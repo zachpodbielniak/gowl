@@ -566,46 +566,60 @@ gowl_config_apply_mapping(
 			g_object_set(self, "log-level", val, NULL);
 	}
 
-	/* Keybinds: expect a sequence of mappings with keys:
-	 *   bind: "Super+Return"
-	 *   action: "spawn"
-	 *   arg: "gst"                  (optional)
+	/* Keybinds: mapping of "Mod+Key": { action: <name>, arg: "<value>" }
+	 *
+	 * Example:
+	 *   "Super+Return": { action: spawn, arg: "gst" }
+	 *   "Super+Shift+q": { action: quit }
 	 */
 	if (yaml_mapping_has_member(mapping, "keybinds")) {
-		YamlSequence *seq = yaml_mapping_get_sequence_member(mapping, "keybinds");
-		if (seq != NULL) {
-			guint len = yaml_sequence_get_length(seq);
+		YamlMapping *kb_mapping = yaml_mapping_get_mapping_member(
+			mapping, "keybinds");
+		if (kb_mapping != NULL) {
+			guint kb_count = yaml_mapping_get_size(kb_mapping);
 			guint i;
 
-			for (i = 0; i < len; i++) {
-				YamlMapping *kb_map = yaml_sequence_get_mapping_element(seq, i);
-				if (kb_map == NULL)
+			for (i = 0; i < kb_count; i++) {
+				const gchar *bind_str = yaml_mapping_get_key(kb_mapping, i);
+				YamlNode *val_node = yaml_mapping_get_value(kb_mapping, i);
+				YamlMapping *val_map;
+				const gchar *action_str;
+				const gchar *arg_str;
+				guint mods;
+				guint keysym;
+				GEnumClass *action_class;
+				GEnumValue *enum_val;
+				gint action;
+
+				if (bind_str == NULL || val_node == NULL)
 					continue;
 
-				const gchar *bind_str = yaml_mapping_get_string_member(kb_map, "bind");
-				const gchar *action_str = yaml_mapping_get_string_member(kb_map, "action");
-				const gchar *arg_str = NULL;
-
-				if (yaml_mapping_has_member(kb_map, "arg"))
-					arg_str = yaml_mapping_get_string_member(kb_map, "arg");
-
-				if (bind_str == NULL || action_str == NULL)
+				val_map = yaml_node_get_mapping(val_node);
+				if (val_map == NULL)
 					continue;
 
-				/* Parse the bind string into modifiers+keysym */
-				guint mods = 0;
-				guint keysym = 0;
+				action_str = yaml_mapping_get_string_member(val_map, "action");
+				if (action_str == NULL)
+					continue;
+
+				arg_str = NULL;
+				if (yaml_mapping_has_member(val_map, "arg"))
+					arg_str = yaml_mapping_get_string_member(val_map, "arg");
+
+				/* Parse bind string into modifiers + keysym */
+				mods = 0;
+				keysym = 0;
 				if (!gowl_keybind_parse(bind_str, &mods, &keysym)) {
-					g_warning("gowl_config: failed to parse keybind '%s'", bind_str);
+					g_warning("gowl_config: failed to parse keybind '%s'",
+					          bind_str);
 					continue;
 				}
 
-				/* Resolve action name to GowlAction enum.
-				 * Use the GType enum lookup for robustness. */
-				GEnumClass *action_class = (GEnumClass *)g_type_class_ref(
+				/* Resolve action name to GowlAction enum */
+				action_class = (GEnumClass *)g_type_class_ref(
 					gowl_action_get_type());
-				GEnumValue *enum_val = g_enum_get_value_by_nick(action_class, action_str);
-				gint action = GOWL_ACTION_NONE;
+				enum_val = g_enum_get_value_by_nick(action_class, action_str);
+				action = GOWL_ACTION_NONE;
 				if (enum_val != NULL)
 					action = enum_val->value;
 				else

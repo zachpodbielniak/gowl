@@ -1,0 +1,12 @@
+build/
+*.o
+*.so
+*.so.*
+*.a
+*.pc
+*.gir
+*.typelib
+*.d
+src/gowl-version.h
+src/protocols/*-protocol.h
+*-protocol.h

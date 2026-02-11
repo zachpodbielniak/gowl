@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Gowl
+Comment=A GObject-based Wayland compositor inspired by dwl and dwm
+Exec=gowl
+Type=Application
+Icon=gowl
+DesktopNames=gowl

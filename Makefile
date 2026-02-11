@@ -20,7 +20,7 @@
 include config.mk
 
 # Check dependencies before anything else (skip for bootstrap targets)
-SKIP_DEP_CHECK_GOALS := install-deps help show-config check-deps clean
+SKIP_DEP_CHECK_GOALS := install-deps install-debug-session help show-config check-deps clean
 ifeq ($(filter $(SKIP_DEP_CHECK_GOALS),$(MAKECMDGOALS)),)
 $(foreach dep,$(DEPS_REQUIRED),$(call check_dep,$(dep)))
 endif
@@ -259,6 +259,21 @@ install-deps:
 		pixman-devel \
 		libasan libubsan
 
+# Install a debug .desktop session file pointing at the local debug build
+.PHONY: install-debug-session
+install-debug-session: $(OUTDIR)/gowl
+	@echo "Installing debug session file..."
+	@$(MKDIR_P) $(DESTDIR)$(DATADIR)/wayland-sessions
+	@printf '[Desktop Entry]\n\
+Name=Gowl (Debug)\n\
+Comment=Gowl debug build from $(CURDIR)\n\
+Exec=$(CURDIR)/build/debug/gowl --debug\n\
+Type=Application\n\
+Icon=gowl\n\
+DesktopNames=gowl\n' > $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop
+	@echo "Installed: $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop"
+	@echo "  Exec: $(CURDIR)/build/debug/gowl --debug"
+
 # Help target
 .PHONY: help
 help:
@@ -285,10 +300,11 @@ help:
 	@echo "  BUILD_XWAYLAND=0 - Disable XWayland support"
 	@echo ""
 	@echo "Utility targets:"
-	@echo "  check-deps   - Check for required dependencies"
-	@echo "  install-deps - Install dependencies (Fedora dnf)"
-	@echo "  show-config  - Show current build configuration"
-	@echo "  help         - Show this help message"
+	@echo "  check-deps            - Check for required dependencies"
+	@echo "  install-deps          - Install dependencies (Fedora dnf)"
+	@echo "  install-debug-session - Install a .desktop session file for the local debug build"
+	@echo "  show-config           - Show current build configuration"
+	@echo "  help                  - Show this help message"
 
 # Dependency tracking
 -include $(LIB_OBJS:.o=.d)

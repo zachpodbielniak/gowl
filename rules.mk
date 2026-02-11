@@ -167,9 +167,9 @@ clean-all:
 	rm -f $(PROTO_HDRS)
 
 # Installation rules
-.PHONY: install install-lib install-bin install-headers install-pc install-gir install-modules
+.PHONY: install install-lib install-bin install-headers install-pc install-gir install-modules install-desktop
 
-install: install-lib install-bin install-headers install-pc
+install: install-lib install-bin install-headers install-pc install-desktop
 ifeq ($(BUILD_GIR),1)
 install: install-gir
 endif
@@ -221,6 +221,12 @@ install-gir: $(OUTDIR)/$(GIR_FILE) $(OUTDIR)/$(TYPELIB_FILE)
 	$(INSTALL_DATA) $(OUTDIR)/$(GIR_FILE) $(DESTDIR)$(GIRDIR)/
 	$(INSTALL_DATA) $(OUTDIR)/$(TYPELIB_FILE) $(DESTDIR)$(TYPELIBDIR)/
 
+install-desktop:
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/wayland-sessions
+	$(INSTALL_DATA) data/gowl.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps
+	$(INSTALL_DATA) data/logo-256.png $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gowl.png
+
 install-modules:
 	$(MKDIR_P) $(DESTDIR)$(MODULEDIR)
 	@for mod in $(OUTDIR)/modules/*.so; do \
@@ -242,3 +248,6 @@ uninstall:
 	rm -f $(DESTDIR)$(GIRDIR)/$(GIR_FILE)
 	rm -f $(DESTDIR)$(TYPELIBDIR)/$(TYPELIB_FILE)
 	rm -rf $(DESTDIR)$(MODULEDIR)
+	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl.desktop
+	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop
+	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gowl.png

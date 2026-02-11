@@ -52,7 +52,7 @@ General compositor settings.
 | `log-level` | string | `"warning"` | Log verbosity: `"debug"`, `"info"`, `"message"`, `"warning"`, `"error"` |
 | `repeat-rate` | int | `25` | Keyboard repeat rate (keys per second) |
 | `repeat-delay` | int | `600` | Keyboard repeat delay (milliseconds before repeat starts) |
-| `terminal` | string | `"foot"` | Terminal emulator command |
+| `terminal` | string | `"gst"` | Terminal emulator command |
 | `menu` | string | `"bemenu-run"` | Application launcher command |
 | `sloppyfocus` | bool | `true` | Enable sloppy (focus-follows-mouse) focus |
 
@@ -109,7 +109,7 @@ The last token in the `+`-separated string is the key name, resolved via `xkb_ke
 #### Action Object Format
 
 ```yaml
-"Super+Return": { action: spawn, arg: "foot" }
+"Super+Return": { action: spawn, arg: "gst" }
 ```
 
 | Field | Type | Required | Description |
@@ -146,7 +146,7 @@ The last token in the `+`-separated string is the key name, resolved via `xkb_ke
 
 ```yaml
 keybinds:
-  "Super+Return": { action: spawn, arg: "foot" }
+  "Super+Return": { action: spawn, arg: "gst" }
   "Super+p": { action: spawn, arg: "bemenu-run" }
   "Super+Shift+c": { action: kill_client }
   "Super+j": { action: focus_stack, arg: "+1" }
@@ -334,7 +334,7 @@ Use `gowl_config_add_keybind()`:
 
 gowl_config_add_keybind(gowl_config,
     GOWL_KEY_MOD_LOGO, XKB_KEY_Return,
-    GOWL_ACTION_SPAWN, "foot");
+    GOWL_ACTION_SPAWN, "gst");
 
 gowl_config_add_keybind(gowl_config,
     GOWL_KEY_MOD_LOGO | GOWL_KEY_MOD_SHIFT, XKB_KEY_c,

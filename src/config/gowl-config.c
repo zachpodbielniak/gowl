@@ -38,7 +38,7 @@
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
 #define GOWL_CONFIG_DEFAULT_REPEAT_RATE         (25)
 #define GOWL_CONFIG_DEFAULT_REPEAT_DELAY        (600)
-#define GOWL_CONFIG_DEFAULT_TERMINAL            "foot"
+#define GOWL_CONFIG_DEFAULT_TERMINAL            "gst"
 #define GOWL_CONFIG_DEFAULT_MENU                "bemenu-run"
 #define GOWL_CONFIG_DEFAULT_SLOPPYFOCUS         (TRUE)
 #define GOWL_CONFIG_DEFAULT_LOG_LEVEL           "warning"
@@ -569,7 +569,7 @@ gowl_config_apply_mapping(
 	/* Keybinds: expect a sequence of mappings with keys:
 	 *   bind: "Super+Return"
 	 *   action: "spawn"
-	 *   arg: "foot"                 (optional)
+	 *   arg: "gst"                  (optional)
 	 */
 	if (yaml_mapping_has_member(mapping, "keybinds")) {
 		YamlSequence *seq = yaml_mapping_get_sequence_member(mapping, "keybinds");

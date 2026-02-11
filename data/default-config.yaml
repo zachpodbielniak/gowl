@@ -14,7 +14,7 @@ compositor:
   log-level: "warning"
   repeat-rate: 25
   repeat-delay: 600
-  terminal: "foot"
+  terminal: "gst"
   menu: "bemenu-run"
   sloppyfocus: true
 
@@ -41,7 +41,7 @@ tags:
 #                 zoom, quit, reload_config, ipc_command, custom
 keybinds:
   # Launch applications
-  "Super+Return": { action: spawn, arg: "foot" }
+  "Super+Return": { action: spawn, arg: "gst" }
   "Super+p": { action: spawn, arg: "bemenu-run" }
 
   # Client management

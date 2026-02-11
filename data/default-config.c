@@ -89,7 +89,7 @@ gowl_config_init(void)
 	/* --- General --- */
 	g_object_set(gowl_config,
 		"tag-count",   9,
-		"terminal",    "foot",
+		"terminal",    "gst",
 		"menu",        "bemenu-run",
 		"sloppyfocus", TRUE,
 		"log-level",   "warning",
@@ -100,7 +100,7 @@ gowl_config_init(void)
 	/* Launch terminal */
 	gowl_config_add_keybind(gowl_config,
 		MODKEY, XKB_KEY_Return,
-		GOWL_ACTION_SPAWN, "foot");
+		GOWL_ACTION_SPAWN, "gst");
 
 	/* Launch menu */
 	gowl_config_add_keybind(gowl_config,

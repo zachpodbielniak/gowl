@@ -44,7 +44,7 @@ test_config_defaults(void)
 	g_assert_cmpint(gowl_config_get_repeat_rate(config), ==, 25);
 	g_assert_cmpint(gowl_config_get_repeat_delay(config), ==, 600);
 	g_assert_true(gowl_config_get_sloppyfocus(config));
-	g_assert_cmpstr(gowl_config_get_terminal(config), ==, "foot");
+	g_assert_cmpstr(gowl_config_get_terminal(config), ==, "gst");
 	g_assert_cmpstr(gowl_config_get_menu(config), ==, "bemenu-run");
 
 	g_object_unref(config);

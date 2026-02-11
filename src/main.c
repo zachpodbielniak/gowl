@@ -133,6 +133,7 @@ main(int argc, char *argv[])
 	gboolean generate_yaml = FALSE;
 	gboolean generate_c = FALSE;
 	gboolean no_c_config = FALSE;
+	gboolean recompile = FALSE;
 	gchar *config_path = NULL;
 	gchar *c_config_path = NULL;
 	gchar *startup_cmd = NULL;
@@ -157,6 +158,8 @@ main(int argc, char *argv[])
 			"Override C config path", "PATH" },
 		{ "no-c-config", 0, 0, G_OPTION_ARG_NONE, &no_c_config,
 			"Skip C config compilation", NULL },
+		{ "recompile", 0, 0, G_OPTION_ARG_NONE, &recompile,
+			"Compile C config and exit", NULL },
 		{ "startup", 's', 0, G_OPTION_ARG_STRING, &startup_cmd,
 			"Startup command", "CMD" },
 		{ NULL }
@@ -193,6 +196,64 @@ main(int argc, char *argv[])
 	if (generate_c) {
 		g_print("%s", default_c_config);
 		ret = 0;
+		goto cleanup;
+	}
+
+	/* Handle --recompile */
+	if (recompile) {
+		g_autoptr(GowlConfigCompiler) compiler = NULL;
+		g_autofree gchar *c_source = NULL;
+		g_autofree gchar *so_path = NULL;
+
+		compiler = gowl_config_compiler_new();
+		so_path  = gowl_config_compiler_get_cache_path(compiler);
+
+		if (c_config_path != NULL) {
+			c_source = g_strdup(c_config_path);
+		} else {
+			const gchar *search_dirs[] = {
+				"./data",
+				NULL,
+				GOWL_SYSCONFDIR "/gowl",
+				GOWL_DATADIR "/gowl",
+				NULL
+			};
+			g_autofree gchar *user_dir = NULL;
+			gint i;
+
+			user_dir = g_build_filename(
+				g_get_user_config_dir(), "gowl", NULL);
+			search_dirs[1] = user_dir;
+
+			for (i = 0; search_dirs[i] != NULL; i++) {
+				g_autofree gchar *candidate = NULL;
+
+				candidate = g_build_filename(
+					search_dirs[i], "config.c", NULL);
+				if (g_file_test(candidate, G_FILE_TEST_EXISTS)) {
+					c_source = g_steal_pointer(&candidate);
+					break;
+				}
+			}
+		}
+
+		if (c_source == NULL) {
+			g_printerr("No config.c found\n");
+			ret = 1;
+			goto cleanup;
+		}
+
+		g_print("Compiling %s -> %s\n", c_source, so_path);
+
+		if (!gowl_config_compiler_compile(compiler,
+		        c_source, so_path, &error)) {
+			g_printerr("Compile failed: %s\n", error->message);
+			g_clear_error(&error);
+			ret = 1;
+		} else {
+			g_print("OK\n");
+		}
+
 		goto cleanup;
 	}
 

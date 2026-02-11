@@ -139,8 +139,12 @@ get_gowl_include_flags(void)
 		return flags;
 
 #ifdef GOWL_DEV_INCLUDE_DIR
-	/* fall back to development include path */
-	return g_strdup("-I" GOWL_DEV_INCLUDE_DIR);
+	/* fall back to development include paths:
+	 * -I<build>/include      for #include <gowl/gowl.h>
+	 * -I<build>/include/gowl for bare includes from sub-headers
+	 */
+	return g_strdup("-I" GOWL_DEV_INCLUDE_DIR
+	                " -I" GOWL_DEV_INCLUDE_DIR "/gowl");
 #else
 	return g_strdup("");
 #endif

@@ -79,6 +79,74 @@ gowl_config_compiler_init(GowlConfigCompiler *self)
 /* --- Internal helpers --- */
 
 /**
+ * run_pkg_config:
+ * @args: arguments to pass to pkg-config (e.g. "--cflags --libs glib-2.0")
+ * @error: (nullable): return location for a #GError, or %NULL
+ *
+ * Runs pkg-config with the given arguments and captures its stdout.
+ * Trailing whitespace is stripped from the output.
+ *
+ * Returns: (transfer full): the pkg-config output string, or %NULL on error
+ */
+static gchar *
+run_pkg_config(
+	const gchar  *args,
+	GError      **error
+){
+	g_autofree gchar *cmd = NULL;
+	g_autofree gchar *stdout_output = NULL;
+	g_autofree gchar *stderr_output = NULL;
+	gint exit_status;
+
+	cmd = g_strdup_printf("pkg-config %s", args);
+
+	if (!g_spawn_command_line_sync(cmd, &stdout_output, &stderr_output,
+	                               &exit_status, error))
+		return NULL;
+
+	if (!g_spawn_check_exit_status(exit_status, NULL)) {
+		g_set_error(error,
+		            G_IO_ERROR,
+		            G_IO_ERROR_FAILED,
+		            "pkg-config %s failed: %s",
+		            args,
+		            stderr_output != NULL ? stderr_output : "(no output)");
+		return NULL;
+	}
+
+	g_strstrip(stdout_output);
+	return g_steal_pointer(&stdout_output);
+}
+
+/**
+ * get_gowl_include_flags:
+ *
+ * Attempts to get gowl's include flags via pkg-config.  If gowl
+ * is not installed, falls back to the compile-time development
+ * include path (GOWL_DEV_INCLUDE_DIR).
+ *
+ * Returns: (transfer full): include flags string; free with g_free()
+ */
+static gchar *
+get_gowl_include_flags(void)
+{
+	g_autoptr(GError) error = NULL;
+	gchar *flags;
+
+	/* try installed gowl first */
+	flags = run_pkg_config("--cflags gowl", &error);
+	if (flags != NULL)
+		return flags;
+
+#ifdef GOWL_DEV_INCLUDE_DIR
+	/* fall back to development include path */
+	return g_strdup("-I" GOWL_DEV_INCLUDE_DIR);
+#else
+	return g_strdup("");
+#endif
+}
+
+/**
  * extract_build_args:
  * @source_content: the full text of the config source file
  *
@@ -183,6 +251,8 @@ gowl_config_compiler_compile(
 ){
 	g_autofree gchar *source_content = NULL;
 	g_autofree gchar *extra_args = NULL;
+	g_autofree gchar *pkg_flags = NULL;
+	g_autofree gchar *gowl_flags = NULL;
 	g_autofree gchar *cmd = NULL;
 	g_autofree gchar *stderr_output = NULL;
 	gint exit_status;
@@ -201,6 +271,15 @@ gowl_config_compiler_compile(
 		return FALSE;
 	}
 
+	/* get pkg-config flags for dependencies */
+	pkg_flags = run_pkg_config(
+		"--cflags --libs glib-2.0 gobject-2.0 gmodule-2.0", error);
+	if (pkg_flags == NULL)
+		return FALSE;
+
+	/* get gowl include flags (installed or development fallback) */
+	gowl_flags = get_gowl_include_flags();
+
 	/* read the source file */
 	if (!g_file_get_contents(source_path, &source_content, NULL, error))
 		return FALSE;
@@ -208,14 +287,20 @@ gowl_config_compiler_compile(
 	/* extract optional build arguments from the source */
 	extra_args = extract_build_args(source_content);
 
+	/* ensure the output directory exists */
+	g_mkdir_with_parents(self->cache_dir, 0755);
+
 	/* build the compilation command */
 	cmd = g_strdup_printf(
-		"%s -std=gnu89 -shared -fPIC %s -o %s %s "
-		"$(pkg-config --cflags --libs glib-2.0 gobject-2.0 gmodule-2.0)",
+		"%s -std=gnu89 -shared -fPIC %s %s %s -o %s %s",
 		self->gcc_path,
+		pkg_flags,
+		gowl_flags,
 		extra_args,
 		output_path,
 		source_path);
+
+	g_debug("C config compile command: %s", cmd);
 
 	/* execute the compiler */
 	ok = g_spawn_command_line_sync(cmd,

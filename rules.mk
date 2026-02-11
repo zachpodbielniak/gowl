@@ -76,7 +76,7 @@ $(OUTDIR)/$(LIB_SHARED_FULL): $(LIB_OBJS) $(YAMLGLIB_OBJS)
 
 # Executable linking
 $(OUTDIR)/gowl: $(OBJDIR)/main.o $(OUTDIR)/$(LIB_SHARED_FULL)
-	$(CC) -o $@ $(OBJDIR)/main.o -L$(OUTDIR) -lgowl $(LDFLAGS) -Wl,-rpath,'$$ORIGIN'
+	$(CC) -o $@ $(OBJDIR)/main.o -L$(OUTDIR) -lgowl $(LDFLAGS) -rdynamic -Wl,-rpath,'$$ORIGIN'
 
 # Wayland protocol header generation rules
 # wlroots headers include these via bare #include "...-protocol.h"
@@ -116,8 +116,18 @@ $(OUTDIR)/$(GIR_FILE): $(LIB_SRCS) $(LIB_HDRS) | $(OUTDIR)/$(LIB_SHARED_FULL)
 $(OUTDIR)/$(TYPELIB_FILE): $(OUTDIR)/$(GIR_FILE)
 	$(GIR_COMPILER) --output=$@ $<
 
+# Development include symlink for C config compilation
+# Creates $(BUILDDIR)/include/gowl -> src/ so that
+# #include <gowl/gowl.h> resolves during development
+$(BUILDDIR):
+	@$(MKDIR_P) $(BUILDDIR)
+
+$(BUILDDIR)/include/gowl: | $(BUILDDIR)
+	@$(MKDIR_P) $(BUILDDIR)/include
+	@ln -sfn $(CURDIR)/src $(BUILDDIR)/include/gowl
+
 # Directory creation
-$(OBJDIR):
+$(OBJDIR): | $(BUILDDIR)/include/gowl
 	@$(MKDIR_P) $(OBJDIR)
 	@$(MKDIR_P) $(OBJDIR)/core
 	@$(MKDIR_P) $(OBJDIR)/config

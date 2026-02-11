@@ -20,6 +20,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/*
+ * Global pointers exported for C config shared objects.
+ * The user's config.c declares these as extern and accesses
+ * them from gowl_config_init() at dlopen time.
+ */
+GowlCompositor *gowl_compositor = NULL;
+GowlConfig     *gowl_config = NULL;
+
 /* Default YAML config content for --generate-yaml-config */
 static const gchar *default_yaml_config =
 	"# Gowl Default Configuration\n"
@@ -195,6 +203,7 @@ main(int argc, char *argv[])
 
 	/* Load configuration */
 	config = gowl_config_new();
+	gowl_config = config;
 
 	if (config_path != NULL) {
 		if (!gowl_config_load_yaml(config, config_path, &error)) {
@@ -275,6 +284,7 @@ main(int argc, char *argv[])
 
 	/* Create compositor and wire up config + module manager */
 	compositor = gowl_compositor_new();
+	gowl_compositor = compositor;
 	gowl_compositor_set_config(compositor, config);
 	gowl_compositor_set_module_manager(compositor, module_mgr);
 

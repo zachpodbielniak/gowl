@@ -22,6 +22,7 @@ PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig
 GIRDIR ?= $(DATADIR)/gir-1.0
 TYPELIBDIR ?= $(LIBDIR)/girepository-1.0
 MODULEDIR ?= $(LIBDIR)/gowl/modules
+BAR_MODULEDIR ?= $(LIBDIR)/gowlbar/modules
 SYSCONFDIR ?= /etc
 
 # Build directories
@@ -153,6 +154,24 @@ TEST_LDFLAGS := $(LDFLAGS) -L$(OUTDIR) -lgowl -Wl,-rpath,$(OUTDIR)
 MODULE_CFLAGS_INC := -I$(CURDIR) -I$(CURDIR)/src -I$(CURDIR)/deps/yaml-glib/src
 MODULE_CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(MODULE_CFLAGS_INC) $(CFLAGS_DEPS)
 MODULE_LDFLAGS := -shared -fPIC
+
+# Bar dependencies (standalone Wayland client)
+BAR_DEPS := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 wayland-client wayland-protocols pangocairo yaml-0.1 json-glib-1.0
+BAR_CFLAGS_DEPS := $(shell $(PKG_CONFIG) --cflags $(BAR_DEPS) 2>/dev/null)
+BAR_LDFLAGS_DEPS := $(shell $(PKG_CONFIG) --libs $(BAR_DEPS) 2>/dev/null)
+
+# Bar compiler flags
+BAR_CFLAGS := $(CSTD) -Wall -Wextra -Wno-unused-parameter -fPIC
+BAR_CFLAGS += -DGOWL_VERSION=\"$(VERSION)\"
+BAR_CFLAGS += -DGOWL_SYSCONFDIR=\"$(SYSCONFDIR)\"
+BAR_CFLAGS += -DGOWL_DATADIR=\"$(DATADIR)\"
+BAR_CFLAGS += -DGOWLBAR_MODULEDIR=\"$(BAR_MODULEDIR)\"
+BAR_CFLAGS += -DGOWL_DEV_INCLUDE_DIR=\"$(CURDIR)/$(BUILDDIR)/include\"
+BAR_CFLAGS += $(CFLAGS_BUILD)
+BAR_CFLAGS += -I. -Isrc/bar -Ideps/yaml-glib/src
+BAR_CFLAGS += $(BAR_CFLAGS_DEPS)
+
+BAR_LDFLAGS := $(BAR_LDFLAGS_DEPS) $(LDFLAGS_ASAN)
 
 # Print configuration
 .PHONY: show-config

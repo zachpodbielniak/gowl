@@ -47,6 +47,49 @@ $(OBJDIR)/util/%.o: src/util/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Bar source compilation
+$(OBJDIR)/bar/%.o: src/bar/%.c | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(BAR_CFLAGS) -c $< -o $@
+
+# Bar client-side protocol code generation
+wlr-layer-shell-unstable-v1-client-protocol.h:
+	$(WAYLAND_SCANNER) client-header \
+		protocols/wlr-layer-shell-unstable-v1.xml $@
+
+wlr-layer-shell-unstable-v1-protocol.c:
+	$(WAYLAND_SCANNER) private-code \
+		protocols/wlr-layer-shell-unstable-v1.xml $@
+
+xdg-shell-client-protocol.h:
+	$(WAYLAND_SCANNER) client-header \
+		$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell/xdg-shell.xml $@
+
+xdg-shell-protocol.c:
+	$(WAYLAND_SCANNER) private-code \
+		$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell/xdg-shell.xml $@
+
+# Bar protocol objects
+$(OBJDIR)/bar/wlr-layer-shell-unstable-v1-protocol.o: wlr-layer-shell-unstable-v1-protocol.c wlr-layer-shell-unstable-v1-client-protocol.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(BAR_CFLAGS) -c $< -o $@
+
+$(OBJDIR)/bar/xdg-shell-protocol.o: xdg-shell-protocol.c xdg-shell-client-protocol.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(BAR_CFLAGS) -c $< -o $@
+
+# Bar sources depend on client-side protocol headers
+$(BAR_OBJS): wlr-layer-shell-unstable-v1-client-protocol.h
+
+# Bar executable linking
+BAR_PROTO_OBJS := \
+	$(OBJDIR)/bar/wlr-layer-shell-unstable-v1-protocol.o \
+	$(OBJDIR)/bar/xdg-shell-protocol.o
+
+$(OUTDIR)/gowlbar: $(BAR_OBJS) $(BAR_PROTO_OBJS) $(YAMLGLIB_OBJS)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) -o $@ $^ $(BAR_LDFLAGS) -rdynamic
+
 # Test compilation
 $(OBJDIR)/tests/%.o: tests/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
@@ -137,6 +180,8 @@ $(OBJDIR): | $(BUILDDIR)/include/gowl
 	@$(MKDIR_P) $(OBJDIR)/layout
 	@$(MKDIR_P) $(OBJDIR)/ipc
 	@$(MKDIR_P) $(OBJDIR)/util
+	@$(MKDIR_P) $(OBJDIR)/bar
+	@$(MKDIR_P) $(OBJDIR)/bar/interfaces
 	@$(MKDIR_P) $(OBJDIR)/tests
 	@$(MKDIR_P) $(OBJDIR)/deps/yaml-glib/src
 
@@ -170,16 +215,24 @@ clean:
 	rm -rf $(BUILDDIR)/$(BUILD_TYPE)
 	rm -f src/gowl-version.h
 	rm -f $(PROTO_HDRS)
+	rm -f wlr-layer-shell-unstable-v1-client-protocol.h
+	rm -f wlr-layer-shell-unstable-v1-protocol.c
+	rm -f xdg-shell-client-protocol.h
+	rm -f xdg-shell-protocol.c
 
 clean-all:
 	rm -rf $(BUILDDIR)
 	rm -f src/gowl-version.h
 	rm -f $(PROTO_HDRS)
+	rm -f wlr-layer-shell-unstable-v1-client-protocol.h
+	rm -f wlr-layer-shell-unstable-v1-protocol.c
+	rm -f xdg-shell-client-protocol.h
+	rm -f xdg-shell-protocol.c
 
 # Installation rules
-.PHONY: install install-lib install-bin install-headers install-pc install-gir install-modules install-desktop
+.PHONY: install install-lib install-bin install-bar install-bar-configs install-headers install-pc install-gir install-modules install-desktop
 
-install: install-lib install-bin install-headers install-pc install-desktop
+install: install-lib install-bin install-bar install-bar-configs install-headers install-pc install-desktop
 ifeq ($(BUILD_GIR),1)
 install: install-gir
 endif
@@ -245,10 +298,21 @@ install-modules:
 		fi \
 	done
 
+install-bar: $(OUTDIR)/gowlbar
+	$(MKDIR_P) $(DESTDIR)$(BINDIR)
+	$(INSTALL_PROGRAM) $(OUTDIR)/gowlbar $(DESTDIR)$(BINDIR)/gowlbar
+	$(MKDIR_P) $(DESTDIR)$(BAR_MODULEDIR)
+
+install-bar-configs:
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/gowl
+	$(INSTALL_DATA) data/default-bar.yaml $(DESTDIR)$(DATADIR)/gowl/default-bar.yaml
+	$(INSTALL_DATA) data/example-bar.c $(DESTDIR)$(DATADIR)/gowl/example-bar.c
+
 # Uninstall
 .PHONY: uninstall
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/gowl
+	rm -f $(DESTDIR)$(BINDIR)/gowlbar
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_STATIC)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_SHARED_FULL)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_SHARED_MAJOR)
@@ -258,6 +322,9 @@ uninstall:
 	rm -f $(DESTDIR)$(GIRDIR)/$(GIR_FILE)
 	rm -f $(DESTDIR)$(TYPELIBDIR)/$(TYPELIB_FILE)
 	rm -rf $(DESTDIR)$(MODULEDIR)
+	rm -rf $(DESTDIR)$(BAR_MODULEDIR)
+	rm -f $(DESTDIR)$(DATADIR)/gowl/default-bar.yaml
+	rm -f $(DESTDIR)$(DATADIR)/gowl/example-bar.c
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl.desktop
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gowl.png

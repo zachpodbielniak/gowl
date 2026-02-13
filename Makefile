@@ -149,18 +149,43 @@ TEST_SRCS := $(wildcard tests/test-*.c)
 # Module directories
 MODULE_DIRS := $(wildcard modules/*)
 
+# Bar source files (standalone Wayland client)
+BAR_SRCS := \
+	src/bar/gowlbar-main.c \
+	src/bar/gowlbar-app.c \
+	src/bar/gowlbar-output.c \
+	src/bar/gowlbar-config.c \
+	src/bar/gowlbar-config-compiler.c \
+	src/bar/gowlbar-widget.c \
+	src/bar/gowlbar-ipc.c \
+	src/bar/gowlbar-tag-widget.c \
+	src/bar/gowlbar-layout-widget.c \
+	src/bar/gowlbar-title-widget.c \
+	src/bar/gowlbar-status-widget.c \
+	src/bar/gowlbar-module.c \
+	src/bar/gowlbar-module-manager.c \
+	src/bar/interfaces/gowlbar-widget-provider.c \
+	src/bar/interfaces/gowlbar-status-provider.c \
+	src/bar/interfaces/gowlbar-click-handler.c \
+	src/bar/interfaces/gowlbar-startup-handler.c \
+	src/bar/interfaces/gowlbar-shutdown-handler.c
+
 # Object files
 LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
 YAMLGLIB_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(YAMLGLIB_SRCS))
 MAIN_OBJ := $(OBJDIR)/main.o
+BAR_OBJS := $(patsubst src/bar/%.c,$(OBJDIR)/bar/%.o,$(BAR_SRCS))
 TEST_OBJS := $(patsubst tests/%.c,$(OBJDIR)/tests/%.o,$(TEST_SRCS))
 TEST_BINS := $(patsubst tests/%.c,$(OUTDIR)/%,$(TEST_SRCS))
 
 # Include build rules
 include rules.mk
 
+# Build the bar executable
+bar: deps $(OUTDIR)/gowlbar
+
 # Default target
-all: deps lib gowl-bin
+all: deps lib gowl-bin bar
 ifeq ($(BUILD_MODULES),1)
 all: modules
 endif
@@ -280,9 +305,10 @@ help:
 	@echo "Gowl - GObject Wayland Compositor"
 	@echo ""
 	@echo "Build targets:"
-	@echo "  all          - Build library, executable, and modules (default)"
+	@echo "  all          - Build library, executable, bar, and modules (default)"
 	@echo "  lib          - Build static and shared libraries"
 	@echo "  gowl-bin     - Build the gowl executable"
+	@echo "  bar          - Build the gowlbar status bar"
 	@echo "  gir          - Generate GObject Introspection data"
 	@echo "  modules      - Build all modules"
 	@echo "  test         - Build and run the test suite"

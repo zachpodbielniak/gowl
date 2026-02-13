@@ -1,0 +1,23 @@
+# gowlbar configuration
+
+bar:
+  height: 24
+  position: "top"
+  font: "monospace 10"
+  padding: 4
+
+colors:
+  background: "#222222"
+  foreground: "#bbbbbb"
+  tag-active-bg: "#005577"
+  tag-active-fg: "#eeeeee"
+  tag-urgent-bg: "#ff0000"
+  tag-urgent-fg: "#ffffff"
+  tag-occupied-fg: "#bbbbbb"
+  tag-empty-fg: "#555555"
+  layout-fg: "#bbbbbb"
+  title-fg: "#bbbbbb"
+  status-fg: "#bbbbbb"
+  border-color: "#444444"
+
+modules: {}

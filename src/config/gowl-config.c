@@ -42,6 +42,7 @@
 #define GOWL_CONFIG_DEFAULT_MENU                "bemenu-run"
 #define GOWL_CONFIG_DEFAULT_SLOPPYFOCUS         (TRUE)
 #define GOWL_CONFIG_DEFAULT_LOG_LEVEL           "warning"
+#define GOWL_CONFIG_DEFAULT_LOG_FILE            "~/.config/gowl/gowl.log"
 
 /* Configuration file name */
 #define GOWL_CONFIG_FILENAME "gowl.yaml"
@@ -73,6 +74,7 @@ struct _GowlConfig {
 
 	/* Logging */
 	gchar   *log_level;
+	gchar   *log_file;
 
 	/* Keybinds - array of GowlKeybindEntry */
 	GArray  *keybinds;
@@ -194,6 +196,10 @@ gowl_config_set_property(
 		g_free(self->log_level);
 		self->log_level = g_value_dup_string(value);
 		break;
+	case GOWL_CONFIG_PROP_LOG_FILE:
+		g_free(self->log_file);
+		self->log_file = g_value_dup_string(value);
+		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
 		return;
@@ -257,6 +263,9 @@ gowl_config_get_property(
 	case GOWL_CONFIG_PROP_LOG_LEVEL:
 		g_value_set_string(value, self->log_level);
 		break;
+	case GOWL_CONFIG_PROP_LOG_FILE:
+		g_value_set_string(value, self->log_file);
+		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
 		break;
@@ -279,6 +288,7 @@ gowl_config_finalize(GObject *object)
 	g_free(self->terminal);
 	g_free(self->menu);
 	g_free(self->log_level);
+	g_free(self->log_file);
 
 	if (self->keybinds != NULL)
 		g_array_unref(self->keybinds);
@@ -404,6 +414,13 @@ gowl_config_class_init(GowlConfigClass *klass)
 		                     GOWL_CONFIG_DEFAULT_LOG_LEVEL,
 		                     G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
+	properties[GOWL_CONFIG_PROP_LOG_FILE] =
+		g_param_spec_string("log-file",
+		                     "Log File",
+		                     "Path to log file (\"stderr\" for stderr only)",
+		                     GOWL_CONFIG_DEFAULT_LOG_FILE,
+		                     G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
 	g_object_class_install_properties(object_class,
 	                                  GOWL_CONFIG_PROP_LAST,
 	                                  properties);
@@ -468,6 +485,7 @@ gowl_config_init(GowlConfig *self)
 	self->terminal            = g_strdup(GOWL_CONFIG_DEFAULT_TERMINAL);
 	self->menu                = g_strdup(GOWL_CONFIG_DEFAULT_MENU);
 	self->log_level           = g_strdup(GOWL_CONFIG_DEFAULT_LOG_LEVEL);
+	self->log_file            = g_strdup(GOWL_CONFIG_DEFAULT_LOG_FILE);
 
 	self->keybinds = g_array_new(FALSE, TRUE, sizeof(GowlKeybindEntry));
 	g_array_set_clear_func(self->keybinds, gowl_keybind_entry_clear);
@@ -564,6 +582,11 @@ gowl_config_apply_mapping(
 		const gchar *val = yaml_mapping_get_string_member(mapping, "log-level");
 		if (val != NULL)
 			g_object_set(self, "log-level", val, NULL);
+	}
+	if (yaml_mapping_has_member(mapping, "log-file")) {
+		const gchar *val = yaml_mapping_get_string_member(mapping, "log-file");
+		if (val != NULL)
+			g_object_set(self, "log-file", val, NULL);
 	}
 
 	/* Keybinds: mapping of "Mod+Key": { action: <name>, arg: "<value>" }
@@ -817,6 +840,7 @@ gowl_config_generate_yaml(GowlConfig *self)
 
 	/* Logging */
 	g_string_append_printf(yaml, "log-level: \"%s\"\n", self->log_level);
+	g_string_append_printf(yaml, "log-file: \"%s\"\n", self->log_file);
 
 	/* Keybinds */
 	if (self->keybinds->len > 0) {
@@ -951,6 +975,13 @@ gowl_config_get_log_level(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_LOG_LEVEL);
 	return self->log_level;
+}
+
+const gchar *
+gowl_config_get_log_file(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_LOG_FILE);
+	return self->log_file;
 }
 
 /* --- Keybind management --- */

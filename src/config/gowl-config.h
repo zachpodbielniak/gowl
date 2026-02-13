@@ -82,6 +82,7 @@ typedef struct {
  * @GOWL_CONFIG_PROP_MENU: "menu" property.
  * @GOWL_CONFIG_PROP_SLOPPYFOCUS: "sloppyfocus" property.
  * @GOWL_CONFIG_PROP_LOG_LEVEL: "log-level" property.
+ * @GOWL_CONFIG_PROP_LOG_FILE: "log-file" property.
  * @GOWL_CONFIG_PROP_LAST: sentinel; total number of properties.
  *
  * Property identifiers for #GowlConfig GObject properties.
@@ -101,6 +102,7 @@ typedef enum {
 	GOWL_CONFIG_PROP_MENU,
 	GOWL_CONFIG_PROP_SLOPPYFOCUS,
 	GOWL_CONFIG_PROP_LOG_LEVEL,
+	GOWL_CONFIG_PROP_LOG_FILE,
 	GOWL_CONFIG_PROP_LAST
 } GowlConfigProp;
 
@@ -291,6 +293,14 @@ gboolean gowl_config_get_sloppyfocus(GowlConfig *self);
  * Returns: (transfer none): the log level string (e.g. "warning", "debug")
  */
 const gchar *gowl_config_get_log_level(GowlConfig *self);
+
+/**
+ * gowl_config_get_log_file:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none): the log file path, or "stderr" for stderr only
+ */
+const gchar *gowl_config_get_log_file(GowlConfig *self);
 
 /* --- Keybinds --- */
 

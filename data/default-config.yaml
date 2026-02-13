@@ -12,6 +12,7 @@
 
 compositor:
   log-level: "warning"
+  log-file: "~/.config/gowl/gowl.log"
   repeat-rate: 25
   repeat-delay: 600
   terminal: "gst"

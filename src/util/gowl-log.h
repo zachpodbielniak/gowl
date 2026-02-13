@@ -26,12 +26,16 @@ G_BEGIN_DECLS
 /**
  * gowl_log_init:
  * @level: log level string ("debug", "info", "warning", "error")
+ * @log_file: (nullable): path to log file, "stderr" for stderr only,
+ *            or %NULL for stderr only.  The path may contain "~" which
+ *            is expanded to $HOME.
  *
- * Initialize the gowl logging system.
- * Sets up GLib structured logging for the "gowl" domain.
+ * Initialize the gowl logging system.  When @log_file is a valid path,
+ * log messages are written to the file.  When set to "stderr" or %NULL,
+ * messages go to stderr (or the systemd journal if available).
  */
 void
-gowl_log_init(const gchar *level);
+gowl_log_init(const gchar *level, const gchar *log_file);
 
 G_END_DECLS
 

@@ -17,6 +17,7 @@
  */
 
 #include "gowl.h"
+#include "ipc/gowl-ipc.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -35,6 +36,7 @@ static const gchar *default_yaml_config =
 	"\n"
 	"compositor:\n"
 	"  log_level: warning\n"
+	"  log_file: \"~/.config/gowl/gowl.log\"\n"
 	"  repeat_rate: 25\n"
 	"  repeat_delay: 600\n"
 	"  terminal: gst\n"
@@ -141,6 +143,7 @@ main(int argc, char *argv[])
 	GowlConfig *config = NULL;
 	GowlCompositor *compositor = NULL;
 	GowlModuleManager *module_mgr = NULL;
+	GowlIpc *ipc = NULL;
 	int ret = 0;
 
 	GOptionEntry entries[] = {
@@ -257,8 +260,8 @@ main(int argc, char *argv[])
 		goto cleanup;
 	}
 
-	/* Initialize logging */
-	gowl_log_init(debug_mode ? "debug" : "warning");
+	/* Initialize logging (stderr first, re-init after config load) */
+	gowl_log_init(debug_mode ? "debug" : "warning", NULL);
 
 	g_message("gowl %s starting...", GOWL_VERSION_STRING);
 
@@ -340,6 +343,11 @@ main(int argc, char *argv[])
 		}
 	}
 
+	/* Re-initialize logging with config values (file + level) */
+	gowl_log_init(
+		debug_mode ? "debug" : gowl_config_get_log_level(config),
+		gowl_config_get_log_file(config));
+
 	/* Initialize module manager */
 	module_mgr = gowl_module_manager_new();
 
@@ -348,6 +356,16 @@ main(int argc, char *argv[])
 	gowl_compositor = compositor;
 	gowl_compositor_set_config(compositor, config);
 	gowl_compositor_set_module_manager(compositor, module_mgr);
+
+	/* Create and start IPC server */
+	ipc = gowl_ipc_new(NULL);
+	if (!gowl_ipc_start(ipc, &error)) {
+		g_warning("Failed to start IPC: %s", error->message);
+		g_clear_error(&error);
+		g_clear_object(&ipc);
+	} else {
+		gowl_compositor_set_ipc(compositor, ipc);
+	}
 
 	/* Start compositor */
 	if (!gowl_compositor_start(compositor, &error)) {
@@ -380,6 +398,9 @@ main(int argc, char *argv[])
 	gowl_module_manager_dispatch_shutdown(module_mgr, compositor);
 
 cleanup:
+	if (ipc != NULL)
+		gowl_ipc_stop(ipc);
+	g_clear_object(&ipc);
 	g_clear_object(&compositor);
 	g_clear_object(&module_mgr);
 	g_clear_object(&config);

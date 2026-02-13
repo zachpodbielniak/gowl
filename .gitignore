@@ -10,3 +10,4 @@ build/
 src/gowl-version.h
 src/protocols/*-protocol.h
 *-protocol.h
+*-protocol.c

@@ -371,6 +371,38 @@ gowl_compositor_set_module_manager(
 }
 
 /**
+ * gowl_compositor_set_ipc:
+ * @self: a #GowlCompositor
+ * @ipc: (transfer none) (nullable): the #GowlIpc server to use
+ *
+ * Stores a borrowed reference to the IPC server.  The compositor
+ * will push state events to subscribed clients when state changes.
+ */
+void
+gowl_compositor_set_ipc(
+	GowlCompositor *self,
+	GowlIpc        *ipc
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	self->ipc = ipc;
+}
+
+/**
+ * gowl_compositor_get_ipc:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the current #GowlIpc
+ */
+GowlIpc *
+gowl_compositor_get_ipc(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->ipc;
+}
+
+/**
  * gowl_compositor_get_socket_name:
  * @self: a #GowlCompositor
  *
@@ -1182,6 +1214,10 @@ gowl_compositor_focus_client(
 	if (c == NULL) {
 		/* No client: clear focus */
 		wlr_seat_keyboard_notify_clear_focus(self->wlr_seat);
+
+		/* Push empty title to IPC subscribers */
+		if (self->ipc != NULL)
+			gowl_ipc_push_event(self->ipc, "EVENT title ");
 		return;
 	}
 
@@ -1202,6 +1238,11 @@ gowl_compositor_focus_client(
 
 	/* Activate the surface */
 	wlr_xdg_toplevel_set_activated(c->xdg_toplevel, TRUE);
+
+	/* Push title to IPC subscribers */
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT title %s",
+		                     c->title != NULL ? c->title : "");
 }
 
 /**
@@ -1763,6 +1804,8 @@ keybinding(
 			}
 			case GOWL_ACTION_TAG_VIEW: {
 				guint32 newtags;
+				guint32 occupied;
+				GList *cl;
 				if (self->selmon == NULL || kb->arg == NULL)
 					return TRUE;
 				newtags = (guint32)atoi(kb->arg) & TAGMASK;
@@ -1771,11 +1814,28 @@ keybinding(
 				self->selmon->tagset[self->selmon->seltags] = newtags;
 				gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
 				gowl_compositor_arrange(self, self->selmon);
+
+				/* Push tag state to IPC subscribers */
+				if (self->ipc != NULL) {
+					occupied = 0;
+					for (cl = self->clients; cl != NULL; cl = cl->next) {
+						GowlClient *tc = (GowlClient *)cl->data;
+						if (tc->mon == self->selmon)
+							occupied |= tc->tags;
+					}
+					gowl_ipc_push_event(self->ipc,
+						"EVENT tags %s %u %u 0 %u",
+						self->selmon->wlr_output->name,
+						newtags, occupied, newtags);
+				}
 				return TRUE;
 			}
 			case GOWL_ACTION_TAG_SET: {
 				GowlClient *sel;
 				guint32 newtags;
+				guint32 occupied;
+				guint32 active;
+				GList *cl;
 				if (self->selmon == NULL || kb->arg == NULL)
 					return TRUE;
 				sel = focustop(self, self->selmon);
@@ -1787,6 +1847,21 @@ keybinding(
 				sel->tags = newtags;
 				gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
 				gowl_compositor_arrange(self, self->selmon);
+
+				/* Push tag state to IPC subscribers */
+				if (self->ipc != NULL) {
+					active = self->selmon->tagset[self->selmon->seltags];
+					occupied = 0;
+					for (cl = self->clients; cl != NULL; cl = cl->next) {
+						GowlClient *tc = (GowlClient *)cl->data;
+						if (tc->mon == self->selmon)
+							occupied |= tc->tags;
+					}
+					gowl_ipc_push_event(self->ipc,
+						"EVENT tags %s %u %u 0 %u",
+						self->selmon->wlr_output->name,
+						active, occupied, active);
+				}
 				return TRUE;
 			}
 			case GOWL_ACTION_SET_LAYOUT: {
@@ -1797,8 +1872,291 @@ keybinding(
 				else
 					self->selmon->sellt = 0;
 				gowl_compositor_arrange(self, self->selmon);
+
+				/* Push layout to IPC subscribers */
+				if (self->ipc != NULL) {
+					gowl_ipc_push_event(self->ipc,
+						"EVENT layout %s %s",
+						self->selmon->wlr_output->name,
+						self->selmon->layout_symbol != NULL
+							? self->selmon->layout_symbol
+							: "tile");
+				}
 				return TRUE;
 			}
+			case GOWL_ACTION_ZOOM: {
+				/*
+				 * Promote the focused client to the head of the
+				 * tiling list (master position).  If it is already
+				 * master, promote the second visible client instead.
+				 * Ported from dwl's zoom().
+				 */
+				GowlClient *sel, *first_visible;
+				GList *l;
+
+				sel = focustop(self, self->selmon);
+				if (sel == NULL || sel->isfloating)
+					return TRUE;
+
+				/* Find the first visible tiled client on this monitor */
+				first_visible = NULL;
+				for (l = self->clients; l != NULL; l = l->next) {
+					GowlClient *tc = (GowlClient *)l->data;
+					if (VISIBLEON(tc, self->selmon) && !tc->isfloating) {
+						first_visible = tc;
+						break;
+					}
+				}
+
+				/* If sel is already master, swap with next visible */
+				if (sel == first_visible) {
+					for (l = g_list_find(self->clients, sel)->next;
+					     l != NULL; l = l->next) {
+						GowlClient *tc = (GowlClient *)l->data;
+						if (VISIBLEON(tc, self->selmon) && !tc->isfloating) {
+							sel = tc;
+							break;
+						}
+					}
+				}
+
+				/* Move sel to the front of the client list */
+				if (sel != first_visible) {
+					self->clients = g_list_remove(self->clients, sel);
+					self->clients = g_list_prepend(self->clients, sel);
+					gowl_compositor_focus_client(self, sel, TRUE);
+					gowl_compositor_arrange(self, self->selmon);
+				}
+				return TRUE;
+			}
+			case GOWL_ACTION_FOCUS_MONITOR: {
+				/*
+				 * Move keyboard focus to the next/previous monitor.
+				 * arg "+1" = next, "-1" = previous.
+				 * Ported from dwl's focusmon().
+				 */
+				GowlMonitor *target;
+				GList *cur, *next;
+				gint dir;
+
+				if (self->selmon == NULL || kb->arg == NULL)
+					return TRUE;
+
+				dir = atoi(kb->arg);
+				cur = g_list_find(self->monitors, self->selmon);
+				if (cur == NULL)
+					return TRUE;
+
+				if (dir > 0) {
+					next = cur->next;
+					if (next == NULL)
+						next = self->monitors;
+				} else {
+					next = cur->prev;
+					if (next == NULL)
+						next = g_list_last(self->monitors);
+				}
+
+				target = (GowlMonitor *)next->data;
+				if (target != self->selmon) {
+					self->selmon = target;
+					gowl_compositor_focus_client(self,
+						focustop(self, target), TRUE);
+				}
+				return TRUE;
+			}
+			case GOWL_ACTION_MOVE_TO_MONITOR: {
+				/*
+				 * Move the focused client to the next/previous
+				 * monitor.  arg "+1" = next, "-1" = previous.
+				 * Ported from dwl's tagmon().
+				 */
+				GowlClient *sel;
+				GowlMonitor *target;
+				GList *cur, *next;
+				gint dir;
+
+				sel = focustop(self, self->selmon);
+				if (sel == NULL || self->selmon == NULL || kb->arg == NULL)
+					return TRUE;
+
+				dir = atoi(kb->arg);
+				cur = g_list_find(self->monitors, self->selmon);
+				if (cur == NULL)
+					return TRUE;
+
+				if (dir > 0) {
+					next = cur->next;
+					if (next == NULL)
+						next = self->monitors;
+				} else {
+					next = cur->prev;
+					if (next == NULL)
+						next = g_list_last(self->monitors);
+				}
+
+				target = (GowlMonitor *)next->data;
+				if (target != self->selmon)
+					setmon(self, sel, target, 0);
+				return TRUE;
+			}
+			case GOWL_ACTION_TAG_TOGGLE_VIEW: {
+				/*
+				 * Toggle the visibility of a specific tag on the
+				 * current monitor.  arg is the tag bitmask.
+				 * Ported from dwl's toggleview().
+				 */
+				guint32 newtags;
+				guint32 occupied;
+				GList *cl;
+
+				if (self->selmon == NULL || kb->arg == NULL)
+					return TRUE;
+
+				newtags = self->selmon->tagset[self->selmon->seltags] ^
+				          ((guint32)atoi(kb->arg) & TAGMASK);
+
+				/* Must have at least one tag visible */
+				if (newtags == 0)
+					return TRUE;
+
+				self->selmon->tagset[self->selmon->seltags] = newtags;
+				gowl_compositor_focus_client(self,
+					focustop(self, self->selmon), TRUE);
+				gowl_compositor_arrange(self, self->selmon);
+
+				/* Push tag state to IPC subscribers */
+				if (self->ipc != NULL) {
+					occupied = 0;
+					for (cl = self->clients; cl != NULL; cl = cl->next) {
+						GowlClient *tc = (GowlClient *)cl->data;
+						if (tc->mon == self->selmon)
+							occupied |= tc->tags;
+					}
+					gowl_ipc_push_event(self->ipc,
+						"EVENT tags %s %u %u 0 %u",
+						self->selmon->wlr_output->name,
+						newtags, occupied, newtags);
+				}
+				return TRUE;
+			}
+			case GOWL_ACTION_TAG_TOGGLE: {
+				/*
+				 * Toggle a specific tag on the focused client.
+				 * arg is the tag bitmask.
+				 * Ported from dwl's toggletag().
+				 */
+				GowlClient *sel;
+				guint32 newtags;
+				guint32 occupied;
+				guint32 active;
+				GList *cl;
+
+				if (self->selmon == NULL || kb->arg == NULL)
+					return TRUE;
+
+				sel = focustop(self, self->selmon);
+				if (sel == NULL)
+					return TRUE;
+
+				newtags = sel->tags ^ ((guint32)atoi(kb->arg) & TAGMASK);
+
+				/* Client must have at least one tag */
+				if (newtags == 0)
+					return TRUE;
+
+				sel->tags = newtags;
+				gowl_compositor_focus_client(self,
+					focustop(self, self->selmon), TRUE);
+				gowl_compositor_arrange(self, self->selmon);
+
+				/* Push tag state to IPC subscribers */
+				if (self->ipc != NULL) {
+					active = self->selmon->tagset[self->selmon->seltags];
+					occupied = 0;
+					for (cl = self->clients; cl != NULL; cl = cl->next) {
+						GowlClient *tc = (GowlClient *)cl->data;
+						if (tc->mon == self->selmon)
+							occupied |= tc->tags;
+					}
+					gowl_ipc_push_event(self->ipc,
+						"EVENT tags %s %u %u 0 %u",
+						self->selmon->wlr_output->name,
+						active, occupied, active);
+				}
+				return TRUE;
+			}
+			case GOWL_ACTION_CYCLE_LAYOUT: {
+				/*
+				 * Cycle between tile (0) and monocle (1) layouts
+				 * on the selected monitor.
+				 */
+				if (self->selmon == NULL)
+					return TRUE;
+
+				self->selmon->sellt = (self->selmon->sellt + 1) % 2;
+				gowl_compositor_arrange(self, self->selmon);
+
+				/* Push layout to IPC subscribers */
+				if (self->ipc != NULL) {
+					gowl_ipc_push_event(self->ipc,
+						"EVENT layout %s %s",
+						self->selmon->wlr_output->name,
+						self->selmon->layout_symbol != NULL
+							? self->selmon->layout_symbol
+							: "tile");
+				}
+				return TRUE;
+			}
+			case GOWL_ACTION_RELOAD_CONFIG: {
+				/*
+				 * Reload the YAML configuration from disk.  Keybinds
+				 * and appearance settings take effect immediately.
+				 * The new config object is intentionally kept alive
+				 * (the compositor borrows the reference).
+				 */
+				GowlConfig *new_config;
+				GError *err = NULL;
+
+				new_config = gowl_config_new();
+				if (!gowl_config_load_yaml_from_search_path(new_config,
+				                                            &err)) {
+					g_warning("reload_config: %s", err->message);
+					g_error_free(err);
+					g_object_unref(new_config);
+					return TRUE;
+				}
+
+				/* Drop ref on old config if compositor owns one */
+				if (self->config != NULL)
+					g_object_unref(self->config);
+
+				gowl_compositor_set_config(self, new_config);
+				g_info("Configuration reloaded");
+
+				/* Re-arrange all monitors with new settings */
+				{
+					GList *ml;
+					for (ml = self->monitors; ml != NULL; ml = ml->next) {
+						GowlMonitor *m = (GowlMonitor *)ml->data;
+						gowl_compositor_arrange(self, m);
+					}
+				}
+				return TRUE;
+			}
+			case GOWL_ACTION_IPC_COMMAND: {
+				/*
+				 * Execute an arbitrary IPC command string.
+				 * The arg is forwarded to the IPC handler.
+				 */
+				if (self->ipc != NULL && kb->arg != NULL) {
+					gowl_ipc_push_event(self->ipc,
+						"EVENT command %s", kb->arg);
+				}
+				return TRUE;
+			}
+			case GOWL_ACTION_NONE:
+			case GOWL_ACTION_CUSTOM:
 			default:
 				g_debug("Unhandled action %d for keybind",
 				        kb->action);
@@ -2474,8 +2832,11 @@ static void
 on_client_set_title(struct wl_listener *listener, void *data)
 {
 	GowlClient *c;
+	GowlCompositor *self;
+	GowlClient *focused;
 
 	c = wl_container_of(listener, c, set_title);
+	self = c->compositor;
 	(void)data;
 
 	g_free(c->title);
@@ -2483,6 +2844,12 @@ on_client_set_title(struct wl_listener *listener, void *data)
 
 	g_free(c->app_id);
 	c->app_id = g_strdup(c->xdg_toplevel->app_id);
+
+	/* Push title to IPC if this is the focused client */
+	focused = focustop(self, self->selmon);
+	if (self->ipc != NULL && focused == c)
+		gowl_ipc_push_event(self->ipc, "EVENT title %s",
+		                     c->title != NULL ? c->title : "");
 }
 
 /**

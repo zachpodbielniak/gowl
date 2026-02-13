@@ -70,6 +70,26 @@ void            gowl_compositor_set_module_manager (GowlCompositor  *self,
                                                     GowlModuleManager *mgr);
 
 /**
+ * gowl_compositor_set_ipc:
+ * @self: a #GowlCompositor
+ * @ipc: (transfer none) (nullable): the #GowlIpc server to use
+ *
+ * Sets the IPC server.  The compositor borrows the reference and
+ * will push state events (tags, layout, title, focus) to subscribed
+ * clients whenever those change.  May be %NULL to disable IPC events.
+ */
+void            gowl_compositor_set_ipc (GowlCompositor *self,
+                                         GowlIpc        *ipc);
+
+/**
+ * gowl_compositor_get_ipc:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the current #GowlIpc
+ */
+GowlIpc        *gowl_compositor_get_ipc (GowlCompositor *self);
+
+/**
  * gowl_compositor_start:
  * @self: a #GowlCompositor
  * @error: (nullable): return location for a #GError, or %NULL

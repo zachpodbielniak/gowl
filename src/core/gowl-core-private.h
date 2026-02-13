@@ -31,6 +31,7 @@
 #include "gowl-types.h"
 #include "gowl-enums.h"
 #include "config/gowl-config.h"
+#include "ipc/gowl-ipc.h"
 #include "module/gowl-module-manager.h"
 #include "core/gowl-compositor.h"
 #include "core/gowl-monitor.h"
@@ -173,6 +174,7 @@ struct _GowlCompositor {
 	/* gowl sub-objects (compositor-owned) */
 	GowlConfig                   *config;       /* borrowed ref */
 	GowlModuleManager            *module_mgr;   /* borrowed ref */
+	GowlIpc                      *ipc;          /* borrowed ref (may be NULL) */
 
 	/* input sub-objects (owned by compositor, created in start) */
 	struct wlr_seat              *wlr_seat;

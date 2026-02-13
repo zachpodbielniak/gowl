@@ -59,6 +59,31 @@ gowl_ipc_start(GowlIpc *self, GError **error);
 void
 gowl_ipc_stop(GowlIpc *self);
 
+/**
+ * gowl_ipc_push_event:
+ * @self: the IPC server
+ * @format: printf-style format string for the event line
+ * @...: arguments for the format string
+ *
+ * Broadcasts an event line to all subscribed clients.
+ * Clients subscribe by sending the "subscribe" command.
+ * The event is sent as a single newline-terminated line.
+ */
+void
+gowl_ipc_push_event(GowlIpc *self, const gchar *format, ...)
+	G_GNUC_PRINTF(2, 3);
+
+/**
+ * gowl_ipc_get_subscriber_count:
+ * @self: the IPC server
+ *
+ * Returns the number of currently subscribed clients.
+ *
+ * Returns: the subscriber count
+ */
+guint
+gowl_ipc_get_subscriber_count(GowlIpc *self);
+
 G_END_DECLS
 
 #endif /* GOWL_IPC_H */

@@ -20,6 +20,7 @@
 #include <gio/gio.h>
 #include <gio/gunixsocketaddress.h>
 #include <glib/gstdio.h>
+#include <stdarg.h>
 #include <string.h>
 
 /**
@@ -37,6 +38,7 @@ struct _GowlIpc {
 	gboolean         running;
 	GSocketService  *service;     /* GSocketService for accepting clients */
 	GList           *connections; /* active GSocketConnection* list */
+	GList           *subscribers; /* connections that sent "subscribe" */
 };
 
 G_DEFINE_FINAL_TYPE(GowlIpc, gowl_ipc, G_TYPE_OBJECT)
@@ -81,6 +83,7 @@ gowl_ipc_finalize(GObject *object)
 	self = GOWL_IPC(object);
 
 	g_free(self->socket_path);
+	g_list_free(self->subscribers);
 	g_list_free(self->connections);
 
 	G_OBJECT_CLASS(gowl_ipc_parent_class)->finalize(object);
@@ -124,6 +127,7 @@ gowl_ipc_init(GowlIpc *self)
 	self->running     = FALSE;
 	self->service     = NULL;
 	self->connections = NULL;
+	self->subscribers = NULL;
 }
 
 /* --- Async read callback --- */
@@ -158,6 +162,9 @@ on_read_line(GObject *source, GAsyncResult *result, gpointer user_data)
 			g_error_free(error);
 		}
 
+		/* Remove from subscribers if present */
+		self->subscribers = g_list_remove(self->subscribers, conn);
+
 		/* Clean up this connection */
 		self->connections = g_list_remove(self->connections, conn);
 		g_io_stream_close(G_IO_STREAM(conn), NULL, NULL);
@@ -181,6 +188,16 @@ on_read_line(GObject *source, GAsyncResult *result, gpointer user_data)
 			args = "";
 		}
 
+		/* Handle "subscribe" command: flag this connection for events */
+		if (g_strcmp0(command, "subscribe") == 0) {
+			if (g_list_find(self->subscribers, conn) == NULL) {
+				self->subscribers = g_list_prepend(
+					self->subscribers, conn);
+				g_debug("gowl-ipc: client subscribed (%u total)",
+				        g_list_length(self->subscribers));
+			}
+		}
+
 		g_signal_emit(self, ipc_signals[SIGNAL_COMMAND_RECEIVED], 0,
 		              command, args);
 
@@ -194,6 +211,7 @@ on_read_line(GObject *source, GAsyncResult *result, gpointer user_data)
 		g_data_input_stream_read_line_async(
 			dis, G_PRIORITY_DEFAULT, NULL, on_read_line, NULL);
 	} else {
+		self->subscribers = g_list_remove(self->subscribers, conn);
 		self->connections = g_list_remove(self->connections, conn);
 		g_io_stream_close(G_IO_STREAM(conn), NULL, NULL);
 		g_object_unref(conn);
@@ -379,8 +397,85 @@ gowl_ipc_stop(GowlIpc *self)
 	g_list_free(self->connections);
 	self->connections = NULL;
 
+	/* Clear subscriber list (connections already closed above) */
+	g_list_free(self->subscribers);
+	self->subscribers = NULL;
+
 	/* Remove the socket file */
 	g_unlink(self->socket_path);
 
 	g_debug("gowl-ipc: stopped");
+}
+
+/**
+ * gowl_ipc_push_event:
+ * @self: the IPC server
+ * @format: printf-style format string for the event line
+ * @...: arguments for the format string
+ *
+ * Broadcasts a newline-terminated event line to all subscribed
+ * clients.  Clients that have disconnected or whose write fails
+ * are silently removed from the subscriber list.
+ */
+void
+gowl_ipc_push_event(GowlIpc *self, const gchar *format, ...)
+{
+	va_list ap;
+	g_autofree gchar *body = NULL;
+	g_autofree gchar *line = NULL;
+	GList *l;
+	GList *next;
+
+	g_return_if_fail(GOWL_IS_IPC(self));
+
+	if (self->subscribers == NULL)
+		return;
+
+	/* Format the event line with trailing newline */
+	va_start(ap, format);
+	body = g_strdup_vprintf(format, ap);
+	va_end(ap);
+
+	line = g_strdup_printf("%s\n", body);
+
+	/* Broadcast to all subscribers, removing dead ones */
+	for (l = self->subscribers; l != NULL; l = next) {
+		GSocketConnection *conn;
+		GOutputStream *ostream;
+		GError *error;
+
+		next = l->next;
+		conn = (GSocketConnection *)l->data;
+
+		ostream = g_io_stream_get_output_stream(G_IO_STREAM(conn));
+
+		error = NULL;
+		if (!g_output_stream_write_all(
+				ostream, line, strlen(line),
+				NULL, NULL, &error)) {
+			g_debug("gowl-ipc: subscriber write failed: %s",
+			        error->message);
+			g_error_free(error);
+
+			/* Remove dead subscriber */
+			self->subscribers = g_list_delete_link(
+				self->subscribers, l);
+		}
+	}
+}
+
+/**
+ * gowl_ipc_get_subscriber_count:
+ * @self: the IPC server
+ *
+ * Returns the number of currently subscribed clients.
+ *
+ * Returns: the subscriber count
+ */
+guint
+gowl_ipc_get_subscriber_count(GowlIpc *self)
+{
+	g_return_val_if_fail(GOWL_IS_IPC(self), 0);
+
+	return g_list_length(self->subscribers);
 }

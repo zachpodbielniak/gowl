@@ -1200,3 +1200,20 @@ gowl_config_get_module_config(
 	return (GHashTable *)g_hash_table_lookup(
 		self->module_configs, module_name);
 }
+
+/**
+ * gowl_config_get_all_module_configs:
+ * @self: a #GowlConfig
+ *
+ * Returns the entire module configuration table.  The outer hash
+ * maps module names (strings) to inner #GHashTable objects of
+ * string key-value settings.
+ *
+ * Returns: (transfer none) (nullable): the module configs hash table
+ */
+GHashTable *
+gowl_config_get_all_module_configs(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->module_configs;
+}

@@ -383,6 +383,17 @@ GPtrArray *gowl_config_get_rules(GowlConfig *self);
 GHashTable *gowl_config_get_module_config(GowlConfig  *self,
                                            const gchar *module_name);
 
+/**
+ * gowl_config_get_all_module_configs:
+ * @self: a #GowlConfig
+ *
+ * Returns the entire module configuration table mapping module
+ * names to their settings hash tables.
+ *
+ * Returns: (transfer none) (nullable): a #GHashTable, or %NULL
+ */
+GHashTable *gowl_config_get_all_module_configs(GowlConfig *self);
+
 G_END_DECLS
 
 #endif /* GOWL_CONFIG_H */

@@ -722,36 +722,91 @@ main(int argc, char *argv[])
 	module_mgr = gowl_module_manager_new();
 
 	/*
-	 * Auto-load modules from standard directories.
-	 * In development builds (GOWL_DEV_INCLUDE_DIR is set), also
-	 * look alongside the binary for a modules/ directory.
-	 * At install time, modules live in GOWL_MODULEDIR.
+	 * Load only modules that are enabled in the YAML config.
+	 *
+	 * Build two search directories (dev first, then installed).
+	 * For each module listed as "enabled: true" in the config,
+	 * find its .so in the first directory that has it and load it.
+	 * This prevents duplicates and respects the enabled flag.
 	 */
 	{
 		g_autofree gchar *dev_mod_dir = NULL;
 		g_autofree gchar *bin_dir = NULL;
 		g_autofree gchar *exe_path = NULL;
+		const gchar *search_dirs[3] = { NULL, NULL, NULL };
+		gint n_dirs = 0;
+		GHashTable *enabled_modules;
+		GHashTableIter iter;
+		gpointer key, value;
 
-		/* Try development modules directory (relative to binary) */
+		/* Build ordered list of module search directories */
 		exe_path = g_file_read_link("/proc/self/exe", NULL);
 		if (exe_path != NULL) {
 			bin_dir = g_path_get_dirname(exe_path);
 			dev_mod_dir = g_build_filename(bin_dir, "modules", NULL);
-			if (g_file_test(dev_mod_dir, G_FILE_TEST_IS_DIR)) {
-				g_message("Loading modules from: %s", dev_mod_dir);
-				gowl_module_manager_load_from_directory(
-					module_mgr, dev_mod_dir);
+			if (g_file_test(dev_mod_dir, G_FILE_TEST_IS_DIR))
+				search_dirs[n_dirs++] = dev_mod_dir;
+		}
+		if (g_file_test(GOWL_MODULEDIR, G_FILE_TEST_IS_DIR))
+			search_dirs[n_dirs++] = GOWL_MODULEDIR;
+
+		/* Collect the set of module names with enabled: true */
+		enabled_modules = gowl_config_get_all_module_configs(config);
+
+		if (enabled_modules != NULL) {
+			g_hash_table_iter_init(&iter, enabled_modules);
+			while (g_hash_table_iter_next(&iter, &key, &value)) {
+				const gchar *mod_name = (const gchar *)key;
+				GHashTable *mod_cfg = (GHashTable *)value;
+				const gchar *enabled_str;
+				gboolean enabled;
+				gboolean loaded;
+				gint di;
+
+				/* Check enabled flag; default to false if absent */
+				enabled_str = (const gchar *)g_hash_table_lookup(
+					mod_cfg, "enabled");
+				enabled = (enabled_str != NULL &&
+				           g_ascii_strcasecmp(enabled_str, "true") == 0);
+
+				if (!enabled) {
+					g_debug("Module '%s' is disabled, skipping", mod_name);
+					continue;
+				}
+
+				/* Try each search directory in priority order */
+				loaded = FALSE;
+				for (di = 0; di < n_dirs && !loaded; di++) {
+					g_autofree gchar *so_name = NULL;
+					g_autofree gchar *so_path = NULL;
+					GError *mod_err = NULL;
+
+					so_name = g_strdup_printf("%s.so", mod_name);
+					so_path = g_build_filename(
+						search_dirs[di], so_name, NULL);
+
+					if (!g_file_test(so_path, G_FILE_TEST_EXISTS))
+						continue;
+
+					if (gowl_module_manager_load_module(
+					        module_mgr, so_path, &mod_err)) {
+						g_message("Loaded module '%s' from %s",
+						          mod_name, so_path);
+						loaded = TRUE;
+					} else {
+						g_warning("Failed to load module '%s': %s",
+						          so_path, mod_err->message);
+						g_error_free(mod_err);
+					}
+				}
+
+				if (!loaded)
+					g_warning("Module '%s' is enabled but .so not found",
+					          mod_name);
 			}
 		}
 
-		/* Also load from the installed module directory */
-		if (g_file_test(GOWL_MODULEDIR, G_FILE_TEST_IS_DIR)) {
-			g_message("Loading modules from: %s", GOWL_MODULEDIR);
-			gowl_module_manager_load_from_directory(
-				module_mgr, GOWL_MODULEDIR);
-		}
-
-		/* Activate all loaded modules */
+		/* Activate all loaded (enabled) modules */
 		gowl_module_manager_activate_all(module_mgr);
 	}
 

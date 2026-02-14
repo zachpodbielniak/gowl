@@ -3147,7 +3147,12 @@ on_new_layer_surface(struct wl_listener *listener, void *data)
 	ls->scene_layer_surface = wlr_scene_layer_surface_v1_create(
 		scene_layer, wlr_layer_surface);
 	ls->scene = ls->scene_layer_surface->tree;
-	ls->scene->node.data = ls;
+	/* NOTE: do NOT set ls->scene->node.data here.  The xytonode()
+	 * tree walk casts all non-NULL node.data as GowlClient*, so
+	 * storing a GowlLayerSurface* would cause a type confusion
+	 * crash when the pointer hovers over a layer surface. Layer
+	 * surface data is accessed via wlr_layer_surface->data or
+	 * wl_container_of() instead. */
 
 	/* Register surface event listeners */
 	LISTEN(&wlr_layer_surface->surface->events.commit,

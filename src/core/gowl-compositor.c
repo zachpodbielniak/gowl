@@ -1030,8 +1030,11 @@ xytonode(
 				surface = ss->surface;
 		}
 
-		/* Walk the tree upward to find a node with client data */
-		for (pnode = node; pnode != NULL && c == NULL; pnode = &pnode->parent->node)
+		/* Walk the tree upward to find a node with client data.
+		 * Layer surfaces (e.g. gowlbar) have no GowlClient, so the
+		 * walk may reach the root where parent is NULL. */
+		for (pnode = node; pnode != NULL && c == NULL;
+		     pnode = pnode->parent ? &pnode->parent->node : NULL)
 			c = (GowlClient *)pnode->data;
 	}
 

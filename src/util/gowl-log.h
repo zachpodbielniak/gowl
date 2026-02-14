@@ -29,13 +29,16 @@ G_BEGIN_DECLS
  * @log_file: (nullable): path to log file, "stderr" for stderr only,
  *            or %NULL for stderr only.  The path may contain "~" which
  *            is expanded to $HOME.
+ * @truncate: if %TRUE, the log file is truncated (overwritten) instead
+ *            of appended to.  Useful for debug sessions where a fresh
+ *            log is desired on each launch.
  *
  * Initialize the gowl logging system.  When @log_file is a valid path,
  * log messages are written to the file.  When set to "stderr" or %NULL,
  * messages go to stderr (or the systemd journal if available).
  */
 void
-gowl_log_init(const gchar *level, const gchar *log_file);
+gowl_log_init(const gchar *level, const gchar *log_file, gboolean truncate);
 
 G_END_DECLS
 

@@ -109,7 +109,7 @@ gowl_log_writer(
 }
 
 void
-gowl_log_init(const gchar *level, const gchar *log_file)
+gowl_log_init(const gchar *level, const gchar *log_file, gboolean truncate)
 {
 	/* Parse log level */
 	if (level == NULL || g_ascii_strcasecmp(level, "warning") == 0) {
@@ -124,15 +124,25 @@ gowl_log_init(const gchar *level, const gchar *log_file)
 		gowl_min_log_level = G_LOG_LEVEL_WARNING;
 	}
 
+	/* Close any previously opened log file (re-init path) */
+	if (gowl_log_fp != NULL) {
+		fclose(gowl_log_fp);
+		gowl_log_fp = NULL;
+	}
+
 	/*
 	 * Open log file if specified and not "stderr".
 	 * Expand leading "~" to $HOME.
+	 * Use "w" (truncate) in debug mode, "a" (append) otherwise.
 	 */
 	if (log_file != NULL &&
 	    g_ascii_strcasecmp(log_file, "stderr") != 0 &&
 	    log_file[0] != '\0') {
 		g_autofree gchar *expanded = NULL;
 		g_autofree gchar *dir = NULL;
+		const gchar *mode;
+
+		mode = truncate ? "w" : "a";
 
 		/* Expand ~ to home directory */
 		if (log_file[0] == '~' && log_file[1] == G_DIR_SEPARATOR) {
@@ -145,7 +155,7 @@ gowl_log_init(const gchar *level, const gchar *log_file)
 		/* Ensure the parent directory exists */
 		dir = g_path_get_dirname(expanded);
 		if (g_mkdir_with_parents(dir, 0755) == 0) {
-			gowl_log_fp = fopen(expanded, "a");
+			gowl_log_fp = fopen(expanded, mode);
 			if (gowl_log_fp == NULL) {
 				g_printerr("gowl: failed to open log file: %s\n",
 				           expanded);

@@ -261,7 +261,7 @@ main(int argc, char *argv[])
 	}
 
 	/* Initialize logging (stderr first, re-init after config load) */
-	gowl_log_init(debug_mode ? "debug" : "warning", NULL);
+	gowl_log_init(debug_mode ? "debug" : "warning", NULL, FALSE);
 
 	g_message("gowl %s starting...", GOWL_VERSION_STRING);
 
@@ -343,10 +343,14 @@ main(int argc, char *argv[])
 		}
 	}
 
-	/* Re-initialize logging with config values (file + level) */
+	/* Re-initialize logging with config values (file + level).
+	 * In debug mode: force debug level and truncate the log file
+	 * so each session starts with a clean log.
+	 */
 	gowl_log_init(
 		debug_mode ? "debug" : gowl_config_get_log_level(config),
-		gowl_config_get_log_file(config));
+		gowl_config_get_log_file(config),
+		debug_mode);
 
 	/* Initialize module manager */
 	module_mgr = gowl_module_manager_new();

@@ -157,6 +157,7 @@ MODULE_LDFLAGS := -shared -fPIC
 
 # Bar dependencies (standalone Wayland client)
 BAR_DEPS := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 wayland-client pangocairo yaml-0.1 json-glib-1.0
+$(foreach dep,$(BAR_DEPS),$(call check_dep,$(dep)))
 BAR_CFLAGS_DEPS := $(shell $(PKG_CONFIG) --cflags $(BAR_DEPS))
 BAR_LDFLAGS_DEPS := $(shell $(PKG_CONFIG) --libs $(BAR_DEPS))
 

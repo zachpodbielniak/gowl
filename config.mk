@@ -156,9 +156,9 @@ MODULE_CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(MODULE_CFLAGS_INC) $(CFLAGS_DE
 MODULE_LDFLAGS := -shared -fPIC
 
 # Bar dependencies (standalone Wayland client)
-BAR_DEPS := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 wayland-client wayland-protocols pangocairo yaml-0.1 json-glib-1.0
-BAR_CFLAGS_DEPS := $(shell $(PKG_CONFIG) --cflags $(BAR_DEPS) 2>/dev/null)
-BAR_LDFLAGS_DEPS := $(shell $(PKG_CONFIG) --libs $(BAR_DEPS) 2>/dev/null)
+BAR_DEPS := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 wayland-client pangocairo yaml-0.1 json-glib-1.0
+BAR_CFLAGS_DEPS := $(shell $(PKG_CONFIG) --cflags $(BAR_DEPS))
+BAR_LDFLAGS_DEPS := $(shell $(PKG_CONFIG) --libs $(BAR_DEPS))
 
 # Bar compiler flags
 BAR_CFLAGS := $(CSTD) -Wall -Wextra -Wno-unused-parameter -fPIC

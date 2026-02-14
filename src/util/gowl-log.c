@@ -23,6 +23,7 @@
 
 static GLogLevelFlags gowl_min_log_level = G_LOG_LEVEL_WARNING;
 static FILE          *gowl_log_fp        = NULL;
+static gboolean       gowl_log_writer_set = FALSE;
 
 /**
  * level_name:
@@ -155,5 +156,9 @@ gowl_log_init(const gchar *level, const gchar *log_file)
 		}
 	}
 
-	g_log_set_writer_func(gowl_log_writer, NULL, NULL);
+	/* Only register the writer function once; GLib forbids repeat calls */
+	if (!gowl_log_writer_set) {
+		g_log_set_writer_func(gowl_log_writer, NULL, NULL);
+		gowl_log_writer_set = TRUE;
+	}
 }

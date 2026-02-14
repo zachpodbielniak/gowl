@@ -1031,11 +1031,14 @@ xytonode(
 		}
 
 		/* Walk the tree upward to find a node with client data.
-		 * Layer surfaces (e.g. gowlbar) have no GowlClient, so the
-		 * walk may reach the root where parent is NULL. */
+		 * Layer surfaces (e.g. gowlbar) store GowlLayerSurface in
+		 * node.data, so we must verify the type with GOWL_IS_CLIENT.
+		 * The walk may also reach the root where parent is NULL. */
 		for (pnode = node; pnode != NULL && c == NULL;
-		     pnode = pnode->parent ? &pnode->parent->node : NULL)
-			c = (GowlClient *)pnode->data;
+		     pnode = pnode->parent ? &pnode->parent->node : NULL) {
+			if (pnode->data != NULL && GOWL_IS_CLIENT(pnode->data))
+				c = (GowlClient *)pnode->data;
+		}
 	}
 
 	if (psurface != NULL) *psurface = surface;

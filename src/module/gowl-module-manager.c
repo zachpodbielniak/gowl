@@ -801,3 +801,45 @@ gowl_module_manager_get_gaps(
 
 	return FALSE;
 }
+
+/**
+ * gowl_module_manager_configure_all:
+ * @self: a #GowlModuleManager
+ * @module_configs: a #GHashTable mapping module names (gchar*) to
+ *   per-module #GHashTable<gchar*,gchar*> settings.  Typically
+ *   obtained from gowl_config_get_all_module_configs().
+ *
+ * Iterates all registered modules and calls gowl_module_configure()
+ * on each one that has a matching entry in @module_configs.
+ */
+void
+gowl_module_manager_configure_all(
+	GowlModuleManager *self,
+	GHashTable        *module_configs
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	if (module_configs == NULL)
+		return;
+
+	for (i = 0; i < self->modules->len; i++) {
+		GowlModule *mod;
+		const gchar *mod_name;
+		GHashTable *mod_cfg;
+
+		mod = (GowlModule *)g_ptr_array_index(self->modules, i);
+		mod_name = gowl_module_get_name(mod);
+		if (mod_name == NULL)
+			continue;
+
+		mod_cfg = (GHashTable *)g_hash_table_lookup(
+			module_configs, mod_name);
+		if (mod_cfg != NULL) {
+			g_message("Configuring module '%s' with %u settings",
+			          mod_name, g_hash_table_size(mod_cfg));
+			gowl_module_configure(mod, (gpointer)mod_cfg);
+		}
+	}
+}

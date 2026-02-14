@@ -82,6 +82,9 @@ gboolean            gowl_module_manager_get_gaps         (GowlModuleManager *sel
                                                            gint              *outer_h,
                                                            gint              *outer_v);
 
+void                gowl_module_manager_configure_all    (GowlModuleManager *self,
+                                                           GHashTable        *module_configs);
+
 G_END_DECLS
 
 #endif /* GOWL_MODULE_MANAGER_H */

@@ -102,34 +102,86 @@ vanitygaps_get_version(GowlModule *mod)
 }
 
 /**
+ * vanitygaps_get_int_setting:
+ * @settings: a #GHashTable of string key-value pairs
+ * @key: the setting key to look up
+ * @fallback: value to return if the key is missing
+ *
+ * Helper to read an integer from the module config hash table.
+ *
+ * Returns: the parsed integer, or @fallback on missing/invalid key
+ */
+static gint
+vanitygaps_get_int_setting(
+	GHashTable  *settings,
+	const gchar *key,
+	gint         fallback
+){
+	const gchar *val;
+
+	val = (const gchar *)g_hash_table_lookup(settings, key);
+	if (val == NULL)
+		return fallback;
+
+	return (gint)g_ascii_strtoll(val, NULL, 10);
+}
+
+/**
  * vanitygaps_configure:
  * @mod: the module
- * @config: a gint[4] array: {inner_h, inner_v, outer_h, outer_v}
+ * @config: a #GHashTable of string key-value settings from the YAML
+ *          config.  Recognised keys: "inner-h", "inner-v", "outer-h",
+ *          "outer-v" (integers in pixels).  Also accepts the shorthand
+ *          keys "inner-gap" (sets both inner-h and inner-v) and
+ *          "outer-gap" (sets both outer-h and outer-v).
  *
- * Sets gap values from configuration.  The config parameter is
- * expected to be a pointer to a gint[4] array containing the
- * four gap values in order.
+ * Applies configuration from the YAML modules section.
  */
 static void
 vanitygaps_configure(GowlModule *mod, gpointer config)
 {
 	GowlModuleVanitygaps *self;
-	gint *gaps;
+	GHashTable *settings;
 
 	self = GOWL_MODULE_VANITYGAPS(mod);
 
 	if (config == NULL)
 		return;
 
-	gaps = (gint *)config;
-	self->inner_h = gaps[0];
-	self->inner_v = gaps[1];
-	self->outer_h = gaps[2];
-	self->outer_v = gaps[3];
+	settings = (GHashTable *)config;
 
-	g_debug("vanitygaps: configured gaps ih=%d iv=%d oh=%d ov=%d",
-	        self->inner_h, self->inner_v,
-	        self->outer_h, self->outer_v);
+	/* Support shorthand: "inner-gap" sets both h and v,
+	 * "outer-gap" sets both h and v.  Specific keys override. */
+	if (g_hash_table_contains(settings, "inner-gap")) {
+		gint ig = vanitygaps_get_int_setting(settings, "inner-gap",
+		                                     GOWL_VANITYGAPS_DEFAULT_GAP);
+		self->inner_h = ig;
+		self->inner_v = ig;
+	}
+	if (g_hash_table_contains(settings, "outer-gap")) {
+		gint og = vanitygaps_get_int_setting(settings, "outer-gap",
+		                                     GOWL_VANITYGAPS_DEFAULT_GAP);
+		self->outer_h = og;
+		self->outer_v = og;
+	}
+
+	/* Specific per-axis keys override the shorthand */
+	if (g_hash_table_contains(settings, "inner-h"))
+		self->inner_h = vanitygaps_get_int_setting(
+			settings, "inner-h", self->inner_h);
+	if (g_hash_table_contains(settings, "inner-v"))
+		self->inner_v = vanitygaps_get_int_setting(
+			settings, "inner-v", self->inner_v);
+	if (g_hash_table_contains(settings, "outer-h"))
+		self->outer_h = vanitygaps_get_int_setting(
+			settings, "outer-h", self->outer_h);
+	if (g_hash_table_contains(settings, "outer-v"))
+		self->outer_v = vanitygaps_get_int_setting(
+			settings, "outer-v", self->outer_v);
+
+	g_message("vanitygaps: configured gaps ih=%d iv=%d oh=%d ov=%d",
+	          self->inner_h, self->inner_v,
+	          self->outer_h, self->outer_v);
 }
 
 /* --- GowlStartupHandler --- */

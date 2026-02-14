@@ -755,6 +755,33 @@ main(int argc, char *argv[])
 		gowl_module_manager_activate_all(module_mgr);
 	}
 
+	/* Pass per-module config from YAML to each loaded module.
+	 * This calls gowl_module_configure() with a GHashTable<string,string>
+	 * of settings for each module that has a matching YAML section. */
+	{
+		GList *mod_list;
+		GList *ml;
+
+		mod_list = gowl_module_manager_get_modules(module_mgr);
+		for (ml = mod_list; ml != NULL; ml = ml->next) {
+			GowlModule *mod = GOWL_MODULE(ml->data);
+			const gchar *mod_name;
+			GHashTable *mod_cfg;
+
+			mod_name = gowl_module_get_name(mod);
+			if (mod_name == NULL)
+				continue;
+
+			mod_cfg = gowl_config_get_module_config(config, mod_name);
+			if (mod_cfg != NULL) {
+				g_message("Configuring module '%s' with %u settings",
+				          mod_name, g_hash_table_size(mod_cfg));
+				gowl_module_configure(mod, (gpointer)mod_cfg);
+			}
+		}
+		g_list_free(mod_list);
+	}
+
 	/* Create compositor and wire up config + module manager */
 	compositor = gowl_compositor_new();
 	gowl_compositor = compositor;

@@ -185,7 +185,9 @@ monitors: {}
 # Each key is a module name; nested values are passed to the module's configure() method.
 modules:
   vanitygaps:
-    enabled: false
+    enabled: true
+    # Shorthand: inner-gap / outer-gap set both axes.
+    # Per-axis: inner-h, inner-v, outer-h, outer-v override shorthand.
     inner-gap: 5
     outer-gap: 5
   pertag:

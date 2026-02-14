@@ -81,6 +81,11 @@ struct _GowlConfig {
 
 	/* Rules - array of GowlRuleEntry* (heap-allocated) */
 	GPtrArray *rules;
+
+	/* Module configs - maps module name (gchar*) to per-module
+	 * GHashTable<gchar*, gchar*> of key-value settings parsed
+	 * from the YAML modules section. */
+	GHashTable *module_configs;
 };
 
 G_DEFINE_FINAL_TYPE(GowlConfig, gowl_config, G_TYPE_OBJECT)
@@ -295,6 +300,8 @@ gowl_config_finalize(GObject *object)
 	if (self->rules != NULL)
 		g_ptr_array_unref(self->rules);
 
+	g_clear_pointer(&self->module_configs, g_hash_table_unref);
+
 	G_OBJECT_CLASS(gowl_config_parent_class)->finalize(object);
 }
 
@@ -491,6 +498,13 @@ gowl_config_init(GowlConfig *self)
 	g_array_set_clear_func(self->keybinds, gowl_keybind_entry_clear);
 
 	self->rules = g_ptr_array_new_with_free_func(gowl_rule_entry_free);
+
+	/* Module configs: outer table maps module name -> inner table,
+	 * inner table maps setting key -> string value.
+	 * Both keys and values are owned (g_free). */
+	self->module_configs = g_hash_table_new_full(
+		g_str_hash, g_str_equal,
+		g_free, (GDestroyNotify)g_hash_table_unref);
 }
 
 /* --- Public API --- */
@@ -699,6 +713,80 @@ gowl_config_apply_mapping(
 					monitor = (gint)yaml_mapping_get_int_member(rule_map, "monitor");
 
 				gowl_config_add_rule(self, app_id, title, tags, floating, monitor);
+			}
+		}
+	}
+
+	/* Modules: each top-level key is a module name, value is a mapping
+	 * of setting keys to scalar values.  We flatten each module's
+	 * mapping into a GHashTable<string, string> for generic consumption
+	 * by the module's configure() method.
+	 *
+	 * Example YAML:
+	 *   modules:
+	 *     vanitygaps:
+	 *       enabled: true
+	 *       inner-h: 10
+	 */
+	if (yaml_mapping_has_member(mapping, "modules")) {
+		YamlMapping *mod_mapping;
+
+		mod_mapping = yaml_mapping_get_mapping_member(mapping, "modules");
+		if (mod_mapping != NULL) {
+			guint mod_count = yaml_mapping_get_size(mod_mapping);
+			guint mi;
+
+			/* Clear any previously-loaded module configs on reload */
+			g_hash_table_remove_all(self->module_configs);
+
+			for (mi = 0; mi < mod_count; mi++) {
+				const gchar *mod_name;
+				YamlNode *mod_val_node;
+				YamlMapping *mod_cfg_map;
+				GHashTable *settings;
+				guint si, setting_count;
+
+				mod_name = yaml_mapping_get_key(mod_mapping, mi);
+				mod_val_node = yaml_mapping_get_value(mod_mapping, mi);
+				if (mod_name == NULL || mod_val_node == NULL)
+					continue;
+
+				mod_cfg_map = yaml_node_get_mapping(mod_val_node);
+				if (mod_cfg_map == NULL)
+					continue;
+
+				/* Build settings hash for this module */
+				settings = g_hash_table_new_full(
+					g_str_hash, g_str_equal, g_free, g_free);
+
+				setting_count = yaml_mapping_get_size(mod_cfg_map);
+				for (si = 0; si < setting_count; si++) {
+					const gchar *key;
+					YamlNode *val_node;
+					const gchar *val_str;
+
+					key = yaml_mapping_get_key(mod_cfg_map, si);
+					val_node = yaml_mapping_get_value(mod_cfg_map, si);
+					if (key == NULL || val_node == NULL)
+						continue;
+
+					/* Get the raw scalar string from the YAML node.
+					 * For numbers and bools this is the text form
+					 * (e.g. "5", "true"). */
+					val_str = yaml_node_get_scalar(val_node);
+					if (val_str != NULL) {
+						g_hash_table_insert(settings,
+						                    g_strdup(key),
+						                    g_strdup(val_str));
+					}
+				}
+
+				g_debug("gowl_config: loaded %u settings for module '%s'",
+				        g_hash_table_size(settings), mod_name);
+
+				g_hash_table_insert(self->module_configs,
+				                    g_strdup(mod_name),
+				                    settings);
 			}
 		}
 	}
@@ -1086,4 +1174,29 @@ gowl_config_get_rules(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
 	return self->rules;
+}
+
+/**
+ * gowl_config_get_module_config:
+ * @self: a #GowlConfig
+ * @module_name: the name of the module (e.g. "vanitygaps")
+ *
+ * Returns the per-module settings parsed from the YAML config's
+ * `modules:` section.  The returned hash table maps setting keys
+ * (e.g. "inner-h") to string values (e.g. "10").  Callers must
+ * convert to the appropriate type.
+ *
+ * Returns: (transfer none) (nullable): a #GHashTable of string
+ *          key-value pairs, or %NULL if no config for @module_name
+ */
+GHashTable *
+gowl_config_get_module_config(
+	GowlConfig  *self,
+	const gchar *module_name
+){
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	g_return_val_if_fail(module_name != NULL, NULL);
+
+	return (GHashTable *)g_hash_table_lookup(
+		self->module_configs, module_name);
 }

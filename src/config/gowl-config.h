@@ -368,6 +368,21 @@ gowl_config_add_rule(
  */
 GPtrArray *gowl_config_get_rules(GowlConfig *self);
 
+/* --- Module Configuration --- */
+
+/**
+ * gowl_config_get_module_config:
+ * @self: a #GowlConfig
+ * @module_name: the name of the module (e.g. "vanitygaps")
+ *
+ * Returns the per-module settings hash table from the YAML config's
+ * `modules:` section.  Keys and values are strings.
+ *
+ * Returns: (transfer none) (nullable): a #GHashTable, or %NULL
+ */
+GHashTable *gowl_config_get_module_config(GowlConfig  *self,
+                                           const gchar *module_name);
+
 G_END_DECLS
 
 #endif /* GOWL_CONFIG_H */

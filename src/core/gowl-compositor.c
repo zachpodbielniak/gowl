@@ -867,11 +867,15 @@ resize_client(
 	                                       c->geom.width - 2 * (gint)c->bw,
 	                                       c->geom.height - 2 * (gint)c->bw);
 
-	/* Clip the surface to the geometry minus border.
-	 * Matches dwl's client_get_clip(): origin at (0,0),
-	 * width/height reduced by a single bw. */
-	clip.x = 0;
-	clip.y = 0;
+	/*
+	 * Clip the surface to the geometry minus border.
+	 * Matches dwl's client_get_clip(): origin at the XDG geometry
+	 * offset so CSD shadow areas are excluded but content is not
+	 * cut off.  GTK apps (Firefox, Ptyxis) have non-zero geometry.x/y
+	 * due to invisible resize-grab shadows around the content.
+	 */
+	clip.x = c->xdg_toplevel->base->geometry.x;
+	clip.y = c->xdg_toplevel->base->geometry.y;
 	clip.width  = c->geom.width - (gint)c->bw;
 	clip.height = c->geom.height - (gint)c->bw;
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);

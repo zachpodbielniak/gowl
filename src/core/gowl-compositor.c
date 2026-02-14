@@ -2186,14 +2186,17 @@ on_kb_key(struct wl_listener *listener, void *data)
 	guint32 mods;
 	gint nsyms, i;
 	gboolean handled;
+	xkb_keycode_t keycode;
 
 	self = wl_container_of(listener, self, kb_key);
 	event = (struct wlr_keyboard_key_event *)data;
 	kb = &self->wlr_kb_group->keyboard;
+	keycode = event->keycode + 8;
 
-	/* Translate keycode to keysyms using XKB state */
-	nsyms = xkb_state_key_get_syms(kb->xkb_state,
-	                               event->keycode + 8, &syms);
+	/* Translate keycode to keysyms using XKB state
+	 * (includes Shift / layout transforms).
+	 */
+	nsyms = xkb_state_key_get_syms(kb->xkb_state, keycode, &syms);
 	mods = wlr_keyboard_get_modifiers(kb);
 
 	/* Notify idle system of activity */
@@ -2204,10 +2207,39 @@ on_kb_key(struct wl_listener *listener, void *data)
 
 	/* Only check keybinds on press events */
 	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+		/* First try the state-resolved keysyms (handles things
+		 * like XKB_KEY_Return that don't change with Shift).
+		 */
 		for (i = 0; i < nsyms; i++) {
 			if (keybinding(self, mods, syms[i])) {
 				handled = TRUE;
 				break;
+			}
+		}
+
+		/* If not handled, try the base (level-0) keysym.
+		 * This is needed because the config parser stores
+		 * lowercase keysyms (e.g. XKB_KEY_c = 0x63), but when
+		 * Shift is held xkb_state_key_get_syms returns the
+		 * shifted keysym (e.g. XKB_KEY_C = 0x43).  By also
+		 * checking the raw keysym from layout level 0, we match
+		 * "Super+Shift+c" correctly.
+		 */
+		if (!handled) {
+			const xkb_keysym_t *raw_syms;
+			xkb_layout_index_t layout;
+			gint n_raw;
+
+			layout = xkb_state_key_get_layout(kb->xkb_state,
+			                                  keycode);
+			n_raw = xkb_keymap_key_get_syms_by_level(
+				kb->keymap, keycode, layout, 0, &raw_syms);
+
+			for (i = 0; i < n_raw; i++) {
+				if (keybinding(self, mods, raw_syms[i])) {
+					handled = TRUE;
+					break;
+				}
 			}
 		}
 	}

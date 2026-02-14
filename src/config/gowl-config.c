@@ -638,10 +638,17 @@ gowl_config_apply_mapping(
 					continue;
 				}
 
-				/* Resolve action name to GowlAction enum */
+				/* Resolve action name to GowlAction enum.
+				 * Normalise underscores to hyphens so that both
+				 * "kill_client" and "kill-client" map to the nick.
+				 */
 				action_class = (GEnumClass *)g_type_class_ref(
 					gowl_action_get_type());
-				enum_val = g_enum_get_value_by_nick(action_class, action_str);
+				{
+					g_autofree gchar *norm = g_strdup(action_str);
+					g_strdelimit(norm, "_", '-');
+					enum_val = g_enum_get_value_by_nick(action_class, norm);
+				}
 				action = GOWL_ACTION_NONE;
 				if (enum_val != NULL)
 					action = enum_val->value;

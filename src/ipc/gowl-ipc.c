@@ -189,6 +189,8 @@ on_client_readable(int fd, uint32_t mask, void *data)
 	GowlIpc *self;
 	ssize_t n;
 	gchar *newline;
+	gsize line_len;
+	gsize remaining;
 
 	client = (GowlIpcClient *)data;
 	self = client->server;
@@ -218,8 +220,6 @@ on_client_readable(int fd, uint32_t mask, void *data)
 
 	/* Process all complete lines in the buffer */
 	while ((newline = strchr(client->buf, '\n')) != NULL) {
-		gsize line_len;
-
 		*newline = '\0';
 		line_len = (gsize)(newline - client->buf);
 
@@ -232,15 +232,11 @@ on_client_readable(int fd, uint32_t mask, void *data)
 		process_line(self, client, client->buf, line_len);
 
 		/* Shift remaining data to front of buffer */
-		{
-			gsize remaining;
-
-			remaining = client->buf_len - (gsize)(newline - client->buf) - 1;
-			if (remaining > 0)
-				memmove(client->buf, newline + 1, remaining);
-			client->buf_len = remaining;
-			client->buf[client->buf_len] = '\0';
-		}
+		remaining = client->buf_len - (gsize)(newline - client->buf) - 1;
+		if (remaining > 0)
+			memmove(client->buf, newline + 1, remaining);
+		client->buf_len = remaining;
+		client->buf[client->buf_len] = '\0';
 	}
 
 	/* If the buffer is full with no newline, discard it to avoid

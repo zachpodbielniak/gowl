@@ -292,13 +292,15 @@ install-deps:
 install-debug-session: $(OUTDIR)/gowl
 	@echo "Installing debug session file..."
 	@$(MKDIR_P) $(DESTDIR)$(DATADIR)/wayland-sessions
-	@printf '[Desktop Entry]\n\
-Name=Gowl (Debug)\n\
-Comment=Gowl debug build from $(CURDIR)\n\
-Exec=$(CURDIR)/build/debug/gowl --debug\n\
-Type=Application\n\
-Icon=gowl\n\
-DesktopNames=gowl\n' > $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop
+	@printf '%s\n' \
+		'[Desktop Entry]' \
+		'Name=Gowl (Debug)' \
+		'Comment=Gowl debug build from $(CURDIR)' \
+		'Exec=$(CURDIR)/build/debug/gowl --debug' \
+		'Type=Application' \
+		'Icon=gowl' \
+		'DesktopNames=gowl' \
+		> $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop
 	@echo "Installed: $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop"
 	@echo "  Exec: $(CURDIR)/build/debug/gowl --debug"
 

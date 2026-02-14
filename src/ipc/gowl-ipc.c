@@ -17,6 +17,7 @@
  */
 
 #include "gowl-ipc.h"
+#include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <stdarg.h>
 #include <string.h>

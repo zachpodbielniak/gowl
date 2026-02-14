@@ -403,6 +403,20 @@ gowl_compositor_get_ipc(GowlCompositor *self)
 }
 
 /**
+ * gowl_compositor_get_event_loop:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the Wayland event loop
+ */
+struct wl_event_loop *
+gowl_compositor_get_event_loop(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->event_loop;
+}
+
+/**
  * gowl_compositor_get_socket_name:
  * @self: a #GowlCompositor
  *

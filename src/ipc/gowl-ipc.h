@@ -20,6 +20,7 @@
 #define GOWL_IPC_H
 
 #include <glib-object.h>
+#include <wayland-server-core.h>
 
 G_BEGIN_DECLS
 
@@ -41,14 +42,21 @@ gowl_ipc_new(const gchar *socket_path);
 /**
  * gowl_ipc_start:
  * @self: the IPC server
+ * @event_loop: the Wayland event loop to integrate with
  * @error: (nullable): return location for a #GError
  *
- * Starts listening for IPC connections.
+ * Starts listening for IPC connections.  Uses @event_loop for
+ * I/O dispatch so the IPC server runs within the compositor's
+ * Wayland event loop.
  *
  * Returns: TRUE on success
  */
 gboolean
-gowl_ipc_start(GowlIpc *self, GError **error);
+gowl_ipc_start(
+	GowlIpc              *self,
+	struct wl_event_loop *event_loop,
+	GError              **error
+);
 
 /**
  * gowl_ipc_stop:

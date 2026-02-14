@@ -17,28 +17,69 @@
  */
 
 #include "gowl-ipc.h"
-#include <gio/gio.h>
-#include <gio/gunixsocketaddress.h>
 #include <glib/gstdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <fcntl.h>
+#include <wayland-server-core.h>
+
+/**
+ * GOWL_IPC_BUF_SIZE:
+ *
+ * Per-client read buffer size.  Lines longer than this are
+ * silently truncated to prevent unbounded allocation.
+ */
+#define GOWL_IPC_BUF_SIZE (4096)
+
+/**
+ * GowlIpcClient:
+ *
+ * Tracks a single connected IPC client.  Holds the file descriptor,
+ * a wl_event_source for readable events, a line buffer for incremental
+ * reads, and a flag indicating whether the client has subscribed
+ * to receive broadcast events.
+ */
+typedef struct {
+	int                      fd;
+	struct wl_event_source  *event_source;
+	GowlIpc                *server;     /* back-pointer (not owned) */
+	gboolean                 subscribed;
+
+	/* Incremental line buffer */
+	gchar                    buf[GOWL_IPC_BUF_SIZE];
+	gsize                    buf_len;
+} GowlIpcClient;
 
 /**
  * GowlIpc:
  *
  * IPC server that listens on a Unix domain socket for line-based
- * commands.  Each line is parsed as "command args..." and emits
- * the "command-received" signal for the compositor to handle.
- * Uses GLib async I/O for non-blocking operation.
+ * commands.  Uses wl_event_loop for I/O so that it integrates
+ * directly into the compositor's Wayland event loop (instead of
+ * requiring a separate GLib main loop).
+ *
+ * Each incoming line is parsed as "command args..." and the
+ * "command-received" GObject signal is emitted.  Clients that
+ * send "subscribe" are flagged to receive broadcast events via
+ * gowl_ipc_push_event().
  */
 struct _GowlIpc {
 	GObject parent_instance;
 
-	gchar           *socket_path;
-	gboolean         running;
-	GSocketService  *service;     /* GSocketService for accepting clients */
-	GList           *connections; /* active GSocketConnection* list */
-	GList           *subscribers; /* connections that sent "subscribe" */
+	gchar                   *socket_path;
+	gboolean                 running;
+
+	/* Listening socket */
+	int                      listen_fd;
+	struct wl_event_source  *listen_source;
+	struct wl_event_loop    *event_loop;    /* borrowed, not owned */
+
+	/* Connected clients */
+	GList                   *clients;       /* GList of GowlIpcClient* */
 };
 
 G_DEFINE_FINAL_TYPE(GowlIpc, gowl_ipc, G_TYPE_OBJECT)
@@ -52,12 +93,239 @@ static guint ipc_signals[N_IPC_SIGNALS];
 
 /* --- Forward declarations --- */
 
-static gboolean on_incoming(GSocketService    *service,
-                            GSocketConnection *connection,
-                            GObject           *source_object,
-                            gpointer           user_data);
-static void     read_line_async(GowlIpc           *self,
-                                GSocketConnection  *conn);
+static int  on_client_readable(int fd, uint32_t mask, void *data);
+static int  on_listen_readable(int fd, uint32_t mask, void *data);
+static void remove_client(GowlIpc *self, GowlIpcClient *client);
+
+/* --- Helper: set fd non-blocking --- */
+
+/**
+ * set_nonblocking:
+ * @fd: file descriptor
+ *
+ * Sets O_NONBLOCK on @fd.  Returns 0 on success, -1 on error.
+ */
+static int
+set_nonblocking(int fd)
+{
+	int flags;
+
+	flags = fcntl(fd, F_GETFL);
+	if (flags < 0)
+		return -1;
+	return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+/* --- Client line processing --- */
+
+/**
+ * process_line:
+ * @self: the IPC server
+ * @client: the client that sent the line
+ * @line: the complete line (without newline)
+ * @length: length of @line
+ *
+ * Parses a "command args..." line.  If the command is "subscribe",
+ * flags the client for broadcast events.  Emits the
+ * "command-received" signal for all commands.
+ */
+static void
+process_line(
+	GowlIpc       *self,
+	GowlIpcClient *client,
+	const gchar   *line,
+	gsize          length
+){
+	gchar *command;
+	const gchar *args;
+	gchar *space;
+
+	if (length == 0)
+		return;
+
+	space = strchr(line, ' ');
+	if (space != NULL) {
+		command = g_strndup(line, (gsize)(space - line));
+		args = space + 1;
+	} else {
+		command = g_strdup(line);
+		args = "";
+	}
+
+	/* Handle "subscribe" command: flag this client for events */
+	if (g_strcmp0(command, "subscribe") == 0) {
+		if (!client->subscribed) {
+			client->subscribed = TRUE;
+			g_debug("gowl-ipc: client fd=%d subscribed", client->fd);
+		}
+	}
+
+	g_signal_emit(self, ipc_signals[SIGNAL_COMMAND_RECEIVED], 0,
+	              command, args);
+
+	g_free(command);
+}
+
+/* --- Client readable callback --- */
+
+/**
+ * on_client_readable:
+ * @fd: the client socket fd
+ * @mask: wl_event mask (WL_EVENT_READABLE, WL_EVENT_HANGUP, etc.)
+ * @data: pointer to GowlIpcClient
+ *
+ * Called by the Wayland event loop when a client socket has data
+ * to read.  Reads into the per-client line buffer and processes
+ * complete newline-terminated lines.
+ *
+ * Returns: 0 to keep the source, or 0 (removal happens via
+ *          remove_client which destroys the wl_event_source)
+ */
+static int
+on_client_readable(int fd, uint32_t mask, void *data)
+{
+	GowlIpcClient *client;
+	GowlIpc *self;
+	ssize_t n;
+	gchar *newline;
+
+	client = (GowlIpcClient *)data;
+	self = client->server;
+
+	/* Handle hangup or error */
+	if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
+		g_debug("gowl-ipc: client fd=%d disconnected", fd);
+		remove_client(self, client);
+		return 0;
+	}
+
+	/* Read available data into the line buffer */
+	n = read(fd, client->buf + client->buf_len,
+	         GOWL_IPC_BUF_SIZE - client->buf_len - 1);
+
+	if (n <= 0) {
+		if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+			g_debug("gowl-ipc: client fd=%d read %s",
+			        fd, n == 0 ? "EOF" : g_strerror(errno));
+			remove_client(self, client);
+		}
+		return 0;
+	}
+
+	client->buf_len += (gsize)n;
+	client->buf[client->buf_len] = '\0';
+
+	/* Process all complete lines in the buffer */
+	while ((newline = strchr(client->buf, '\n')) != NULL) {
+		gsize line_len;
+
+		*newline = '\0';
+		line_len = (gsize)(newline - client->buf);
+
+		/* Strip trailing \r if present */
+		if (line_len > 0 && client->buf[line_len - 1] == '\r') {
+			client->buf[line_len - 1] = '\0';
+			line_len--;
+		}
+
+		process_line(self, client, client->buf, line_len);
+
+		/* Shift remaining data to front of buffer */
+		{
+			gsize remaining;
+
+			remaining = client->buf_len - (gsize)(newline - client->buf) - 1;
+			if (remaining > 0)
+				memmove(client->buf, newline + 1, remaining);
+			client->buf_len = remaining;
+			client->buf[client->buf_len] = '\0';
+		}
+	}
+
+	/* If the buffer is full with no newline, discard it to avoid
+	 * blocking on a misbehaving client */
+	if (client->buf_len >= GOWL_IPC_BUF_SIZE - 1) {
+		g_warning("gowl-ipc: client fd=%d buffer overflow, discarding",
+		          client->fd);
+		client->buf_len = 0;
+	}
+
+	return 0;
+}
+
+/* --- Listener readable callback --- */
+
+/**
+ * on_listen_readable:
+ * @fd: the listening socket fd
+ * @mask: wl_event mask
+ * @data: pointer to GowlIpc
+ *
+ * Called when the listening socket has a pending connection.
+ * Accepts the connection, creates a GowlIpcClient, and adds
+ * a readable event source for the new client fd.
+ */
+static int
+on_listen_readable(int fd, uint32_t mask, void *data)
+{
+	GowlIpc *self;
+	GowlIpcClient *client;
+	int client_fd;
+
+	self = (GowlIpc *)data;
+	(void)mask;
+
+	client_fd = accept(fd, NULL, NULL);
+	if (client_fd < 0) {
+		if (errno != EAGAIN && errno != EWOULDBLOCK)
+			g_warning("gowl-ipc: accept failed: %s", g_strerror(errno));
+		return 0;
+	}
+
+	if (set_nonblocking(client_fd) < 0) {
+		g_warning("gowl-ipc: failed to set non-blocking on fd=%d", client_fd);
+		close(client_fd);
+		return 0;
+	}
+
+	client = g_new0(GowlIpcClient, 1);
+	client->fd          = client_fd;
+	client->server      = self;
+	client->subscribed  = FALSE;
+	client->buf_len     = 0;
+
+	client->event_source = wl_event_loop_add_fd(
+		self->event_loop, client_fd,
+		WL_EVENT_READABLE,
+		on_client_readable, client);
+
+	self->clients = g_list_prepend(self->clients, client);
+
+	g_debug("gowl-ipc: client connected (fd=%d)", client_fd);
+	return 0;
+}
+
+/* --- Client removal --- */
+
+/**
+ * remove_client:
+ * @self: the IPC server
+ * @client: the client to remove
+ *
+ * Removes a client from the server's client list, destroys its
+ * wl_event_source, closes the fd, and frees the client struct.
+ */
+static void
+remove_client(GowlIpc *self, GowlIpcClient *client)
+{
+	self->clients = g_list_remove(self->clients, client);
+
+	if (client->event_source != NULL)
+		wl_event_source_remove(client->event_source);
+
+	close(client->fd);
+	g_free(client);
+}
 
 /* --- GObject lifecycle --- */
 
@@ -83,8 +351,6 @@ gowl_ipc_finalize(GObject *object)
 	self = GOWL_IPC(object);
 
 	g_free(self->socket_path);
-	g_list_free(self->subscribers);
-	g_list_free(self->connections);
 
 	G_OBJECT_CLASS(gowl_ipc_parent_class)->finalize(object);
 }
@@ -123,156 +389,12 @@ gowl_ipc_class_init(GowlIpcClass *klass)
 static void
 gowl_ipc_init(GowlIpc *self)
 {
-	self->socket_path = NULL;
-	self->running     = FALSE;
-	self->service     = NULL;
-	self->connections = NULL;
-	self->subscribers = NULL;
-}
-
-/* --- Async read callback --- */
-
-/**
- * on_read_line:
- *
- * Callback for async line reads.  Parses the command and args
- * from the line, emits command-received, then reads the next line.
- */
-static void
-on_read_line(GObject *source, GAsyncResult *result, gpointer user_data)
-{
-	GDataInputStream *dis;
-	GowlIpc *self;
-	GSocketConnection *conn;
-	gchar *line;
-	gsize length;
-	GError *error;
-
-	dis = G_DATA_INPUT_STREAM(source);
-	self = (GowlIpc *)g_object_get_data(source, "gowl-ipc");
-	conn = (GSocketConnection *)g_object_get_data(source, "gowl-conn");
-
-	error = NULL;
-	line = g_data_input_stream_read_line_finish(dis, result, &length, &error);
-
-	if (line == NULL) {
-		/* EOF or error: client disconnected */
-		if (error != NULL) {
-			g_debug("gowl-ipc: read error: %s", error->message);
-			g_error_free(error);
-		}
-
-		/* Remove from subscribers if present */
-		self->subscribers = g_list_remove(self->subscribers, conn);
-
-		/* Clean up this connection */
-		self->connections = g_list_remove(self->connections, conn);
-		g_io_stream_close(G_IO_STREAM(conn), NULL, NULL);
-		g_object_unref(conn);
-		g_object_unref(dis);
-		return;
-	}
-
-	/* Parse "command args..." */
-	if (length > 0) {
-		gchar *command;
-		const gchar *args;
-		gchar *space;
-
-		space = strchr(line, ' ');
-		if (space != NULL) {
-			command = g_strndup(line, (gsize)(space - line));
-			args = space + 1;
-		} else {
-			command = g_strdup(line);
-			args = "";
-		}
-
-		/* Handle "subscribe" command: flag this connection for events */
-		if (g_strcmp0(command, "subscribe") == 0) {
-			if (g_list_find(self->subscribers, conn) == NULL) {
-				self->subscribers = g_list_prepend(
-					self->subscribers, conn);
-				g_debug("gowl-ipc: client subscribed (%u total)",
-				        g_list_length(self->subscribers));
-			}
-		}
-
-		g_signal_emit(self, ipc_signals[SIGNAL_COMMAND_RECEIVED], 0,
-		              command, args);
-
-		g_free(command);
-	}
-
-	g_free(line);
-
-	/* Continue reading if still running */
-	if (self->running) {
-		g_data_input_stream_read_line_async(
-			dis, G_PRIORITY_DEFAULT, NULL, on_read_line, NULL);
-	} else {
-		self->subscribers = g_list_remove(self->subscribers, conn);
-		self->connections = g_list_remove(self->connections, conn);
-		g_io_stream_close(G_IO_STREAM(conn), NULL, NULL);
-		g_object_unref(conn);
-		g_object_unref(dis);
-	}
-}
-
-/**
- * read_line_async:
- *
- * Sets up async line-based reading on a new connection.
- */
-static void
-read_line_async(
-	GowlIpc            *self,
-	GSocketConnection   *conn
-){
-	GInputStream *istream;
-	GDataInputStream *dis;
-
-	istream = g_io_stream_get_input_stream(G_IO_STREAM(conn));
-	dis = g_data_input_stream_new(istream);
-
-	/* Attach references for the callback */
-	g_object_set_data(G_OBJECT(dis), "gowl-ipc", self);
-	g_object_set_data(G_OBJECT(dis), "gowl-conn", conn);
-
-	g_data_input_stream_read_line_async(
-		dis, G_PRIORITY_DEFAULT, NULL, on_read_line, NULL);
-}
-
-/* --- Incoming connection handler --- */
-
-/**
- * on_incoming:
- *
- * Called when a new client connects to the IPC socket.
- * Starts async line reading on the connection.
- */
-static gboolean
-on_incoming(
-	GSocketService    *service,
-	GSocketConnection *connection,
-	GObject           *source_object,
-	gpointer           user_data
-){
-	GowlIpc *self;
-
-	self = (GowlIpc *)user_data;
-	(void)service;
-	(void)source_object;
-
-	/* Take a reference and track the connection */
-	g_object_ref(connection);
-	self->connections = g_list_prepend(self->connections, connection);
-
-	/* Start reading commands */
-	read_line_async(self, connection);
-
-	g_debug("gowl-ipc: client connected");
-	return TRUE;
+	self->socket_path    = NULL;
+	self->running        = FALSE;
+	self->listen_fd      = -1;
+	self->listen_source  = NULL;
+	self->event_loop     = NULL;
+	self->clients        = NULL;
 }
 
 /* --- Public API --- */
@@ -308,21 +430,28 @@ gowl_ipc_new(const gchar *socket_path)
 /**
  * gowl_ipc_start:
  * @self: the IPC server
+ * @event_loop: the Wayland event loop to integrate with
  * @error: (nullable): return location for a #GError
  *
  * Creates a Unix domain socket at the configured path and starts
- * listening for incoming connections.  Commands are read as
- * line-delimited text and emitted via the "command-received" signal.
+ * listening for incoming connections.  Uses @event_loop for I/O
+ * dispatch so that the IPC server runs inside the compositor's
+ * main event loop.  Commands are read as line-delimited text and
+ * emitted via the "command-received" signal.
  *
  * Returns: %TRUE on success, %FALSE on error
  */
 gboolean
-gowl_ipc_start(GowlIpc *self, GError **error)
-{
-	GSocketAddress *address;
-	GError *local_error;
+gowl_ipc_start(
+	GowlIpc              *self,
+	struct wl_event_loop *event_loop,
+	GError              **error
+){
+	struct sockaddr_un addr;
+	int fd;
 
 	g_return_val_if_fail(GOWL_IS_IPC(self), FALSE);
+	g_return_val_if_fail(event_loop != NULL, FALSE);
 
 	if (self->running) {
 		g_set_error(error, G_IO_ERROR, G_IO_ERROR_ALREADY_MOUNTED,
@@ -333,30 +462,49 @@ gowl_ipc_start(GowlIpc *self, GError **error)
 	/* Remove stale socket file if present */
 	g_unlink(self->socket_path);
 
-	/* Create the socket service */
-	self->service = g_socket_service_new();
-
-	address = g_unix_socket_address_new(self->socket_path);
-
-	local_error = NULL;
-	if (!g_socket_listener_add_address(
-			G_SOCKET_LISTENER(self->service),
-			address, G_SOCKET_TYPE_STREAM,
-			G_SOCKET_PROTOCOL_DEFAULT,
-			NULL, NULL, &local_error)) {
-		g_propagate_error(error, local_error);
-		g_object_unref(address);
-		g_clear_object(&self->service);
+	/* Create the listening socket */
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0) {
+		g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		            "socket() failed: %s", g_strerror(errno));
 		return FALSE;
 	}
-	g_object_unref(address);
 
-	/* Connect the incoming signal */
-	g_signal_connect(self->service, "incoming",
-	                 G_CALLBACK(on_incoming), self);
+	if (set_nonblocking(fd) < 0) {
+		g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		            "fcntl(O_NONBLOCK) failed: %s", g_strerror(errno));
+		close(fd);
+		return FALSE;
+	}
 
-	/* Start accepting connections */
-	g_socket_service_start(self->service);
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	g_strlcpy(addr.sun_path, self->socket_path, sizeof(addr.sun_path));
+
+	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		            "bind(%s) failed: %s",
+		            self->socket_path, g_strerror(errno));
+		close(fd);
+		return FALSE;
+	}
+
+	if (listen(fd, 16) < 0) {
+		g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		            "listen() failed: %s", g_strerror(errno));
+		close(fd);
+		g_unlink(self->socket_path);
+		return FALSE;
+	}
+
+	/* Register with the Wayland event loop */
+	self->event_loop = event_loop;
+	self->listen_fd = fd;
+	self->listen_source = wl_event_loop_add_fd(
+		event_loop, fd,
+		WL_EVENT_READABLE,
+		on_listen_readable, self);
+
 	self->running = TRUE;
 
 	g_debug("gowl-ipc: started on %s", self->socket_path);
@@ -374,6 +522,7 @@ void
 gowl_ipc_stop(GowlIpc *self)
 {
 	GList *l;
+	GList *next;
 
 	g_return_if_fail(GOWL_IS_IPC(self));
 
@@ -382,27 +531,37 @@ gowl_ipc_stop(GowlIpc *self)
 
 	self->running = FALSE;
 
-	/* Stop accepting new connections */
-	if (self->service != NULL) {
-		g_socket_service_stop(self->service);
-		g_clear_object(&self->service);
+	/* Remove the listener event source */
+	if (self->listen_source != NULL) {
+		wl_event_source_remove(self->listen_source);
+		self->listen_source = NULL;
 	}
 
-	/* Close all active connections */
-	for (l = self->connections; l != NULL; l = l->next) {
-		GSocketConnection *conn = (GSocketConnection *)l->data;
-		g_io_stream_close(G_IO_STREAM(conn), NULL, NULL);
-		g_object_unref(conn);
+	/* Close the listening socket */
+	if (self->listen_fd >= 0) {
+		close(self->listen_fd);
+		self->listen_fd = -1;
 	}
-	g_list_free(self->connections);
-	self->connections = NULL;
 
-	/* Clear subscriber list (connections already closed above) */
-	g_list_free(self->subscribers);
-	self->subscribers = NULL;
+	/* Close all client connections */
+	for (l = self->clients; l != NULL; l = next) {
+		GowlIpcClient *client;
+
+		next = l->next;
+		client = (GowlIpcClient *)l->data;
+
+		if (client->event_source != NULL)
+			wl_event_source_remove(client->event_source);
+		close(client->fd);
+		g_free(client);
+	}
+	g_list_free(self->clients);
+	self->clients = NULL;
 
 	/* Remove the socket file */
 	g_unlink(self->socket_path);
+
+	self->event_loop = NULL;
 
 	g_debug("gowl-ipc: stopped");
 }
@@ -415,7 +574,7 @@ gowl_ipc_stop(GowlIpc *self)
  *
  * Broadcasts a newline-terminated event line to all subscribed
  * clients.  Clients that have disconnected or whose write fails
- * are silently removed from the subscriber list.
+ * are silently removed from the client list.
  */
 void
 gowl_ipc_push_event(GowlIpc *self, const gchar *format, ...)
@@ -423,12 +582,23 @@ gowl_ipc_push_event(GowlIpc *self, const gchar *format, ...)
 	va_list ap;
 	g_autofree gchar *body = NULL;
 	g_autofree gchar *line = NULL;
+	gsize line_len;
 	GList *l;
 	GList *next;
+	gboolean has_subscribers;
 
 	g_return_if_fail(GOWL_IS_IPC(self));
 
-	if (self->subscribers == NULL)
+	/* Quick check: any subscribed clients? */
+	has_subscribers = FALSE;
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlIpcClient *client = (GowlIpcClient *)l->data;
+		if (client->subscribed) {
+			has_subscribers = TRUE;
+			break;
+		}
+	}
+	if (!has_subscribers)
 		return;
 
 	/* Format the event line with trailing newline */
@@ -437,29 +607,24 @@ gowl_ipc_push_event(GowlIpc *self, const gchar *format, ...)
 	va_end(ap);
 
 	line = g_strdup_printf("%s\n", body);
+	line_len = strlen(line);
 
-	/* Broadcast to all subscribers, removing dead ones */
-	for (l = self->subscribers; l != NULL; l = next) {
-		GSocketConnection *conn;
-		GOutputStream *ostream;
-		GError *error;
+	/* Broadcast to all subscribed clients, removing dead ones */
+	for (l = self->clients; l != NULL; l = next) {
+		GowlIpcClient *client;
+		ssize_t written;
 
 		next = l->next;
-		conn = (GSocketConnection *)l->data;
+		client = (GowlIpcClient *)l->data;
 
-		ostream = g_io_stream_get_output_stream(G_IO_STREAM(conn));
+		if (!client->subscribed)
+			continue;
 
-		error = NULL;
-		if (!g_output_stream_write_all(
-				ostream, line, strlen(line),
-				NULL, NULL, &error)) {
-			g_debug("gowl-ipc: subscriber write failed: %s",
-			        error->message);
-			g_error_free(error);
-
-			/* Remove dead subscriber */
-			self->subscribers = g_list_delete_link(
-				self->subscribers, l);
+		written = write(client->fd, line, line_len);
+		if (written < 0) {
+			g_debug("gowl-ipc: subscriber fd=%d write failed: %s",
+			        client->fd, g_strerror(errno));
+			remove_client(self, client);
 		}
 	}
 }
@@ -475,7 +640,17 @@ gowl_ipc_push_event(GowlIpc *self, const gchar *format, ...)
 guint
 gowl_ipc_get_subscriber_count(GowlIpc *self)
 {
+	GList *l;
+	guint count;
+
 	g_return_val_if_fail(GOWL_IS_IPC(self), 0);
 
-	return g_list_length(self->subscribers);
+	count = 0;
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlIpcClient *client = (GowlIpcClient *)l->data;
+		if (client->subscribed)
+			count++;
+	}
+
+	return count;
 }

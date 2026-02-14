@@ -439,22 +439,24 @@ main(int argc, char *argv[])
 		}
 	}
 
-	/* Create and start IPC server */
-	ipc = gowl_ipc_new(NULL);
-	if (!gowl_ipc_start(ipc, &error)) {
-		g_warning("Failed to start IPC: %s", error->message);
-		g_clear_error(&error);
-		g_clear_object(&ipc);
-	} else {
-		gowl_compositor_set_ipc(compositor, ipc);
-	}
-
-	/* Start compositor */
+	/* Start compositor (creates wl_display and event loop) */
 	if (!gowl_compositor_start(compositor, &error)) {
 		g_printerr("Failed to start compositor: %s\n", error->message);
 		g_error_free(error);
 		ret = 1;
 		goto cleanup;
+	}
+
+	/* Create and start IPC server (needs compositor's event loop) */
+	ipc = gowl_ipc_new(NULL);
+	if (!gowl_ipc_start(ipc,
+	                     gowl_compositor_get_event_loop(compositor),
+	                     &error)) {
+		g_warning("Failed to start IPC: %s", error->message);
+		g_clear_error(&error);
+		g_clear_object(&ipc);
+	} else {
+		gowl_compositor_set_ipc(compositor, ipc);
 	}
 
 	/* Dispatch startup hooks */

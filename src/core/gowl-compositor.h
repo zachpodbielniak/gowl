@@ -20,6 +20,7 @@
 #define GOWL_COMPOSITOR_H
 
 #include "gowl-types.h"
+#include <wayland-server-core.h>
 
 G_BEGIN_DECLS
 
@@ -119,6 +120,17 @@ void            gowl_compositor_run   (GowlCompositor  *self);
  * Requests the compositor to exit its event loop.
  */
 void            gowl_compositor_quit  (GowlCompositor  *self);
+
+/**
+ * gowl_compositor_get_event_loop:
+ * @self: a #GowlCompositor
+ *
+ * Returns the Wayland event loop used by the compositor.
+ * Only valid after gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the event loop
+ */
+struct wl_event_loop *gowl_compositor_get_event_loop (GowlCompositor *self);
 
 /**
  * gowl_compositor_get_socket_name:

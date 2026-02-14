@@ -656,7 +656,9 @@ gowl_config_apply_mapping(
 					g_warning("gowl_config: unknown action '%s'", action_str);
 				g_type_class_unref(action_class);
 
-				gowl_config_add_keybind(self, mods, keysym, action, arg_str);
+				g_debug("gowl_config: keybind '%s' -> mods=0x%x sym=0x%x action=%d",
+			        bind_str, mods, keysym, action);
+			gowl_config_add_keybind(self, mods, keysym, action, arg_str);
 			}
 		}
 	}

@@ -1700,6 +1700,9 @@ keybinding(
 
 	clean_mods = GOWL_CLEANMASK(mods);
 
+	g_debug("keybinding: sym=0x%04x mods=0x%x clean=0x%x",
+	        (guint)sym, mods, clean_mods);
+
 	for (i = 0; i < keybinds->len; i++) {
 		GowlKeybindEntry *kb;
 

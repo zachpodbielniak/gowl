@@ -9,29 +9,31 @@
 #   4. /usr/local/gowl/gowl.yaml
 #
 # Generate this file with: gowl --generate-yaml-config > ~/.config/gowl/gowl.yaml
+#
+# NOTE: All property keys must be at the root level (flat mapping).
+# Key names use hyphens (log-level, not log_level).
 
-compositor:
-  log-level: "warning"
-  log-file: "~/.config/gowl/gowl.log"
-  repeat-rate: 25
-  repeat-delay: 600
-  terminal: "gst"
-  menu: "bemenu-run"
-  sloppyfocus: true
+# Compositor settings
+log-level: "warning"
+log-file: "~/.config/gowl/gowl.log"
+repeat-rate: 25
+repeat-delay: 600
+terminal: "gst"
+menu: "bemenu-run"
+sloppyfocus: true
 
-appearance:
-  border-width: 2
-  border-color-focus: "#005577"
-  border-color-unfocus: "#444444"
-  border-color-urgent: "#ff0000"
+# Appearance
+border-width: 2
+border-color-focus: "#005577"
+border-color-unfocus: "#444444"
+border-color-urgent: "#ff0000"
 
-layout:
-  default: "tile"
-  mfact: 0.55
-  nmaster: 1
+# Layout
+mfact: 0.55
+nmaster: 1
 
-tags:
-  count: 9
+# Tags
+tag-count: 9
 
 # Keybind format: "Modifier+Modifier+Key": { action: <action>, arg: "<argument>" }
 #
@@ -77,87 +79,88 @@ keybinds:
   "Super+Shift+0": { action: tag_set, arg: "0" }
 
   # Tag switching (Super+1 through Super+9)
+  # arg is the tag bitmask: tag N = 1 << (N-1)
   "Super+1": { action: tag_view, arg: "1" }
   "Super+2": { action: tag_view, arg: "2" }
-  "Super+3": { action: tag_view, arg: "3" }
-  "Super+4": { action: tag_view, arg: "4" }
-  "Super+5": { action: tag_view, arg: "5" }
-  "Super+6": { action: tag_view, arg: "6" }
-  "Super+7": { action: tag_view, arg: "7" }
-  "Super+8": { action: tag_view, arg: "8" }
-  "Super+9": { action: tag_view, arg: "9" }
+  "Super+3": { action: tag_view, arg: "4" }
+  "Super+4": { action: tag_view, arg: "8" }
+  "Super+5": { action: tag_view, arg: "16" }
+  "Super+6": { action: tag_view, arg: "32" }
+  "Super+7": { action: tag_view, arg: "64" }
+  "Super+8": { action: tag_view, arg: "128" }
+  "Super+9": { action: tag_view, arg: "256" }
 
   # Tag assignment (Super+Shift+1 through Super+Shift+9)
   "Super+Shift+1": { action: tag_set, arg: "1" }
   "Super+Shift+2": { action: tag_set, arg: "2" }
-  "Super+Shift+3": { action: tag_set, arg: "3" }
-  "Super+Shift+4": { action: tag_set, arg: "4" }
-  "Super+Shift+5": { action: tag_set, arg: "5" }
-  "Super+Shift+6": { action: tag_set, arg: "6" }
-  "Super+Shift+7": { action: tag_set, arg: "7" }
-  "Super+Shift+8": { action: tag_set, arg: "8" }
-  "Super+Shift+9": { action: tag_set, arg: "9" }
+  "Super+Shift+3": { action: tag_set, arg: "4" }
+  "Super+Shift+4": { action: tag_set, arg: "8" }
+  "Super+Shift+5": { action: tag_set, arg: "16" }
+  "Super+Shift+6": { action: tag_set, arg: "32" }
+  "Super+Shift+7": { action: tag_set, arg: "64" }
+  "Super+Shift+8": { action: tag_set, arg: "128" }
+  "Super+Shift+9": { action: tag_set, arg: "256" }
 
   # Tag toggle view (Super+Ctrl+1 through Super+Ctrl+9)
   "Super+Ctrl+1": { action: tag_toggle_view, arg: "1" }
   "Super+Ctrl+2": { action: tag_toggle_view, arg: "2" }
-  "Super+Ctrl+3": { action: tag_toggle_view, arg: "3" }
-  "Super+Ctrl+4": { action: tag_toggle_view, arg: "4" }
-  "Super+Ctrl+5": { action: tag_toggle_view, arg: "5" }
-  "Super+Ctrl+6": { action: tag_toggle_view, arg: "6" }
-  "Super+Ctrl+7": { action: tag_toggle_view, arg: "7" }
-  "Super+Ctrl+8": { action: tag_toggle_view, arg: "8" }
-  "Super+Ctrl+9": { action: tag_toggle_view, arg: "9" }
+  "Super+Ctrl+3": { action: tag_toggle_view, arg: "4" }
+  "Super+Ctrl+4": { action: tag_toggle_view, arg: "8" }
+  "Super+Ctrl+5": { action: tag_toggle_view, arg: "16" }
+  "Super+Ctrl+6": { action: tag_toggle_view, arg: "32" }
+  "Super+Ctrl+7": { action: tag_toggle_view, arg: "64" }
+  "Super+Ctrl+8": { action: tag_toggle_view, arg: "128" }
+  "Super+Ctrl+9": { action: tag_toggle_view, arg: "256" }
 
   # Tag toggle on client (Super+Shift+Ctrl+1 through Super+Shift+Ctrl+9)
   "Super+Shift+Ctrl+1": { action: tag_toggle, arg: "1" }
   "Super+Shift+Ctrl+2": { action: tag_toggle, arg: "2" }
-  "Super+Shift+Ctrl+3": { action: tag_toggle, arg: "3" }
-  "Super+Shift+Ctrl+4": { action: tag_toggle, arg: "4" }
-  "Super+Shift+Ctrl+5": { action: tag_toggle, arg: "5" }
-  "Super+Shift+Ctrl+6": { action: tag_toggle, arg: "6" }
-  "Super+Shift+Ctrl+7": { action: tag_toggle, arg: "7" }
-  "Super+Shift+Ctrl+8": { action: tag_toggle, arg: "8" }
-  "Super+Shift+Ctrl+9": { action: tag_toggle, arg: "9" }
+  "Super+Shift+Ctrl+3": { action: tag_toggle, arg: "4" }
+  "Super+Shift+Ctrl+4": { action: tag_toggle, arg: "8" }
+  "Super+Shift+Ctrl+5": { action: tag_toggle, arg: "16" }
+  "Super+Shift+Ctrl+6": { action: tag_toggle, arg: "32" }
+  "Super+Shift+Ctrl+7": { action: tag_toggle, arg: "64" }
+  "Super+Shift+Ctrl+8": { action: tag_toggle, arg: "128" }
+  "Super+Shift+Ctrl+9": { action: tag_toggle, arg: "256" }
 
   # Session
   "Super+Shift+q": { action: quit }
   "Super+Shift+r": { action: reload_config }
 
 # Window rules
-# Each rule matches clients by app_id and/or title, then applies settings.
+# Each rule matches clients by app-id and/or title, then applies settings.
 # Fields:
-#   app_id:   (string) Wayland app_id to match (empty or omitted = match any)
+#   app-id:   (string) Wayland app_id to match (empty or omitted = match any)
 #   title:    (string) Window title pattern to match (empty or omitted = match any)
 #   tags:     (int)    Bitmask of tags to assign (0 = no tag override)
 #   floating: (bool)   Whether the client should float
 #   monitor:  (int)    Monitor index to place on (-1 = default)
 rules:
-  - app_id: "firefox"
+  - app-id: "firefox"
     title: ""
     tags: 2
     floating: false
     monitor: -1
 
-  - app_id: "thunderbird"
+  - app-id: "thunderbird"
     title: ""
     tags: 4
     floating: false
     monitor: -1
 
-  - app_id: "org.keepassxc.KeePassXC"
+  - app-id: "org.keepassxc.KeePassXC"
     title: ""
     tags: 8
     floating: true
     monitor: -1
 
-  - app_id: "pavucontrol"
+  - app-id: "pavucontrol"
     title: ""
     tags: 0
     floating: true
     monitor: -1
 
-  - app_id: "imv"
+  - app-id: "imv"
     title: ""
     tags: 0
     floating: true

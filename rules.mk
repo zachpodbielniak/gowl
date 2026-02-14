@@ -289,6 +289,12 @@ install-desktop:
 	$(INSTALL_DATA) data/gowl.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/
 	$(MKDIR_P) $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps
 	$(INSTALL_DATA) data/logo-256.png $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gowl.png
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/gowl
+	$(INSTALL_DATA) data/default-config.yaml $(DESTDIR)$(DATADIR)/gowl/default-config.yaml
+	$(MKDIR_P) $(DESTDIR)$(SYSCONFDIR)/gowl
+	@if [ ! -f $(DESTDIR)$(SYSCONFDIR)/gowl/gowl.yaml ]; then \
+		$(INSTALL_DATA) data/default-config.yaml $(DESTDIR)$(SYSCONFDIR)/gowl/gowl.yaml; \
+	fi
 
 install-modules:
 	$(MKDIR_P) $(DESTDIR)$(MODULEDIR)

@@ -17,6 +17,7 @@
  */
 
 #include "gowl.h"
+#include "config/gowl-keybind.h"
 #include "ipc/gowl-ipc.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,48 +30,104 @@
 GowlCompositor *gowl_compositor = NULL;
 GowlConfig     *gowl_config = NULL;
 
-/* Default YAML config content for --generate-yaml-config */
+/* Default YAML config content for --generate-yaml-config.
+ *
+ * NOTE: The config parser expects a FLAT mapping — all property keys
+ * (border-width, log-level, keybinds, etc.) must be at the root level.
+ * Nested sections like "compositor:" are NOT supported by the parser;
+ * they are used here only as YAML comments for human organisation.
+ * Key names MUST use hyphens (log-level, not log_level).
+ */
 static const gchar *default_yaml_config =
 	"# Gowl Default Configuration\n"
 	"# Search order: ./data/ > ~/.config/gowl/ > /etc/gowl/ > /usr/local/gowl/\n"
+	"#\n"
+	"# Generate this file with: gowl --generate-yaml-config > ~/.config/gowl/gowl.yaml\n"
 	"\n"
-	"compositor:\n"
-	"  log_level: warning\n"
-	"  log_file: \"~/.config/gowl/gowl.log\"\n"
-	"  repeat_rate: 25\n"
-	"  repeat_delay: 600\n"
-	"  terminal: gst\n"
-	"  menu: bemenu-run\n"
-	"  sloppyfocus: true\n"
+	"# Compositor settings\n"
+	"log-level: \"warning\"\n"
+	"log-file: \"~/.config/gowl/gowl.log\"\n"
+	"repeat-rate: 25\n"
+	"repeat-delay: 600\n"
+	"terminal: \"gst\"\n"
+	"menu: \"bemenu-run\"\n"
+	"sloppyfocus: true\n"
 	"\n"
-	"appearance:\n"
-	"  border_width: 2\n"
-	"  border_color_focus: \"#bbbbbb\"\n"
-	"  border_color_unfocus: \"#444444\"\n"
-	"  border_color_urgent: \"#ff0000\"\n"
+	"# Appearance\n"
+	"border-width: 2\n"
+	"border-color-focus: \"#005577\"\n"
+	"border-color-unfocus: \"#444444\"\n"
+	"border-color-urgent: \"#ff0000\"\n"
 	"\n"
-	"layout:\n"
-	"  default: tile\n"
-	"  mfact: 0.55\n"
-	"  nmaster: 1\n"
+	"# Layout\n"
+	"mfact: 0.55\n"
+	"nmaster: 1\n"
 	"\n"
-	"tags:\n"
-	"  count: 9\n"
+	"# Tags\n"
+	"tag-count: 9\n"
 	"\n"
+	"# Keybinds\n"
 	"keybinds:\n"
+	"  # Launch applications\n"
 	"  \"Super+Return\": { action: spawn, arg: \"gst\" }\n"
 	"  \"Super+p\": { action: spawn, arg: \"bemenu-run\" }\n"
+	"\n"
+	"  # Client management\n"
 	"  \"Super+Shift+c\": { action: kill_client }\n"
+	"  \"Super+space\": { action: toggle_float }\n"
+	"  \"Super+Shift+space\": { action: toggle_fullscreen }\n"
+	"  \"Super+Shift+Return\": { action: zoom }\n"
+	"\n"
+	"  # Focus navigation\n"
 	"  \"Super+j\": { action: focus_stack, arg: \"+1\" }\n"
 	"  \"Super+k\": { action: focus_stack, arg: \"-1\" }\n"
-	"  \"Super+i\": { action: inc_nmaster, arg: \"+1\" }\n"
-	"  \"Super+d\": { action: inc_nmaster, arg: \"-1\" }\n"
+	"\n"
+	"  # Master area adjustment\n"
 	"  \"Super+h\": { action: set_mfact, arg: \"-0.05\" }\n"
 	"  \"Super+l\": { action: set_mfact, arg: \"+0.05\" }\n"
+	"  \"Super+i\": { action: inc_nmaster, arg: \"+1\" }\n"
+	"  \"Super+d\": { action: inc_nmaster, arg: \"-1\" }\n"
+	"\n"
+	"  # Layout selection\n"
 	"  \"Super+t\": { action: set_layout, arg: \"tile\" }\n"
-	"  \"Super+f\": { action: toggle_fullscreen }\n"
-	"  \"Super+space\": { action: toggle_float }\n"
+	"  \"Super+f\": { action: set_layout, arg: \"float\" }\n"
+	"  \"Super+m\": { action: set_layout, arg: \"monocle\" }\n"
+	"\n"
+	"  # Multi-monitor\n"
+	"  \"Super+comma\": { action: focus_monitor, arg: \"-1\" }\n"
+	"  \"Super+period\": { action: focus_monitor, arg: \"+1\" }\n"
+	"  \"Super+Shift+comma\": { action: move_to_monitor, arg: \"-1\" }\n"
+	"  \"Super+Shift+period\": { action: move_to_monitor, arg: \"+1\" }\n"
+	"\n"
+	"  # View all tags / tag all\n"
+	"  \"Super+0\": { action: tag_view, arg: \"0\" }\n"
+	"  \"Super+Shift+0\": { action: tag_set, arg: \"0\" }\n"
+	"\n"
+	"  # Tag switching (Super+1 through Super+9)\n"
+	"  \"Super+1\": { action: tag_view, arg: \"1\" }\n"
+	"  \"Super+2\": { action: tag_view, arg: \"2\" }\n"
+	"  \"Super+3\": { action: tag_view, arg: \"4\" }\n"
+	"  \"Super+4\": { action: tag_view, arg: \"8\" }\n"
+	"  \"Super+5\": { action: tag_view, arg: \"16\" }\n"
+	"  \"Super+6\": { action: tag_view, arg: \"32\" }\n"
+	"  \"Super+7\": { action: tag_view, arg: \"64\" }\n"
+	"  \"Super+8\": { action: tag_view, arg: \"128\" }\n"
+	"  \"Super+9\": { action: tag_view, arg: \"256\" }\n"
+	"\n"
+	"  # Tag assignment (Super+Shift+1 through Super+Shift+9)\n"
+	"  \"Super+Shift+1\": { action: tag_set, arg: \"1\" }\n"
+	"  \"Super+Shift+2\": { action: tag_set, arg: \"2\" }\n"
+	"  \"Super+Shift+3\": { action: tag_set, arg: \"4\" }\n"
+	"  \"Super+Shift+4\": { action: tag_set, arg: \"8\" }\n"
+	"  \"Super+Shift+5\": { action: tag_set, arg: \"16\" }\n"
+	"  \"Super+Shift+6\": { action: tag_set, arg: \"32\" }\n"
+	"  \"Super+Shift+7\": { action: tag_set, arg: \"64\" }\n"
+	"  \"Super+Shift+8\": { action: tag_set, arg: \"128\" }\n"
+	"  \"Super+Shift+9\": { action: tag_set, arg: \"256\" }\n"
+	"\n"
+	"  # Session\n"
 	"  \"Super+Shift+q\": { action: quit }\n"
+	"  \"Super+Shift+r\": { action: reload_config }\n"
 	"\n"
 	"rules: []\n"
 	"\n"
@@ -360,6 +417,27 @@ main(int argc, char *argv[])
 	gowl_compositor = compositor;
 	gowl_compositor_set_config(compositor, config);
 	gowl_compositor_set_module_manager(compositor, module_mgr);
+
+	/* Dump registered keybinds for diagnostics */
+	{
+		GArray *kb_arr = gowl_config_get_keybinds(config);
+		guint kb_i;
+
+		g_message("Registered %u keybind(s):", kb_arr ? kb_arr->len : 0);
+		if (kb_arr != NULL) {
+			for (kb_i = 0; kb_i < kb_arr->len; kb_i++) {
+				GowlKeybindEntry *ent;
+				g_autofree gchar *name = NULL;
+
+				ent  = &g_array_index(kb_arr, GowlKeybindEntry, kb_i);
+				name = gowl_keybind_to_string(ent->modifiers, ent->keysym);
+				g_message("  [%u] %s -> action=%d mods=0x%x sym=0x%x arg=%s",
+				          kb_i, name ? name : "???",
+				          ent->action, ent->modifiers, ent->keysym,
+				          ent->arg ? ent->arg : "(null)");
+			}
+		}
+	}
 
 	/* Create and start IPC server */
 	ipc = gowl_ipc_new(NULL);

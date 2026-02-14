@@ -790,8 +790,8 @@ gowl_config_load_yaml_from_search_path(
 
 	search_paths[0] = "data/" GOWL_CONFIG_FILENAME;
 	search_paths[1] = xdg_path;
-	search_paths[2] = "/etc/gowl/" GOWL_CONFIG_FILENAME;
-	search_paths[3] = "/usr/local/gowl/" GOWL_CONFIG_FILENAME;
+	search_paths[2] = GOWL_SYSCONFDIR "/gowl/" GOWL_CONFIG_FILENAME;
+	search_paths[3] = GOWL_DATADIR "/gowl/" GOWL_CONFIG_FILENAME;
 	search_paths[4] = NULL;
 
 	for (i = 0; search_paths[i] != NULL; i++) {

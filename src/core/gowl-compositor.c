@@ -2202,6 +2202,11 @@ on_kb_key(struct wl_listener *listener, void *data)
 	nsyms = xkb_state_key_get_syms(kb->xkb_state, keycode, &syms);
 	mods = wlr_keyboard_get_modifiers(kb);
 
+	if (nsyms > 0 && event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+		g_info("on_kb_key: keycode=%u sym=0x%04x mods=0x%x clean=0x%x",
+		       keycode, (guint)syms[0], mods, GOWL_CLEANMASK(mods));
+	}
+
 	/* Notify idle system of activity */
 	wlr_idle_notifier_v1_notify_activity(self->idle_notifier,
 	                                     self->wlr_seat);
@@ -2237,6 +2242,11 @@ on_kb_key(struct wl_listener *listener, void *data)
 			                                  keycode);
 			n_raw = xkb_keymap_key_get_syms_by_level(
 				kb->keymap, keycode, layout, 0, &raw_syms);
+
+			if (n_raw > 0) {
+				g_debug("on_kb_key: level-0 fallback sym=0x%04x (n=%d)",
+				        (guint)raw_syms[0], n_raw);
+			}
 
 			for (i = 0; i < n_raw; i++) {
 				if (keybinding(self, mods, raw_syms[i])) {

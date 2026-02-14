@@ -718,8 +718,42 @@ main(int argc, char *argv[])
 		gowl_config_get_log_file(config),
 		debug_mode);
 
-	/* Initialize module manager */
+	/* Initialize module manager and load modules */
 	module_mgr = gowl_module_manager_new();
+
+	/*
+	 * Auto-load modules from standard directories.
+	 * In development builds (GOWL_DEV_INCLUDE_DIR is set), also
+	 * look alongside the binary for a modules/ directory.
+	 * At install time, modules live in GOWL_MODULEDIR.
+	 */
+	{
+		g_autofree gchar *dev_mod_dir = NULL;
+		g_autofree gchar *bin_dir = NULL;
+		g_autofree gchar *exe_path = NULL;
+
+		/* Try development modules directory (relative to binary) */
+		exe_path = g_file_read_link("/proc/self/exe", NULL);
+		if (exe_path != NULL) {
+			bin_dir = g_path_get_dirname(exe_path);
+			dev_mod_dir = g_build_filename(bin_dir, "modules", NULL);
+			if (g_file_test(dev_mod_dir, G_FILE_TEST_IS_DIR)) {
+				g_message("Loading modules from: %s", dev_mod_dir);
+				gowl_module_manager_load_from_directory(
+					module_mgr, dev_mod_dir);
+			}
+		}
+
+		/* Also load from the installed module directory */
+		if (g_file_test(GOWL_MODULEDIR, G_FILE_TEST_IS_DIR)) {
+			g_message("Loading modules from: %s", GOWL_MODULEDIR);
+			gowl_module_manager_load_from_directory(
+				module_mgr, GOWL_MODULEDIR);
+		}
+
+		/* Activate all loaded modules */
+		gowl_module_manager_activate_all(module_mgr);
+	}
 
 	/* Create compositor and wire up config + module manager */
 	compositor = gowl_compositor_new();

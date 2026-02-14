@@ -1272,7 +1272,11 @@ gowl_compositor_focus_client(
 /**
  * tile:
  *
- * Master-stack tiling layout.  Ported from dwl's tile().
+ * Master-stack tiling layout with gap support.
+ * Queries the module manager for gap values from GowlGapProvider
+ * modules (e.g. vanitygaps).  Outer gaps shrink the usable area,
+ * inner gaps add spacing between tiled windows.
+ * Ported from dwl's tile().
  */
 static void
 tile(
@@ -1281,6 +1285,8 @@ tile(
 ){
 	guint mw, my, ty;
 	gint i, n;
+	gint ih, iv, oh, ov;
+	gint aw, ah, ax, ay;
 	GList *l;
 
 	/* Count visible tiling clients */
@@ -1293,10 +1299,25 @@ tile(
 	if (n == 0)
 		return;
 
+	/* Query gap provider for gap values */
+	ih = iv = oh = ov = 0;
+	if (self->module_mgr != NULL)
+		gowl_module_manager_get_gaps(self->module_mgr, (gpointer)m,
+		                             &ih, &iv, &oh, &ov);
+
+	/* Compute usable area after outer gaps */
+	ax = m->w.x + oh;
+	ay = m->w.y + ov;
+	aw = m->w.width - 2 * oh;
+	ah = m->w.height - 2 * ov;
+
+	if (aw <= 0 || ah <= 0)
+		return;
+
 	if (n > m->nmaster)
-		mw = m->nmaster ? (guint)roundf((float)m->w.width * (float)m->mfact) : 0;
+		mw = m->nmaster ? (guint)roundf((float)aw * (float)m->mfact) : 0;
 	else
-		mw = (guint)m->w.width;
+		mw = (guint)aw;
 
 	i = 0;
 	my = ty = 0;
@@ -1304,26 +1325,31 @@ tile(
 		GowlClient *c = (GowlClient *)l->data;
 		struct wlr_box geo;
 		gint remaining;
+		gint nmaster_count;
 
 		if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
 			continue;
 
-		if (i < m->nmaster) {
-			remaining = (m->nmaster < n ? m->nmaster : n) - i;
-			geo.x = m->w.x;
-			geo.y = m->w.y + (gint)my;
-			geo.width = (gint)mw;
-			geo.height = (m->w.height - (gint)my) / remaining;
+		nmaster_count = m->nmaster < n ? m->nmaster : n;
+
+		if (i < nmaster_count) {
+			/* Master area (left side) */
+			remaining = nmaster_count - i;
+			geo.x = ax;
+			geo.y = ay + (gint)my;
+			geo.width = (gint)mw - (n > nmaster_count ? ih / 2 : 0);
+			geo.height = (ah - (gint)my - (remaining - 1) * iv) / remaining;
 			resize_client(self, c, geo, FALSE);
-			my += (guint)c->geom.height;
+			my += (guint)c->geom.height + (guint)iv;
 		} else {
+			/* Stack area (right side) */
 			remaining = n - i;
-			geo.x = m->w.x + (gint)mw;
-			geo.y = m->w.y + (gint)ty;
-			geo.width = m->w.width - (gint)mw;
-			geo.height = (m->w.height - (gint)ty) / remaining;
+			geo.x = ax + (gint)mw + (nmaster_count > 0 ? ih / 2 : 0);
+			geo.y = ay + (gint)ty;
+			geo.width = aw - (gint)mw - (nmaster_count > 0 ? ih / 2 : 0);
+			geo.height = (ah - (gint)ty - (remaining - 1) * iv) / remaining;
 			resize_client(self, c, geo, FALSE);
-			ty += (guint)c->geom.height;
+			ty += (guint)c->geom.height + (guint)iv;
 		}
 		i++;
 	}
@@ -1332,7 +1358,8 @@ tile(
 /**
  * monocle:
  *
- * Monocle layout: all tiled clients fill the window area.
+ * Monocle layout with gap support: all tiled clients fill the
+ * window area minus outer gaps.
  * Ported from dwl's monocle().
  */
 static void
@@ -1343,13 +1370,26 @@ monocle(
 	GList *l;
 	GowlClient *top;
 	gint n;
+	gint oh, ov;
+	struct wlr_box area;
+
+	/* Query gap provider for outer gaps only (monocle has no inner gaps) */
+	oh = ov = 0;
+	if (self->module_mgr != NULL)
+		gowl_module_manager_get_gaps(self->module_mgr, (gpointer)m,
+		                             NULL, NULL, &oh, &ov);
+
+	area.x = m->w.x + oh;
+	area.y = m->w.y + ov;
+	area.width = m->w.width - 2 * oh;
+	area.height = m->w.height - 2 * ov;
 
 	n = 0;
 	for (l = self->clients; l != NULL; l = l->next) {
 		GowlClient *c = (GowlClient *)l->data;
 		if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
 			continue;
-		resize_client(self, c, m->w, FALSE);
+		resize_client(self, c, area, FALSE);
 		n++;
 	}
 	if (n > 0) {

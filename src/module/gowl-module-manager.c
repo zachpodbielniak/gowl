@@ -25,6 +25,7 @@
 #include "interfaces/gowl-startup-handler.h"
 #include "interfaces/gowl-shutdown-handler.h"
 #include "interfaces/gowl-ipc-handler.h"
+#include "interfaces/gowl-gap-provider.h"
 
 /**
  * GowlModuleManager:
@@ -47,6 +48,7 @@ struct _GowlModuleManager {
 	GPtrArray *startup_handlers;   /* element-type GowlStartupHandler* */
 	GPtrArray *shutdown_handlers;  /* element-type GowlShutdownHandler* */
 	GPtrArray *ipc_handlers;       /* element-type GowlIpcHandler*     */
+	GPtrArray *gap_providers;      /* element-type GowlGapProvider*    */
 };
 
 G_DEFINE_FINAL_TYPE(GowlModuleManager, gowl_module_manager, G_TYPE_OBJECT)
@@ -145,6 +147,7 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->startup_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->shutdown_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->ipc_handlers, g_ptr_array_unref);
+	g_clear_pointer(&self->gap_providers, g_ptr_array_unref);
 
 	/* Unref all module instances */
 	g_clear_pointer(&self->modules, g_ptr_array_unref);
@@ -243,6 +246,7 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->startup_handlers  = g_ptr_array_new();
 	self->shutdown_handlers = g_ptr_array_new();
 	self->ipc_handlers      = g_ptr_array_new();
+	self->gap_providers     = g_ptr_array_new();
 }
 
 /* --- Internal: classify a module into dispatch arrays --- */
@@ -289,6 +293,11 @@ classify_module(
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_IPC_HANDLER)) {
 		g_ptr_array_add(self->ipc_handlers, (gpointer)mod);
 		sort_dispatch_array(self->ipc_handlers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_GAP_PROVIDER)) {
+		g_ptr_array_add(self->gap_providers, (gpointer)mod);
+		sort_dispatch_array(self->gap_providers);
 	}
 }
 
@@ -739,4 +748,56 @@ gowl_module_manager_dispatch_shutdown(
 
 		gowl_shutdown_handler_on_shutdown(handler, compositor);
 	}
+}
+
+/**
+ * gowl_module_manager_get_gaps:
+ * @self: a #GowlModuleManager
+ * @monitor: the monitor being laid out
+ * @inner_h: (out): horizontal gap between clients
+ * @inner_v: (out): vertical gap between clients
+ * @outer_h: (out): horizontal gap at screen edges
+ * @outer_v: (out): vertical gap at screen edges
+ *
+ * Queries the first active gap provider for gap values.
+ * If no gap provider is registered, all outputs are set to 0.
+ *
+ * Returns: %TRUE if a gap provider was found
+ */
+gboolean
+gowl_module_manager_get_gaps(
+	GowlModuleManager *self,
+	gpointer           monitor,
+	gint              *inner_h,
+	gint              *inner_v,
+	gint              *outer_h,
+	gint              *outer_v
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), FALSE);
+
+	/* Default to zero gaps */
+	if (inner_h != NULL) *inner_h = 0;
+	if (inner_v != NULL) *inner_v = 0;
+	if (outer_h != NULL) *outer_h = 0;
+	if (outer_v != NULL) *outer_v = 0;
+
+	/* Query the first active gap provider */
+	for (i = 0; i < self->gap_providers->len; i++) {
+		GowlGapProvider *provider;
+
+		provider = (GowlGapProvider *)g_ptr_array_index(
+			self->gap_providers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(provider)))
+			continue;
+
+		gowl_gap_provider_get_gaps(provider, monitor,
+		                           inner_h, inner_v,
+		                           outer_h, outer_v);
+		return TRUE;
+	}
+
+	return FALSE;
 }

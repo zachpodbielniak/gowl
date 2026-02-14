@@ -75,6 +75,13 @@ void                gowl_module_manager_dispatch_startup (GowlModuleManager *sel
 void                gowl_module_manager_dispatch_shutdown(GowlModuleManager *self,
                                                            gpointer           compositor);
 
+gboolean            gowl_module_manager_get_gaps         (GowlModuleManager *self,
+                                                           gpointer           monitor,
+                                                           gint              *inner_h,
+                                                           gint              *inner_v,
+                                                           gint              *outer_h,
+                                                           gint              *outer_v);
+
 G_END_DECLS
 
 #endif /* GOWL_MODULE_MANAGER_H */

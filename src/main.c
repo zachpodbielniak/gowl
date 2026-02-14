@@ -21,6 +21,7 @@
 #include "ipc/gowl-ipc.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /*
  * Global pointers exported for C config shared objects.
@@ -29,6 +30,97 @@
  */
 GowlCompositor *gowl_compositor = NULL;
 GowlConfig     *gowl_config = NULL;
+
+/**
+ * GowlBuiltinModule:
+ *
+ * Static registry of known modules for --list-modules and
+ * --modules CSV generation.  Each entry maps a module name
+ * to its description and default YAML config snippet.
+ */
+typedef struct {
+	const gchar *name;
+	const gchar *description;
+	const gchar *yaml_snippet;
+	const gchar *c_snippet;
+} GowlBuiltinModule;
+
+static const GowlBuiltinModule builtin_modules[] = {
+	{
+		"autostart",
+		"Spawn configured commands on compositor startup",
+		"  autostart:\n"
+		"    enabled: true\n"
+		"    commands:\n"
+		"      - \"gowlbar\"\n",
+		" *   - autostart: spawn commands on startup\n"
+	},
+	{
+		"centeredmaster",
+		"Centered master tiling layout",
+		"  centeredmaster:\n"
+		"    enabled: true\n",
+		" *   - centeredmaster: |M| layout\n"
+	},
+	{
+		"fibonacci",
+		"Fibonacci spiral tiling layout",
+		"  fibonacci:\n"
+		"    enabled: true\n",
+		" *   - fibonacci: [@] layout\n"
+	},
+	{
+		"ipc",
+		"Handle IPC commands (ping, version, quit, reload)",
+		"  ipc:\n"
+		"    enabled: true\n",
+		" *   - ipc: handle IPC commands\n"
+	},
+	{
+		"movestack",
+		"Move clients up/down in the tiling stack",
+		"  movestack:\n"
+		"    enabled: true\n",
+		" *   - movestack: reorder clients in stack\n"
+	},
+	{
+		"pertag",
+		"Per-tag layout state (layout, mfact, nmaster)",
+		"  pertag:\n"
+		"    enabled: true\n",
+		" *   - pertag: per-tag layout state\n"
+	},
+	{
+		"scratchpad",
+		"Named scratchpad window management",
+		"  scratchpad:\n"
+		"    enabled: true\n",
+		" *   - scratchpad: named scratchpad windows\n"
+	},
+	{
+		"swallow",
+		"Window swallowing for terminal-spawned applications",
+		"  swallow:\n"
+		"    enabled: true\n"
+		"    terminals:\n"
+		"      - \"st-256color\"\n"
+		"      - \"kitty\"\n"
+		"      - \"foot\"\n",
+		" *   - swallow: terminal window swallowing\n"
+	},
+	{
+		"vanitygaps",
+		"Configurable inner and outer gaps for tiling layouts",
+		"  vanitygaps:\n"
+		"    enabled: true\n"
+		"    inner-h: 5\n"
+		"    inner-v: 5\n"
+		"    outer-h: 5\n"
+		"    outer-v: 5\n",
+		" *   - vanitygaps: configurable gaps\n"
+	},
+	{ NULL, NULL, NULL, NULL }
+};
 
 /* Default YAML config content for --generate-yaml-config.
  *
@@ -143,6 +235,203 @@ static const gchar *default_yaml_config =
 	"  autostart:\n"
 	"    enabled: true\n";
 
+/**
+ * find_builtin_module:
+ * @name: module name to look up
+ *
+ * Searches the builtin_modules registry for a module by name.
+ *
+ * Returns: pointer to the entry, or %NULL if not found
+ */
+static const GowlBuiltinModule *
+find_builtin_module(const gchar *name)
+{
+	gint i;
+
+	for (i = 0; builtin_modules[i].name != NULL; i++) {
+		if (strcmp(builtin_modules[i].name, name) == 0)
+			return &builtin_modules[i];
+	}
+
+	return NULL;
+}
+
+/**
+ * parse_modules_csv:
+ * @csv: comma-separated module names (e.g. "vanitygaps,autostart")
+ * @out_count: (out): number of parsed names
+ *
+ * Splits a CSV string into an array of trimmed module names.
+ * Caller must free the returned array with g_strfreev().
+ *
+ * Returns: %NULL-terminated array of module name strings
+ */
+static gchar **
+parse_modules_csv(const gchar *csv, gint *out_count)
+{
+	gchar **parts;
+	gint i;
+	gint count;
+
+	parts = g_strsplit(csv, ",", -1);
+	count = 0;
+
+	/* Trim whitespace from each entry */
+	for (i = 0; parts[i] != NULL; i++) {
+		g_strstrip(parts[i]);
+		if (parts[i][0] != '\0')
+			count++;
+	}
+
+	if (out_count != NULL)
+		*out_count = count;
+
+	return parts;
+}
+
+/**
+ * generate_yaml_with_modules:
+ * @modules_csv: comma-separated module names
+ *
+ * Prints the default YAML config with the modules section
+ * replaced by entries for the specified modules (all enabled).
+ */
+static void
+generate_yaml_with_modules(const gchar *modules_csv)
+{
+	g_autofree gchar *base = NULL;
+	gchar **mod_names;
+	gint count;
+	gchar *modules_pos;
+	gint i;
+
+	mod_names = parse_modules_csv(modules_csv, &count);
+
+	/* Print the base config up to the modules: section */
+	base = g_strdup(default_yaml_config);
+	modules_pos = strstr(base, "modules:\n");
+	if (modules_pos != NULL)
+		*modules_pos = '\0';
+
+	g_print("%s", base);
+	g_print("modules:\n");
+
+	/* Emit each requested module's YAML snippet */
+	for (i = 0; mod_names[i] != NULL; i++) {
+		const GowlBuiltinModule *bmod;
+
+		if (mod_names[i][0] == '\0')
+			continue;
+
+		bmod = find_builtin_module(mod_names[i]);
+		if (bmod != NULL) {
+			g_print("%s", bmod->yaml_snippet);
+		} else {
+			g_printerr("warning: unknown module '%s'\n",
+			           mod_names[i]);
+		}
+	}
+
+	g_strfreev(mod_names);
+}
+
+/**
+ * generate_c_with_modules:
+ * @modules_csv: comma-separated module names
+ *
+ * Prints the default C config template with comments listing
+ * which modules are expected to be loaded.
+ */
+static void
+generate_c_with_modules(const gchar *modules_csv)
+{
+	gchar **mod_names;
+	gint i;
+
+	mod_names = parse_modules_csv(modules_csv, NULL);
+
+	g_print(
+		"/*\n"
+		" * gowl user configuration\n"
+		" *\n"
+		" * Compile args are taken from the GOWL_BUILD_ARGS define if present,\n"
+		" * otherwise pkg-config is used. This file is compiled to a .so and\n"
+		" * loaded at startup. On compile failure, defaults are used.\n"
+		" *\n"
+		" * Optional build args override:\n"
+		" * #define GOWL_BUILD_ARGS \"-I/custom/path\"\n"
+		" */\n"
+		"\n"
+		"#include <gowl/gowl.h>\n"
+		"\n"
+		"/*\n"
+		" * Extern references to compositor objects.\n"
+		" * These are resolved at dlopen time from the running compositor.\n"
+		" */\n"
+		"extern GowlCompositor *gowl_compositor;\n"
+		"extern GowlConfig     *gowl_config;\n"
+		"\n"
+		"/*\n"
+		" * gowl_config_init:\n"
+		" *\n"
+		" * Called after YAML config is loaded but before compositor starts.\n"
+		" * Override or supplement YAML values here.\n"
+		" * Return TRUE on success, FALSE to fall back to defaults.\n"
+		" *\n"
+		" * Modules enabled via YAML config:\n");
+
+	for (i = 0; mod_names[i] != NULL; i++) {
+		const GowlBuiltinModule *bmod;
+
+		if (mod_names[i][0] == '\0')
+			continue;
+
+		bmod = find_builtin_module(mod_names[i]);
+		if (bmod != NULL)
+			g_print("%s", bmod->c_snippet);
+	}
+
+	g_print(
+		" */\n"
+		"G_MODULE_EXPORT gboolean\n"
+		"gowl_config_init(void)\n"
+		"{\n"
+		"    /* Example: override border width */\n"
+		"    g_object_set(gowl_config,\n"
+		"        \"border-width\", 3,\n"
+		"        \"mfact\", 0.55,\n"
+		"        NULL);\n"
+		"\n"
+		"    return TRUE;\n"
+		"}\n");
+
+	g_strfreev(mod_names);
+}
+
+/**
+ * print_module_list:
+ *
+ * Prints all known modules with a short summary.
+ */
+static void
+print_module_list(void)
+{
+	gint i;
+
+	g_print("Available gowl modules:\n\n");
+	g_print("  %-18s %s\n", "MODULE", "DESCRIPTION");
+	g_print("  %-18s %s\n", "------", "-----------");
+
+	for (i = 0; builtin_modules[i].name != NULL; i++) {
+		g_print("  %-18s %s\n",
+		        builtin_modules[i].name,
+		        builtin_modules[i].description);
+	}
+
+	g_print("\nUse --modules MODULE1,MODULE2 with --generate-yaml-config\n"
+	        "or --generate-c-config to include modules in generated config.\n");
+}
+
 /* Default C config template for --generate-c-config */
 static const gchar *default_c_config =
 	"/*\n"
@@ -191,11 +480,13 @@ main(int argc, char *argv[])
 	gboolean debug_mode = FALSE;
 	gboolean generate_yaml = FALSE;
 	gboolean generate_c = FALSE;
+	gboolean list_modules = FALSE;
 	gboolean no_c_config = FALSE;
 	gboolean recompile = FALSE;
 	gchar *config_path = NULL;
 	gchar *c_config_path = NULL;
 	gchar *startup_cmd = NULL;
+	gchar *modules_csv = NULL;
 	GError *error = NULL;
 	GowlConfig *config = NULL;
 	GowlCompositor *compositor = NULL;
@@ -212,6 +503,11 @@ main(int argc, char *argv[])
 			"Print default YAML config to stdout", NULL },
 		{ "generate-c-config", 0, 0, G_OPTION_ARG_NONE, &generate_c,
 			"Print default C config template to stdout", NULL },
+		{ "modules", 0, 0, G_OPTION_ARG_STRING, &modules_csv,
+			"Comma-separated modules for config generation",
+			"MOD1,MOD2" },
+		{ "list-modules", 0, 0, G_OPTION_ARG_NONE, &list_modules,
+			"List available modules with descriptions", NULL },
 		{ "config", 0, 0, G_OPTION_ARG_FILENAME, &config_path,
 			"Override YAML config path", "PATH" },
 		{ "c-config", 0, 0, G_OPTION_ARG_FILENAME, &c_config_path,
@@ -245,16 +541,29 @@ main(int argc, char *argv[])
 		goto cleanup;
 	}
 
+	/* Handle --list-modules */
+	if (list_modules) {
+		print_module_list();
+		ret = 0;
+		goto cleanup;
+	}
+
 	/* Handle --generate-yaml-config */
 	if (generate_yaml) {
-		g_print("%s", default_yaml_config);
+		if (modules_csv != NULL)
+			generate_yaml_with_modules(modules_csv);
+		else
+			g_print("%s", default_yaml_config);
 		ret = 0;
 		goto cleanup;
 	}
 
 	/* Handle --generate-c-config */
 	if (generate_c) {
-		g_print("%s", default_c_config);
+		if (modules_csv != NULL)
+			generate_c_with_modules(modules_csv);
+		else
+			g_print("%s", default_c_config);
 		ret = 0;
 		goto cleanup;
 	}
@@ -491,6 +800,7 @@ cleanup:
 	g_free(config_path);
 	g_free(c_config_path);
 	g_free(startup_cmd);
+	g_free(modules_csv);
 
 	return ret;
 }

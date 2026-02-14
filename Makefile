@@ -23,6 +23,7 @@ include config.mk
 SKIP_DEP_CHECK_GOALS := install-deps install-debug-session help show-config check-deps clean
 ifeq ($(filter $(SKIP_DEP_CHECK_GOALS),$(MAKECMDGOALS)),)
 $(foreach dep,$(DEPS_REQUIRED),$(call check_dep,$(dep)))
+$(foreach dep,$(BAR_DEPS),$(call check_dep,$(dep)))
 endif
 
 # Source files - Library
@@ -282,6 +283,8 @@ install-deps:
 		xcb-util-wm-devel \
 		libdrm-devel \
 		pixman-devel \
+		pango-devel \
+		cairo-devel \
 		libasan libubsan
 
 # Install a debug .desktop session file pointing at the local debug build

@@ -240,9 +240,12 @@ ifeq ($(BUILD_MODULES),1)
 install: install-modules
 endif
 
-install-bin: $(OUTDIR)/gowl
+install-bin: $(OBJDIR)/main.o $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(MKDIR_P) $(DESTDIR)$(BINDIR)
-	$(INSTALL_PROGRAM) $(OUTDIR)/gowl $(DESTDIR)$(BINDIR)/gowl
+	$(CC) -o $(DESTDIR)$(BINDIR)/gowl $(OBJDIR)/main.o \
+		-L$(OUTDIR) -lgowl $(LDFLAGS) -rdynamic \
+		-Wl,-rpath,$(LIBDIR)
+	chmod 755 $(DESTDIR)$(BINDIR)/gowl
 
 install-lib: $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(MKDIR_P) $(DESTDIR)$(LIBDIR)
@@ -250,6 +253,10 @@ install-lib: $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(INSTALL_DATA) $(OUTDIR)/$(LIB_SHARED_FULL) $(DESTDIR)$(LIBDIR)/
 	cd $(DESTDIR)$(LIBDIR) && ln -sf $(LIB_SHARED_FULL) $(LIB_SHARED_MAJOR)
 	cd $(DESTDIR)$(LIBDIR) && ln -sf $(LIB_SHARED_MAJOR) $(LIB_SHARED)
+	@if [ -z "$(DESTDIR)" ] && command -v ldconfig >/dev/null 2>&1; then \
+		echo "  Running ldconfig..."; \
+		ldconfig || true; \
+	fi
 
 install-headers:
 	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl

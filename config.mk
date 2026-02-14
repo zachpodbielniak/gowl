@@ -15,7 +15,10 @@ VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 # Installation directories
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
-LIBDIR ?= $(PREFIX)/lib
+# Auto-detect lib directory suffix (lib vs lib64)
+# 64-bit distros (Fedora, RHEL, SUSE) use lib64; override with LIBDIR=...
+LIBSUFFIX := $(shell [ -d /usr/lib64 ] && echo lib64 || echo lib)
+LIBDIR ?= $(PREFIX)/$(LIBSUFFIX)
 INCLUDEDIR ?= $(PREFIX)/include
 DATADIR ?= $(PREFIX)/share
 PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig
@@ -186,6 +189,7 @@ show-config:
 	@echo "CFLAGS:          $(CFLAGS)"
 	@echo "LDFLAGS:         $(LDFLAGS)"
 	@echo "PREFIX:          $(PREFIX)"
+	@echo "LIBDIR:          $(LIBDIR)"
 	@echo "MODULEDIR:       $(MODULEDIR)"
 	@echo "DEBUG:           $(DEBUG)"
 	@echo "ASAN:            $(ASAN)"

@@ -18,6 +18,14 @@
 
 #include "gowl-enums.h"
 
+/*
+ * Suppress -Wdiscarded-qualifiers caused by GLib's g_once_init_enter()
+ * macro using __atomic_load on a volatile gsize pointer. This is a known
+ * GLib header issue (not our code) and is harmless.
+ */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
+
 /* --- GowlHookPoint GType registration --- */
 
 /**
@@ -369,3 +377,5 @@ gowl_idle_state_get_type(void)
 
 	return (GType)g_type_id;
 }
+
+#pragma GCC diagnostic pop

@@ -100,10 +100,10 @@ $(OUTDIR)/modules/%.so: modules/%/*.c | $(OUTDIR)/modules
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(MODULE_CFLAGS) $(MODULE_LDFLAGS) -o $@ $^ $(LDFLAGS) -L$(OUTDIR) -lgowl
 
-# yaml-glib dependency compilation
+# yaml-glib dependency compilation (suppress warnings in vendored code)
 $(OBJDIR)/deps/yaml-glib/src/%.o: deps/yaml-glib/src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -w -c $< -o $@
 
 # Static library creation
 $(OUTDIR)/$(LIB_STATIC): $(LIB_OBJS) $(YAMLGLIB_OBJS)

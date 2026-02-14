@@ -104,7 +104,7 @@ run_pkg_config(
 	                               &exit_status, error))
 		return NULL;
 
-	if (!g_spawn_check_exit_status(exit_status, NULL)) {
+	if (!g_spawn_check_wait_status(exit_status, NULL)) {
 		g_set_error(error,
 		            G_IO_ERROR,
 		            G_IO_ERROR_FAILED,
@@ -315,7 +315,7 @@ gowl_config_compiler_compile(
 	if (!ok)
 		return FALSE;
 
-	if (!g_spawn_check_exit_status(exit_status, NULL)) {
+	if (!g_spawn_check_wait_status(exit_status, NULL)) {
 		g_set_error(error,
 		            G_IO_ERROR,
 		            G_IO_ERROR_FAILED,

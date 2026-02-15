@@ -778,6 +778,35 @@ gowl_config_apply_mapping(
 						g_hash_table_insert(settings,
 						                    g_strdup(key),
 						                    g_strdup(val_str));
+					} else {
+						/* Handle sequence values (e.g. commands list).
+						 * Join elements with newline so modules can
+						 * split them back via g_strsplit(). */
+						YamlSequence *seq;
+
+						seq = yaml_node_get_sequence(val_node);
+						if (seq != NULL) {
+							guint slen;
+							guint si2;
+							GString *joined;
+
+							slen = yaml_sequence_get_length(seq);
+							joined = g_string_new(NULL);
+							for (si2 = 0; si2 < slen; si2++) {
+								const gchar *elem;
+
+								elem = yaml_sequence_get_string_element(
+									seq, si2);
+								if (elem == NULL)
+									continue;
+								if (joined->len > 0)
+									g_string_append_c(joined, '\n');
+								g_string_append(joined, elem);
+							}
+							g_hash_table_insert(settings,
+							                    g_strdup(key),
+							                    g_string_free(joined, FALSE));
+						}
 					}
 				}
 

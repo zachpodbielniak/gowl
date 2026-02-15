@@ -98,16 +98,19 @@ autostart_get_version(GowlModule *mod)
 
 /**
  * autostart_configure:
+ * @mod: the autostart module
+ * @config: (type GHashTable)(nullable): per-module settings hash table
  *
- * Accepts a NULL-terminated string array (gchar **) of shell
- * commands to run at startup.
+ * Reads the "commands" key from the module config hash table.
+ * Commands are stored as a newline-delimited string by the config
+ * parser (from YAML sequence values).
  */
 static void
 autostart_configure(GowlModule *mod, gpointer config)
 {
 	GowlModuleAutostart *self;
-	gchar **cmds;
-	gint i;
+	GHashTable *settings;
+	const gchar *cmds_str;
 
 	self = GOWL_MODULE_AUTOSTART(mod);
 
@@ -118,11 +121,13 @@ autostart_configure(GowlModule *mod, gpointer config)
 	if (config == NULL)
 		return;
 
-	cmds = (gchar **)config;
-	for (i = 0; cmds[i] != NULL; i++)
-		;
-	self->n_commands = i;
-	self->commands = g_strdupv(cmds);
+	settings = (GHashTable *)config;
+	cmds_str = (const gchar *)g_hash_table_lookup(settings, "commands");
+	if (cmds_str == NULL || cmds_str[0] == '\0')
+		return;
+
+	self->commands = g_strsplit(cmds_str, "\n", -1);
+	self->n_commands = (gint)g_strv_length(self->commands);
 
 	g_debug("autostart: configured with %d command(s)", self->n_commands);
 }

@@ -64,15 +64,21 @@ get_time_ms(void)
  * keysym_to_keycode:
  * @keymap: the xkb keymap to search
  * @keysym: the keysym to find
+ * @out_layout: (out) (optional): layout index where the keysym was found
+ * @out_level: (out) (optional): level index where the keysym was found
  *
  * Reverse-lookup: finds the first keycode in the keymap that
  * produces @keysym at any layout/level.  Returns the xkb keycode
- * (evdev + 8), or 0 if not found.
+ * (evdev + 8), or 0 if not found.  When non-NULL, @out_layout and
+ * @out_level are set to the layout and level at which the match
+ * was found (useful for determining required modifiers).
  */
 static xkb_keycode_t
 keysym_to_keycode(
-	struct xkb_keymap *keymap,
-	xkb_keysym_t       keysym
+	struct xkb_keymap  *keymap,
+	xkb_keysym_t        keysym,
+	xkb_layout_index_t *out_layout,
+	xkb_level_index_t  *out_level
 ){
 	xkb_keycode_t min_kc;
 	xkb_keycode_t max_kc;
@@ -100,12 +106,22 @@ keysym_to_keycode(
 				nsyms = xkb_keymap_key_get_syms_by_level(
 					keymap, kc, layout, level, &syms);
 				for (i = 0; i < nsyms; i++) {
-					if (syms[i] == keysym)
+					if (syms[i] == keysym) {
+						if (out_layout != NULL)
+							*out_layout = layout;
+						if (out_level != NULL)
+							*out_level = level;
 						return kc;
+					}
 				}
 			}
 		}
 	}
+
+	if (out_layout != NULL)
+		*out_layout = 0;
+	if (out_level != NULL)
+		*out_level = 0;
 	return 0;
 }
 
@@ -187,7 +203,7 @@ tool_send_key(
 
 	/* Find the keycode in the current keymap */
 	kb = &module->compositor->wlr_kb_group->keyboard;
-	xkb_kc = keysym_to_keycode(kb->keymap, keysym);
+	xkb_kc = keysym_to_keycode(kb->keymap, keysym, NULL, NULL);
 	if (xkb_kc == 0) {
 		result = mcp_tool_result_new(TRUE);
 		mcp_tool_result_add_text(result,
@@ -234,8 +250,11 @@ handle_send_key(
  *
  * Types a string character-by-character.  Each Unicode codepoint
  * is converted to a keysym, looked up in the keymap, and sent as
- * a key press/release pair.  Characters that cannot be mapped are
- * skipped.
+ * a key press/release pair.  Characters that live on a higher
+ * keymap level (e.g. Shift for uppercase letters, symbols like
+ * '(', ')', ':') have the required modifier state sent to the
+ * client before the key event and restored afterwards.
+ * Characters that cannot be mapped are skipped.
  */
 static McpToolResult *
 tool_send_text(
@@ -247,6 +266,7 @@ tool_send_text(
 	const gchar *text;
 	const gchar *p;
 	struct wlr_keyboard *kb;
+	struct wlr_keyboard_modifiers orig_mods;
 	guint32 time_ms;
 	gint sent;
 	gint skipped;
@@ -266,13 +286,19 @@ tool_send_text(
 	sent = 0;
 	skipped = 0;
 
+	/* Save original modifier state to restore between characters */
+	orig_mods = kb->modifiers;
+
 	wlr_seat_set_keyboard(module->compositor->wlr_seat, kb);
 
 	for (p = text; *p != '\0'; ) {
 		gunichar uc;
 		xkb_keysym_t keysym;
 		xkb_keycode_t xkb_kc;
+		xkb_layout_index_t layout;
+		xkb_level_index_t level;
 		guint32 evdev_kc;
+		gboolean mods_changed;
 
 		uc = g_utf8_get_char(p);
 		p = g_utf8_next_char(p);
@@ -284,14 +310,41 @@ tool_send_text(
 			continue;
 		}
 
-		/* Find keycode in keymap */
-		xkb_kc = keysym_to_keycode(kb->keymap, keysym);
+		/* Find keycode and level in keymap */
+		xkb_kc = keysym_to_keycode(kb->keymap, keysym,
+			&layout, &level);
 		if (xkb_kc == 0) {
 			skipped++;
 			continue;
 		}
 
 		evdev_kc = xkb_kc - 8;
+		mods_changed = FALSE;
+
+		/*
+		 * If the keysym lives on a level that requires modifiers
+		 * (e.g. level 1 = Shift for uppercase and symbols like
+		 * '(', ')', ':', '!', '@', etc.), query the keymap for
+		 * the modifier mask needed to reach that level and send
+		 * the modifier state to the client before the key event.
+		 */
+		if (level > 0) {
+			xkb_mod_mask_t masks[8];
+			size_t nmasks;
+
+			nmasks = xkb_keymap_key_get_mods_for_level(
+				kb->keymap, xkb_kc, layout, level,
+				masks, G_N_ELEMENTS(masks));
+			if (nmasks > 0) {
+				struct wlr_keyboard_modifiers mods;
+
+				mods = orig_mods;
+				mods.depressed |= masks[0];
+				wlr_seat_keyboard_notify_modifiers(
+					module->compositor->wlr_seat, &mods);
+				mods_changed = TRUE;
+			}
+		}
 
 		wlr_seat_keyboard_notify_key(
 			module->compositor->wlr_seat,
@@ -301,6 +354,12 @@ tool_send_text(
 			module->compositor->wlr_seat,
 			time_ms + 1, evdev_kc,
 			WL_KEYBOARD_KEY_STATE_RELEASED);
+
+		/* Restore original modifier state if we changed it */
+		if (mods_changed) {
+			wlr_seat_keyboard_notify_modifiers(
+				module->compositor->wlr_seat, &orig_mods);
+		}
 
 		time_ms += 2;
 		sent++;

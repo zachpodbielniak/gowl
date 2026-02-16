@@ -25,8 +25,10 @@
  *   - screenshot_region  : Capture an arbitrary rectangle
  *
  * Screenshots are returned as base64-encoded PNG via the MCP image
- * content type.  Uses wlr_texture_read_pixels() for pixel readback
- * and libpng for encoding.
+ * content type.  When the optional 'path' parameter is provided,
+ * the PNG is written to disk and JSON metadata is returned instead.
+ * Uses wlr_texture_read_pixels() for pixel readback and libpng
+ * for encoding.
  */
 
 #undef G_LOG_DOMAIN
@@ -328,6 +330,76 @@ pixels_to_image_result(
 	return result;
 }
 
+/**
+ * save_png_to_file:
+ * @pixels: ARGB8888 pixel data
+ * @width: image width
+ * @height: image height
+ * @stride: row stride in bytes
+ * @path: destination file path
+ *
+ * Encodes pixels to PNG and writes to @path via g_file_set_contents().
+ * Returns an McpToolResult -- either success JSON (path, bytes) or error.
+ *
+ * Returns: (transfer full): a new #McpToolResult
+ */
+static McpToolResult *
+save_png_to_file(
+	const guint8 *pixels,
+	gint          width,
+	gint          height,
+	gint          stride,
+	const gchar  *path
+){
+	McpToolResult *result;
+	guint8 *png_data;
+	gsize png_len;
+	GError *error;
+
+	png_data = NULL;
+	png_len = 0;
+
+	if (!encode_rgba_to_png(pixels, width, height, stride,
+	                        &png_data, &png_len))
+	{
+		result = mcp_tool_result_new(TRUE);
+		mcp_tool_result_add_text(result,
+			"Failed to encode PNG");
+		return result;
+	}
+
+	error = NULL;
+	if (!g_file_set_contents(path, (const gchar *)png_data,
+	                         (gssize)png_len, &error))
+	{
+		g_autofree gchar *msg = NULL;
+
+		msg = g_strdup_printf("Failed to write %s: %s",
+			path, error->message);
+		g_error_free(error);
+		g_free(png_data);
+
+		result = mcp_tool_result_new(TRUE);
+		mcp_tool_result_add_text(result, msg);
+		return result;
+	}
+
+	g_free(png_data);
+
+	/* Return JSON metadata */
+	{
+		g_autofree gchar *json = NULL;
+
+		json = g_strdup_printf(
+			"{\"success\": true, \"path\": \"%s\", \"bytes\": %"
+			G_GSIZE_FORMAT "}", path, png_len);
+
+		result = mcp_tool_result_new(FALSE);
+		mcp_tool_result_add_text(result, json);
+		return result;
+	}
+}
+
 /* ========================================================================== */
 /* Helper: find client by ID                                                  */
 /* ========================================================================== */
@@ -459,6 +531,20 @@ tool_screenshot_client(
 		return r;
 	}
 
+	/* Check for optional save path */
+	if (arguments != NULL &&
+	    json_object_has_member(arguments, "path"))
+	{
+		const gchar *path;
+		McpToolResult *r;
+
+		path = json_object_get_string_member(arguments, "path");
+		r = save_png_to_file(pixels, w, h, stride, path);
+		g_free(pixels);
+		return r;
+	}
+
+	/* Default: return base64 image */
 	{
 		McpToolResult *r;
 
@@ -583,6 +669,20 @@ tool_screenshot_monitor(
 	wlr_texture_destroy(texture);
 	wlr_output_state_finish(&state);
 
+	/* Check for optional save path */
+	if (arguments != NULL &&
+	    json_object_has_member(arguments, "path"))
+	{
+		const gchar *path;
+		McpToolResult *r;
+
+		path = json_object_get_string_member(arguments, "path");
+		r = save_png_to_file(pixels, w, h, stride, path);
+		g_free(pixels);
+		return r;
+	}
+
+	/* Default: return base64 image */
 	{
 		McpToolResult *r;
 
@@ -728,6 +828,20 @@ tool_screenshot_region(
 	wlr_texture_destroy(texture);
 	wlr_output_state_finish(&state);
 
+	/* Check for optional save path */
+	if (arguments != NULL &&
+	    json_object_has_member(arguments, "path"))
+	{
+		const gchar *path;
+		McpToolResult *r;
+
+		path = json_object_get_string_member(arguments, "path");
+		r = save_png_to_file(pixels, out_w, out_h, out_stride, path);
+		g_free(pixels);
+		return r;
+	}
+
+	/* Default: return base64 image */
 	{
 		McpToolResult *r;
 
@@ -771,7 +885,8 @@ gowl_mcp_register_screenshot_tools(
 
 		tool = mcp_tool_new("screenshot_client",
 			"Capture a screenshot of a specific client window. "
-			"Returns a base64-encoded PNG image.");
+			"Returns a base64-encoded PNG image. If 'path' is "
+			"provided, saves to file instead.");
 		mcp_tool_set_read_only_hint(tool, TRUE);
 
 		json_builder_begin_object(b);
@@ -787,6 +902,16 @@ gowl_mcp_register_screenshot_tools(
 		json_builder_set_member_name(b, "description");
 		json_builder_add_string_value(b,
 			"Client window ID (from list_clients)");
+		json_builder_end_object(b);
+
+		json_builder_set_member_name(b, "path");
+		json_builder_begin_object(b);
+		json_builder_set_member_name(b, "type");
+		json_builder_add_string_value(b, "string");
+		json_builder_set_member_name(b, "description");
+		json_builder_add_string_value(b,
+			"File path to write the PNG to. "
+			"If omitted, returns base64 image.");
 		json_builder_end_object(b);
 
 		json_builder_end_object(b);
@@ -814,7 +939,8 @@ gowl_mcp_register_screenshot_tools(
 
 		tool = mcp_tool_new("screenshot_monitor",
 			"Capture a screenshot of an entire monitor/output. "
-			"Returns a base64-encoded PNG image.");
+			"Returns a base64-encoded PNG image. If 'path' is "
+			"provided, saves to file instead.");
 		mcp_tool_set_read_only_hint(tool, TRUE);
 
 		json_builder_begin_object(b);
@@ -831,6 +957,16 @@ gowl_mcp_register_screenshot_tools(
 		json_builder_add_string_value(b,
 			"Output name (e.g. 'eDP-1', 'HDMI-A-1'). "
 			"Default: first monitor.");
+		json_builder_end_object(b);
+
+		json_builder_set_member_name(b, "path");
+		json_builder_begin_object(b);
+		json_builder_set_member_name(b, "type");
+		json_builder_add_string_value(b, "string");
+		json_builder_set_member_name(b, "description");
+		json_builder_add_string_value(b,
+			"File path to write the PNG to. "
+			"If omitted, returns base64 image.");
 		json_builder_end_object(b);
 
 		json_builder_end_object(b);
@@ -854,7 +990,8 @@ gowl_mcp_register_screenshot_tools(
 
 		tool = mcp_tool_new("screenshot_region",
 			"Capture a rectangular region from a monitor. "
-			"Returns a base64-encoded PNG image.");
+			"Returns a base64-encoded PNG image. If 'path' is "
+			"provided, saves to file instead.");
 		mcp_tool_set_read_only_hint(tool, TRUE);
 
 		json_builder_begin_object(b);
@@ -906,6 +1043,16 @@ gowl_mcp_register_screenshot_tools(
 		json_builder_set_member_name(b, "description");
 		json_builder_add_string_value(b,
 			"Output name (default: first monitor)");
+		json_builder_end_object(b);
+
+		json_builder_set_member_name(b, "path");
+		json_builder_begin_object(b);
+		json_builder_set_member_name(b, "type");
+		json_builder_add_string_value(b, "string");
+		json_builder_set_member_name(b, "description");
+		json_builder_add_string_value(b,
+			"File path to write the PNG to. "
+			"If omitted, returns base64 image.");
 		json_builder_end_object(b);
 
 		json_builder_end_object(b);

@@ -533,6 +533,7 @@ Gowl ships with several modules in the `modules/` directory:
 | `fibonacci` | Fibonacci spiral layout |
 | `centeredmaster` | Centered master layout |
 | `ipc` | IPC socket command handler |
+| `copyhighlight` | Sync primary selection to clipboard on text highlight |
 
 ## Tips
 

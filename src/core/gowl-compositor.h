@@ -22,6 +22,8 @@
 #include "gowl-types.h"
 #include <wayland-server-core.h>
 
+struct wlr_seat;
+
 G_BEGIN_DECLS
 
 #define GOWL_TYPE_COMPOSITOR (gowl_compositor_get_type())
@@ -142,6 +144,17 @@ struct wl_event_loop *gowl_compositor_get_event_loop (GowlCompositor *self);
  * Returns: (transfer none) (nullable): the socket name string
  */
 const gchar    *gowl_compositor_get_socket_name (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_wlr_seat:
+ * @self: a #GowlCompositor
+ *
+ * Returns the wlr_seat owned by the compositor.  Only valid after
+ * gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the wlr_seat, or %NULL
+ */
+struct wlr_seat *gowl_compositor_get_wlr_seat (GowlCompositor *self);
 
 G_END_DECLS
 

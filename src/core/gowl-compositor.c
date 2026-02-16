@@ -431,6 +431,23 @@ gowl_compositor_get_socket_name(GowlCompositor *self)
 }
 
 /**
+ * gowl_compositor_get_wlr_seat:
+ * @self: a #GowlCompositor
+ *
+ * Returns the wlr_seat used by the compositor for input handling.
+ * Only valid after gowl_compositor_start() has been called successfully.
+ *
+ * Returns: (transfer none) (nullable): the struct wlr_seat, or %NULL
+ */
+struct wlr_seat *
+gowl_compositor_get_wlr_seat(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->wlr_seat;
+}
+
+/**
  * gowl_compositor_start:
  * @self: a #GowlCompositor
  * @error: (nullable): return location for a #GError

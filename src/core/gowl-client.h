@@ -20,6 +20,9 @@
 #define GOWL_CLIENT_H
 
 #include <glib-object.h>
+#include <sys/types.h>
+
+struct wlr_surface;
 
 G_BEGIN_DECLS
 
@@ -72,6 +75,48 @@ void           gowl_client_set_geometry       (GowlClient  *self,
 gpointer       gowl_client_get_monitor        (GowlClient  *self);
 void           gowl_client_set_monitor        (GowlClient  *self,
                                                gpointer     monitor);
+
+/**
+ * gowl_client_get_id:
+ * @self: a #GowlClient
+ *
+ * Returns a unique identifier for this client.  The ID is stable
+ * for the lifetime of the client object and is never reused.
+ *
+ * Returns: the unique client ID
+ */
+guint          gowl_client_get_id             (GowlClient  *self);
+
+/**
+ * gowl_client_close:
+ * @self: a #GowlClient
+ *
+ * Sends a close request to the client's XDG toplevel.  The client
+ * may choose to ignore the request (e.g. to show an "unsaved" dialog).
+ */
+void           gowl_client_close              (GowlClient  *self);
+
+/**
+ * gowl_client_get_pid:
+ * @self: a #GowlClient
+ *
+ * Returns the PID of the process that owns this client's Wayland
+ * connection, obtained via wl_client_get_credentials().
+ *
+ * Returns: the process ID, or -1 if unavailable
+ */
+pid_t          gowl_client_get_pid            (GowlClient  *self);
+
+/**
+ * gowl_client_get_wlr_surface:
+ * @self: a #GowlClient
+ *
+ * Returns the underlying wlr_surface for this client.  Useful for
+ * screenshot and surface inspection operations.
+ *
+ * Returns: (transfer none) (nullable): the struct wlr_surface, or %NULL
+ */
+struct wlr_surface *gowl_client_get_wlr_surface (GowlClient *self);
 
 G_END_DECLS
 

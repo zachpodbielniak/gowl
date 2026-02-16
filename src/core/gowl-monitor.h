@@ -21,6 +21,8 @@
 
 #include <glib-object.h>
 
+struct wlr_output;
+
 G_BEGIN_DECLS
 
 #define GOWL_TYPE_MONITOR (gowl_monitor_get_type())
@@ -115,6 +117,42 @@ void           gowl_monitor_set_nmaster       (GowlMonitor *self,
  * Returns: (transfer none) (nullable): the layout symbol string
  */
 const gchar   *gowl_monitor_get_layout_symbol (GowlMonitor *self);
+
+/**
+ * gowl_monitor_get_name:
+ * @self: a #GowlMonitor
+ *
+ * Returns the output name (e.g. "eDP-1", "HDMI-A-1").
+ *
+ * Returns: (transfer none) (nullable): the output name string
+ */
+const gchar   *gowl_monitor_get_name          (GowlMonitor *self);
+
+/**
+ * gowl_monitor_get_geometry:
+ * @self: a #GowlMonitor
+ * @x: (out) (nullable): return location for x coordinate
+ * @y: (out) (nullable): return location for y coordinate
+ * @width: (out) (nullable): return location for width
+ * @height: (out) (nullable): return location for height
+ *
+ * Returns the monitor's layout-relative geometry.
+ */
+void           gowl_monitor_get_geometry      (GowlMonitor *self,
+                                               gint        *x,
+                                               gint        *y,
+                                               gint        *width,
+                                               gint        *height);
+
+/**
+ * gowl_monitor_get_wlr_output:
+ * @self: a #GowlMonitor
+ *
+ * Returns the underlying wlr_output for this monitor.
+ *
+ * Returns: (transfer none) (nullable): the struct wlr_output, or %NULL
+ */
+struct wlr_output *gowl_monitor_get_wlr_output (GowlMonitor *self);
 
 G_END_DECLS
 

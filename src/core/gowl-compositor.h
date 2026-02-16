@@ -23,6 +23,7 @@
 #include <wayland-server-core.h>
 
 struct wlr_seat;
+struct wlr_renderer;
 
 G_BEGIN_DECLS
 
@@ -155,6 +156,109 @@ const gchar    *gowl_compositor_get_socket_name (GowlCompositor *self);
  * Returns: (transfer none) (nullable): the wlr_seat, or %NULL
  */
 struct wlr_seat *gowl_compositor_get_wlr_seat (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_wlr_renderer:
+ * @self: a #GowlCompositor
+ *
+ * Returns the wlr_renderer used by the compositor for rendering
+ * operations.  Only valid after gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the struct wlr_renderer, or %NULL
+ */
+struct wlr_renderer *gowl_compositor_get_wlr_renderer (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_clients:
+ * @self: a #GowlCompositor
+ *
+ * Returns the list of managed client windows.  The list and its
+ * elements are owned by the compositor; the caller must not free
+ * or modify the list.
+ *
+ * Returns: (transfer none) (element-type GowlClient) (nullable):
+ *   the client list, or %NULL if empty
+ */
+GList *gowl_compositor_get_clients (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_monitors:
+ * @self: a #GowlCompositor
+ *
+ * Returns the list of active monitors.  The list and its elements
+ * are owned by the compositor; the caller must not free or modify
+ * the list.
+ *
+ * Returns: (transfer none) (element-type GowlMonitor) (nullable):
+ *   the monitor list, or %NULL if empty
+ */
+GList *gowl_compositor_get_monitors (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_focused_client:
+ * @self: a #GowlCompositor
+ *
+ * Returns the client that currently has keyboard focus.
+ *
+ * Returns: (transfer none) (nullable): the focused #GowlClient, or %NULL
+ */
+GowlClient *gowl_compositor_get_focused_client (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_client_count:
+ * @self: a #GowlCompositor
+ *
+ * Returns the number of managed clients.
+ *
+ * Returns: the client count
+ */
+guint gowl_compositor_get_client_count (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_monitor_count:
+ * @self: a #GowlCompositor
+ *
+ * Returns the number of active monitors.
+ *
+ * Returns: the monitor count
+ */
+guint gowl_compositor_get_monitor_count (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_module_manager:
+ * @self: a #GowlCompositor
+ *
+ * Returns the module manager used by the compositor.
+ *
+ * Returns: (transfer none) (nullable): the #GowlModuleManager, or %NULL
+ */
+GowlModuleManager *gowl_compositor_get_module_manager (GowlCompositor *self);
+
+/**
+ * gowl_compositor_find_client_by_app_id:
+ * @self: a #GowlCompositor
+ * @pattern: a glob pattern to match against client app_id values
+ *
+ * Searches for the first client whose app_id matches @pattern
+ * using g_pattern_match_simple().
+ *
+ * Returns: (transfer none) (nullable): the matching #GowlClient, or %NULL
+ */
+GowlClient *gowl_compositor_find_client_by_app_id (GowlCompositor *self,
+                                                     const gchar    *pattern);
+
+/**
+ * gowl_compositor_find_client_by_title:
+ * @self: a #GowlCompositor
+ * @pattern: a glob pattern to match against client title values
+ *
+ * Searches for the first client whose title matches @pattern
+ * using g_pattern_match_simple().
+ *
+ * Returns: (transfer none) (nullable): the matching #GowlClient, or %NULL
+ */
+GowlClient *gowl_compositor_find_client_by_title (GowlCompositor *self,
+                                                    const gchar    *pattern);
 
 G_END_DECLS
 

@@ -19,6 +19,10 @@
 #include "gowl-core-private.h"
 
 #include <string.h>
+#include <unistd.h>
+
+/* monotonically increasing client ID counter */
+static guint next_client_id = 1;
 
 /**
  * GowlClient:
@@ -225,6 +229,7 @@ gowl_client_class_init(GowlClientClass *klass)
 static void
 gowl_client_init(GowlClient *self)
 {
+	self->id            = next_client_id++;
 	self->xdg_toplevel  = NULL;
 	self->scene         = NULL;
 	self->scene_surface = NULL;
@@ -571,4 +576,91 @@ gowl_client_set_monitor(
 	g_return_if_fail(GOWL_IS_CLIENT(self));
 
 	self->mon = (GowlMonitor *)monitor;
+}
+
+/**
+ * gowl_client_get_id:
+ * @self: a #GowlClient
+ *
+ * Returns a unique identifier for this client.  The ID is assigned
+ * at creation time from a monotonically increasing counter and is
+ * never reused within the compositor session.
+ *
+ * Returns: the unique client ID
+ */
+guint
+gowl_client_get_id(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), 0);
+
+	return self->id;
+}
+
+/**
+ * gowl_client_close:
+ * @self: a #GowlClient
+ *
+ * Sends a close request to the client's XDG toplevel surface.
+ * The client may choose to ignore the request (e.g. to prompt
+ * the user about unsaved changes).
+ */
+void
+gowl_client_close(GowlClient *self)
+{
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	if (self->xdg_toplevel != NULL)
+		wlr_xdg_toplevel_send_close(self->xdg_toplevel);
+}
+
+/**
+ * gowl_client_get_pid:
+ * @self: a #GowlClient
+ *
+ * Returns the PID of the process that owns this client's Wayland
+ * connection.  Uses wl_client_get_credentials() on the underlying
+ * Wayland client resource.
+ *
+ * Returns: the process ID, or (pid_t)-1 if unavailable
+ */
+pid_t
+gowl_client_get_pid(GowlClient *self)
+{
+	struct wl_client *wl_client;
+	pid_t pid;
+
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), (pid_t)-1);
+
+	if (self->xdg_toplevel == NULL ||
+	    self->xdg_toplevel->base == NULL ||
+	    self->xdg_toplevel->base->resource == NULL)
+		return (pid_t)-1;
+
+	wl_client = wl_resource_get_client(self->xdg_toplevel->base->resource);
+	if (wl_client == NULL)
+		return (pid_t)-1;
+
+	wl_client_get_credentials(wl_client, &pid, NULL, NULL);
+	return pid;
+}
+
+/**
+ * gowl_client_get_wlr_surface:
+ * @self: a #GowlClient
+ *
+ * Returns the underlying wlr_surface for this client.  The surface
+ * is owned by wlroots and must not be freed by the caller.
+ *
+ * Returns: (transfer none) (nullable): the wlr_surface, or %NULL
+ */
+struct wlr_surface *
+gowl_client_get_wlr_surface(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), NULL);
+
+	if (self->xdg_toplevel == NULL ||
+	    self->xdg_toplevel->base == NULL)
+		return NULL;
+
+	return self->xdg_toplevel->base->surface;
 }

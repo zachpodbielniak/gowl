@@ -200,3 +200,50 @@ modules:
     enabled: false
   copyhighlight:
     enabled: false
+  mcp:
+    enabled: false
+    # Transport: Unix socket for stdio relay (gowl-mcp binary)
+    transport-stdio: true
+    # Transport: HTTP+SSE (direct connections)
+    transport-http: false
+    http-host: "127.0.0.1"
+    http-port: 8716
+    # http-auth-token: "your-secret-here"
+    # Allowed tools (all enabled by default; comment out to disable)
+    # tools: |
+    #   list_clients
+    #   list_monitors
+    #   get_tag_state
+    #   get_config
+    #   list_keybinds
+    #   list_modules
+    #   get_focused_client
+    #   focus_client
+    #   close_client
+    #   move_client_to_tag
+    #   set_client_state
+    #   resize_client
+    #   move_client
+    #   swap_clients
+    #   zoom_client
+    #   view_tag
+    #   toggle_tag_view
+    #   set_client_tags
+    #   set_mfact
+    #   set_nmaster
+    #   add_rule
+    #   add_keybind
+    #   spawn
+    #   compositor_quit
+    #   send_key
+    #   send_text
+    #   send_mouse
+    #   send_mouse_move
+    #   send_scroll
+    #   screenshot_client
+    #   screenshot_monitor
+    #   screenshot_region
+    #   get_client_process_info
+    #   signal_client
+    #   describe_desktop
+    #   find_window

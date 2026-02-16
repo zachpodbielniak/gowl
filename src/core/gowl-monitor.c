@@ -332,3 +332,66 @@ gowl_monitor_get_layout_symbol(GowlMonitor *self)
 
 	return self->layout_symbol;
 }
+
+/**
+ * gowl_monitor_get_name:
+ * @self: a #GowlMonitor
+ *
+ * Returns the output name from the underlying wlr_output
+ * (e.g. "eDP-1", "HDMI-A-1").
+ *
+ * Returns: (transfer none) (nullable): the output name string
+ */
+const gchar *
+gowl_monitor_get_name(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), NULL);
+
+	if (self->wlr_output == NULL)
+		return NULL;
+
+	return self->wlr_output->name;
+}
+
+/**
+ * gowl_monitor_get_geometry:
+ * @self: a #GowlMonitor
+ * @x: (out) (nullable): return location for x
+ * @y: (out) (nullable): return location for y
+ * @width: (out) (nullable): return location for width
+ * @height: (out) (nullable): return location for height
+ *
+ * Returns the monitor's layout-relative geometry (the full
+ * output area, not the window area).
+ */
+void
+gowl_monitor_get_geometry(
+	GowlMonitor *self,
+	gint        *x,
+	gint        *y,
+	gint        *width,
+	gint        *height
+){
+	g_return_if_fail(GOWL_IS_MONITOR(self));
+
+	if (x != NULL)      *x      = self->m.x;
+	if (y != NULL)      *y      = self->m.y;
+	if (width != NULL)  *width  = self->m.width;
+	if (height != NULL) *height = self->m.height;
+}
+
+/**
+ * gowl_monitor_get_wlr_output:
+ * @self: a #GowlMonitor
+ *
+ * Returns the underlying wlr_output for this monitor.
+ *
+ * Returns: (transfer none) (nullable): the wlr_output, or %NULL
+ */
+struct wlr_output *
+gowl_monitor_get_wlr_output(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), NULL);
+
+	return self->wlr_output;
+}

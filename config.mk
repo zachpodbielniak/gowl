@@ -42,6 +42,7 @@ BUILD_GIR ?= 0
 BUILD_TESTS ?= 1
 BUILD_MODULES ?= 1
 BUILD_XWAYLAND ?= 1
+MCP ?= 0
 
 # Select build directories based on DEBUG
 ifeq ($(DEBUG),1)
@@ -107,6 +108,14 @@ DEPS_XWAYLAND := xcb xcb-icccm
 XWAYLAND_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_XWAYLAND) 2>/dev/null && echo 1 || echo 0)
 else
 XWAYLAND_AVAILABLE := 0
+endif
+
+# Optional MCP dependencies (requires mcp-glib submodule at deps/mcp-glib)
+ifeq ($(MCP),1)
+DEPS_MCP := libsoup-3.0 libdex-1 libpng
+MCP_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_MCP) 2>/dev/null && echo 1 || echo 0)
+else
+MCP_AVAILABLE := 0
 endif
 
 # Wayland protocols directory
@@ -198,3 +207,5 @@ show-config:
 	@echo "BUILD_MODULES:   $(BUILD_MODULES)"
 	@echo "BUILD_XWAYLAND:  $(BUILD_XWAYLAND)"
 	@echo "XWAYLAND_AVAILABLE: $(XWAYLAND_AVAILABLE)"
+	@echo "MCP:             $(MCP)"
+	@echo "MCP_AVAILABLE:   $(MCP_AVAILABLE)"

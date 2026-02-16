@@ -297,6 +297,7 @@ struct _GowlMonitor {
 struct _GowlClient {
 	GObject parent_instance;
 
+	guint   id;             /* unique monotonic client ID */
 	struct wlr_xdg_toplevel *xdg_toplevel;
 	struct wlr_scene_tree   *scene;          /* client container node */
 	struct wlr_scene_tree   *scene_surface;  /* xdg_surface node */
@@ -417,6 +418,8 @@ void gowl_compositor_focus_client (GowlCompositor *self,
                                    GowlClient     *c,
                                    gboolean        lift);
 void gowl_compositor_arrangelayers(GowlCompositor *self, GowlMonitor *m);
+void gowl_compositor_motionnotify (GowlCompositor *self,
+                                   guint32         time_msec);
 
 /* colour parsing: "#rrggbb" or "#rrggbbaa" -> float[4] */
 void gowl_color_parse_to_floats   (const gchar *hex, float out[4]);

@@ -119,6 +119,22 @@ static const GowlBuiltinModule builtin_modules[] = {
 		"    outer-v: 5\n",
 		" *   - vanitygaps: configurable gaps\n"
 	},
+	{
+		"copyhighlight",
+		"Sync primary selection to clipboard on change",
+		"  copyhighlight:\n"
+		"    enabled: true\n",
+		" *   - copyhighlight: primary selection to clipboard\n"
+	},
+	{
+		"mcp",
+		"MCP server for AI compositor control (requires MCP=1 build)",
+		"  mcp:\n"
+		"    enabled: true\n"
+		"    transport-stdio: true\n"
+		"    transport-http: false\n",
+		" *   - mcp: AI compositor control via MCP protocol\n"
+	},
 	{ NULL, NULL, NULL, NULL }
 };
 

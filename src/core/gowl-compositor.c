@@ -156,8 +156,7 @@ static void create_keyboard       (GowlCompositor *self,
                                    struct wlr_keyboard *keyboard);
 static void create_pointer        (GowlCompositor *self,
                                    struct wlr_pointer *pointer);
-static void motionnotify          (GowlCompositor *self,
-                                   guint32 time_msec);
+/* motionnotify is now non-static: gowl_compositor_motionnotify() */
 static gboolean keybinding        (GowlCompositor *self,
                                    guint mods,
                                    xkb_keysym_t sym);
@@ -445,6 +444,196 @@ gowl_compositor_get_wlr_seat(GowlCompositor *self)
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
 	return self->wlr_seat;
+}
+
+/**
+ * gowl_compositor_get_wlr_renderer:
+ * @self: a #GowlCompositor
+ *
+ * Returns the wlr_renderer used by the compositor.
+ *
+ * Returns: (transfer none) (nullable): the struct wlr_renderer, or %NULL
+ */
+struct wlr_renderer *
+gowl_compositor_get_wlr_renderer(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->renderer;
+}
+
+/**
+ * gowl_compositor_get_clients:
+ * @self: a #GowlCompositor
+ *
+ * Returns the list of managed client windows.  The list and its
+ * elements are owned by the compositor; the caller must not free
+ * or modify the list.
+ *
+ * Returns: (transfer none) (element-type GowlClient) (nullable):
+ *   the client list, or %NULL
+ */
+GList *
+gowl_compositor_get_clients(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->clients;
+}
+
+/**
+ * gowl_compositor_get_monitors:
+ * @self: a #GowlCompositor
+ *
+ * Returns the list of active monitors.  The list and its elements
+ * are owned by the compositor; the caller must not free or modify
+ * the list.
+ *
+ * Returns: (transfer none) (element-type GowlMonitor) (nullable):
+ *   the monitor list, or %NULL
+ */
+GList *
+gowl_compositor_get_monitors(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->monitors;
+}
+
+/**
+ * gowl_compositor_get_focused_client:
+ * @self: a #GowlCompositor
+ *
+ * Returns the client that currently has keyboard focus.  This is
+ * the first client in the focus stack.
+ *
+ * Returns: (transfer none) (nullable): the focused #GowlClient, or %NULL
+ */
+GowlClient *
+gowl_compositor_get_focused_client(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	if (self->fstack == NULL)
+		return NULL;
+
+	return GOWL_CLIENT(self->fstack->data);
+}
+
+/**
+ * gowl_compositor_get_client_count:
+ * @self: a #GowlCompositor
+ *
+ * Returns the number of managed clients.
+ *
+ * Returns: the client count
+ */
+guint
+gowl_compositor_get_client_count(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), 0);
+
+	return g_list_length(self->clients);
+}
+
+/**
+ * gowl_compositor_get_monitor_count:
+ * @self: a #GowlCompositor
+ *
+ * Returns the number of active monitors.
+ *
+ * Returns: the monitor count
+ */
+guint
+gowl_compositor_get_monitor_count(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), 0);
+
+	return g_list_length(self->monitors);
+}
+
+/**
+ * gowl_compositor_get_module_manager:
+ * @self: a #GowlCompositor
+ *
+ * Returns the module manager used by the compositor.
+ *
+ * Returns: (transfer none) (nullable): the #GowlModuleManager, or %NULL
+ */
+GowlModuleManager *
+gowl_compositor_get_module_manager(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->module_mgr;
+}
+
+/**
+ * gowl_compositor_find_client_by_app_id:
+ * @self: a #GowlCompositor
+ * @pattern: a glob pattern to match against app_id values
+ *
+ * Searches the client list for the first client whose app_id matches
+ * @pattern using g_pattern_match_simple().
+ *
+ * Returns: (transfer none) (nullable): the matching #GowlClient, or %NULL
+ */
+GowlClient *
+gowl_compositor_find_client_by_app_id(
+	GowlCompositor *self,
+	const gchar    *pattern
+){
+	GList *l;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	g_return_val_if_fail(pattern != NULL, NULL);
+
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c;
+		const gchar *app_id;
+
+		c = GOWL_CLIENT(l->data);
+		app_id = gowl_client_get_app_id(c);
+
+		if (app_id != NULL && g_pattern_match_simple(pattern, app_id))
+			return c;
+	}
+
+	return NULL;
+}
+
+/**
+ * gowl_compositor_find_client_by_title:
+ * @self: a #GowlCompositor
+ * @pattern: a glob pattern to match against title values
+ *
+ * Searches the client list for the first client whose title matches
+ * @pattern using g_pattern_match_simple().
+ *
+ * Returns: (transfer none) (nullable): the matching #GowlClient, or %NULL
+ */
+GowlClient *
+gowl_compositor_find_client_by_title(
+	GowlCompositor *self,
+	const gchar    *pattern
+){
+	GList *l;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	g_return_val_if_fail(pattern != NULL, NULL);
+
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c;
+		const gchar *title;
+
+		c = GOWL_CLIENT(l->data);
+		title = gowl_client_get_title(c);
+
+		if (title != NULL && g_pattern_match_simple(pattern, title))
+			return c;
+	}
+
+	return NULL;
 }
 
 /**
@@ -1183,7 +1372,7 @@ gowl_compositor_arrange(
 		monocle(self, m);
 
 	/* Restore pointer focus */
-	motionnotify(self, 0);
+	gowl_compositor_motionnotify(self, 0);
 }
 
 /**
@@ -1263,7 +1452,7 @@ gowl_compositor_focus_client(
 	}
 
 	/* Restore pointer focus */
-	motionnotify(self, 0);
+	gowl_compositor_motionnotify(self, 0);
 
 	/* Focus the client's surface */
 	kb = wlr_seat_get_keyboard(self->wlr_seat);
@@ -2417,21 +2606,16 @@ on_key_repeat(void *data)
  * ----------------------------------------------------------- */
 
 /**
- * motionnotify:
- *
- * Common cursor motion handler.  Moves the cursor image and
- * applies sloppy focus if configured.
- * Ported from dwl's motionnotify().
- */
-/**
- * motionnotify:
+ * gowl_compositor_motionnotify:
+ * @self: the #GowlCompositor
+ * @time_msec: event timestamp in milliseconds (0 for synthetic)
  *
  * Common cursor motion handler.  Handles interactive move/resize,
  * sloppy focus, and pointer focus updates.
  * Ported from dwl's motionnotify().
  */
-static void
-motionnotify(GowlCompositor *self, guint32 time_msec)
+void
+gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 {
 	gdouble sx, sy;
 	GowlClient *c;
@@ -2502,7 +2686,7 @@ on_cursor_motion(struct wl_listener *listener, void *data)
 
 	wlr_cursor_move(self->wlr_cursor, &event->pointer->base,
 	                event->delta_x, event->delta_y);
-	motionnotify(self, event->time_msec);
+	gowl_compositor_motionnotify(self, event->time_msec);
 }
 
 static void
@@ -2516,7 +2700,7 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 
 	wlr_cursor_warp_absolute(self->wlr_cursor, &event->pointer->base,
 	                         event->x, event->y);
-	motionnotify(self, event->time_msec);
+	gowl_compositor_motionnotify(self, event->time_msec);
 }
 
 /**
@@ -2881,7 +3065,7 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	memset(c->border, 0, sizeof(c->border));
 
 	/* Restore focus */
-	motionnotify(self, 0);
+	gowl_compositor_motionnotify(self, 0);
 
 	g_debug("Client unmapped");
 }
@@ -3303,7 +3487,7 @@ on_layer_unmap(struct wl_listener *listener, void *data)
 		gowl_compositor_focus_client(self,
 			focustop(self, self->selmon), TRUE);
 
-	motionnotify(self, 0);
+	gowl_compositor_motionnotify(self, 0);
 }
 
 /**
@@ -3528,7 +3712,7 @@ on_session_unlock(struct wl_listener *listener, void *data)
 	/* Restore focus and cursor */
 	gowl_compositor_focus_client(self,
 		focustop(self, self->selmon), TRUE);
-	motionnotify(self, 0);
+	gowl_compositor_motionnotify(self, 0);
 
 	g_debug("Session unlocked");
 }

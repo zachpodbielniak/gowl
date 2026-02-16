@@ -149,6 +149,9 @@ TEST_SRCS := $(wildcard tests/test-*.c)
 
 # Module directories
 MODULE_DIRS := $(wildcard modules/*)
+ifneq ($(MCP_AVAILABLE),1)
+MODULE_DIRS := $(filter-out modules/mcp,$(MODULE_DIRS))
+endif
 
 # Bar source files (standalone Wayland client)
 BAR_SRCS := \
@@ -193,6 +196,9 @@ endif
 ifeq ($(BUILD_GIR),1)
 all: gir
 endif
+ifeq ($(MCP_AVAILABLE),1)
+all: gowl-mcp
+endif
 
 # Build dependencies (yaml-glib)
 deps: $(YAMLGLIB_OBJS)
@@ -205,6 +211,13 @@ gowl-bin: lib $(OUTDIR)/gowl
 
 # Build GIR/typelib
 gir: $(OUTDIR)/$(GIR_FILE) $(OUTDIR)/$(TYPELIB_FILE)
+
+# Build gowl-mcp relay binary (only if MCP=1)
+ifeq ($(MCP_AVAILABLE),1)
+.PHONY: gowl-mcp
+gowl-mcp:
+	$(MAKE) -C tools/gowl-mcp OUTDIR=$(abspath $(OUTDIR))
+endif
 
 # Build all modules
 modules: lib $(OUTDIR)/modules
@@ -255,7 +268,7 @@ check-deps:
 		fi \
 	done
 	@echo ""
-	@echo "Optional dependencies:"
+	@echo "Optional dependencies (XWayland):"
 	@for dep in xcb xcb-icccm; do \
 		if $(PKG_CONFIG) --exists $$dep; then \
 			ver=$$($(PKG_CONFIG) --modversion $$dep 2>/dev/null); \
@@ -264,6 +277,19 @@ check-deps:
 			echo "  $$dep: MISSING"; \
 		fi \
 	done
+	@echo ""
+	@echo "Optional dependencies (MCP=1):"
+	@for dep in libsoup-3.0 libdex-1 libpng; do \
+		if $(PKG_CONFIG) --exists $$dep; then \
+			ver=$$($(PKG_CONFIG) --modversion $$dep 2>/dev/null); \
+			echo "  $$dep: OK ($$ver)"; \
+		else \
+			echo "  $$dep: MISSING"; \
+		fi \
+	done
+
+# Fedora package names for MCP dependencies
+FEDORA_DEPS_MCP := libsoup3-devel libdex-devel libpng-devel
 
 # Install dependencies (Fedora 41+)
 install-deps:
@@ -285,7 +311,8 @@ install-deps:
 		pixman-devel \
 		pango-devel \
 		cairo-devel \
-		libasan libubsan
+		libasan libubsan \
+		$(if $(filter 1,$(MCP)),$(FEDORA_DEPS_MCP))
 
 # Install a debug .desktop session file pointing at the local debug build
 .PHONY: install-debug-session
@@ -329,6 +356,7 @@ help:
 	@echo "  BUILD_GIR=0      - Disable GIR generation"
 	@echo "  BUILD_TESTS=0    - Disable test building"
 	@echo "  BUILD_XWAYLAND=0 - Disable XWayland support"
+	@echo "  MCP=1            - Enable MCP server module (AI compositor control)"
 	@echo ""
 	@echo "Utility targets:"
 	@echo "  check-deps            - Check for required dependencies"

@@ -1,3 +1,6 @@
 [submodule "deps/yaml-glib"]
 	path = deps/yaml-glib
 	url = git@gitlab.com:copyleft-games/yaml-glib.git
+[submodule "deps/mcp-glib"]
+	path = deps/mcp-glib
+	url = git@gitlab.com:copyleft-games/mcp-glib.git

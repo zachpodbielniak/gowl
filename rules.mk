@@ -230,7 +230,7 @@ clean-all:
 	rm -f xdg-shell-protocol.c
 
 # Installation rules
-.PHONY: install install-lib install-bin install-bar install-bar-configs install-headers install-pc install-gir install-modules install-desktop
+.PHONY: install install-lib install-bin install-bar install-bar-configs install-headers install-pc install-gir install-modules install-mcp install-desktop
 
 install: install-lib install-bin install-bar install-bar-configs install-headers install-pc install-desktop
 ifeq ($(BUILD_GIR),1)
@@ -238,6 +238,9 @@ install: install-gir
 endif
 ifeq ($(BUILD_MODULES),1)
 install: install-modules
+endif
+ifeq ($(MCP_AVAILABLE),1)
+install: install-mcp
 endif
 
 install-bin: $(OBJDIR)/main.o $(OUTDIR)/$(LIB_SHARED_FULL)
@@ -316,6 +319,10 @@ install-bar: $(OUTDIR)/gowlbar
 	$(INSTALL_PROGRAM) $(OUTDIR)/gowlbar $(DESTDIR)$(BINDIR)/gowlbar
 	$(MKDIR_P) $(DESTDIR)$(BAR_MODULEDIR)
 
+install-mcp: $(OUTDIR)/gowl-mcp
+	$(MKDIR_P) $(DESTDIR)$(BINDIR)
+	$(INSTALL_PROGRAM) $(OUTDIR)/gowl-mcp $(DESTDIR)$(BINDIR)/gowl-mcp
+
 install-bar-configs:
 	$(MKDIR_P) $(DESTDIR)$(DATADIR)/gowl
 	$(INSTALL_DATA) data/default-bar.yaml $(DESTDIR)$(DATADIR)/gowl/default-bar.yaml
@@ -326,6 +333,7 @@ install-bar-configs:
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/gowl
 	rm -f $(DESTDIR)$(BINDIR)/gowlbar
+	rm -f $(DESTDIR)$(BINDIR)/gowl-mcp
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_STATIC)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_SHARED_FULL)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_SHARED_MAJOR)

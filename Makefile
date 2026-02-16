@@ -215,7 +215,9 @@ gir: $(OUTDIR)/$(GIR_FILE) $(OUTDIR)/$(TYPELIB_FILE)
 # Build gowl-mcp relay binary (only if MCP=1)
 ifeq ($(MCP_AVAILABLE),1)
 .PHONY: gowl-mcp
-gowl-mcp:
+gowl-mcp: $(OUTDIR)/gowl-mcp
+
+$(OUTDIR)/gowl-mcp: tools/gowl-mcp/gowl-mcp.c | $(OUTDIR)
 	$(MAKE) -C tools/gowl-mcp OUTDIR=$(abspath $(OUTDIR))
 endif
 

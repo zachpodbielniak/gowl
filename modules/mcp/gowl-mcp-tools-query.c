@@ -44,6 +44,7 @@
 #include "core/gowl-monitor.h"
 #include "config/gowl-config.h"
 #include "module/gowl-module.h"
+#include "module/gowl-module-info.h"
 #include "module/gowl-module-manager.h"
 #include "gowl-enums.h"
 
@@ -697,38 +698,30 @@ tool_list_modules(
 	json_builder_begin_array(builder);
 
 	for (iter = modules; iter != NULL; iter = iter->next) {
-		GowlModule *mod;
+		GowlModuleInfo *info;
+		const gchar *val;
 
-		mod = GOWL_MODULE(iter->data);
+		info = (GowlModuleInfo *)iter->data;
 
 		json_builder_begin_object(builder);
 
+		val = gowl_module_info_get_name(info);
 		json_builder_set_member_name(builder, "name");
-		json_builder_add_string_value(builder,
-			gowl_module_get_name(mod) ?
-				gowl_module_get_name(mod) : "");
+		json_builder_add_string_value(builder, val ? val : "");
 
+		val = gowl_module_info_get_description(info);
 		json_builder_set_member_name(builder, "description");
-		json_builder_add_string_value(builder,
-			gowl_module_get_description(mod) ?
-				gowl_module_get_description(mod) : "");
+		json_builder_add_string_value(builder, val ? val : "");
 
+		val = gowl_module_info_get_version(info);
 		json_builder_set_member_name(builder, "version");
-		json_builder_add_string_value(builder,
-			gowl_module_get_version(mod) ?
-				gowl_module_get_version(mod) : "");
-
-		json_builder_set_member_name(builder, "priority");
-		json_builder_add_int_value(builder,
-			gowl_module_get_priority(mod));
-
-		json_builder_set_member_name(builder, "active");
-		json_builder_add_boolean_value(builder,
-			gowl_module_get_is_active(mod));
+		json_builder_add_string_value(builder, val ? val : "");
 
 		json_builder_end_object(builder);
 	}
 	json_builder_end_array(builder);
+
+	g_list_free_full(modules, (GDestroyNotify)gowl_module_info_free);
 
 	json_str = builder_to_string(builder);
 

@@ -120,6 +120,9 @@ parse_event_line(GowlbarIpc *self, const gchar *line)
 		urgent_mask   = (guint32)strtoul(rest, (char **)&rest, 10);
 		sel_tags      = (guint32)strtoul(rest, NULL, 10);
 
+		g_warning("gowlbar-ipc: tags event: output=%s active=%u occupied=%u urgent=%u sel=%u",
+			output_name, active_mask, occupied_mask, urgent_mask, sel_tags);
+
 		g_signal_emit(self, ipc_signals[SIGNAL_TAGS_CHANGED], 0,
 		              output_name, active_mask, occupied_mask,
 		              urgent_mask, sel_tags);
@@ -273,7 +276,7 @@ on_connect_ready(GObject *source, GAsyncResult *result, gpointer user_data)
 	conn = g_socket_client_connect_finish(client, result, &error);
 
 	if (conn == NULL) {
-		g_debug("gowlbar-ipc: connect failed: %s", error->message);
+		g_warning("gowlbar-ipc: connect failed: %s", error->message);
 		g_error_free(error);
 
 		/* Schedule reconnect */
@@ -290,7 +293,7 @@ on_connect_ready(GObject *source, GAsyncResult *result, gpointer user_data)
 	self->connected = TRUE;
 	self->reconnect_delay = GOWLBAR_IPC_RECONNECT_MIN;
 
-	g_debug("gowlbar-ipc: connected to %s", self->socket_path);
+	g_warning("gowlbar-ipc: connected to %s", self->socket_path);
 
 	/* Send subscribe command to start receiving events */
 	subscribe_cmd = "subscribe\n";

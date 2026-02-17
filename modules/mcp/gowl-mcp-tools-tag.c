@@ -36,8 +36,56 @@
 #include "core/gowl-client.h"
 #include "core/gowl-monitor.h"
 #include "core/gowl-core-private.h"
+#include "ipc/gowl-ipc.h"
 
 #include <json-glib/json-glib.h>
+
+/* ========================================================================== */
+/* Helper: push tag IPC event to gowlbar subscribers                          */
+/* ========================================================================== */
+
+/**
+ * push_tag_ipc_event:
+ * @module: the MCP module (provides compositor access)
+ * @mon: the monitor whose tags changed
+ *
+ * Computes the occupied mask and pushes an IPC "EVENT tags" line
+ * to all subscribed clients (e.g. gowlbar).  Matches the same
+ * format used by the compositor's keybind handlers.
+ */
+static void
+push_tag_ipc_event(
+	GowlModuleMcp *module,
+	GowlMonitor   *mon
+){
+	GowlIpc *ipc;
+	guint32 active;
+	guint32 occupied;
+	GList *clients;
+	GList *iter;
+
+	ipc = gowl_compositor_get_ipc(module->compositor);
+	if (ipc == NULL)
+		return;
+
+	active = gowl_monitor_get_tags(mon);
+
+	/* Compute occupied mask by OR-ing tags of all clients on this monitor */
+	occupied = 0;
+	clients = gowl_compositor_get_clients(module->compositor);
+	for (iter = clients; iter != NULL; iter = iter->next) {
+		GowlClient *c;
+
+		c = GOWL_CLIENT(iter->data);
+		if (gowl_client_get_monitor(c) == (gpointer)mon)
+			occupied |= gowl_client_get_tags(c);
+	}
+
+	gowl_ipc_push_event(ipc,
+		"EVENT tags %s %u %u 0 %u",
+		gowl_monitor_get_name(mon),
+		active, occupied, active);
+}
 
 /* ========================================================================== */
 /* Helper: resolve a monitor from arguments                                   */
@@ -141,6 +189,9 @@ tool_view_tag(
 	gowl_compositor_arrange(module->compositor, mon);
 	gowl_compositor_focus_client(module->compositor, NULL, FALSE);
 
+	/* Notify gowlbar of the tag change */
+	push_tag_ipc_event(module, mon);
+
 	return mcp_tool_result_new(FALSE);
 }
 
@@ -209,6 +260,9 @@ tool_toggle_tag_view(
 	tag_bit = (1u << tag_index);
 	gowl_monitor_toggle_tag(mon, tag_bit);
 	gowl_compositor_arrange(module->compositor, mon);
+
+	/* Notify gowlbar of the tag change */
+	push_tag_ipc_event(module, mon);
 
 	return mcp_tool_result_new(FALSE);
 }
@@ -298,8 +352,12 @@ tool_set_client_tags(
 	gowl_client_set_tags(client, tags);
 
 	mon = (GowlMonitor *)gowl_client_get_monitor(client);
-	if (mon != NULL)
+	if (mon != NULL) {
 		gowl_compositor_arrange(module->compositor, mon);
+
+		/* Notify gowlbar of the tag change */
+		push_tag_ipc_event(module, mon);
+	}
 
 	return mcp_tool_result_new(FALSE);
 }

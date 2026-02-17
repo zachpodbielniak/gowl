@@ -2096,16 +2096,10 @@ keybinding(
 						if (tc->mon == self->selmon)
 							occupied |= tc->tags;
 					}
-					g_warning("TAG_VIEW IPC: output=%s newtags=%u occupied=%u subs=%u",
-						self->selmon->wlr_output->name,
-						newtags, occupied,
-						gowl_ipc_get_subscriber_count(self->ipc));
 					gowl_ipc_push_event(self->ipc,
 						"EVENT tags %s %u %u 0 %u",
 						self->selmon->wlr_output->name,
 						newtags, occupied, newtags);
-				} else {
-					g_warning("TAG_VIEW: self->ipc is NULL, no IPC event sent");
 				}
 				return TRUE;
 			}

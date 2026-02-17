@@ -314,7 +314,7 @@ on_ipc_connected(GowlbarIpc *ipc, gpointer user_data)
 	(void)ipc;
 	(void)user_data;
 
-	g_warning("gowlbar: IPC connected to compositor");
+	g_debug("gowlbar: IPC connected to compositor");
 }
 
 /**
@@ -328,7 +328,7 @@ on_ipc_disconnected(GowlbarIpc *ipc, gpointer user_data)
 	(void)ipc;
 	(void)user_data;
 
-	g_warning("gowlbar: IPC disconnected from compositor");
+	g_debug("gowlbar: IPC disconnected from compositor");
 }
 
 /**
@@ -353,9 +353,6 @@ on_ipc_tags_changed(
 	(void)output;
 
 	self = (GowlbarApp *)user_data;
-
-	g_warning("gowlbar: on_ipc_tags_changed: output=%s active=%u occupied=%u urgent=%u sel=%u",
-		output, active_mask, occupied_mask, urgent_mask, sel_tags);
 
 	gowlbar_tag_widget_set_state(
 		self->tag_widget,

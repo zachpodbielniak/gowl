@@ -12,3 +12,5 @@ src/protocols/*-protocol.h
 *-protocol.h
 *-protocol.c
 .mcp.json
+.cache/
+compile_commands.json

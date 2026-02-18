@@ -26,6 +26,7 @@
 #include "interfaces/gowl-shutdown-handler.h"
 #include "interfaces/gowl-ipc-handler.h"
 #include "interfaces/gowl-gap-provider.h"
+#include "interfaces/gowl-wallpaper-provider.h"
 
 /**
  * GowlModuleManager:
@@ -49,6 +50,7 @@ struct _GowlModuleManager {
 	GPtrArray *shutdown_handlers;  /* element-type GowlShutdownHandler* */
 	GPtrArray *ipc_handlers;       /* element-type GowlIpcHandler*     */
 	GPtrArray *gap_providers;      /* element-type GowlGapProvider*    */
+	GPtrArray *wallpaper_providers; /* element-type GowlWallpaperProvider* */
 };
 
 G_DEFINE_FINAL_TYPE(GowlModuleManager, gowl_module_manager, G_TYPE_OBJECT)
@@ -148,6 +150,7 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->shutdown_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->ipc_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->gap_providers, g_ptr_array_unref);
+	g_clear_pointer(&self->wallpaper_providers, g_ptr_array_unref);
 
 	/* Unref all module instances */
 	g_clear_pointer(&self->modules, g_ptr_array_unref);
@@ -247,6 +250,7 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->shutdown_handlers = g_ptr_array_new();
 	self->ipc_handlers      = g_ptr_array_new();
 	self->gap_providers     = g_ptr_array_new();
+	self->wallpaper_providers = g_ptr_array_new();
 }
 
 /* --- Internal: classify a module into dispatch arrays --- */
@@ -298,6 +302,11 @@ classify_module(
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_GAP_PROVIDER)) {
 		g_ptr_array_add(self->gap_providers, (gpointer)mod);
 		sort_dispatch_array(self->gap_providers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_WALLPAPER_PROVIDER)) {
+		g_ptr_array_add(self->wallpaper_providers, (gpointer)mod);
+		sort_dispatch_array(self->wallpaper_providers);
 	}
 }
 
@@ -841,5 +850,69 @@ gowl_module_manager_configure_all(
 			          mod_name, g_hash_table_size(mod_cfg));
 			gowl_module_configure(mod, (gpointer)mod_cfg);
 		}
+	}
+}
+
+/**
+ * gowl_module_manager_dispatch_wallpaper_output:
+ * @self: a #GowlModuleManager
+ * @compositor: (nullable): the compositor instance
+ * @monitor: (nullable): the monitor being configured
+ *
+ * Broadcasts an output event to all registered wallpaper providers.
+ * Called when a monitor is added or its geometry changes so that
+ * providers can create or update their wallpaper scene nodes.
+ */
+void
+gowl_module_manager_dispatch_wallpaper_output(
+	GowlModuleManager *self,
+	gpointer           compositor,
+	gpointer           monitor
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	for (i = 0; i < self->wallpaper_providers->len; i++) {
+		GowlWallpaperProvider *provider;
+
+		provider = (GowlWallpaperProvider *)g_ptr_array_index(
+			self->wallpaper_providers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(provider)))
+			continue;
+
+		gowl_wallpaper_provider_on_output(provider, compositor, monitor);
+	}
+}
+
+/**
+ * gowl_module_manager_dispatch_wallpaper_output_destroy:
+ * @self: a #GowlModuleManager
+ * @monitor: (nullable): the monitor being destroyed
+ *
+ * Broadcasts an output-destroy event to all registered wallpaper
+ * providers.  Called before the monitor's scene output is torn down
+ * so that providers can clean up their scene nodes.
+ */
+void
+gowl_module_manager_dispatch_wallpaper_output_destroy(
+	GowlModuleManager *self,
+	gpointer           monitor
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	for (i = 0; i < self->wallpaper_providers->len; i++) {
+		GowlWallpaperProvider *provider;
+
+		provider = (GowlWallpaperProvider *)g_ptr_array_index(
+			self->wallpaper_providers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(provider)))
+			continue;
+
+		gowl_wallpaper_provider_on_output_destroy(provider, monitor);
 	}
 }

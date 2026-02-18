@@ -60,6 +60,7 @@
 #include "interfaces/gowl-swallow-handler.h"
 #include "interfaces/gowl-sticky-handler.h"
 #include "interfaces/gowl-cursor-provider.h"
+#include "interfaces/gowl-wallpaper-provider.h"
 
 /* Configuration */
 #include "config/gowl-config.h"

@@ -395,3 +395,19 @@ gowl_monitor_get_wlr_output(GowlMonitor *self)
 
 	return self->wlr_output;
 }
+
+/**
+ * gowl_monitor_get_scene_output:
+ * @self: a #GowlMonitor
+ *
+ * Returns the wlr_scene_output for this monitor.
+ *
+ * Returns: (transfer none) (nullable): the wlr_scene_output, or %NULL
+ */
+struct wlr_scene_output *
+gowl_monitor_get_scene_output(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), NULL);
+
+	return self->scene_output;
+}

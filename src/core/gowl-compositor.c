@@ -463,6 +463,26 @@ gowl_compositor_get_wlr_renderer(GowlCompositor *self)
 }
 
 /**
+ * gowl_compositor_get_scene_layer:
+ * @self: a #GowlCompositor
+ * @layer: the #GowlSceneLayer index
+ *
+ * Returns the scene tree for the given layer.
+ *
+ * Returns: (transfer none) (nullable): the wlr_scene_tree, or %NULL
+ */
+struct wlr_scene_tree *
+gowl_compositor_get_scene_layer(
+	GowlCompositor *self,
+	gint            layer
+){
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	g_return_val_if_fail(layer >= 0 && layer < GOWL_SCENE_LAYER_COUNT, NULL);
+
+	return self->layers[layer];
+}
+
+/**
  * gowl_compositor_get_clients:
  * @self: a #GowlCompositor
  *
@@ -1753,6 +1773,11 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 	/* Clear wlr_output back-pointer */
 	m->wlr_output->data = NULL;
 
+	/* Notify wallpaper providers before tearing down the scene output */
+	if (self->module_mgr != NULL)
+		gowl_module_manager_dispatch_wallpaper_output_destroy(
+			self->module_mgr, m);
+
 	/* Remove from output layout */
 	wlr_output_layout_remove(self->output_layout, m->wlr_output);
 	wlr_scene_output_destroy(m->scene_output);
@@ -1843,6 +1868,13 @@ on_layout_change(struct wl_listener *listener, void *data)
 		struct wlr_box full;
 		wlr_output_layout_get_box(self->output_layout, NULL, &full);
 		wlr_scene_rect_set_size(self->root_bg, full.width, full.height);
+	}
+
+	/* Notify wallpaper providers so they can update per-monitor images */
+	if (self->module_mgr != NULL) {
+		for (l = self->monitors; l != NULL; l = l->next)
+			gowl_module_manager_dispatch_wallpaper_output(
+				self->module_mgr, self, l->data);
 	}
 }
 

@@ -85,6 +85,15 @@ gboolean            gowl_module_manager_get_gaps         (GowlModuleManager *sel
 void                gowl_module_manager_configure_all    (GowlModuleManager *self,
                                                            GHashTable        *module_configs);
 
+void                gowl_module_manager_dispatch_wallpaper_output
+                                                          (GowlModuleManager *self,
+                                                           gpointer           compositor,
+                                                           gpointer           monitor);
+
+void                gowl_module_manager_dispatch_wallpaper_output_destroy
+                                                          (GowlModuleManager *self,
+                                                           gpointer           monitor);
+
 G_END_DECLS
 
 #endif /* GOWL_MODULE_MANAGER_H */

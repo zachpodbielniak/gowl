@@ -22,6 +22,7 @@
 #include <glib-object.h>
 
 struct wlr_output;
+struct wlr_scene_output;
 
 G_BEGIN_DECLS
 
@@ -153,6 +154,17 @@ void           gowl_monitor_get_geometry      (GowlMonitor *self,
  * Returns: (transfer none) (nullable): the struct wlr_output, or %NULL
  */
 struct wlr_output *gowl_monitor_get_wlr_output (GowlMonitor *self);
+
+/**
+ * gowl_monitor_get_scene_output:
+ * @self: a #GowlMonitor
+ *
+ * Returns the wlr_scene_output for this monitor.
+ * Only valid after the monitor is attached to the scene.
+ *
+ * Returns: (transfer none) (nullable): the wlr_scene_output, or %NULL
+ */
+struct wlr_scene_output *gowl_monitor_get_scene_output (GowlMonitor *self);
 
 G_END_DECLS
 

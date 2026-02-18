@@ -169,6 +169,20 @@ struct wlr_seat *gowl_compositor_get_wlr_seat (GowlCompositor *self);
 struct wlr_renderer *gowl_compositor_get_wlr_renderer (GowlCompositor *self);
 
 /**
+ * gowl_compositor_get_scene_layer:
+ * @self: a #GowlCompositor
+ * @layer: the #GowlSceneLayer index (0 to GOWL_SCENE_LAYER_COUNT-1)
+ *
+ * Returns the scene tree for the given layer.  Only valid after
+ * gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the wlr_scene_tree for
+ *   the layer, or %NULL if the index is out of range
+ */
+struct wlr_scene_tree *gowl_compositor_get_scene_layer (GowlCompositor *self,
+                                                         gint            layer);
+
+/**
  * gowl_compositor_get_clients:
  * @self: a #GowlCompositor
  *

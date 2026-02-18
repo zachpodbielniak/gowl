@@ -190,6 +190,12 @@ modules:
     # Per-axis: inner-h, inner-v, outer-h, outer-v override shorthand.
     inner-gap: 5
     outer-gap: 5
+  wallpaper:
+    enabled: true
+    # Absolute path to image file; empty = no wallpaper (solid root color)
+    path: "~/Pictures/wallpaper.png"
+    # Scaling mode: fill | fit | center | stretch | tile
+    mode: fill
   pertag:
     enabled: false
   autostart:

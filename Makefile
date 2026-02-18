@@ -153,7 +153,10 @@ CRISPY_SRCS := \
 	deps/crispy/src/core/crispy-gcc-compiler.c \
 	deps/crispy/src/core/crispy-file-cache.c \
 	deps/crispy/src/core/crispy-plugin-engine.c \
-	deps/crispy/src/core/crispy-script.c
+	deps/crispy/src/core/crispy-script.c \
+	deps/crispy/src/core/crispy-source-utils-private.c \
+	deps/crispy/src/core/crispy-config-context.c \
+	deps/crispy/src/core/crispy-config-loader.c
 
 # Test sources
 TEST_SRCS := $(wildcard tests/test-*.c)

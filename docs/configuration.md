@@ -20,12 +20,12 @@ Both can be used simultaneously. The C config runs after the YAML config, so C v
 
 ### Search Paths
 
-Gowl searches for `gowl.yaml` in this order (first match wins):
+Gowl searches for `config.yaml` in this order (first match wins):
 
-1. `./data/gowl.yaml` -- Project directory (for development)
-2. `~/.config/gowl/gowl.yaml` -- User config (recommended)
-3. `/etc/gowl/gowl.yaml` -- System-wide config
-4. `/usr/local/gowl/gowl.yaml` -- Installation default
+1. `./data/config.yaml` -- Project directory (for development)
+2. `~/.config/gowl/config.yaml` -- User config (recommended)
+3. `/etc/gowl/config.yaml` -- System-wide config
+4. `/usr/local/gowl/config.yaml` -- Installation default
 
 Override the search with `--config`:
 
@@ -36,7 +36,7 @@ gowl --config /path/to/my-config.yaml
 ### Generating a Default Config
 
 ```bash
-gowl --generate-yaml-config > ~/.config/gowl/gowl.yaml
+gowl --generate-yaml-config > ~/.config/gowl/config.yaml
 ```
 
 This writes the built-in default configuration to stdout.
@@ -374,7 +374,7 @@ When both configs are present:
 A common pattern is to use YAML for declarative settings and C config only for things that require logic (conditional keybinds, computed values, etc.):
 
 ```yaml
-# gowl.yaml -- base settings
+# config.yaml -- base settings
 appearance:
   border-width: 2
   border-color-focus: "#005577"

@@ -3,12 +3,12 @@
 # Copyright (C) 2026  Zach Podbielniak
 #
 # Search order:
-#   1. ./data/gowl.yaml
-#   2. ~/.config/gowl/gowl.yaml
-#   3. /etc/gowl/gowl.yaml
-#   4. /usr/local/gowl/gowl.yaml
+#   1. ./data/config.yaml
+#   2. ~/.config/gowl/config.yaml
+#   3. /etc/gowl/config.yaml
+#   4. /usr/local/gowl/config.yaml
 #
-# Generate this file with: gowl --generate-yaml-config > ~/.config/gowl/gowl.yaml
+# Generate this file with: gowl --generate-yaml-config > ~/.config/gowl/config.yaml
 #
 # NOTE: All property keys must be at the root level (flat mapping).
 # Key names use hyphens (log-level, not log_level).

@@ -45,7 +45,7 @@
 #define GOWL_CONFIG_DEFAULT_LOG_FILE            "~/.config/gowl/gowl.log"
 
 /* Configuration file name */
-#define GOWL_CONFIG_FILENAME "gowl.yaml"
+#define GOWL_CONFIG_FILENAME "config.yaml"
 
 /* --- Instance struct --- */
 
@@ -890,7 +890,7 @@ gowl_config_load_yaml(
  * @self: a #GowlConfig
  * @error: (nullable): return location for a #GError
  *
- * Searches standard directories for gowl.yaml and loads the first
+ * Searches standard directories for config.yaml and loads the first
  * one found. If no file exists, the config keeps its defaults and
  * the function returns %TRUE.
  *
@@ -907,7 +907,7 @@ gowl_config_load_yaml_from_search_path(
 
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
 
-	/* Build the XDG config path: ~/.config/gowl/gowl.yaml */
+	/* Build the XDG config path: ~/.config/gowl/config.yaml */
 	xdg_path = g_build_filename(g_get_user_config_dir(),
 	                             "gowl",
 	                             GOWL_CONFIG_FILENAME,

@@ -4,7 +4,7 @@ The MCP (Model Context Protocol) module exposes compositor state and controls to
 
 ## Quick Start
 
-1. Enable the module in your config (`~/.config/gowl/gowl.yaml`):
+1. Enable the module in your config (`~/.config/gowl/config.yaml`):
 
 ```yaml
 modules:

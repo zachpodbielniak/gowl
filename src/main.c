@@ -150,7 +150,7 @@ static const gchar *default_yaml_config =
 	"# Gowl Default Configuration\n"
 	"# Search order: ./data/ > ~/.config/gowl/ > /etc/gowl/ > /usr/local/gowl/\n"
 	"#\n"
-	"# Generate this file with: gowl --generate-yaml-config > ~/.config/gowl/gowl.yaml\n"
+	"# Generate this file with: gowl --generate-yaml-config > ~/.config/gowl/config.yaml\n"
 	"\n"
 	"# Compositor settings\n"
 	"log-level: \"warning\"\n"

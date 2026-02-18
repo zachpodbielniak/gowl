@@ -157,7 +157,7 @@ gowl_config_load_yaml(
  * @self: a #GowlConfig
  * @error: (nullable): return location for a #GError
  *
- * Searches for a gowl.yaml configuration file in the following
+ * Searches for a config.yaml configuration file in the following
  * directories (first match wins):
  *   1. ./data/
  *   2. ~/.config/gowl/

@@ -58,13 +58,13 @@ gowl
 gowl --debug
 
 # Run with a custom config
-gowl --config ~/.config/gowl/gowl.yaml
+gowl --config ~/.config/gowl/config.yaml
 
 # Run with a startup command
 gowl -s waybar
 
 # Generate a default YAML config
-gowl --generate-yaml-config > ~/.config/gowl/gowl.yaml
+gowl --generate-yaml-config > ~/.config/gowl/config.yaml
 
 # Generate a default C config
 gowl --generate-c-config > ~/.config/gowl/config.c
@@ -76,13 +76,13 @@ Gowl supports two configuration methods:
 
 ### YAML Config
 
-Declarative configuration in `~/.config/gowl/gowl.yaml`. Covers appearance, layout, keybinds, rules, autostart, monitor settings, and module configuration.
+Declarative configuration in `~/.config/gowl/config.yaml`. Covers appearance, layout, keybinds, rules, autostart, monitor settings, and module configuration.
 
 Generate a default config:
 
 ```bash
 mkdir -p ~/.config/gowl
-gowl --generate-yaml-config > ~/.config/gowl/gowl.yaml
+gowl --generate-yaml-config > ~/.config/gowl/config.yaml
 ```
 
 ### C Config

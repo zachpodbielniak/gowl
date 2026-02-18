@@ -324,8 +324,8 @@ install-desktop:
 	$(MKDIR_P) $(DESTDIR)$(DATADIR)/gowl
 	$(INSTALL_DATA) data/default-config.yaml $(DESTDIR)$(DATADIR)/gowl/default-config.yaml
 	$(MKDIR_P) $(DESTDIR)$(SYSCONFDIR)/gowl
-	@if [ ! -f $(DESTDIR)$(SYSCONFDIR)/gowl/gowl.yaml ]; then \
-		$(INSTALL_DATA) data/default-config.yaml $(DESTDIR)$(SYSCONFDIR)/gowl/gowl.yaml; \
+	@if [ ! -f $(DESTDIR)$(SYSCONFDIR)/gowl/config.yaml ]; then \
+		$(INSTALL_DATA) data/default-config.yaml $(DESTDIR)$(SYSCONFDIR)/gowl/config.yaml; \
 	fi
 
 install-modules:

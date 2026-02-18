@@ -168,7 +168,7 @@ There are two dispatch patterns:
 
 Gowl supports two configuration mechanisms that work together:
 
-1. **YAML Config** (`gowl.yaml`) -- Declarative configuration for all standard settings, keybinds, rules, and module options. Parsed at startup.
+1. **YAML Config** (`config.yaml`) -- Declarative configuration for all standard settings, keybinds, rules, and module options. Parsed at startup.
 
 2. **C Config** (`config.c`) -- Compiled to a `.so` and loaded via `g_module_open()`. The exported `gowl_config_init()` function runs after YAML loading, allowing it to override or supplement YAML values programmatically.
 
@@ -183,12 +183,12 @@ From lowest to highest priority:
 
 ### YAML Search Paths
 
-The config loader searches for `gowl.yaml` in this order (first match wins):
+The config loader searches for `config.yaml` in this order (first match wins):
 
-1. `./data/gowl.yaml` (project directory, for development)
-2. `~/.config/gowl/gowl.yaml` (user config, recommended)
-3. `/etc/gowl/gowl.yaml` (system-wide config)
-4. `/usr/local/gowl/gowl.yaml` (installation default)
+1. `./data/config.yaml` (project directory, for development)
+2. `~/.config/gowl/config.yaml` (user config, recommended)
+3. `/etc/gowl/config.yaml` (system-wide config)
+4. `/usr/local/gowl/config.yaml` (installation default)
 
 ### C Config Search Paths
 

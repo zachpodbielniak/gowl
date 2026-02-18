@@ -73,6 +73,28 @@ main(int argc, char *argv[])
 	GOptionContext *opt_ctx;
 
 	opt_ctx = g_option_context_new("- GObject Wayland Status Bar");
+	g_option_context_set_summary(opt_ctx,
+		"Gowlbar - GObject Wayland Status Bar\n"
+		"A companion status bar for the gowl compositor.");
+	g_option_context_set_description(opt_ctx,
+		"YAML configuration files are searched in this order:\n"
+		"  1. --config PATH (command line override)\n"
+		"  2. ./data/bar.yaml (development)\n"
+		"  3. ~/.config/gowl/bar.yaml (user, recommended)\n"
+		"  4. /etc/gowl/bar.yaml (system-wide)\n"
+		"  5. /usr/local/gowl/bar.yaml (installation default)\n"
+		"\n"
+		"C configuration files are searched in this order:\n"
+		"  1. --c-config PATH (command line override)\n"
+		"  2. ~/.config/gowl/bar.c\n"
+		"  3. /etc/gowl/bar.c\n"
+		"  4. /usr/local/share/gowl/bar.c\n"
+		"  5. ./data/bar.c (development fallback)\n"
+		"\n"
+		"Config precedence (lowest to highest):\n"
+		"  Built-in defaults < YAML config < C config < CLI arguments\n"
+		"\n"
+		"C config cache: $XDG_CACHE_HOME/gowl/ (compiled .so files)");
 	g_option_context_add_main_entries(opt_ctx, entries, NULL);
 
 	if (!g_option_context_parse(opt_ctx, &argc, &argv, &error)) {

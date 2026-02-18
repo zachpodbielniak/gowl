@@ -543,6 +543,32 @@ main(int argc, char *argv[])
 	GOptionContext *opt_ctx;
 
 	opt_ctx = g_option_context_new("- GObject Wayland Compositor");
+	g_option_context_set_summary(opt_ctx,
+		"Gowl - GObject Wayland Compositor\n"
+		"A modular tiling Wayland compositor built on wlroots and GObject.");
+	g_option_context_set_description(opt_ctx,
+		"YAML configuration files are searched in this order:\n"
+		"  1. --config PATH (command line override)\n"
+		"  2. ./data/config.yaml (development)\n"
+		"  3. ~/.config/gowl/config.yaml (user, recommended)\n"
+		"  4. /etc/gowl/config.yaml (system-wide)\n"
+		"  5. /usr/local/share/gowl/config.yaml (installation default)\n"
+		"\n"
+		"C configuration files are searched in this order:\n"
+		"  1. --c-config PATH (command line override)\n"
+		"  2. ~/.config/gowl/config.c\n"
+		"  3. /etc/gowl/config.c\n"
+		"  4. /usr/local/share/gowl/config.c\n"
+		"  5. ./data/config.c (development fallback)\n"
+		"\n"
+		"Config precedence (lowest to highest):\n"
+		"  Built-in defaults < YAML config < C config < CLI arguments\n"
+		"\n"
+		"Modules are loaded from:\n"
+		"  1. <exe-dir>/modules/ (development)\n"
+		"  2. " GOWL_MODULEDIR " (installed)\n"
+		"\n"
+		"C config cache: $XDG_CACHE_HOME/gowl/ (compiled .so files)");
 	g_option_context_add_main_entries(opt_ctx, entries, NULL);
 
 	if (!g_option_context_parse(opt_ctx, &argc, &argv, &error)) {

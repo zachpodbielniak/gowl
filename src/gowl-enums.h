@@ -255,6 +255,7 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  * @GOWL_ACTION_QUIT: Quit the compositor.
  * @GOWL_ACTION_RELOAD_CONFIG: Reload the configuration.
  * @GOWL_ACTION_IPC_COMMAND: Execute an IPC command.
+ * @GOWL_ACTION_LOCK: Lock the session via the lock handler module.
  * @GOWL_ACTION_CUSTOM: Custom action handled by a module callback.
  *
  * Compositor actions that can be bound to keys or IPC commands.
@@ -280,6 +281,7 @@ typedef enum {
 	GOWL_ACTION_QUIT,
 	GOWL_ACTION_RELOAD_CONFIG,
 	GOWL_ACTION_IPC_COMMAND,
+	GOWL_ACTION_LOCK,
 	GOWL_ACTION_CUSTOM
 } GowlAction;
 

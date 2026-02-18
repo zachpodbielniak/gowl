@@ -1,0 +1,3 @@
+# PAM configuration for gowl screen lock
+auth    include     login
+account include     login

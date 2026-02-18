@@ -27,6 +27,7 @@
 #include "interfaces/gowl-ipc-handler.h"
 #include "interfaces/gowl-gap-provider.h"
 #include "interfaces/gowl-wallpaper-provider.h"
+#include "interfaces/gowl-lock-handler.h"
 
 /**
  * GowlModuleManager:
@@ -51,6 +52,7 @@ struct _GowlModuleManager {
 	GPtrArray *ipc_handlers;       /* element-type GowlIpcHandler*     */
 	GPtrArray *gap_providers;      /* element-type GowlGapProvider*    */
 	GPtrArray *wallpaper_providers; /* element-type GowlWallpaperProvider* */
+	GPtrArray *lock_handlers;      /* element-type GowlLockHandler*       */
 };
 
 G_DEFINE_FINAL_TYPE(GowlModuleManager, gowl_module_manager, G_TYPE_OBJECT)
@@ -151,6 +153,7 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->ipc_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->gap_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->wallpaper_providers, g_ptr_array_unref);
+	g_clear_pointer(&self->lock_handlers, g_ptr_array_unref);
 
 	/* Unref all module instances */
 	g_clear_pointer(&self->modules, g_ptr_array_unref);
@@ -251,6 +254,7 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->ipc_handlers      = g_ptr_array_new();
 	self->gap_providers     = g_ptr_array_new();
 	self->wallpaper_providers = g_ptr_array_new();
+	self->lock_handlers       = g_ptr_array_new();
 }
 
 /* --- Internal: classify a module into dispatch arrays --- */
@@ -307,6 +311,11 @@ classify_module(
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_WALLPAPER_PROVIDER)) {
 		g_ptr_array_add(self->wallpaper_providers, (gpointer)mod);
 		sort_dispatch_array(self->wallpaper_providers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_LOCK_HANDLER)) {
+		g_ptr_array_add(self->lock_handlers, (gpointer)mod);
+		sort_dispatch_array(self->lock_handlers);
 	}
 }
 
@@ -914,5 +923,197 @@ gowl_module_manager_dispatch_wallpaper_output_destroy(
 			continue;
 
 		gowl_wallpaper_provider_on_output_destroy(provider, monitor);
+	}
+}
+
+/**
+ * gowl_module_manager_dispatch_lock:
+ * @self: a #GowlModuleManager
+ * @compositor: (nullable): the compositor instance
+ *
+ * Broadcasts a lock event to all registered lock handlers.
+ * Called when the session should be locked (keybind or idle timeout).
+ */
+void
+gowl_module_manager_dispatch_lock(
+	GowlModuleManager *self,
+	gpointer           compositor
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	for (i = 0; i < self->lock_handlers->len; i++) {
+		GowlLockHandler *handler;
+
+		handler = (GowlLockHandler *)g_ptr_array_index(
+			self->lock_handlers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(handler)))
+			continue;
+
+		gowl_lock_handler_on_lock(handler, compositor);
+	}
+}
+
+/**
+ * gowl_module_manager_dispatch_unlock:
+ * @self: a #GowlModuleManager
+ * @compositor: (nullable): the compositor instance
+ *
+ * Broadcasts an unlock event to all registered lock handlers.
+ * Called after successful authentication.
+ */
+void
+gowl_module_manager_dispatch_unlock(
+	GowlModuleManager *self,
+	gpointer           compositor
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	for (i = 0; i < self->lock_handlers->len; i++) {
+		GowlLockHandler *handler;
+
+		handler = (GowlLockHandler *)g_ptr_array_index(
+			self->lock_handlers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(handler)))
+			continue;
+
+		gowl_lock_handler_on_unlock(handler, compositor);
+	}
+}
+
+/**
+ * gowl_module_manager_dispatch_lock_key:
+ * @self: a #GowlModuleManager
+ * @keysym: the XKB keysym value
+ * @codepoint: the Unicode codepoint (0 if not printable)
+ * @pressed: %TRUE if key was pressed
+ *
+ * Dispatches a key event to registered lock handlers during locked
+ * state.  Uses consumable semantics: stops at the first handler
+ * that returns %TRUE.
+ *
+ * Returns: %TRUE if a handler consumed the event
+ */
+gboolean
+gowl_module_manager_dispatch_lock_key(
+	GowlModuleManager *self,
+	guint              keysym,
+	guint32            codepoint,
+	gboolean           pressed
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), FALSE);
+
+	for (i = 0; i < self->lock_handlers->len; i++) {
+		GowlLockHandler *handler;
+
+		handler = (GowlLockHandler *)g_ptr_array_index(
+			self->lock_handlers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(handler)))
+			continue;
+
+		if (gowl_lock_handler_on_key_input(handler, keysym,
+		                                   codepoint, pressed))
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+/**
+ * gowl_module_manager_dispatch_lock_output:
+ * @self: a #GowlModuleManager
+ * @compositor: (nullable): the compositor instance
+ * @monitor: (nullable): the monitor being added or changed
+ *
+ * Broadcasts an output event to all registered lock handlers.
+ * Called when a monitor is added or changes geometry during lock.
+ */
+void
+gowl_module_manager_dispatch_lock_output(
+	GowlModuleManager *self,
+	gpointer           compositor,
+	gpointer           monitor
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	for (i = 0; i < self->lock_handlers->len; i++) {
+		GowlLockHandler *handler;
+
+		handler = (GowlLockHandler *)g_ptr_array_index(
+			self->lock_handlers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(handler)))
+			continue;
+
+		gowl_lock_handler_on_output(handler, compositor, monitor);
+	}
+}
+
+/**
+ * gowl_module_manager_dispatch_lock_output_destroy:
+ * @self: a #GowlModuleManager
+ * @monitor: (nullable): the monitor being destroyed
+ *
+ * Broadcasts an output-destroy event to all registered lock handlers.
+ * Called when a monitor is removed during lock.
+ */
+void
+gowl_module_manager_dispatch_lock_output_destroy(
+	GowlModuleManager *self,
+	gpointer           monitor
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	for (i = 0; i < self->lock_handlers->len; i++) {
+		GowlLockHandler *handler;
+
+		handler = (GowlLockHandler *)g_ptr_array_index(
+			self->lock_handlers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(handler)))
+			continue;
+
+		gowl_lock_handler_on_output_destroy(handler, monitor);
+	}
+}
+
+/**
+ * gowl_module_manager_notify_lock_activity:
+ * @self: a #GowlModuleManager
+ *
+ * Notifies all registered lock handlers that user input activity
+ * occurred while the session is unlocked.  Used to reset idle
+ * auto-lock timers maintained by lock handler modules.
+ */
+void
+gowl_module_manager_notify_lock_activity(
+	GowlModuleManager *self
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	for (i = 0; i < self->lock_handlers->len; i++) {
+		GowlLockHandler *handler;
+
+		handler = (GowlLockHandler *)g_ptr_array_index(
+			self->lock_handlers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(handler)))
+			continue;
+
+		gowl_lock_handler_on_activity(handler);
 	}
 }

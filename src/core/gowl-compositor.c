@@ -589,6 +589,64 @@ gowl_compositor_get_module_manager(GowlCompositor *self)
 }
 
 /**
+ * gowl_compositor_is_locked:
+ * @self: a #GowlCompositor
+ *
+ * Returns whether the session is currently locked.
+ *
+ * Returns: %TRUE if the session is locked
+ */
+gboolean
+gowl_compositor_is_locked(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	return self->locked;
+}
+
+/**
+ * gowl_compositor_set_locked:
+ * @self: a #GowlCompositor
+ * @locked: %TRUE to lock, %FALSE to unlock
+ *
+ * Sets the compositor lock state.  When locking, enables the locked
+ * background and unfocuses all clients.  When unlocking, disables
+ * the locked background and restores focus to the top client on
+ * the selected monitor.
+ *
+ * This is used by built-in lock handler modules.  External session
+ * lock clients use the ext-session-lock-v1 protocol instead.
+ */
+void
+gowl_compositor_set_locked(
+	GowlCompositor *self,
+	gboolean        locked
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->locked == locked)
+		return;
+
+	self->locked = locked;
+
+	if (locked) {
+		/* Enable locked background */
+		wlr_scene_node_set_enabled(&self->locked_bg->node, TRUE);
+		/* Unfocus all clients */
+		gowl_compositor_focus_client(self, NULL, FALSE);
+		g_debug("Session locked (built-in)");
+	} else {
+		/* Disable locked background */
+		wlr_scene_node_set_enabled(&self->locked_bg->node, FALSE);
+		/* Restore focus and cursor */
+		gowl_compositor_focus_client(self,
+			focustop(self, self->selmon), TRUE);
+		gowl_compositor_motionnotify(self, 0);
+		g_debug("Session unlocked (built-in)");
+	}
+}
+
+/**
  * gowl_compositor_find_client_by_app_id:
  * @self: a #GowlCompositor
  * @pattern: a glob pattern to match against app_id values
@@ -2460,6 +2518,11 @@ keybinding(
 				}
 				return TRUE;
 			}
+			case GOWL_ACTION_LOCK:
+				if (self->module_mgr != NULL && !self->locked)
+					gowl_module_manager_dispatch_lock(
+						self->module_mgr, (gpointer)self);
+				return TRUE;
 			case GOWL_ACTION_NONE:
 			case GOWL_ACTION_CUSTOM:
 			default:
@@ -2512,6 +2575,32 @@ on_kb_key(struct wl_listener *listener, void *data)
 	/* Notify idle system of activity */
 	wlr_idle_notifier_v1_notify_activity(self->idle_notifier,
 	                                     self->wlr_seat);
+
+	/* When session is locked, route all key events exclusively to
+	 * the lock handler module.  No compositor keybinds fire and no
+	 * events are forwarded to clients.
+	 */
+	if (self->locked) {
+		if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+		    self->module_mgr != NULL) {
+			guint32 codepoint;
+
+			codepoint = xkb_state_key_get_utf32(
+				kb->xkb_state, keycode);
+			for (i = 0; i < nsyms; i++) {
+				gowl_module_manager_dispatch_lock_key(
+					self->module_mgr,
+					(guint)syms[i], codepoint, TRUE);
+			}
+		}
+		/* Cancel key repeat during lock */
+		wl_event_source_timer_update(self->key_repeat_source, 0);
+		return;
+	}
+
+	/* Notify lock handlers of activity for idle timer reset */
+	if (self->module_mgr != NULL)
+		gowl_module_manager_notify_lock_activity(self->module_mgr);
 
 	handled = FALSE;
 
@@ -2617,6 +2706,10 @@ on_key_repeat(void *data)
 	gint i;
 
 	self = (GowlCompositor *)data;
+
+	/* Suppress key repeat while session is locked */
+	if (self->locked)
+		return 0;
 
 	if (self->kb_nsyms > 0 &&
 	    self->wlr_kb_group->keyboard.repeat_info.rate > 0) {

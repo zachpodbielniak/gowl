@@ -59,6 +59,7 @@ LIB_SRCS := \
 	src/interfaces/gowl-sticky-handler.c \
 	src/interfaces/gowl-cursor-provider.c \
 	src/interfaces/gowl-wallpaper-provider.c \
+	src/interfaces/gowl-lock-handler.c \
 	src/config/gowl-config.c \
 	src/config/gowl-config-compiler.c \
 	src/config/gowl-keybind.c \
@@ -114,6 +115,7 @@ LIB_HDRS := \
 	src/interfaces/gowl-sticky-handler.h \
 	src/interfaces/gowl-cursor-provider.h \
 	src/interfaces/gowl-wallpaper-provider.h \
+	src/interfaces/gowl-lock-handler.h \
 	src/config/gowl-config.h \
 	src/config/gowl-config-compiler.h \
 	src/config/gowl-keybind.h \
@@ -328,6 +330,7 @@ install-deps:
 		pixman-devel \
 		pango-devel \
 		cairo-devel \
+		pam-devel \
 		gdk-pixbuf2-devel \
 		libasan libubsan \
 		$(if $(filter 1,$(MCP)),$(FEDORA_DEPS_MCP))

@@ -45,7 +45,7 @@ tag-count: 9
 # Action values:  spawn, kill_client, toggle_float, toggle_fullscreen, focus_stack,
 #                 focus_monitor, tag_view, tag_set, tag_toggle_view, tag_toggle,
 #                 move_to_monitor, set_mfact, inc_nmaster, set_layout, cycle_layout,
-#                 zoom, quit, reload_config, ipc_command, custom
+#                 zoom, quit, reload_config, ipc_command, lock, custom
 keybinds:
   # Launch applications
   "Super+Return": { action: spawn, arg: "gst" }
@@ -130,6 +130,7 @@ keybinds:
   # Session
   "Super+Shift+q": { action: quit }
   "Super+Shift+r": { action: reload_config }
+  "Super+Shift+l": { action: lock }
 
 # Window rules
 # Each rule matches clients by app-id and/or title, then applies settings.
@@ -210,6 +211,16 @@ modules:
     enabled: false
   copyhighlight:
     enabled: false
+  screenlock:
+    enabled: false
+    pam-service: "gowl"
+    auto-lock-timeout: 300
+    bg-color: "#1e1e2e"
+    text-color: "#cdd6f4"
+    indicator-color: "#89b4fa"
+    error-color: "#f38ba8"
+    font: "monospace"
+    font-size: 24
   mcp:
     enabled: false
     # Transport: Unix socket for stdio relay (gowl-mcp binary)

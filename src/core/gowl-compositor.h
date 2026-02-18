@@ -249,6 +249,28 @@ guint gowl_compositor_get_monitor_count (GowlCompositor *self);
 GowlModuleManager *gowl_compositor_get_module_manager (GowlCompositor *self);
 
 /**
+ * gowl_compositor_is_locked:
+ * @self: a #GowlCompositor
+ *
+ * Returns whether the session is currently locked.
+ *
+ * Returns: %TRUE if the session is locked
+ */
+gboolean gowl_compositor_is_locked    (GowlCompositor *self);
+
+/**
+ * gowl_compositor_set_locked:
+ * @self: a #GowlCompositor
+ * @locked: %TRUE to lock, %FALSE to unlock
+ *
+ * Sets the compositor lock state.  Used by built-in lock handler
+ * modules.  External lock clients use the ext-session-lock-v1
+ * protocol instead.
+ */
+void     gowl_compositor_set_locked   (GowlCompositor *self,
+                                        gboolean        locked);
+
+/**
  * gowl_compositor_find_client_by_app_id:
  * @self: a #GowlCompositor
  * @pattern: a glob pattern to match against client app_id values

@@ -61,6 +61,7 @@
 #include "interfaces/gowl-sticky-handler.h"
 #include "interfaces/gowl-cursor-provider.h"
 #include "interfaces/gowl-wallpaper-provider.h"
+#include "interfaces/gowl-lock-handler.h"
 
 /* Configuration */
 #include "config/gowl-config.h"

@@ -277,6 +277,7 @@ gowl_action_get_type(void)
 			{ GOWL_ACTION_QUIT,              "GOWL_ACTION_QUIT",              "quit" },
 			{ GOWL_ACTION_RELOAD_CONFIG,     "GOWL_ACTION_RELOAD_CONFIG",     "reload-config" },
 			{ GOWL_ACTION_IPC_COMMAND,       "GOWL_ACTION_IPC_COMMAND",       "ipc-command" },
+			{ GOWL_ACTION_LOCK,              "GOWL_ACTION_LOCK",              "lock" },
 			{ GOWL_ACTION_CUSTOM,            "GOWL_ACTION_CUSTOM",            "custom" },
 			{ 0, NULL, NULL }
 		};

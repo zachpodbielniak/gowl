@@ -94,6 +94,29 @@ void                gowl_module_manager_dispatch_wallpaper_output_destroy
                                                           (GowlModuleManager *self,
                                                            gpointer           monitor);
 
+void                gowl_module_manager_dispatch_lock     (GowlModuleManager *self,
+                                                           gpointer           compositor);
+
+void                gowl_module_manager_dispatch_unlock   (GowlModuleManager *self,
+                                                           gpointer           compositor);
+
+gboolean            gowl_module_manager_dispatch_lock_key (GowlModuleManager *self,
+                                                           guint              keysym,
+                                                           guint32            codepoint,
+                                                           gboolean           pressed);
+
+void                gowl_module_manager_dispatch_lock_output
+                                                          (GowlModuleManager *self,
+                                                           gpointer           compositor,
+                                                           gpointer           monitor);
+
+void                gowl_module_manager_dispatch_lock_output_destroy
+                                                          (GowlModuleManager *self,
+                                                           gpointer           monitor);
+
+void                gowl_module_manager_notify_lock_activity
+                                                          (GowlModuleManager *self);
+
 G_END_DECLS
 
 #endif /* GOWL_MODULE_MANAGER_H */

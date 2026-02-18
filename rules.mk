@@ -86,7 +86,7 @@ BAR_PROTO_OBJS := \
 	$(OBJDIR)/bar/wlr-layer-shell-unstable-v1-protocol.o \
 	$(OBJDIR)/bar/xdg-shell-protocol.o
 
-$(OUTDIR)/gowlbar: $(BAR_OBJS) $(BAR_PROTO_OBJS) $(YAMLGLIB_OBJS)
+$(OUTDIR)/gowlbar: $(BAR_OBJS) $(BAR_PROTO_OBJS) $(YAMLGLIB_OBJS) $(CRISPY_OBJS)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) -o $@ $^ $(BAR_LDFLAGS) -rdynamic
 
@@ -105,13 +105,31 @@ $(OBJDIR)/deps/yaml-glib/src/%.o: deps/yaml-glib/src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -w -c $< -o $@
 
+# crispy dependency compilation (suppress warnings in vendored code)
+$(OBJDIR)/deps/crispy/src/interfaces/%.o: deps/crispy/src/interfaces/%.c deps/crispy/src/crispy-version.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CFLAGS) -w -c $< -o $@
+
+$(OBJDIR)/deps/crispy/src/core/%.o: deps/crispy/src/core/%.c deps/crispy/src/crispy-version.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CFLAGS) -w -c $< -o $@
+
+# crispy version header generation
+deps/crispy/src/crispy-version.h: deps/crispy/src/crispy-version.h.in
+	sed \
+		-e 's|@CRISPY_VERSION_MAJOR@|0|g' \
+		-e 's|@CRISPY_VERSION_MINOR@|1|g' \
+		-e 's|@CRISPY_VERSION_MICRO@|0|g' \
+		-e 's|@CRISPY_VERSION@|0.1.0|g' \
+		$< > $@
+
 # Static library creation
-$(OUTDIR)/$(LIB_STATIC): $(LIB_OBJS) $(YAMLGLIB_OBJS)
+$(OUTDIR)/$(LIB_STATIC): $(LIB_OBJS) $(YAMLGLIB_OBJS) $(CRISPY_OBJS)
 	@$(MKDIR_P) $(dir $@)
 	$(AR) rcs $@ $^
 
 # Shared library creation
-$(OUTDIR)/$(LIB_SHARED_FULL): $(LIB_OBJS) $(YAMLGLIB_OBJS)
+$(OUTDIR)/$(LIB_SHARED_FULL): $(LIB_OBJS) $(YAMLGLIB_OBJS) $(CRISPY_OBJS)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(LDFLAGS_SHARED) -o $@ $^ $(LDFLAGS)
 	cd $(OUTDIR) && ln -sf $(LIB_SHARED_FULL) $(LIB_SHARED_MAJOR)
@@ -184,6 +202,8 @@ $(OBJDIR): | $(BUILDDIR)/include/gowl
 	@$(MKDIR_P) $(OBJDIR)/bar/interfaces
 	@$(MKDIR_P) $(OBJDIR)/tests
 	@$(MKDIR_P) $(OBJDIR)/deps/yaml-glib/src
+	@$(MKDIR_P) $(OBJDIR)/deps/crispy/src/interfaces
+	@$(MKDIR_P) $(OBJDIR)/deps/crispy/src/core
 
 $(OUTDIR):
 	@$(MKDIR_P) $(OUTDIR)
@@ -214,6 +234,7 @@ src/gowl-version.h: src/gowl-version.h.in
 clean:
 	rm -rf $(BUILDDIR)/$(BUILD_TYPE)
 	rm -f src/gowl-version.h
+	rm -f deps/crispy/src/crispy-version.h
 	rm -f $(PROTO_HDRS)
 	rm -f wlr-layer-shell-unstable-v1-client-protocol.h
 	rm -f wlr-layer-shell-unstable-v1-protocol.c
@@ -223,6 +244,7 @@ clean:
 clean-all:
 	rm -rf $(BUILDDIR)
 	rm -f src/gowl-version.h
+	rm -f deps/crispy/src/crispy-version.h
 	rm -f $(PROTO_HDRS)
 	rm -f wlr-layer-shell-unstable-v1-client-protocol.h
 	rm -f wlr-layer-shell-unstable-v1-protocol.c

@@ -1,5 +1,6 @@
 /*
- * gowl - GObject Wayland Compositor
+ * gowlbar-config-compiler.h - C configuration compiler for gowlbar
+ *
  * Copyright (C) 2026  Zach Podbielniak
  *
  * This program is free software: you can redistribute it and/or modify
@@ -14,6 +15,19 @@
  *
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * Compiles a user-written C configuration file into a shared object
+ * and loads it at runtime.  Uses the crispy library for compilation
+ * and content-hash caching (SHA256).  The config source may define
+ * CRISPY_PARAMS to pass extra compiler flags.  The compiled .so
+ * must export a `gowlbar_config_init` symbol.
+ *
+ * Search path for bar.c:
+ *  1. --c-config PATH (explicit override)
+ *  2. $XDG_CONFIG_HOME/gowl/bar.c (~/.config/gowl/bar.c)
+ *  3. SYSCONFDIR/gowl/bar.c (/etc/gowl/bar.c)
+ *  4. DATADIR/gowl/bar.c (/usr/share/gowl/bar.c)
+ *  5. ./data/bar.c (development fallback)
  */
 
 #ifndef GOWLBAR_CONFIG_COMPILER_H
@@ -30,38 +44,58 @@ G_DECLARE_FINAL_TYPE(GowlbarConfigCompiler, gowlbar_config_compiler,
 
 /**
  * gowlbar_config_compiler_new:
+ * @error: (nullable): return location for a #GError
  *
- * Creates a new #GowlbarConfigCompiler.
+ * Creates a new #GowlbarConfigCompiler backed by the crispy library.
+ * Probes gcc for its version and caches pkg-config output.
+ * Uses SHA256 content-hash caching in $XDG_CACHE_HOME/gowl.
  *
- * Returns: (transfer full): a newly allocated #GowlbarConfigCompiler
+ * Returns: (transfer full) (nullable): a new #GowlbarConfigCompiler,
+ *          or %NULL if gcc is not found
  */
-GowlbarConfigCompiler *gowlbar_config_compiler_new(void);
+GowlbarConfigCompiler *
+gowlbar_config_compiler_new(GError **error);
+
+/**
+ * gowlbar_config_compiler_find_config:
+ * @self: a #GowlbarConfigCompiler
+ *
+ * Searches standard paths for a bar C config file.
+ *
+ * Search order:
+ *  1. $XDG_CONFIG_HOME/gowl/bar.c
+ *  2. SYSCONFDIR/gowl/bar.c
+ *  3. DATADIR/gowl/bar.c
+ *  4. ./data/bar.c (development fallback)
+ *
+ * Returns: (transfer full) (nullable): path to the bar.c,
+ *          or %NULL if none found.  Free with g_free().
+ */
+gchar *
+gowlbar_config_compiler_find_config(GowlbarConfigCompiler *self);
 
 /**
  * gowlbar_config_compiler_compile:
  * @self: a #GowlbarConfigCompiler
  * @source_path: path to the C configuration source file
- * @output_path: path where the compiled .so should be written
+ * @force: if %TRUE, bypass cache and force recompilation
  * @error: (nullable): return location for a #GError
  *
- * Compiles the C config source into a shared object.
+ * Reads the source file, scans for an optional CRISPY_PARAMS
+ * define, computes a SHA256 content hash, and compiles to a
+ * shared object if no valid cached artifact exists (or if
+ * @force is %TRUE).
  *
- * Returns: %TRUE on success, %FALSE on error
+ * Returns: (transfer full) (nullable): path to the compiled .so,
+ *          or %NULL on error.  Free with g_free().
  */
-gboolean gowlbar_config_compiler_compile(GowlbarConfigCompiler  *self,
-                                          const gchar            *source_path,
-                                          const gchar            *output_path,
-                                          GError                **error);
-
-/**
- * gowlbar_config_compiler_get_cache_path:
- * @self: a #GowlbarConfigCompiler
- *
- * Returns the default path for the compiled bar config shared object.
- *
- * Returns: (transfer full): a newly allocated path string; free with g_free()
- */
-gchar *gowlbar_config_compiler_get_cache_path(GowlbarConfigCompiler *self);
+gchar *
+gowlbar_config_compiler_compile(
+    GowlbarConfigCompiler  *self,
+    const gchar            *source_path,
+    gboolean                force,
+    GError                **error
+);
 
 /**
  * gowlbar_config_compiler_load_and_apply:
@@ -69,13 +103,18 @@ gchar *gowlbar_config_compiler_get_cache_path(GowlbarConfigCompiler *self);
  * @so_path: path to the compiled shared object
  * @error: (nullable): return location for a #GError
  *
- * Opens the shared object, looks up `gowlbar_config_init`, and calls it.
+ * Opens the .so, looks up `gowlbar_config_init`, and calls it.
+ * The init function must have signature:
+ *   G_MODULE_EXPORT gboolean gowlbar_config_init(void);
  *
- * Returns: %TRUE on success, %FALSE on error
+ * Returns: %TRUE if loaded and applied successfully
  */
-gboolean gowlbar_config_compiler_load_and_apply(GowlbarConfigCompiler  *self,
-                                                  const gchar            *so_path,
-                                                  GError                **error);
+gboolean
+gowlbar_config_compiler_load_and_apply(
+    GowlbarConfigCompiler  *self,
+    const gchar            *so_path,
+    GError                **error
+);
 
 G_END_DECLS
 

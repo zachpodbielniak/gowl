@@ -271,24 +271,30 @@ gowl --generate-c-config > ~/.config/gowl/config.c
 ### How It Works
 
 1. The compositor finds `config.c` in the search paths.
-2. `GowlConfigCompiler` reads the file and scans for an optional `#define GOWL_BUILD_ARGS` to extract extra compiler flags.
-3. The file is compiled with: `gcc -std=gnu89 -shared -fPIC <GOWL_BUILD_ARGS> -o config.so config.c $(pkg-config --cflags --libs glib-2.0 gobject-2.0 gmodule-2.0)`
-4. The compiled `.so` is cached in `$XDG_CACHE_HOME/gowl/config.so`.
+2. `GowlConfigCompiler` reads the file and scans for an optional `#define CRISPY_PARAMS` to extract extra compiler flags.
+3. The file is compiled via the crispy library with SHA256 content-hash caching.
+4. The compiled `.so` is cached in `$XDG_CACHE_HOME/gowl/` (filename derived from content hash).
 5. The `.so` is opened via `g_module_open()` and the `gowl_config_init` symbol is resolved and called.
 6. If compilation fails, the compositor logs a warning and continues with YAML/default config.
 
-### GOWL_BUILD_ARGS
+### CRISPY_PARAMS
 
-Optional define to pass extra compiler flags:
+Optional define to pass extra compiler flags. Shell expansion is supported:
 
 ```c
-#define GOWL_BUILD_ARGS "-std=gnu89 -shared -fPIC"
+#define CRISPY_PARAMS ""
 ```
 
 This is useful for specifying additional include paths or libraries:
 
 ```c
-#define GOWL_BUILD_ARGS "-I/opt/custom/include -lm"
+#define CRISPY_PARAMS "-I/opt/custom/include -lm"
+```
+
+Shell expansion example (runs at compile time):
+
+```c
+#define CRISPY_PARAMS "$(pkg-config --cflags json-glib-1.0)"
 ```
 
 If omitted, only the default pkg-config flags are used.

@@ -13,6 +13,10 @@
 # NOTE: All property keys must be at the root level (flat mapping).
 # Key names use hyphens (log-level, not log_level).
 
+# Set to true to ignore all YAML values and keep defaults.
+# Useful when relying entirely on C config (equivalent to --no-yaml-config).
+# ignore_yaml: true
+
 # Compositor settings
 log-level: "warning"
 log-file: "~/.config/gowl/gowl.log"

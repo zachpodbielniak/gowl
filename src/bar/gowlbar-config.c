@@ -631,6 +631,14 @@ gowlbar_config_load_yaml(
 		return FALSE;
 	}
 
+	/* check ignore_yaml: if true, discard everything and keep defaults */
+	if (yaml_mapping_has_member(mapping, "ignore_yaml")) {
+		if (yaml_mapping_get_boolean_member(mapping, "ignore_yaml")) {
+			g_debug("gowlbar_config: ignore_yaml set, keeping defaults");
+			return TRUE;
+		}
+	}
+
 	gowlbar_config_apply_mapping(self, mapping);
 
 	/* Emit the reloaded signal */

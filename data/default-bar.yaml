@@ -1,5 +1,9 @@
 # gowlbar configuration
 
+# Set to true to ignore all YAML values and keep defaults.
+# Useful when relying entirely on C config (equivalent to --no-yaml-config).
+# ignore_yaml: true
+
 bar:
   height: 24
   position: "top"

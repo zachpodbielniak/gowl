@@ -146,6 +146,15 @@ YAMLGLIB_SRCS := \
 	deps/yaml-glib/src/yaml-sequence.c \
 	deps/yaml-glib/src/yaml-serializable.c
 
+# crispy sources (built-in dependency for C config compilation)
+CRISPY_SRCS := \
+	deps/crispy/src/interfaces/crispy-compiler.c \
+	deps/crispy/src/interfaces/crispy-cache-provider.c \
+	deps/crispy/src/core/crispy-gcc-compiler.c \
+	deps/crispy/src/core/crispy-file-cache.c \
+	deps/crispy/src/core/crispy-plugin-engine.c \
+	deps/crispy/src/core/crispy-script.c
+
 # Test sources
 TEST_SRCS := $(wildcard tests/test-*.c)
 
@@ -179,6 +188,7 @@ BAR_SRCS := \
 # Object files
 LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
 YAMLGLIB_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(YAMLGLIB_SRCS))
+CRISPY_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(CRISPY_SRCS))
 MAIN_OBJ := $(OBJDIR)/main.o
 BAR_OBJS := $(patsubst src/bar/%.c,$(OBJDIR)/bar/%.o,$(BAR_SRCS))
 TEST_OBJS := $(patsubst tests/%.c,$(OBJDIR)/tests/%.o,$(TEST_SRCS))
@@ -202,8 +212,8 @@ ifeq ($(MCP_AVAILABLE),1)
 all: gowl-mcp
 endif
 
-# Build dependencies (yaml-glib)
-deps: $(YAMLGLIB_OBJS)
+# Build dependencies (yaml-glib, crispy)
+deps: $(YAMLGLIB_OBJS) $(CRISPY_OBJS)
 
 # Build the library
 lib: src/gowl-version.h $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL) $(OUTDIR)/gowl.pc

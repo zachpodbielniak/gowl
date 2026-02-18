@@ -370,12 +370,12 @@ generate_c_with_modules(const gchar *modules_csv)
 		"/*\n"
 		" * gowl user configuration\n"
 		" *\n"
-		" * Compile args are taken from the GOWL_BUILD_ARGS define if present,\n"
+		" * Compile args are taken from the CRISPY_PARAMS define if present,\n"
 		" * otherwise pkg-config is used. This file is compiled to a .so and\n"
 		" * loaded at startup. On compile failure, defaults are used.\n"
 		" *\n"
 		" * Optional build args override:\n"
-		" * #define GOWL_BUILD_ARGS \"-I/custom/path\"\n"
+		" * #define CRISPY_PARAMS \"-I/custom/path\"\n"
 		" */\n"
 		"\n"
 		"#include <gowl/gowl.h>\n"
@@ -453,12 +453,12 @@ static const gchar *default_c_config =
 	"/*\n"
 	" * gowl user configuration\n"
 	" *\n"
-	" * Compile args are taken from the GOWL_BUILD_ARGS define if present,\n"
+	" * Compile args are taken from the CRISPY_PARAMS define if present,\n"
 	" * otherwise pkg-config is used. This file is compiled to a .so and\n"
 	" * loaded at startup. On compile failure, defaults are used.\n"
 	" *\n"
 	" * Optional build args override:\n"
-	" * #define GOWL_BUILD_ARGS \"-I/custom/path\"\n"
+	" * #define CRISPY_PARAMS \"-I/custom/path\"\n"
 	" */\n"
 	"\n"
 	"#include <gowl/gowl.h>\n"
@@ -498,6 +498,7 @@ main(int argc, char *argv[])
 	gboolean generate_c = FALSE;
 	gboolean list_modules = FALSE;
 	gboolean no_c_config = FALSE;
+	gboolean no_yaml_config = FALSE;
 	gboolean recompile = FALSE;
 	gchar *config_path = NULL;
 	gchar *c_config_path = NULL;
@@ -530,6 +531,8 @@ main(int argc, char *argv[])
 			"Override C config path", "PATH" },
 		{ "no-c-config", 0, 0, G_OPTION_ARG_NONE, &no_c_config,
 			"Skip C config compilation", NULL },
+		{ "no-yaml-config", 0, 0, G_OPTION_ARG_NONE, &no_yaml_config,
+			"Skip YAML config loading", NULL },
 		{ "recompile", 0, 0, G_OPTION_ARG_NONE, &recompile,
 			"Compile C config and exit", NULL },
 		{ "startup", 's', 0, G_OPTION_ARG_STRING, &startup_cmd,
@@ -590,36 +593,19 @@ main(int argc, char *argv[])
 		g_autofree gchar *c_source = NULL;
 		g_autofree gchar *so_path = NULL;
 
-		compiler = gowl_config_compiler_new();
-		so_path  = gowl_config_compiler_get_cache_path(compiler);
+		compiler = gowl_config_compiler_new(&error);
+		if (compiler == NULL) {
+			g_printerr("Cannot create compiler: %s\n",
+			           error->message);
+			g_clear_error(&error);
+			ret = 1;
+			goto cleanup;
+		}
 
 		if (c_config_path != NULL) {
 			c_source = g_strdup(c_config_path);
 		} else {
-			const gchar *search_dirs[] = {
-				"./data",
-				NULL,
-				GOWL_SYSCONFDIR "/gowl",
-				GOWL_DATADIR "/gowl",
-				NULL
-			};
-			g_autofree gchar *user_dir = NULL;
-			gint i;
-
-			user_dir = g_build_filename(
-				g_get_user_config_dir(), "gowl", NULL);
-			search_dirs[1] = user_dir;
-
-			for (i = 0; search_dirs[i] != NULL; i++) {
-				g_autofree gchar *candidate = NULL;
-
-				candidate = g_build_filename(
-					search_dirs[i], "config.c", NULL);
-				if (g_file_test(candidate, G_FILE_TEST_EXISTS)) {
-					c_source = g_steal_pointer(&candidate);
-					break;
-				}
-			}
+			c_source = gowl_config_compiler_find_config(compiler);
 		}
 
 		if (c_source == NULL) {
@@ -628,15 +614,16 @@ main(int argc, char *argv[])
 			goto cleanup;
 		}
 
-		g_print("Compiling %s -> %s\n", c_source, so_path);
+		g_print("Compiling %s ...\n", c_source);
 
-		if (!gowl_config_compiler_compile(compiler,
-		        c_source, so_path, &error)) {
+		so_path = gowl_config_compiler_compile(compiler,
+		              c_source, TRUE, &error);
+		if (so_path == NULL) {
 			g_printerr("Compile failed: %s\n", error->message);
 			g_clear_error(&error);
 			ret = 1;
 		} else {
-			g_print("OK\n");
+			g_print("OK: %s\n", so_path);
 		}
 
 		goto cleanup;
@@ -651,17 +638,19 @@ main(int argc, char *argv[])
 	config = gowl_config_new();
 	gowl_config = config;
 
-	if (config_path != NULL) {
-		if (!gowl_config_load_yaml(config, config_path, &error)) {
-			g_warning("Failed to load config from %s: %s",
-				config_path, error->message);
-			g_clear_error(&error);
-		}
-	} else {
-		if (!gowl_config_load_yaml_from_search_path(config, &error)) {
-			g_debug("No YAML config found, using defaults: %s",
-				error->message);
-			g_clear_error(&error);
+	if (!no_yaml_config) {
+		if (config_path != NULL) {
+			if (!gowl_config_load_yaml(config, config_path, &error)) {
+				g_warning("Failed to load config from %s: %s",
+					config_path, error->message);
+				g_clear_error(&error);
+			}
+		} else {
+			if (!gowl_config_load_yaml_from_search_path(config, &error)) {
+				g_debug("No YAML config found, using defaults: %s",
+					error->message);
+				g_clear_error(&error);
+			}
 		}
 	}
 
@@ -671,56 +660,37 @@ main(int argc, char *argv[])
 		g_autofree gchar *c_source = NULL;
 		g_autofree gchar *so_path = NULL;
 
-		compiler = gowl_config_compiler_new();
-		so_path  = gowl_config_compiler_get_cache_path(compiler);
-
-		/* Search for config.c in the same paths as YAML config */
-		if (c_config_path != NULL) {
-			c_source = g_strdup(c_config_path);
+		compiler = gowl_config_compiler_new(&error);
+		if (compiler == NULL) {
+			g_warning("Cannot create C config compiler: %s",
+			          error->message);
+			g_clear_error(&error);
 		} else {
-			const gchar *search_dirs[] = {
-				"./data",
-				NULL, /* filled in below: ~/.config/gowl */
-				GOWL_SYSCONFDIR "/gowl",
-				GOWL_DATADIR "/gowl",
-				NULL
-			};
-			g_autofree gchar *user_dir = NULL;
-			gint i;
-
-			user_dir = g_build_filename(
-				g_get_user_config_dir(), "gowl", NULL);
-			search_dirs[1] = user_dir;
-
-			for (i = 0; search_dirs[i] != NULL; i++) {
-				g_autofree gchar *candidate = NULL;
-
-				candidate = g_build_filename(
-					search_dirs[i], "config.c", NULL);
-				if (g_file_test(candidate, G_FILE_TEST_EXISTS)) {
-					c_source = g_steal_pointer(&candidate);
-					break;
-				}
-			}
-		}
-
-		/* Compile and load if a config.c was found */
-		if (c_source != NULL) {
-			g_debug("Compiling C config: %s -> %s",
-			        c_source, so_path);
-
-			if (!gowl_config_compiler_compile(compiler,
-			        c_source, so_path, &error)) {
-				g_warning("C config compile failed: %s",
-				          error->message);
-				g_clear_error(&error);
-			} else if (!gowl_config_compiler_load_and_apply(
-			               compiler, so_path, &error)) {
-				g_warning("C config load failed: %s",
-				          error->message);
-				g_clear_error(&error);
+			/* Search for config.c */
+			if (c_config_path != NULL) {
+				c_source = g_strdup(c_config_path);
 			} else {
-				g_debug("C config loaded successfully");
+				c_source = gowl_config_compiler_find_config(
+				               compiler);
+			}
+
+			/* Compile and load if a config.c was found */
+			if (c_source != NULL) {
+				so_path = gowl_config_compiler_compile(
+				              compiler, c_source, FALSE,
+				              &error);
+				if (so_path == NULL) {
+					g_warning("C config compile failed: %s",
+					          error->message);
+					g_clear_error(&error);
+				} else if (!gowl_config_compiler_load_and_apply(
+				               compiler, so_path, &error)) {
+					g_warning("C config load failed: %s",
+					          error->message);
+					g_clear_error(&error);
+				} else {
+					g_debug("C config loaded successfully");
+				}
 			}
 		}
 	}

@@ -22,13 +22,14 @@
  * Or let gowl auto-compile this file from:
  *   ~/.config/gowl/config.c
  *
- * The GOWL_BUILD_ARGS define below is optional. If present, the
+ * The CRISPY_PARAMS define below is optional. If present, the
  * config compiler extracts it and passes the value as extra flags
- * to gcc. Remove or modify it if you need custom include paths
+ * to gcc. Shell expansion is supported (e.g. $(pkg-config ...)).
+ * Remove or modify it if you need custom include paths
  * or additional libraries.
  */
 
-#define GOWL_BUILD_ARGS "-std=gnu89 -shared -fPIC"
+#define CRISPY_PARAMS ""
 
 #include <gowl/gowl.h>
 #include <xkbcommon/xkbcommon.h>

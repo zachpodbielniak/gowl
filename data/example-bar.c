@@ -22,8 +22,8 @@
  * This file is compiled to a .so and loaded at startup.
  * On compile failure, YAML config / defaults are used.
  *
- * Optional build args override:
- *   #define GOWLBAR_BUILD_ARGS "-I/custom/path"
+ * Optional build args override (shell expansion supported):
+ *   #define CRISPY_PARAMS "-I/custom/path"
  */
 
 #include <glib-object.h>

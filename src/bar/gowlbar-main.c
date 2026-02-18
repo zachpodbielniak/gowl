@@ -26,49 +26,12 @@
 
 #define GOWLBAR_VERSION GOWL_VERSION
 
-/* C config source filename */
-#define GOWLBAR_C_CONFIG_FILENAME "bar.c"
-
 /*
  * Global exports for C config .so to reference.
  * These are resolved at dlopen time by the C config module.
  */
 GowlbarApp    *gowlbar_app    = NULL;
 GowlbarConfig *gowlbar_config = NULL;
-
-/**
- * find_c_config_source:
- *
- * Searches standard directories for bar.c (same search paths as
- * YAML config).  Returns the first path found, or %NULL if none.
- *
- * Returns: (transfer full) (nullable): path to bar.c or %NULL
- */
-static gchar *
-find_c_config_source(void)
-{
-	g_autofree gchar *xdg_path = NULL;
-	const gchar *search_paths[5];
-	guint i;
-
-	xdg_path = g_build_filename(g_get_user_config_dir(),
-	                             "gowl",
-	                             GOWLBAR_C_CONFIG_FILENAME,
-	                             NULL);
-
-	search_paths[0] = "data/" GOWLBAR_C_CONFIG_FILENAME;
-	search_paths[1] = xdg_path;
-	search_paths[2] = "/etc/gowl/" GOWLBAR_C_CONFIG_FILENAME;
-	search_paths[3] = "/usr/local/gowl/" GOWLBAR_C_CONFIG_FILENAME;
-	search_paths[4] = NULL;
-
-	for (i = 0; search_paths[i] != NULL; i++) {
-		if (g_file_test(search_paths[i], G_FILE_TEST_EXISTS))
-			return g_strdup(search_paths[i]);
-	}
-
-	return NULL;
-}
 
 int
 main(int argc, char *argv[])
@@ -201,50 +164,56 @@ main(int argc, char *argv[])
 	if (!no_c) {
 		g_autoptr(GowlbarConfigCompiler) compiler = NULL;
 		g_autofree gchar *source = NULL;
-		g_autofree gchar *cache = NULL;
+		g_autofree gchar *so_path = NULL;
 
-		compiler = gowlbar_config_compiler_new();
+		compiler = gowlbar_config_compiler_new(&error);
+		if (compiler == NULL) {
+			g_warning("gowlbar: cannot create config compiler: %s",
+			          error->message);
+			g_clear_error(&error);
+			if (recompile) {
+				ret = 1;
+				goto cleanup;
+			}
+			goto skip_c_config;
+		}
 
 		/* Determine source path */
 		if (c_config_path != NULL)
 			source = g_strdup(c_config_path);
 		else
-			source = find_c_config_source();
+			source = gowlbar_config_compiler_find_config(compiler);
 
 		if (source != NULL) {
-			cache = gowlbar_config_compiler_get_cache_path(compiler);
-
-			/* Handle --recompile: compile and exit */
+			/* Handle --recompile: force compile and exit */
 			if (recompile) {
-				g_print("Compiling %s -> %s\n", source, cache);
-				if (!gowlbar_config_compiler_compile(
-						compiler, source, cache, &error)) {
+				g_print("Compiling %s ...\n", source);
+				so_path = gowlbar_config_compiler_compile(
+					compiler, source, TRUE, &error);
+				if (so_path == NULL) {
 					g_printerr("gowlbar: compile failed: %s\n",
 					           error->message);
 					ret = 1;
 				} else {
-					g_print("Compilation successful.\n");
+					g_print("Compilation successful: %s\n", so_path);
 				}
 				goto cleanup;
 			}
 
-			/* Normal flow: compile if source is newer than cache */
-			if (!g_file_test(cache, G_FILE_TEST_EXISTS) ||
-			    g_file_test(source, G_FILE_TEST_EXISTS)) {
-				/* Compile the C config */
-				if (!gowlbar_config_compiler_compile(
-						compiler, source, cache, &error)) {
-					g_warning("gowlbar: C config compile failed: %s",
+			/* Normal flow: compile (crispy handles caching) */
+			so_path = gowlbar_config_compiler_compile(
+				compiler, source, FALSE, &error);
+			if (so_path == NULL) {
+				g_warning("gowlbar: C config compile failed: %s",
+				          error->message);
+				g_clear_error(&error);
+			} else {
+				/* Load the compiled .so */
+				if (!gowlbar_config_compiler_load_and_apply(
+						compiler, so_path, &error)) {
+					g_warning("gowlbar: C config load failed: %s",
 					          error->message);
 					g_clear_error(&error);
-				} else {
-					/* Load the compiled .so */
-					if (!gowlbar_config_compiler_load_and_apply(
-							compiler, cache, &error)) {
-						g_warning("gowlbar: C config load failed: %s",
-						          error->message);
-						g_clear_error(&error);
-					}
 				}
 			}
 		} else if (recompile) {
@@ -258,6 +227,7 @@ main(int argc, char *argv[])
 		ret = 1;
 		goto cleanup;
 	}
+skip_c_config:
 
 	/* Apply config to app */
 	gowlbar_app_set_config(gowlbar_app, gowlbar_config);

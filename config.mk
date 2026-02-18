@@ -8,7 +8,7 @@
 
 # Version
 VERSION_MAJOR := 0
-VERSION_MINOR := 1
+VERSION_MINOR := 2
 VERSION_MICRO := 0
 VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 
@@ -138,7 +138,7 @@ ifeq ($(XWAYLAND_AVAILABLE),1)
 endif
 
 # Include paths
-CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src
+CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src -Ideps/crispy/src
 
 # Combine all CFLAGS
 CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(CFLAGS_INC) $(CFLAGS_DEPS)
@@ -165,7 +165,7 @@ TEST_CFLAGS := $(CFLAGS) $(shell $(PKG_CONFIG) --cflags glib-2.0)
 TEST_LDFLAGS := $(LDFLAGS) -L$(OUTDIR) -lgowl -Wl,-rpath,$(OUTDIR)
 
 # Module flags
-MODULE_CFLAGS_INC := -I$(CURDIR) -I$(CURDIR)/src -I$(CURDIR)/deps/yaml-glib/src
+MODULE_CFLAGS_INC := -I$(CURDIR) -I$(CURDIR)/src -I$(CURDIR)/deps/yaml-glib/src -I$(CURDIR)/deps/crispy/src
 MODULE_CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(MODULE_CFLAGS_INC) $(CFLAGS_DEPS)
 MODULE_LDFLAGS := -shared -fPIC
 
@@ -182,7 +182,7 @@ BAR_CFLAGS += -DGOWL_DATADIR=\"$(DATADIR)\"
 BAR_CFLAGS += -DGOWLBAR_MODULEDIR=\"$(BAR_MODULEDIR)\"
 BAR_CFLAGS += -DGOWL_DEV_INCLUDE_DIR=\"$(CURDIR)/$(BUILDDIR)/include\"
 BAR_CFLAGS += $(CFLAGS_BUILD)
-BAR_CFLAGS += -I. -Isrc/bar -Ideps/yaml-glib/src
+BAR_CFLAGS += -I. -Isrc/bar -Ideps/yaml-glib/src -Ideps/crispy/src
 BAR_CFLAGS += $(BAR_CFLAGS_DEPS)
 
 BAR_LDFLAGS := $(BAR_LDFLAGS_DEPS) $(LDFLAGS_ASAN)

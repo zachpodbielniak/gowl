@@ -47,8 +47,6 @@
 #include "interfaces/gowl-startup-handler.h"
 #include "interfaces/gowl-shutdown-handler.h"
 
-#include <gio/gunixsocketaddress.h>
-#include <unistd.h>
 #include <string.h>
 
 /* default MCP server instructions */
@@ -213,123 +211,30 @@ gowl_module_mcp_setup_server(
  * ================================================================ */
 
 /**
- * mcp_session_free:
- * @session: a #GowlMcpSession
- *
- * Frees a socket session and its associated server/transport.
- */
-static void
-mcp_session_free(GowlMcpSession *session)
-{
-	if (session == NULL)
-		return;
-
-	if (session->server != NULL) {
-		mcp_server_stop(session->server);
-		g_object_unref(session->server);
-	}
-	if (session->transport != NULL)
-		g_object_unref(session->transport);
-	if (session->connection != NULL)
-		g_object_unref(session->connection);
-
-	g_free(session);
-}
-
-/**
- * on_socket_server_started:
- * @source: the McpServer
- * @result: the async result
- * @user_data: the GowlMcpSession
- *
- * Callback for mcp_server_start_async on a socket session.
- */
-static void
-on_socket_server_started(
-	GObject      *source,
-	GAsyncResult *result,
-	gpointer      user_data
-){
-	GowlMcpSession *session;
-	g_autoptr(GError) error = NULL;
-
-	session = (GowlMcpSession *)user_data;
-
-	if (!mcp_server_start_finish(MCP_SERVER(source), result, &error)) {
-		g_warning("gowl-mcp: socket session start failed: %s",
-		          error->message);
-		/* remove session from module list */
-		if (session->module != NULL) {
-			session->module->socket_sessions = g_list_remove(
-				session->module->socket_sessions, session);
-		}
-		mcp_session_free(session);
-	} else {
-		g_debug("gowl-mcp: socket session started");
-	}
-}
-
-/**
- * on_socket_incoming:
- * @service: the GSocketService
- * @connection: the incoming GSocketConnection
- * @source: the source GObject (nullable)
+ * on_socket_session_created:
+ * @unix_server: the McpUnixSocketServer
+ * @server: the per-connection McpServer (not yet started)
  * @user_data: the GowlModuleMcp
  *
  * Called when a new client connects to the Unix domain socket.
- * Creates a new MCP server instance for this connection using
- * McpStdioTransport with the socket's GIO streams.
- *
- * Returns: %TRUE to stop further signal handlers
+ * Registers all allowed tools on the per-connection server before
+ * the MCP handshake begins.
  */
-static gboolean
-on_socket_incoming(
-	GSocketService    *service,
-	GSocketConnection *connection,
-	GObject           *source,
-	gpointer           user_data
+static void
+on_socket_session_created(
+	McpUnixSocketServer *unix_server,
+	McpServer           *server,
+	gpointer             user_data
 ){
-	GowlModuleMcp    *self;
-	GowlMcpSession   *session;
-	GInputStream      *input;
-	GOutputStream     *output;
-
-	(void)service;
-	(void)source;
-
-	self = GOWL_MODULE_MCP(user_data);
-
-	session = g_new0(GowlMcpSession, 1);
-	session->module     = self;
-	session->connection = g_object_ref(connection);
-
-	/* wrap socket streams in an McpStdioTransport (NDJSON framing) */
-	input  = g_io_stream_get_input_stream(G_IO_STREAM(connection));
-	output = g_io_stream_get_output_stream(G_IO_STREAM(connection));
-
-	session->transport = mcp_stdio_transport_new_with_streams(input, output);
-	session->server    = mcp_server_new("gowl-mcp", GOWL_VERSION_STRING);
-
-	mcp_server_set_transport(session->server,
-	                         MCP_TRANSPORT(session->transport));
-	gowl_module_mcp_setup_server(self, session->server);
-
-	/* track this session */
-	self->socket_sessions = g_list_prepend(self->socket_sessions, session);
-
-	/* start the server asynchronously */
-	mcp_server_start_async(session->server, NULL,
-	                       on_socket_server_started, session);
-
-	g_debug("gowl-mcp: accepted socket connection");
-	return TRUE;
+	(void)unix_server;
+	gowl_module_mcp_setup_server(GOWL_MODULE_MCP(user_data), server);
 }
 
 /**
  * setup_socket_transport:
  * @self: the MCP module
  *
- * Creates the Unix domain socket listener at
+ * Creates an McpUnixSocketServer listening at
  * $XDG_RUNTIME_DIR/gowl-mcp.sock.
  *
  * Returns: %TRUE on success
@@ -337,41 +242,34 @@ on_socket_incoming(
 static gboolean
 setup_socket_transport(GowlModuleMcp *self)
 {
-	const gchar          *runtime_dir;
-	g_autoptr(GError)     error = NULL;
-	g_autoptr(GSocketAddress) address = NULL;
+	const gchar       *runtime_dir;
+	g_autofree gchar  *socket_path = NULL;
+	g_autoptr(GError)  error = NULL;
+	const gchar       *instructions;
 
 	runtime_dir = g_get_user_runtime_dir();
-	self->socket_path = g_build_filename(runtime_dir, "gowl-mcp.sock", NULL);
+	socket_path = g_build_filename(runtime_dir, "gowl-mcp.sock", NULL);
 
-	/* remove stale socket file */
-	unlink(self->socket_path);
+	self->socket_server = mcp_unix_socket_server_new(
+		"gowl-mcp", GOWL_VERSION_STRING, socket_path);
 
-	self->socket_service = g_socket_service_new();
+	/* apply instructions so every session inherits them */
+	instructions = (self->instructions != NULL)
+		? self->instructions : DEFAULT_INSTRUCTIONS;
+	mcp_unix_socket_server_set_instructions(
+		self->socket_server, instructions);
 
-	address = g_unix_socket_address_new(self->socket_path);
-	if (!g_socket_listener_add_address(
-		G_SOCKET_LISTENER(self->socket_service),
-		address,
-		G_SOCKET_TYPE_STREAM,
-		G_SOCKET_PROTOCOL_DEFAULT,
-		NULL,   /* source_object */
-		NULL,   /* effective_address */
-		&error))
-	{
-		g_warning("gowl-mcp: failed to listen on %s: %s",
-		          self->socket_path, error->message);
-		g_clear_object(&self->socket_service);
+	g_signal_connect(self->socket_server, "session-created",
+	                 G_CALLBACK(on_socket_session_created), self);
+
+	if (!mcp_unix_socket_server_start(self->socket_server, &error)) {
+		g_warning("gowl-mcp: failed to start socket server on %s: %s",
+		          socket_path, error->message);
+		g_clear_object(&self->socket_server);
 		return FALSE;
 	}
 
-	g_signal_connect(self->socket_service, "incoming",
-	                 G_CALLBACK(on_socket_incoming), self);
-
-	g_socket_service_start(self->socket_service);
-
-	g_debug("gowl-mcp: socket transport listening on %s",
-	        self->socket_path);
+	g_debug("gowl-mcp: socket transport listening on %s", socket_path);
 	return TRUE;
 }
 
@@ -593,7 +491,6 @@ static void
 mcp_on_shutdown(GowlShutdownHandler *handler, gpointer compositor)
 {
 	GowlModuleMcp *self;
-	GList         *l;
 
 	(void)compositor;
 	self = GOWL_MODULE_MCP(handler);
@@ -623,23 +520,10 @@ mcp_on_shutdown(GowlShutdownHandler *handler, gpointer compositor)
 	}
 	g_clear_object(&self->http_transport);
 
-	/* clean up socket sessions */
-	for (l = self->socket_sessions; l != NULL; l = l->next)
-		mcp_session_free((GowlMcpSession *)l->data);
-	g_list_free(self->socket_sessions);
-	self->socket_sessions = NULL;
-
-	/* clean up socket service */
-	if (self->socket_service != NULL) {
-		g_socket_service_stop(self->socket_service);
-		g_clear_object(&self->socket_service);
-	}
-
-	/* remove socket file */
-	if (self->socket_path != NULL) {
-		unlink(self->socket_path);
-		g_free(self->socket_path);
-		self->socket_path = NULL;
+	/* clean up socket server */
+	if (self->socket_server != NULL) {
+		mcp_unix_socket_server_stop(self->socket_server);
+		g_clear_object(&self->socket_server);
 	}
 
 	/* shut down dispatch queue */
@@ -668,7 +552,6 @@ gowl_module_mcp_finalize(GObject *object)
 	g_free(self->http_host);
 	g_free(self->http_auth_token);
 	g_free(self->instructions);
-	g_free(self->socket_path);
 
 	if (self->allowed_tools != NULL)
 		g_hash_table_unref(self->allowed_tools);
@@ -704,9 +587,7 @@ gowl_module_mcp_init(GowlModuleMcp *self)
 	self->mcp_context     = NULL;
 	self->http_server     = NULL;
 	self->http_transport  = NULL;
-	self->socket_service  = NULL;
-	self->socket_path     = NULL;
-	self->socket_sessions = NULL;
+	self->socket_server   = NULL;
 	self->wake_fd         = -1;
 	self->wake_source     = NULL;
 

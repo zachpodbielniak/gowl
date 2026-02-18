@@ -45,22 +45,6 @@ G_DECLARE_FINAL_TYPE(GowlModuleMcp, gowl_module_mcp,
                      GOWL, MODULE_MCP, GowlModule)
 
 /**
- * GowlMcpSession:
- *
- * Tracks a single connected MCP client over the Unix socket
- * transport.  Each accepted connection gets its own McpServer
- * instance and McpStdioTransport wrapping the socket streams.
- */
-typedef struct _GowlMcpSession GowlMcpSession;
-
-struct _GowlMcpSession {
-	McpServer              *server;
-	McpStdioTransport      *transport;
-	GSocketConnection      *connection;
-	GowlModuleMcp          *module;   /* back-reference (unowned) */
-};
-
-/**
  * struct _GowlModuleMcp:
  *
  * MCP server module state.  Holds configuration, thread state,
@@ -82,9 +66,7 @@ struct _GowlModuleMcp {
 	McpHttpServerTransport   *http_transport;
 
 	/* Unix socket server for stdio relay */
-	GSocketService   *socket_service;
-	gchar            *socket_path;
-	GList            *socket_sessions;  /* GList of GowlMcpSession* */
+	McpUnixSocketServer *socket_server;
 
 	/* ---- Thread-safe compositor dispatch ---- */
 	GMutex            queue_mutex;

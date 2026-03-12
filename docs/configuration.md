@@ -275,7 +275,8 @@ gowl --generate-c-config > ~/.config/gowl/config.c
 3. The file is compiled via the crispy library with SHA256 content-hash caching.
 4. The compiled `.so` is cached in `$XDG_CACHE_HOME/gowl/` (filename derived from content hash).
 5. The `.so` is opened via `g_module_open()` and the `gowl_config_init` symbol is resolved and called.
-6. If compilation fails, the compositor logs a warning and continues with YAML/default config.
+6. After the compositor is fully started, the optional `gowl_config_ready` symbol is looked up and called (if present).
+7. If compilation fails, the compositor logs a warning and continues with YAML/default config.
 
 ### CRISPY_PARAMS
 
@@ -362,6 +363,53 @@ gowl_config_add_rule(gowl_config,
 ### Return Value
 
 Return `TRUE` on success. Return `FALSE` to signal failure; the compositor will log a warning and fall back to the YAML/default configuration.
+
+### gowl_config_ready Entry Point (Optional)
+
+The `.so` may optionally export a second function:
+
+```c
+G_MODULE_EXPORT void
+gowl_config_ready(void)
+{
+    /* called after compositor is fully started */
+}
+```
+
+This function is called **once** after the compositor is fully started and the Wayland display is ready to accept clients. It has access to the same extern symbols (`gowl_compositor`, `gowl_config`) as `gowl_config_init`.
+
+Use `gowl_config_ready` to spawn Wayland clients that need a running compositor — status bars, notification daemons, wallpaper setters, etc. These cannot be spawned from `gowl_config_init` because the Wayland display does not exist yet at that point.
+
+If the symbol is absent, the compositor silently skips the call.
+
+#### Example: Spawning a Status Bar
+
+```c
+static void
+spawn_gowlbar(void)
+{
+    g_autofree gchar *path = NULL;
+    gchar            *argv[] = { NULL, NULL };
+    GError           *error  = NULL;
+
+    path = g_find_program_in_path("gowlbar");
+    if (path == NULL)
+        return;
+
+    argv[0] = path;
+    if (!g_spawn_async(NULL, argv, NULL, G_SPAWN_DEFAULT,
+                       NULL, NULL, NULL, &error)) {
+        g_printerr("failed to spawn gowlbar: %s\n", error->message);
+        g_clear_error(&error);
+    }
+}
+
+G_MODULE_EXPORT void
+gowl_config_ready(void)
+{
+    spawn_gowlbar();
+}
+```
 
 ## Using Both YAML and C Config
 

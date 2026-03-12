@@ -419,7 +419,20 @@ generate_c_with_modules(const gchar *modules_csv)
 		"        NULL);\n"
 		"\n"
 		"    return TRUE;\n"
-		"}\n");
+		"}\n"
+		"\n"
+		"/*\n"
+		" * gowl_config_ready: (optional)\n"
+		" *\n"
+		" * Called once after the compositor is fully started and the\n"
+		" * Wayland display is ready to accept clients.  Use this to\n"
+		" * spawn status bars, notification daemons, or other Wayland\n"
+		" * clients that need a running compositor.\n"
+		" */\n"
+		"/* G_MODULE_EXPORT void\n"
+		"gowl_config_ready(void)\n"
+		"{\n"
+		"} */\n");
 
 	g_strfreev(mod_names);
 }
@@ -487,7 +500,20 @@ static const gchar *default_c_config =
 	"        NULL);\n"
 	"\n"
 	"    return TRUE;\n"
-	"}\n";
+	"}\n"
+	"\n"
+	"/*\n"
+	" * gowl_config_ready: (optional)\n"
+	" *\n"
+	" * Called once after the compositor is fully started and the\n"
+	" * Wayland display is ready to accept clients.  Use this to\n"
+	" * spawn status bars, notification daemons, or other Wayland\n"
+	" * clients that need a running compositor.\n"
+	" */\n"
+	"/* G_MODULE_EXPORT void\n"
+	"gowl_config_ready(void)\n"
+	"{\n"
+	"} */\n";
 
 int
 main(int argc, char *argv[])
@@ -508,6 +534,7 @@ main(int argc, char *argv[])
 	GowlConfig *config = NULL;
 	GowlCompositor *compositor = NULL;
 	GowlModuleManager *module_mgr = NULL;
+	GowlConfigCompiler *compiler = NULL;
 	GowlIpc *ipc = NULL;
 	int ret = 0;
 
@@ -682,7 +709,6 @@ main(int argc, char *argv[])
 
 	/* Load C config if available */
 	if (!no_c_config) {
-		g_autoptr(GowlConfigCompiler) compiler = NULL;
 		g_autofree gchar *c_source = NULL;
 		g_autofree gchar *so_path = NULL;
 
@@ -876,6 +902,9 @@ main(int argc, char *argv[])
 		gowl_compositor_set_ipc(compositor, ipc);
 	}
 
+	/* Dispatch C config ready callback (spawning, one-time setup) */
+	gowl_config_compiler_dispatch_ready(compiler);
+
 	/* Dispatch startup hooks */
 	gowl_module_manager_dispatch_startup(module_mgr, compositor);
 
@@ -904,6 +933,7 @@ cleanup:
 	g_clear_object(&ipc);
 	g_clear_object(&compositor);
 	g_clear_object(&module_mgr);
+	g_clear_object(&compiler);
 	g_clear_object(&config);
 	g_free(config_path);
 	g_free(c_config_path);

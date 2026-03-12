@@ -117,6 +117,24 @@ gowl_config_compiler_load_and_apply(
     GError             **error
 );
 
+/**
+ * gowl_config_compiler_dispatch_ready:
+ * @self: (nullable): a #GowlConfigCompiler
+ *
+ * Looks up the optional `gowl_config_ready` symbol from the loaded
+ * C config shared object and calls it if present.  This should be
+ * called after the compositor is fully started and the Wayland
+ * display is ready to accept clients.
+ *
+ * Use this for spawning status bars, notification daemons, or other
+ * Wayland clients that require a running compositor.
+ *
+ * If @self is %NULL, no C config was loaded, or the symbol is absent,
+ * this is a no-op.
+ */
+void
+gowl_config_compiler_dispatch_ready(GowlConfigCompiler *self);
+
 G_END_DECLS
 
 #endif /* GOWL_CONFIG_COMPILER_H */

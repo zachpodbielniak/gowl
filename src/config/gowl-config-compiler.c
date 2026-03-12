@@ -47,8 +47,9 @@
 struct _GowlConfigCompiler {
 	GObject              parent_instance;
 
-	CrispyGccCompiler   *compiler;   /* crispy compiler backend */
-	CrispyFileCache     *cache;      /* crispy file cache (SHA256) */
+	CrispyGccCompiler   *compiler;      /* crispy compiler backend */
+	CrispyFileCache     *cache;         /* crispy file cache (SHA256) */
+	GModule             *config_module; /* loaded config .so (kept open) */
 };
 
 G_DEFINE_FINAL_TYPE(GowlConfigCompiler, gowl_config_compiler, G_TYPE_OBJECT)
@@ -61,6 +62,11 @@ gowl_config_compiler_finalize(GObject *object)
 	GowlConfigCompiler *self;
 
 	self = GOWL_CONFIG_COMPILER(object);
+
+	if (self->config_module != NULL) {
+		g_module_close(self->config_module);
+		self->config_module = NULL;
+	}
 
 	g_clear_object(&self->compiler);
 	g_clear_object(&self->cache);
@@ -594,7 +600,41 @@ gowl_config_compiler_load_and_apply(
 		return FALSE;
 	}
 
-	/* keep the module open so symbols remain available */
+	/* Store handle so we can look up gowl_config_ready later */
+	self->config_module = module;
 
 	return TRUE;
+}
+
+/**
+ * gowl_config_compiler_dispatch_ready:
+ * @self: a #GowlConfigCompiler
+ *
+ * Looks up the optional `gowl_config_ready` symbol from the loaded
+ * C config shared object and calls it if present.  This should be
+ * called after the compositor is fully started and the Wayland
+ * display is ready to accept clients.
+ *
+ * If no C config was loaded or the symbol is absent, this is a no-op.
+ */
+void
+gowl_config_compiler_dispatch_ready(GowlConfigCompiler *self)
+{
+	gpointer symbol;
+	void (*config_ready_fn)(void);
+
+	g_return_if_fail(self == NULL || GOWL_IS_CONFIG_COMPILER(self));
+
+	if (self == NULL || self->config_module == NULL)
+		return;
+
+	if (!g_module_symbol(self->config_module, "gowl_config_ready",
+	                     &symbol)) {
+		/* gowl_config_ready is optional — not an error */
+		return;
+	}
+
+	g_debug("Calling gowl_config_ready()");
+	config_ready_fn = (void (*)(void))symbol;
+	config_ready_fn();
 }

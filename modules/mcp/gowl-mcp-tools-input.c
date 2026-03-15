@@ -126,6 +126,57 @@ keysym_to_keycode(
 }
 
 /**
+ * find_mod_key_evdev:
+ * @keymap: the xkb keymap to search
+ * @mod_index: xkb modifier index (bit position in an xkb_mod_mask_t)
+ *
+ * Maps an xkb modifier index to the evdev keycode of a suitable physical
+ * modifier key (e.g. Shift_L for the Shift modifier).  Uses
+ * xkb_keymap_mod_get_name() to resolve the modifier by name and then
+ * looks up its representative keysym via keysym_to_keycode().
+ *
+ * Returns the evdev keycode (xkb keycode minus 8), or 0 if not found.
+ */
+static guint32
+find_mod_key_evdev(
+	struct xkb_keymap *keymap,
+	xkb_mod_index_t    mod_index
+){
+	/* Map XKB modifier names to a representative keysym */
+	static const struct {
+		const gchar  *mod_name;
+		xkb_keysym_t  keysym;
+	} mod_table[] = {
+		{ XKB_MOD_NAME_SHIFT, XKB_KEY_Shift_L         },
+		{ XKB_MOD_NAME_CAPS,  XKB_KEY_Caps_Lock        },
+		{ XKB_MOD_NAME_CTRL,  XKB_KEY_Control_L        },
+		{ XKB_MOD_NAME_ALT,   XKB_KEY_Alt_L            },
+		{ XKB_MOD_NAME_NUM,   XKB_KEY_Num_Lock         },
+		{ XKB_MOD_NAME_LOGO,  XKB_KEY_Super_L          },
+		{ "Mod3",             XKB_KEY_ISO_Level3_Shift },
+		{ "Mod5",             XKB_KEY_ISO_Level5_Shift },
+		{ NULL, 0 }
+	};
+	const gchar   *mod_name;
+	xkb_keycode_t  kc;
+	gint           i;
+
+	mod_name = xkb_keymap_mod_get_name(keymap, mod_index);
+	if (mod_name == NULL)
+		return 0;
+
+	for (i = 0; mod_table[i].mod_name != NULL; i++) {
+		if (g_strcmp0(mod_name, mod_table[i].mod_name) == 0) {
+			kc = keysym_to_keycode(keymap, mod_table[i].keysym,
+				NULL, NULL);
+			if (kc != 0)
+				return (guint32)(kc - 8); /* xkb → evdev */
+		}
+	}
+	return 0;
+}
+
+/**
  * parse_button_name:
  * @name: button name ("left", "right", "middle", or numeric code)
  *
@@ -252,8 +303,11 @@ handle_send_key(
  * is converted to a keysym, looked up in the keymap, and sent as
  * a key press/release pair.  Characters that live on a higher
  * keymap level (e.g. Shift for uppercase letters, symbols like
- * '(', ')', ':') have the required modifier state sent to the
- * client before the key event and restored afterwards.
+ * '(', ')', ':') are handled by sending real modifier key press/release
+ * events via wlr_seat_keyboard_notify_key rather than using
+ * wlr_seat_keyboard_notify_modifiers.  This ensures wlroots updates the
+ * XKB state machine correctly and emits wl_keyboard.modifiers with
+ * proper serials, which GTK-based clients require.
  * Characters that cannot be mapped are skipped.
  */
 static McpToolResult *
@@ -266,7 +320,6 @@ tool_send_text(
 	const gchar *text;
 	const gchar *p;
 	struct wlr_keyboard *kb;
-	struct wlr_keyboard_modifiers orig_mods;
 	guint32 time_ms;
 	gint sent;
 	gint skipped;
@@ -286,9 +339,6 @@ tool_send_text(
 	sent = 0;
 	skipped = 0;
 
-	/* Save original modifier state to restore between characters */
-	orig_mods = kb->modifiers;
-
 	wlr_seat_set_keyboard(module->compositor->wlr_seat, kb);
 
 	for (p = text; *p != '\0'; ) {
@@ -298,7 +348,6 @@ tool_send_text(
 		xkb_layout_index_t layout;
 		xkb_level_index_t level;
 		guint32 evdev_kc;
-		gboolean mods_changed;
 
 		uc = g_utf8_get_char(p);
 		p = g_utf8_next_char(p);
@@ -319,49 +368,88 @@ tool_send_text(
 		}
 
 		evdev_kc = xkb_kc - 8;
-		mods_changed = FALSE;
 
 		/*
 		 * If the keysym lives on a level that requires modifiers
-		 * (e.g. level 1 = Shift for uppercase and symbols like
-		 * '(', ')', ':', '!', '@', etc.), query the keymap for
-		 * the modifier mask needed to reach that level and send
-		 * the modifier state to the client before the key event.
+		 * (e.g. level 1 = Shift for uppercase letters and symbols
+		 * like '&', '?', ':', '!', '@', etc.), send the modifier
+		 * keys as real key press/release events rather than using
+		 * wlr_seat_keyboard_notify_modifiers.  Real modifier key
+		 * events cause wlroots to update the XKB state machine and
+		 * emit wl_keyboard.modifiers with correct serials, which
+		 * GTK-based clients (e.g. Firefox) require to properly
+		 * scope the modifier to the adjacent character key event.
 		 */
 		if (level > 0) {
 			xkb_mod_mask_t masks[8];
 			size_t nmasks;
+			guint32 mod_evdev[8];
+			gint nmod_keys;
+			gint i;
+			gint bit;
 
 			nmasks = xkb_keymap_key_get_mods_for_level(
 				kb->keymap, xkb_kc, layout, level,
 				masks, G_N_ELEMENTS(masks));
+
+			/* Collect evdev codes for each modifier bit */
+			nmod_keys = 0;
 			if (nmasks > 0) {
-				struct wlr_keyboard_modifiers mods;
+				for (bit = 0;
+				     bit < (gint)(sizeof(xkb_mod_mask_t) * 8);
+				     bit++) {
+					guint32 evdev;
 
-				mods = orig_mods;
-				mods.depressed |= masks[0];
-				wlr_seat_keyboard_notify_modifiers(
-					module->compositor->wlr_seat, &mods);
-				mods_changed = TRUE;
+					if (!(masks[0] & (1u << (guint)bit)))
+						continue;
+					evdev = find_mod_key_evdev(
+						kb->keymap,
+						(xkb_mod_index_t)bit);
+					if (evdev != 0 && nmod_keys < 8)
+						mod_evdev[nmod_keys++] = evdev;
+				}
 			}
+
+			/* Press modifier keys */
+			for (i = 0; i < nmod_keys; i++) {
+				wlr_seat_keyboard_notify_key(
+					module->compositor->wlr_seat,
+					time_ms++, mod_evdev[i],
+					WL_KEYBOARD_KEY_STATE_PRESSED);
+			}
+
+			/* Press and release the character key */
+			wlr_seat_keyboard_notify_key(
+				module->compositor->wlr_seat,
+				time_ms, evdev_kc,
+				WL_KEYBOARD_KEY_STATE_PRESSED);
+			wlr_seat_keyboard_notify_key(
+				module->compositor->wlr_seat,
+				time_ms + 1, evdev_kc,
+				WL_KEYBOARD_KEY_STATE_RELEASED);
+			time_ms += 2;
+
+			/* Release modifier keys in reverse order */
+			for (i = nmod_keys - 1; i >= 0; i--) {
+				wlr_seat_keyboard_notify_key(
+					module->compositor->wlr_seat,
+					time_ms++, mod_evdev[i],
+					WL_KEYBOARD_KEY_STATE_RELEASED);
+			}
+
+		} else {
+			/* No modifier needed — send key press/release directly */
+			wlr_seat_keyboard_notify_key(
+				module->compositor->wlr_seat,
+				time_ms, evdev_kc,
+				WL_KEYBOARD_KEY_STATE_PRESSED);
+			wlr_seat_keyboard_notify_key(
+				module->compositor->wlr_seat,
+				time_ms + 1, evdev_kc,
+				WL_KEYBOARD_KEY_STATE_RELEASED);
+			time_ms += 2;
 		}
 
-		wlr_seat_keyboard_notify_key(
-			module->compositor->wlr_seat,
-			time_ms, evdev_kc,
-			WL_KEYBOARD_KEY_STATE_PRESSED);
-		wlr_seat_keyboard_notify_key(
-			module->compositor->wlr_seat,
-			time_ms + 1, evdev_kc,
-			WL_KEYBOARD_KEY_STATE_RELEASED);
-
-		/* Restore original modifier state if we changed it */
-		if (mods_changed) {
-			wlr_seat_keyboard_notify_modifiers(
-				module->compositor->wlr_seat, &orig_mods);
-		}
-
-		time_ms += 2;
 		sent++;
 	}
 

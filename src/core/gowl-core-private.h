@@ -255,6 +255,10 @@ struct _GowlCompositor {
 
 	/* PIDs that should be floated + hidden on map (for embedding) */
 	GArray  *prefloat_pids;
+
+	/* Key intercept callback (embedder hook) */
+	GowlKeyInterceptFunc key_intercept_func;
+	gpointer             key_intercept_data;
 };
 
 /**

@@ -392,6 +392,18 @@ gowl_compositor_set_ipc(
 	self->ipc = ipc;
 }
 
+void
+gowl_compositor_set_key_intercept(
+	GowlCompositor      *self,
+	GowlKeyInterceptFunc func,
+	gpointer              user_data
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	self->key_intercept_func = func;
+	self->key_intercept_data = user_data;
+}
+
 /**
  * gowl_compositor_get_ipc:
  * @self: a #GowlCompositor
@@ -2820,6 +2832,19 @@ on_kb_key(struct wl_listener *listener, void *data)
 					handled = TRUE;
 					break;
 				}
+			}
+		}
+	}
+
+	if (!handled && self->key_intercept_func != NULL) {
+		for (i = 0; i < nsyms; i++) {
+			if (self->key_intercept_func(
+				    self, mods, (guint)syms[i],
+				    event->keycode,
+				    event->state == WL_KEYBOARD_KEY_STATE_PRESSED,
+				    self->key_intercept_data)) {
+				handled = TRUE;
+				break;
 			}
 		}
 	}

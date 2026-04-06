@@ -412,6 +412,41 @@ void gowl_compositor_position_embedded (GowlCompositor *self,
                                          gint            width,
                                          gint            height);
 
+/**
+ * GowlKeyInterceptFunc:
+ * @compositor: the compositor
+ * @modifiers: active modifier bitmask
+ * @keysym: XKB keysym
+ * @keycode: raw evdev keycode
+ * @pressed: %TRUE on press, %FALSE on release
+ * @user_data: caller-supplied data
+ *
+ * Called before forwarding unhandled key events to clients.
+ * The callback may change keyboard focus via the seat.
+ * Return %TRUE to consume the key (not forwarded).
+ * Return %FALSE to let normal forwarding proceed.
+ */
+typedef gboolean (*GowlKeyInterceptFunc)(GowlCompositor *compositor,
+                                         guint           modifiers,
+                                         guint           keysym,
+                                         guint           keycode,
+                                         gboolean        pressed,
+                                         gpointer        user_data);
+
+/**
+ * gowl_compositor_set_key_intercept:
+ * @self: a #GowlCompositor
+ * @func: (nullable): the intercept callback, or %NULL to clear
+ * @user_data: data passed to @func
+ *
+ * Registers a callback invoked before unhandled key events are
+ * forwarded to the focused client.  Used by embedders to redirect
+ * keyboard input away from embedded clients.
+ */
+void gowl_compositor_set_key_intercept (GowlCompositor      *self,
+                                        GowlKeyInterceptFunc  func,
+                                        gpointer              user_data);
+
 G_END_DECLS
 
 #endif /* GOWL_COMPOSITOR_H */

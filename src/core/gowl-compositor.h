@@ -447,6 +447,34 @@ void gowl_compositor_set_key_intercept (GowlCompositor      *self,
                                         GowlKeyInterceptFunc  func,
                                         gpointer              user_data);
 
+/**
+ * GowlClientMapFunc:
+ * @compositor: the compositor
+ * @client: the newly mapped client
+ * @user_data: caller-supplied data
+ *
+ * Called when a new client surface is mapped (becomes visible).
+ * The callback runs after the compositor's own setup (scene tree,
+ * monitor assignment, prefloat PID check) has completed.
+ * Embedders can use this to catch clients whose PID did not match
+ * the prefloat list (e.g. flatpak/sandbox launchers).
+ */
+typedef void (*GowlClientMapFunc)(GowlCompositor *compositor,
+                                  GowlClient     *client,
+                                  gpointer        user_data);
+
+/**
+ * gowl_compositor_set_client_map_callback:
+ * @self: a #GowlCompositor
+ * @func: (nullable): the callback, or %NULL to clear
+ * @user_data: data passed to @func
+ *
+ * Registers a callback invoked after a new client surface maps.
+ */
+void gowl_compositor_set_client_map_callback (GowlCompositor  *self,
+                                              GowlClientMapFunc func,
+                                              gpointer          user_data);
+
 G_END_DECLS
 
 #endif /* GOWL_COMPOSITOR_H */

@@ -404,6 +404,18 @@ gowl_compositor_set_key_intercept(
 	self->key_intercept_data = user_data;
 }
 
+void
+gowl_compositor_set_client_map_callback(
+	GowlCompositor   *self,
+	GowlClientMapFunc func,
+	gpointer           user_data
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	self->client_map_func = func;
+	self->client_map_data = user_data;
+}
+
 /**
  * gowl_compositor_get_ipc:
  * @self: a #GowlCompositor
@@ -3380,6 +3392,10 @@ on_client_map(struct wl_listener *listener, void *data)
 			}
 		}
 	}
+
+	/* Notify embedder callback (if registered). */
+	if (self->client_map_func != NULL)
+		self->client_map_func(self, c, self->client_map_data);
 
 	g_debug("Client mapped: %s (%s)",
 	        c->xdg_toplevel->title ? c->xdg_toplevel->title : "(untitled)",

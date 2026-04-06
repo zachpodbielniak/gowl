@@ -17,6 +17,7 @@
  */
 
 #include "gowl-core-private.h"
+#include "boxed/gowl-output-mode.h"
 
 /**
  * GowlMonitor:
@@ -410,4 +411,324 @@ gowl_monitor_get_scene_output(GowlMonitor *self)
 	g_return_val_if_fail(GOWL_IS_MONITOR(self), NULL);
 
 	return self->scene_output;
+}
+
+/* ── Output mode / configuration API ──────────────────────────────── */
+
+/**
+ * gowl_monitor_get_modes:
+ * @self: a #GowlMonitor
+ *
+ * Returns a list of available output modes.
+ *
+ * Returns: (transfer full) (element-type GowlOutputMode): available modes
+ */
+GList *
+gowl_monitor_get_modes(GowlMonitor *self)
+{
+	GList *result = NULL;
+	struct wlr_output_mode *mode;
+
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), NULL);
+	g_return_val_if_fail(self->wlr_output != NULL, NULL);
+
+	wl_list_for_each(mode, &self->wlr_output->modes, link) {
+		result = g_list_prepend(result,
+			gowl_output_mode_new(mode->width, mode->height,
+			                     mode->refresh));
+	}
+
+	return g_list_reverse(result);
+}
+
+/**
+ * gowl_monitor_get_current_mode:
+ * @self: a #GowlMonitor
+ *
+ * Returns the currently active output mode.
+ *
+ * Returns: (transfer full) (nullable): the current mode, or %NULL
+ */
+GowlOutputMode *
+gowl_monitor_get_current_mode(GowlMonitor *self)
+{
+	struct wlr_output_mode *mode;
+
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), NULL);
+	g_return_val_if_fail(self->wlr_output != NULL, NULL);
+
+	mode = self->wlr_output->current_mode;
+	if (mode == NULL)
+		return NULL;
+
+	return gowl_output_mode_new(mode->width, mode->height,
+	                            mode->refresh);
+}
+
+/**
+ * gowl_monitor_set_mode:
+ * @self: a #GowlMonitor
+ * @width: horizontal resolution
+ * @height: vertical resolution
+ * @refresh_mhz: refresh rate in millihertz
+ *
+ * Sets the output mode.  Finds a matching advertised mode first,
+ * falls back to a custom mode if no exact match.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_monitor_set_mode(
+	GowlMonitor *self,
+	gint         width,
+	gint         height,
+	gint         refresh_mhz
+){
+	struct wlr_output_state state;
+	struct wlr_output_mode *mode;
+	struct wlr_output_mode *match = NULL;
+	gboolean ok;
+
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+	g_return_val_if_fail(self->wlr_output != NULL, FALSE);
+
+	/* Find an advertised mode that matches the request.
+	 * When refresh_mhz is 0, match any refresh rate. */
+	wl_list_for_each(mode, &self->wlr_output->modes, link) {
+		if (mode->width == width && mode->height == height
+		    && (refresh_mhz == 0 || mode->refresh == refresh_mhz)) {
+			match = mode;
+			break;
+		}
+	}
+
+	wlr_output_state_init(&state);
+
+	if (match != NULL)
+		wlr_output_state_set_mode(&state, match);
+	else
+		wlr_output_state_set_custom_mode(&state, width, height,
+		                                 refresh_mhz);
+
+	/* The Wayland backend (nested compositors) requires enabled
+	 * to be set alongside mode changes for the commit to succeed. */
+	wlr_output_state_set_enabled(&state, TRUE);
+
+	ok = wlr_output_commit_state(self->wlr_output, &state);
+	wlr_output_state_finish(&state);
+
+	/* Safety net: if on_layout_change() did not fire synchronously,
+	 * query the layout box and update geometry ourselves. */
+	if (ok && self->compositor != NULL) {
+		struct wlr_box box;
+		wlr_output_layout_get_box(
+			self->compositor->output_layout,
+			self->wlr_output, &box);
+		if (!wlr_box_empty(&box)) {
+			self->m = box;
+			self->w = self->m;
+		}
+		gowl_compositor_arrange(self->compositor, self);
+	}
+
+	return ok;
+}
+
+/**
+ * gowl_monitor_get_position:
+ * @self: a #GowlMonitor
+ * @x: (out) (nullable): return location for x
+ * @y: (out) (nullable): return location for y
+ *
+ * Returns the layout-relative position.
+ */
+void
+gowl_monitor_get_position(
+	GowlMonitor *self,
+	gint        *x,
+	gint        *y
+){
+	g_return_if_fail(GOWL_IS_MONITOR(self));
+
+	if (x != NULL) *x = self->m.x;
+	if (y != NULL) *y = self->m.y;
+}
+
+/**
+ * gowl_monitor_set_position:
+ * @self: a #GowlMonitor
+ * @x: x coordinate in layout space
+ * @y: y coordinate in layout space
+ *
+ * Sets the monitor position.  Switches from auto to manual layout.
+ * The on_layout_change callback updates m.x/m.y automatically.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_monitor_set_position(
+	GowlMonitor *self,
+	gint         x,
+	gint         y
+){
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+	g_return_val_if_fail(self->wlr_output != NULL, FALSE);
+	g_return_val_if_fail(self->compositor != NULL, FALSE);
+
+	wlr_output_layout_add(self->compositor->output_layout,
+	                       self->wlr_output, x, y);
+	return TRUE;
+}
+
+/**
+ * gowl_monitor_get_enabled:
+ * @self: a #GowlMonitor
+ *
+ * Returns: %TRUE if the output is enabled
+ */
+gboolean
+gowl_monitor_get_enabled(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+	g_return_val_if_fail(self->wlr_output != NULL, FALSE);
+
+	return self->wlr_output->enabled;
+}
+
+/**
+ * gowl_monitor_set_enabled:
+ * @self: a #GowlMonitor
+ * @enabled: whether to enable the output
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_monitor_set_enabled(
+	GowlMonitor *self,
+	gboolean     enabled
+){
+	struct wlr_output_state state;
+	gboolean ok;
+
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+	g_return_val_if_fail(self->wlr_output != NULL, FALSE);
+
+	wlr_output_state_init(&state);
+	wlr_output_state_set_enabled(&state, enabled);
+	ok = wlr_output_commit_state(self->wlr_output, &state);
+	wlr_output_state_finish(&state);
+
+	return ok;
+}
+
+/**
+ * gowl_monitor_get_scale:
+ * @self: a #GowlMonitor
+ *
+ * Returns: the output scale factor
+ */
+gdouble
+gowl_monitor_get_scale(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), 1.0);
+	g_return_val_if_fail(self->wlr_output != NULL, 1.0);
+
+	return (gdouble)self->wlr_output->scale;
+}
+
+/**
+ * gowl_monitor_set_scale:
+ * @self: a #GowlMonitor
+ * @scale: the scale factor
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_monitor_set_scale(
+	GowlMonitor *self,
+	gdouble      scale
+){
+	struct wlr_output_state state;
+	gboolean ok;
+
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+	g_return_val_if_fail(self->wlr_output != NULL, FALSE);
+
+	wlr_output_state_init(&state);
+	wlr_output_state_set_scale(&state, (float)scale);
+	ok = wlr_output_commit_state(self->wlr_output, &state);
+	wlr_output_state_finish(&state);
+
+	/* Safety net: if on_layout_change() did not fire synchronously,
+	 * query the layout box and update geometry ourselves. */
+	if (ok && self->compositor != NULL) {
+		struct wlr_box box;
+		wlr_output_layout_get_box(
+			self->compositor->output_layout,
+			self->wlr_output, &box);
+		if (!wlr_box_empty(&box)) {
+			self->m = box;
+			self->w = self->m;
+		}
+		gowl_compositor_arrange(self->compositor, self);
+	}
+
+	return ok;
+}
+
+/**
+ * gowl_monitor_get_transform:
+ * @self: a #GowlMonitor
+ *
+ * Returns: the transform value (matches enum wl_output_transform)
+ */
+gint
+gowl_monitor_get_transform(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), 0);
+	g_return_val_if_fail(self->wlr_output != NULL, 0);
+
+	return (gint)self->wlr_output->transform;
+}
+
+/**
+ * gowl_monitor_set_transform:
+ * @self: a #GowlMonitor
+ * @transform: transform value (0-7)
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_monitor_set_transform(
+	GowlMonitor *self,
+	gint         transform
+){
+	struct wlr_output_state state;
+	gboolean ok;
+
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+	g_return_val_if_fail(self->wlr_output != NULL, FALSE);
+	g_return_val_if_fail(transform >= 0 && transform <= 7, FALSE);
+
+	wlr_output_state_init(&state);
+	wlr_output_state_set_transform(&state,
+	                               (enum wl_output_transform)transform);
+	ok = wlr_output_commit_state(self->wlr_output, &state);
+	wlr_output_state_finish(&state);
+
+	/* Safety net: if on_layout_change() did not fire synchronously,
+	 * query the layout box and update geometry ourselves. */
+	if (ok && self->compositor != NULL) {
+		struct wlr_box box;
+		wlr_output_layout_get_box(
+			self->compositor->output_layout,
+			self->wlr_output, &box);
+		if (!wlr_box_empty(&box)) {
+			self->m = box;
+			self->w = self->m;
+		}
+		gowl_compositor_arrange(self->compositor, self);
+	}
+
+	return ok;
 }

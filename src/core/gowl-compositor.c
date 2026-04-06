@@ -1513,6 +1513,15 @@ gowl_compositor_arrange(
 	else
 		monocle(self, m);
 
+	/* Re-size fullscreen clients to the current monitor area.
+	 * Tile/monocle skip fullscreen clients, so after a mode or
+	 * scale change they would remain at the old dimensions. */
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+		if (c->mon == m && c->isfullscreen && VISIBLEON(c, m))
+			resize_client(self, c, m->m, FALSE);
+	}
+
 	/* Restore pointer focus */
 	gowl_compositor_motionnotify(self, 0);
 }
@@ -2101,20 +2110,19 @@ on_layout_change(struct wl_listener *listener, void *data)
 	self = wl_container_of(listener, self, layout_change);
 	(void)data;
 
-	/* Update each monitor's area from the layout */
+	/* Update each monitor's area from the layout.
+	 * Use wlr_output_layout_get_box() which accounts for scale
+	 * and transform, giving the correct logical dimensions. */
 	for (l = self->monitors; l != NULL; l = l->next) {
 		GowlMonitor *m = (GowlMonitor *)l->data;
-		struct wlr_output_layout_output *layout_output;
+		struct wlr_box box;
 
-		layout_output = wlr_output_layout_get(self->output_layout,
-		                                      m->wlr_output);
-		if (layout_output == NULL)
+		wlr_output_layout_get_box(self->output_layout,
+		                          m->wlr_output, &box);
+		if (wlr_box_empty(&box))
 			continue;
 
-		m->m.x = layout_output->x;
-		m->m.y = layout_output->y;
-		m->m.width  = m->wlr_output->width;
-		m->m.height = m->wlr_output->height;
+		m->m = box;
 
 		/* Window area starts as full monitor area; layer-shell
 		 * surfaces will subtract their exclusive zones later */
@@ -2134,6 +2142,12 @@ on_layout_change(struct wl_listener *listener, void *data)
 			gowl_module_manager_dispatch_wallpaper_output(
 				self->module_mgr, self, l->data);
 	}
+
+	/* Re-arrange clients on all monitors with updated geometry.
+	 * This catches hotplug, parent-initiated resizes, and any
+	 * mode/scale/transform paths where on_layout_change fires. */
+	for (l = self->monitors; l != NULL; l = l->next)
+		gowl_compositor_arrange(self, (GowlMonitor *)l->data);
 }
 
 static void

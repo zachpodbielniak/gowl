@@ -166,6 +166,138 @@ struct wlr_output *gowl_monitor_get_wlr_output (GowlMonitor *self);
  */
 struct wlr_scene_output *gowl_monitor_get_scene_output (GowlMonitor *self);
 
+/**
+ * gowl_monitor_get_modes:
+ * @self: a #GowlMonitor
+ *
+ * Returns a list of available output modes.
+ *
+ * Returns: (transfer full) (element-type GowlOutputMode): available modes
+ */
+GList          *gowl_monitor_get_modes         (GowlMonitor *self);
+
+/**
+ * gowl_monitor_get_current_mode:
+ * @self: a #GowlMonitor
+ *
+ * Returns the currently active output mode.
+ *
+ * Returns: (transfer full) (nullable): the current mode, or %NULL
+ */
+GowlOutputMode *gowl_monitor_get_current_mode  (GowlMonitor *self);
+
+/**
+ * gowl_monitor_set_mode:
+ * @self: a #GowlMonitor
+ * @width: horizontal resolution in pixels
+ * @height: vertical resolution in pixels
+ * @refresh_mhz: refresh rate in millihertz (e.g. 60000 for 60 Hz)
+ *
+ * Sets the output mode.  Matches against advertised modes first,
+ * falls back to a custom mode if no exact match.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean        gowl_monitor_set_mode          (GowlMonitor *self,
+                                                gint         width,
+                                                gint         height,
+                                                gint         refresh_mhz);
+
+/**
+ * gowl_monitor_get_position:
+ * @self: a #GowlMonitor
+ * @x: (out) (nullable): return location for x coordinate
+ * @y: (out) (nullable): return location for y coordinate
+ *
+ * Returns the layout-relative position of the monitor.
+ */
+void            gowl_monitor_get_position      (GowlMonitor *self,
+                                                gint        *x,
+                                                gint        *y);
+
+/**
+ * gowl_monitor_set_position:
+ * @self: a #GowlMonitor
+ * @x: x coordinate in layout space
+ * @y: y coordinate in layout space
+ *
+ * Sets the monitor's position in the output layout.
+ * Switches from auto-layout to manual positioning.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean        gowl_monitor_set_position      (GowlMonitor *self,
+                                                gint         x,
+                                                gint         y);
+
+/**
+ * gowl_monitor_get_enabled:
+ * @self: a #GowlMonitor
+ *
+ * Returns whether the output is enabled.
+ *
+ * Returns: %TRUE if the output is enabled
+ */
+gboolean        gowl_monitor_get_enabled       (GowlMonitor *self);
+
+/**
+ * gowl_monitor_set_enabled:
+ * @self: a #GowlMonitor
+ * @enabled: whether to enable the output
+ *
+ * Enables or disables the output.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean        gowl_monitor_set_enabled       (GowlMonitor *self,
+                                                gboolean     enabled);
+
+/**
+ * gowl_monitor_get_scale:
+ * @self: a #GowlMonitor
+ *
+ * Returns the output scale factor.
+ *
+ * Returns: the scale factor
+ */
+gdouble         gowl_monitor_get_scale         (GowlMonitor *self);
+
+/**
+ * gowl_monitor_set_scale:
+ * @self: a #GowlMonitor
+ * @scale: scale factor (e.g. 1.0, 1.5, 2.0)
+ *
+ * Sets the output scale factor.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean        gowl_monitor_set_scale         (GowlMonitor *self,
+                                                gdouble      scale);
+
+/**
+ * gowl_monitor_get_transform:
+ * @self: a #GowlMonitor
+ *
+ * Returns the output transform (rotation/flip).
+ * Values match `enum wl_output_transform`:
+ * 0=normal, 1=90, 2=180, 3=270, 4=flipped, 5-7=flipped+rotation.
+ *
+ * Returns: the transform value
+ */
+gint            gowl_monitor_get_transform     (GowlMonitor *self);
+
+/**
+ * gowl_monitor_set_transform:
+ * @self: a #GowlMonitor
+ * @transform: transform value (0-7, see `enum wl_output_transform`)
+ *
+ * Sets the output transform (rotation/flip).
+ *
+ * Returns: %TRUE on success
+ */
+gboolean        gowl_monitor_set_transform     (GowlMonitor *self,
+                                                gint         transform);
+
 G_END_DECLS
 
 #endif /* GOWL_MONITOR_H */

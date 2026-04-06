@@ -1641,6 +1641,13 @@ gowl_compositor_focus_client(
 	if (self->locked)
 		return;
 
+	/* Embedded clients never receive keyboard focus.
+	 * They are managed by the parent (Emacs) and only
+	 * receive pointer events for mouse interaction.
+	 */
+	if (c != NULL && gowl_client_get_embedded(c))
+		return;
+
 	/* Raise client in stacking order if requested */
 	if (c != NULL && lift)
 		wlr_scene_node_raise_to_top(&c->scene->node);

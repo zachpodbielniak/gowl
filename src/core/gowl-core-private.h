@@ -252,6 +252,9 @@ struct _GowlCompositor {
 	gdouble   grab_x, grab_y;
 	struct wlr_box grab_geobox;
 	guint32   resize_edges;
+
+	/* PIDs that should be floated + hidden on map (for embedding) */
+	GArray  *prefloat_pids;
 };
 
 /**
@@ -311,6 +314,7 @@ struct _GowlClient {
 	gboolean isfloating;
 	gboolean isurgent;
 	gboolean isfullscreen;
+	gboolean isembedded;     /* externally managed (skip arrange) */
 	guint32  resize;         /* pending configure serial */
 
 	gchar *title;

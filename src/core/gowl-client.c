@@ -664,3 +664,99 @@ gowl_client_get_wlr_surface(GowlClient *self)
 
 	return self->xdg_toplevel->base->surface;
 }
+
+/**
+ * gowl_client_get_border_width:
+ * @self: a #GowlClient
+ *
+ * Returns the border width in pixels.
+ *
+ * Returns: the border width
+ */
+guint
+gowl_client_get_border_width(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), 0);
+
+	return self->bw;
+}
+
+/**
+ * gowl_client_set_border_width:
+ * @self: a #GowlClient
+ * @width: new border width in pixels
+ *
+ * Sets the border width and updates the border scene rects.
+ */
+void
+gowl_client_set_border_width(
+	GowlClient *self,
+	guint       width
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	self->bw = width;
+
+	/* Update scene rect sizes to match new border width. */
+	if (self->border[0] != NULL) {
+		gint w = self->geom.width;
+		gint h = self->geom.height;
+
+		/* top */
+		wlr_scene_rect_set_size(self->border[0], w, width);
+		/* bottom */
+		wlr_scene_rect_set_size(self->border[1], w, width);
+		wlr_scene_node_set_position(&self->border[1]->node,
+		                            0, h - width);
+		/* left */
+		wlr_scene_rect_set_size(self->border[2], width,
+		                        h - 2 * width);
+		wlr_scene_node_set_position(&self->border[2]->node,
+		                            0, width);
+		/* right */
+		wlr_scene_rect_set_size(self->border[3], width,
+		                        h - 2 * width);
+		wlr_scene_node_set_position(&self->border[3]->node,
+		                            w - width, width);
+	}
+}
+
+/**
+ * gowl_client_set_visible:
+ * @self: a #GowlClient
+ * @visible: %TRUE to show, %FALSE to hide
+ *
+ * Shows or hides the client's scene node without destroying it.
+ */
+void
+gowl_client_set_visible(
+	GowlClient *self,
+	gboolean    visible
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	if (self->scene != NULL)
+		wlr_scene_node_set_enabled(&self->scene->node, visible);
+}
+
+/**
+ * gowl_client_get_embedded:
+ */
+gboolean
+gowl_client_get_embedded(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), FALSE);
+	return self->isembedded;
+}
+
+/**
+ * gowl_client_set_embedded:
+ */
+void
+gowl_client_set_embedded(
+	GowlClient *self,
+	gboolean    embedded
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+	self->isembedded = embedded;
+}

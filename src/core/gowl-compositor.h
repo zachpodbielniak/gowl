@@ -21,6 +21,7 @@
 
 #include "gowl-types.h"
 #include <wayland-server-core.h>
+#include <sys/types.h>
 
 struct wlr_seat;
 struct wlr_renderer;
@@ -134,6 +135,28 @@ void            gowl_compositor_quit  (GowlCompositor  *self);
  * Returns: (transfer none) (nullable): the event loop
  */
 struct wl_event_loop *gowl_compositor_get_event_loop (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_wl_display:
+ * @self: a #GowlCompositor
+ *
+ * Returns the wl_display owned by the compositor.
+ * Only valid after gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the wl_display
+ */
+struct wl_display *gowl_compositor_get_wl_display (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_wlr_backend:
+ * @self: a #GowlCompositor
+ *
+ * Returns the wlr_backend used by the compositor.
+ * Only valid after gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the wlr_backend
+ */
+struct wlr_backend *gowl_compositor_get_wlr_backend (GowlCompositor *self);
 
 /**
  * gowl_compositor_get_socket_name:
@@ -295,6 +318,99 @@ GowlClient *gowl_compositor_find_client_by_app_id (GowlCompositor *self,
  */
 GowlClient *gowl_compositor_find_client_by_title (GowlCompositor *self,
                                                     const gchar    *pattern);
+
+/**
+ * gowl_compositor_arrange:
+ * @self: a #GowlCompositor
+ * @m: the #GowlMonitor to arrange
+ *
+ * Recalculates the tiling layout for @m: enables/disables scene
+ * nodes for tag visibility, reparents floaters to the float layer,
+ * and calls the layout function.
+ */
+void gowl_compositor_arrange (GowlCompositor *self,
+                               GowlMonitor    *m);
+
+/**
+ * gowl_compositor_prefloat_pid:
+ * @self: a #GowlCompositor
+ * @pid: the process ID to pre-float
+ *
+ * Registers @pid so that when a client owned by that process maps,
+ * it is immediately made floating and hidden instead of being tiled.
+ * The entry is consumed (removed) on first match.  Used by embedders
+ * that need to position the client before it becomes visible.
+ */
+void gowl_compositor_prefloat_pid (GowlCompositor *self,
+                                    pid_t           pid);
+
+/**
+ * gowl_compositor_reparent_client:
+ * @self: a #GowlCompositor
+ * @client: a #GowlClient
+ * @layer: the target #GowlSceneLayer
+ *
+ * Moves @client's scene node to the specified scene @layer.
+ * Used by embedders to place a client on a layer that renders
+ * above the Emacs frame (e.g. OVERLAY).
+ */
+void gowl_compositor_reparent_client (GowlCompositor *self,
+                                       GowlClient     *client,
+                                       gint            layer);
+
+/**
+ * gowl_compositor_resize_client:
+ * @self: a #GowlCompositor
+ * @client: a #GowlClient
+ * @x: horizontal position in compositor coordinates
+ * @y: vertical position in compositor coordinates
+ * @width: width in pixels (including borders)
+ * @height: height in pixels (including borders)
+ *
+ * Positions and sizes @client in the scene graph: moves the scene
+ * node, updates borders, and sends an XDG configure to the client.
+ * This is the public equivalent of the internal resize_client().
+ */
+void gowl_compositor_resize_client (GowlCompositor *self,
+                                     GowlClient     *client,
+                                     gint            x,
+                                     gint            y,
+                                     gint            width,
+                                     gint            height);
+
+/**
+ * gowl_compositor_reparent_client_to_client:
+ * @self: a #GowlCompositor
+ * @child: the client to embed
+ * @parent: the client whose scene tree will own @child
+ *
+ * Reparents @child's scene node into @parent's scene tree so
+ * that @child renders as part of @parent.  Positions are then
+ * relative to @parent's top-left corner.
+ */
+void gowl_compositor_reparent_client_to_client (GowlCompositor *self,
+                                                 GowlClient     *child,
+                                                 GowlClient     *parent);
+
+/**
+ * gowl_compositor_position_embedded:
+ * @self: a #GowlCompositor
+ * @client: an embedded client
+ * @x: x position relative to parent scene tree
+ * @y: y position relative to parent scene tree
+ * @width: width in pixels
+ * @height: height in pixels
+ *
+ * Positions and sizes an embedded client within its parent's
+ * scene tree.  Directly sets the scene node position and sends
+ * an XDG configure — no bounds checking is applied.
+ */
+void gowl_compositor_position_embedded (GowlCompositor *self,
+                                         GowlClient     *client,
+                                         gint            x,
+                                         gint            y,
+                                         gint            width,
+                                         gint            height);
 
 G_END_DECLS
 

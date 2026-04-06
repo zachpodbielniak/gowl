@@ -238,6 +238,9 @@ gowl_compositor_finalize(GObject *object)
 	g_list_free(self->clients);
 	g_list_free(self->fstack);
 
+	if (self->prefloat_pids != NULL)
+		g_array_unref(self->prefloat_pids);
+
 	G_OBJECT_CLASS(gowl_compositor_parent_class)->finalize(object);
 }
 
@@ -302,6 +305,8 @@ gowl_compositor_init(GowlCompositor *self)
 	self->fullscreen_bg_color[1] = 0.1f;
 	self->fullscreen_bg_color[2] = 0.1f;
 	self->fullscreen_bg_color[3] = 1.0f;
+
+	self->prefloat_pids = g_array_new(FALSE, FALSE, sizeof(pid_t));
 }
 
 /* -----------------------------------------------------------
@@ -413,6 +418,34 @@ gowl_compositor_get_event_loop(GowlCompositor *self)
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
 	return self->event_loop;
+}
+
+/**
+ * gowl_compositor_get_wl_display:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the wl_display
+ */
+struct wl_display *
+gowl_compositor_get_wl_display(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->wl_display;
+}
+
+/**
+ * gowl_compositor_get_wlr_backend:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the wlr_backend
+ */
+struct wlr_backend *
+gowl_compositor_get_wlr_backend(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->backend;
 }
 
 /**
@@ -1411,9 +1444,12 @@ gowl_compositor_arrange(
 	if (m == NULL || m->wlr_output == NULL)
 		return;
 
-	/* Enable/disable client scene nodes based on tag visibility */
+	/* Enable/disable client scene nodes based on tag visibility.
+	 * Embedded clients are externally managed — skip them. */
 	for (l = self->clients; l != NULL; l = l->next) {
 		c = (GowlClient *)l->data;
+		if (c->isembedded)
+			continue;
 		if (c->mon == m) {
 			gboolean vis = VISIBLEON(c, m);
 			wlr_scene_node_set_enabled(&c->scene->node, vis);
@@ -1429,9 +1465,12 @@ gowl_compositor_arrange(
 	g_free(m->layout_symbol);
 	m->layout_symbol = g_strdup("[]=");
 
-	/* Re-parent floaters to correct layer */
+	/* Re-parent floaters to correct layer.
+	 * Embedded clients are externally managed — skip them. */
 	for (l = self->clients; l != NULL; l = l->next) {
 		c = (GowlClient *)l->data;
+		if (c->isembedded)
+			continue;
 		if (c->mon != m)
 			continue;
 		if (c->scene->node.parent == self->layers[GOWL_SCENE_LAYER_FS])
@@ -1451,6 +1490,135 @@ gowl_compositor_arrange(
 
 	/* Restore pointer focus */
 	gowl_compositor_motionnotify(self, 0);
+}
+
+/**
+ * gowl_compositor_prefloat_pid:
+ *
+ * Registers @pid so that when a client owned by that process maps
+ * it is immediately made floating and hidden.  The entry is consumed
+ * on first match.
+ */
+void
+gowl_compositor_prefloat_pid(
+	GowlCompositor *self,
+	pid_t           pid
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_array_append_val(self->prefloat_pids, pid);
+}
+
+/**
+ * gowl_compositor_reparent_client:
+ *
+ * Moves a client's scene node to the specified scene layer.
+ */
+void
+gowl_compositor_reparent_client(
+	GowlCompositor *self,
+	GowlClient     *client,
+	gint            layer
+){
+	struct wlr_scene_tree *target;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(client));
+	g_return_if_fail(layer >= 0 && layer < GOWL_SCENE_LAYER_COUNT);
+
+	target = self->layers[layer];
+	if (target != NULL && client->scene != NULL)
+		wlr_scene_node_reparent(&client->scene->node, target);
+}
+
+/**
+ * gowl_compositor_resize_client:
+ *
+ * Public wrapper around the internal resize_client().
+ * Positions and sizes a client in the scene graph.
+ */
+void
+gowl_compositor_resize_client(
+	GowlCompositor *self,
+	GowlClient     *client,
+	gint            x,
+	gint            y,
+	gint            width,
+	gint            height
+){
+	struct wlr_box geo;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(client));
+
+	geo.x = x;
+	geo.y = y;
+	geo.width = width;
+	geo.height = height;
+	resize_client(self, client, geo, TRUE);
+}
+
+/**
+ * gowl_compositor_reparent_client_to_client:
+ *
+ * Reparents child's scene node into parent's scene tree.
+ * After this call, child renders as part of parent and
+ * its position is relative to parent's top-left corner.
+ */
+void
+gowl_compositor_reparent_client_to_client(
+	GowlCompositor *self,
+	GowlClient     *child,
+	GowlClient     *parent
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(child));
+	g_return_if_fail(GOWL_IS_CLIENT(parent));
+
+	if (child->scene != NULL && parent->scene != NULL)
+		wlr_scene_node_reparent(&child->scene->node, parent->scene);
+}
+
+/**
+ * gowl_compositor_position_embedded:
+ *
+ * Positions and sizes an embedded client within its parent's
+ * scene tree.  No bounds checking — coordinates are parent-relative.
+ */
+void
+gowl_compositor_position_embedded(
+	GowlCompositor *self,
+	GowlClient     *client,
+	gint            x,
+	gint            y,
+	gint            width,
+	gint            height
+){
+	struct wlr_box clip;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(client));
+
+	client->geom.x = x;
+	client->geom.y = y;
+	client->geom.width = width;
+	client->geom.height = height;
+
+	/* Move scene node (parent-relative) */
+	wlr_scene_node_set_position(&client->scene->node, x, y);
+	wlr_scene_node_set_position(&client->scene_surface->node,
+	                            (gint)client->bw, (gint)client->bw);
+
+	/* Request the client to render at this size */
+	client->resize = wlr_xdg_toplevel_set_size(client->xdg_toplevel,
+	    width - 2 * (gint)client->bw,
+	    height - 2 * (gint)client->bw);
+
+	/* Clip to content area (exclude CSD shadows) */
+	clip.x = client->xdg_toplevel->base->geometry.x;
+	clip.y = client->xdg_toplevel->base->geometry.y;
+	clip.width  = width - 2 * (gint)client->bw;
+	clip.height = height - 2 * (gint)client->bw;
+	wlr_scene_subsurface_tree_set_clip(&client->scene_surface->node, &clip);
 }
 
 /**
@@ -3149,6 +3317,33 @@ on_client_map(struct wl_listener *listener, void *data)
 	/* Assign to selected monitor with current tags */
 	setmon(self, c, self->selmon,
 	       self->selmon ? self->selmon->tagset[self->selmon->seltags] : 1);
+
+	/* Check if this PID was registered for embedding.
+	 * Mark it embedded+floating, reparent to OVERLAY (above FS),
+	 * hide it, and re-arrange so tiling reclaims the space.
+	 * The embedded flag prevents arrange() from touching this
+	 * client's layer or visibility in the future. */
+	if (self->prefloat_pids != NULL && self->prefloat_pids->len > 0) {
+		pid_t cpid;
+		guint pi;
+
+		cpid = gowl_client_get_pid(c);
+		for (pi = 0; pi < self->prefloat_pids->len; pi++) {
+			if (g_array_index(self->prefloat_pids, pid_t, pi) == cpid) {
+				g_array_remove_index_fast(self->prefloat_pids, pi);
+				c->isfloating = TRUE;
+				c->isembedded = TRUE;
+				wlr_scene_node_reparent(&c->scene->node,
+					self->layers[GOWL_SCENE_LAYER_OVERLAY]);
+				wlr_scene_node_set_enabled(&c->scene->node, FALSE);
+				/* Re-arrange: the embedded flag means arrange()
+				   skips this client, so tiling reclaims all
+				   space and our OVERLAY reparent is preserved. */
+				gowl_compositor_arrange(self, c->mon);
+				break;
+			}
+		}
+	}
 
 	g_debug("Client mapped: %s (%s)",
 	        c->xdg_toplevel->title ? c->xdg_toplevel->title : "(untitled)",

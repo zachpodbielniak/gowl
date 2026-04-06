@@ -118,6 +118,58 @@ pid_t          gowl_client_get_pid            (GowlClient  *self);
  */
 struct wlr_surface *gowl_client_get_wlr_surface (GowlClient *self);
 
+/**
+ * gowl_client_get_border_width:
+ * @self: a #GowlClient
+ *
+ * Returns: the border width in pixels
+ */
+guint              gowl_client_get_border_width  (GowlClient  *self);
+
+/**
+ * gowl_client_set_border_width:
+ * @self: a #GowlClient
+ * @width: new border width in pixels
+ *
+ * Sets the border width and updates the border scene rects.
+ */
+void               gowl_client_set_border_width  (GowlClient  *self,
+                                                   guint        width);
+
+/**
+ * gowl_client_set_visible:
+ * @self: a #GowlClient
+ * @visible: %TRUE to show, %FALSE to hide
+ *
+ * Shows or hides the client without destroying it.
+ */
+void               gowl_client_set_visible       (GowlClient  *self,
+                                                   gboolean     visible);
+
+/**
+ * gowl_client_get_embedded:
+ * @self: a #GowlClient
+ *
+ * Returns whether this client is externally managed (embedded).
+ * Embedded clients are skipped by the tiling arrange pass — the
+ * embedder controls their position, visibility, and scene layer.
+ *
+ * Returns: %TRUE if the client is embedded
+ */
+gboolean           gowl_client_get_embedded      (GowlClient  *self);
+
+/**
+ * gowl_client_set_embedded:
+ * @self: a #GowlClient
+ * @embedded: %TRUE to mark as embedded
+ *
+ * Marks the client as externally managed.  When embedded, the
+ * compositor's arrange() will not reparent, show/hide, or
+ * tile the client.
+ */
+void               gowl_client_set_embedded      (GowlClient  *self,
+                                                   gboolean     embedded);
+
 G_END_DECLS
 
 #endif /* GOWL_CLIENT_H */

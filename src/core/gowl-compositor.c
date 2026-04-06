@@ -1389,7 +1389,8 @@ pointerfocus(
 		sloppy = gowl_config_get_sloppyfocus(self->config);
 
 	if (surface != self->wlr_seat->pointer_state.focused_surface &&
-	    sloppy && time_msec && c != NULL)
+	    sloppy && time_msec && c != NULL &&
+	    !gowl_client_get_embedded(c))
 		gowl_compositor_focus_client(self, c, FALSE);
 
 	/* If no surface, clear pointer focus */
@@ -3023,10 +3024,13 @@ on_cursor_button(struct wl_listener *listener, void *data)
 		if (self->locked)
 			break;
 
-		/* Focus client under cursor on click */
+		/* Focus client under cursor on click.
+		 * Embedded clients receive pointer events but do not
+		 * steal keyboard focus — Emacs keybinds take priority.
+		 */
 		xytonode(self, self->wlr_cursor->x, self->wlr_cursor->y,
 		         NULL, &c, NULL, NULL);
-		if (c != NULL)
+		if (c != NULL && !gowl_client_get_embedded(c))
 			gowl_compositor_focus_client(self, c, TRUE);
 		break;
 

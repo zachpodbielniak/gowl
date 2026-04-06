@@ -118,6 +118,10 @@ else
 MCP_AVAILABLE := 0
 endif
 
+# Optional libdecor dependency (window decorations for nested sessions)
+DEPS_LIBDECOR := libdecor-0
+LIBDECOR_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_LIBDECOR) 2>/dev/null && echo 1 || echo 0)
+
 # Wayland protocols directory
 WAYLAND_PROTOCOLS_DIR := $(shell $(PKG_CONFIG) --variable=pkgdatadir wayland-protocols 2>/dev/null)
 
@@ -135,6 +139,13 @@ ifeq ($(XWAYLAND_AVAILABLE),1)
     CFLAGS_BASE += -DGOWL_HAVE_XWAYLAND=1
     CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags $(DEPS_XWAYLAND) 2>/dev/null)
     LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs $(DEPS_XWAYLAND) 2>/dev/null)
+endif
+
+# Add libdecor flags if available
+ifeq ($(LIBDECOR_AVAILABLE),1)
+    CFLAGS_BASE += -DGOWL_HAVE_LIBDECOR=1
+    CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags $(DEPS_LIBDECOR) 2>/dev/null)
+    LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs $(DEPS_LIBDECOR) 2>/dev/null)
 endif
 
 # Include paths
@@ -209,3 +220,4 @@ show-config:
 	@echo "XWAYLAND_AVAILABLE: $(XWAYLAND_AVAILABLE)"
 	@echo "MCP:             $(MCP)"
 	@echo "MCP_AVAILABLE:   $(MCP_AVAILABLE)"
+	@echo "LIBDECOR_AVAILABLE: $(LIBDECOR_AVAILABLE)"

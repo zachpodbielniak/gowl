@@ -97,6 +97,9 @@
 /* wlroots - utility */
 #include <wlr/util/log.h>
 
+/* wlroots - backend detection (for nested Wayland) */
+#include <wlr/backend/wayland.h>
+
 /* xkb */
 #include <xkbcommon/xkbcommon.h>
 
@@ -135,6 +138,10 @@
 /* -----------------------------------------------------------
  * Core struct definitions
  * ----------------------------------------------------------- */
+
+#ifdef GOWL_HAVE_LIBDECOR
+typedef struct _GowlDecor GowlDecor;
+#endif
 
 /**
  * struct _GowlCompositor:
@@ -263,6 +270,14 @@ struct _GowlCompositor {
 	/* Client map callback (embedder hook) */
 	GowlClientMapFunc client_map_func;
 	gpointer          client_map_data;
+
+#ifdef GOWL_HAVE_LIBDECOR
+	/* Nested Wayland decoration (libdecor) */
+	GowlDecor           *decor;             /* NULL when not nested */
+	struct wlr_backend  *nested_wl_backend; /* Wayland sub-backend */
+	struct wlr_output   *default_wl_output; /* default output to destroy */
+	gchar               *parent_wl_display; /* parent $WAYLAND_DISPLAY */
+#endif
 };
 
 /**

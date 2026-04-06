@@ -19,6 +19,10 @@
 #include "gowl-core-private.h"
 #include "config/gowl-keybind.h"
 
+#ifdef GOWL_HAVE_LIBDECOR
+#include "gowl-decor.h"
+#endif
+
 #include <gio/gio.h>
 #include <math.h>
 #include <stdlib.h>
@@ -215,6 +219,13 @@ gowl_compositor_finalize(GObject *object)
 	/* Teardown in reverse order of setup, following dwl's cleanup() */
 	if (self->wl_display != NULL) {
 		wl_display_destroy_clients(self->wl_display);
+
+#ifdef GOWL_HAVE_LIBDECOR
+		gowl_decor_destroy(self->decor);
+		self->decor = NULL;
+		g_free(self->parent_wl_display);
+		self->parent_wl_display = NULL;
+#endif
 
 		if (self->xcursor_mgr != NULL)
 			wlr_xcursor_manager_destroy(self->xcursor_mgr);
@@ -1023,6 +1034,13 @@ gowl_compositor_start(
 		                    "Failed to add Wayland socket");
 		return FALSE;
 	}
+#ifdef GOWL_HAVE_LIBDECOR
+	/* Save the parent compositor's display name before we overwrite it.
+	 * libdecor's GTK plugin calls gtk_init_check() which connects to
+	 * $WAYLAND_DISPLAY — if it points to gowl's socket instead of the
+	 * parent, GTK connects back to us and deadlocks. */
+	self->parent_wl_display = g_strdup(g_getenv("WAYLAND_DISPLAY"));
+#endif
 	setenv("WAYLAND_DISPLAY", self->socket_name, 1);
 
 	/* 20. Start the backend (enumerates outputs and inputs) */
@@ -1031,6 +1049,36 @@ gowl_compositor_start(
 		                    "Failed to start wlr_backend");
 		return FALSE;
 	}
+
+#ifdef GOWL_HAVE_LIBDECOR
+	/* Now that start() has returned, set up libdecor if we detected
+	 * a nested Wayland session in on_new_output().  We could not do
+	 * this inside the callback because roundtripping the parent
+	 * display from within wlr_backend_start() would deadlock. */
+	if (self->nested_wl_backend != NULL) {
+		self->decor = gowl_decor_new(self, self->nested_wl_backend);
+		if (self->decor != NULL && gowl_decor_setup(self->decor)) {
+			/* Success — destroy the undecorated default output */
+			if (self->default_wl_output != NULL) {
+				wlr_output_destroy(self->default_wl_output);
+				self->default_wl_output = NULL;
+			}
+		} else {
+			/* Failed — fall back to undecorated output */
+			g_warning("gowl: libdecor setup failed, "
+			          "falling back to undecorated output");
+			gowl_decor_destroy(self->decor);
+			self->decor = NULL;
+			/* Destroy the skipped default and create a fresh one.
+			 * on_new_output will handle it normally this time. */
+			if (self->default_wl_output != NULL) {
+				wlr_output_destroy(self->default_wl_output);
+				self->default_wl_output = NULL;
+			}
+			wlr_wl_output_create(self->nested_wl_backend);
+		}
+	}
+#endif
 
 	/* Set default cursor image */
 	wlr_cursor_set_xcursor(self->wlr_cursor, self->xcursor_mgr,
@@ -1919,6 +1967,38 @@ on_new_output(struct wl_listener *listener, void *data)
 	self = wl_container_of(listener, self, new_output);
 	wlr_output = (struct wlr_output *)data;
 
+#ifdef GOWL_HAVE_LIBDECOR
+	/* Detect nested Wayland mode from the first Wayland output.
+	 * wlr_backend_autocreate() wraps backends in a multi-backend,
+	 * so we check the output (not the top-level backend).
+	 *
+	 * We must NOT do heavy init here (roundtrips, libdecor_new) because
+	 * this fires from inside wlr_backend_start() and roundtripping
+	 * the parent display would deadlock.  Just save references and
+	 * defer setup to after start() returns. */
+	if (wlr_output_is_wl(wlr_output)
+	    && self->nested_wl_backend == NULL && self->decor == NULL) {
+		self->nested_wl_backend = wlr_output->backend;
+		self->default_wl_output = wlr_output;
+		g_debug("gowl-decor: detected nested Wayland output %s, "
+		        "deferring libdecor setup", wlr_output->name);
+		return;
+	}
+
+#endif
+
+	/* Set title/app_id on nested Wayland outputs.
+	 * The decorated output has no xdg_toplevel (libdecor owns it),
+	 * so skip — libdecor_frame_set_title() handles it instead. */
+	if (wlr_output_is_wl(wlr_output)
+#ifdef GOWL_HAVE_LIBDECOR
+	    && self->decor == NULL
+#endif
+	    ) {
+		wlr_wl_output_set_title(wlr_output, "CMacs");
+		wlr_wl_output_set_app_id(wlr_output, "cmacs");
+	}
+
 	/* Initialise rendering on this output */
 	if (!wlr_output_init_render(wlr_output, self->allocator,
 	                            self->renderer))
@@ -1948,9 +2028,22 @@ on_new_output(struct wl_listener *listener, void *data)
 	g_free(m->layout_symbol);
 	m->layout_symbol = g_strdup("[]=");
 
-	/* Set preferred mode and scale */
-	wlr_output_state_set_mode(&state,
-	                          wlr_output_preferred_mode(wlr_output));
+	/* Set preferred mode and scale.
+	 * Wayland outputs created from a surface (libdecor) have no mode
+	 * list — their size comes from the first configure event. */
+	{
+		struct wlr_output_mode *pref;
+
+		pref = wlr_output_preferred_mode(wlr_output);
+		if (pref != NULL)
+			wlr_output_state_set_mode(&state, pref);
+		else if (wlr_output->width > 0 && wlr_output->height > 0)
+			wlr_output_state_set_custom_mode(&state,
+				wlr_output->width, wlr_output->height, 0);
+		else
+			wlr_output_state_set_custom_mode(&state,
+				1280, 720, 0);
+	}
 	wlr_output_state_set_scale(&state, 1);
 	wlr_output_state_set_enabled(&state, 1);
 	wlr_output_commit_state(wlr_output, &state);

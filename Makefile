@@ -77,7 +77,8 @@ LIB_SRCS := \
 	src/core/gowl-layer-surface.c \
 	src/core/gowl-bar.c \
 	src/core/gowl-session-lock.c \
-	src/core/gowl-idle-manager.c
+	src/core/gowl-idle-manager.c \
+	src/core/gowl-decor.c
 
 # Header files (for GIR scanner and installation)
 LIB_HDRS := \
@@ -133,7 +134,8 @@ LIB_HDRS := \
 	src/core/gowl-layer-surface.h \
 	src/core/gowl-bar.h \
 	src/core/gowl-session-lock.h \
-	src/core/gowl-idle-manager.h
+	src/core/gowl-idle-manager.h \
+	src/core/gowl-decor.h
 
 # yaml-glib sources (built-in dependency)
 YAMLGLIB_SRCS := \
@@ -333,6 +335,7 @@ install-deps:
 		pam-devel \
 		gdk-pixbuf2-devel \
 		libasan libubsan \
+		libdecor-devel \
 		$(if $(filter 1,$(MCP)),$(FEDORA_DEPS_MCP))
 
 # Install a debug .desktop session file pointing at the local debug build

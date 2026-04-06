@@ -98,6 +98,7 @@ docs/                       # Documentation (architecture, building, configurati
 ### Optional
 - `xcb`, `xcb-icccm` (XWayland support, controlled by `BUILD_XWAYLAND`)
 - `gobject-introspection-1.0` (GIR generation, controlled by `BUILD_GIR`)
+- `libdecor-0` (window decorations for nested Wayland sessions, auto-detected)
 
 ## Architecture Notes
 

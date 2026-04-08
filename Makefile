@@ -37,6 +37,7 @@ LIB_SRCS := \
 	src/boxed/gowl-border-spec.c \
 	src/boxed/gowl-rule.c \
 	src/boxed/gowl-output-mode.c \
+	src/boxed/gowl-process-info.c \
 	src/module/gowl-module.c \
 	src/module/gowl-module-manager.c \
 	src/module/gowl-module-info.c \
@@ -94,6 +95,7 @@ LIB_HDRS := \
 	src/boxed/gowl-border-spec.h \
 	src/boxed/gowl-rule.h \
 	src/boxed/gowl-output-mode.h \
+	src/boxed/gowl-process-info.h \
 	src/module/gowl-module.h \
 	src/module/gowl-module-manager.h \
 	src/module/gowl-module-info.h \

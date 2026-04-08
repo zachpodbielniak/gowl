@@ -18,6 +18,9 @@
 
 #include "gowl-core-private.h"
 
+#include <unistd.h>
+#include <string.h>
+
 /**
  * GowlSeat:
  *
@@ -145,4 +148,562 @@ gowl_seat_set_focused_client(
 		self->focused_client = client;
 		g_signal_emit(self, seat_signals[SIGNAL_FOCUS_CHANGED], 0);
 	}
+}
+
+/* --- Input injection --- */
+
+/**
+ * gowl_seat_send_key:
+ * @self: a #GowlSeat
+ * @keycode: the XKB keycode to inject
+ * @pressed: %TRUE for key press, %FALSE for key release
+ *
+ * Injects a synthetic key event to the focused surface.
+ */
+void
+gowl_seat_send_key(
+	GowlSeat *self,
+	guint32   keycode,
+	gboolean  pressed
+){
+	struct wlr_seat *seat;
+
+	g_return_if_fail(GOWL_IS_SEAT(self));
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL)
+		return;
+
+	wlr_seat_keyboard_notify_key(seat,
+		(guint32)(g_get_monotonic_time() / 1000),
+		keycode,
+		pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
+		        : WL_KEYBOARD_KEY_STATE_RELEASED);
+}
+
+/**
+ * gowl_seat_send_text:
+ * @self: a #GowlSeat
+ * @text: UTF-8 string to type
+ *
+ * Injects synthetic key events to type @text character by character
+ * on the focused surface.  For each character, looks up the XKB
+ * keycode that produces it.  Shifted characters (level 1) are
+ * wrapped in Shift press/release.  Characters that cannot be mapped
+ * are silently skipped.
+ */
+void
+gowl_seat_send_text(
+	GowlSeat    *self,
+	const gchar *text
+){
+	struct wlr_seat *seat;
+	GowlKeyboardGroup *kb;
+	struct wlr_keyboard_group *grp;
+	struct xkb_keymap *keymap;
+	xkb_keycode_t min_kc, max_kc;
+	const gchar *p;
+
+	g_return_if_fail(GOWL_IS_SEAT(self));
+	g_return_if_fail(text != NULL);
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	kb   = (GowlKeyboardGroup *)self->keyboard_group;
+	if (seat == NULL || kb == NULL)
+		return;
+
+	grp = (struct wlr_keyboard_group *)kb->wlr_group;
+	if (grp == NULL)
+		return;
+
+	keymap = grp->keyboard.keymap;
+	if (keymap == NULL)
+		return;
+
+	min_kc = xkb_keymap_min_keycode(keymap);
+	max_kc = xkb_keymap_max_keycode(keymap);
+
+	for (p = text; *p != '\0'; p = g_utf8_next_char(p)) {
+		gunichar ch = g_utf8_get_char(p);
+		xkb_keycode_t kc;
+		xkb_keycode_t found_kc = 0;
+		gint found_level = -1;
+		guint32 ts, evdev_kc;
+
+		/* Scan keycodes for one that produces this character. */
+		for (kc = min_kc; kc <= max_kc && found_kc == 0; kc++) {
+			int nlayouts, layout;
+
+			nlayouts = xkb_keymap_num_layouts_for_key(keymap, kc);
+			for (layout = 0; layout < nlayouts && found_kc == 0;
+			     layout++) {
+				int nlevels, level;
+
+				nlevels = xkb_keymap_num_levels_for_key(
+					keymap, kc, layout);
+				/* Only check level 0 (plain) and 1 (shift). */
+				if (nlevels > 2)
+					nlevels = 2;
+
+				for (level = 0; level < nlevels; level++) {
+					const xkb_keysym_t *syms;
+					int nsyms, s;
+
+					nsyms = xkb_keymap_key_get_syms_by_level(
+						keymap, kc, layout, level,
+						&syms);
+					for (s = 0; s < nsyms; s++) {
+						if (xkb_keysym_to_utf32(
+							syms[s]) == ch) {
+							found_kc = kc;
+							found_level = level;
+							goto emit;
+						}
+					}
+				}
+			}
+		}
+
+	emit:
+		if (found_kc == 0)
+			continue;
+
+		/* XKB keycodes are evdev + 8. */
+		evdev_kc = found_kc - 8;
+		ts = (guint32)(g_get_monotonic_time() / 1000);
+
+		if (found_level == 1) {
+			/* Shift press (evdev KEY_LEFTSHIFT = 42) */
+			wlr_seat_keyboard_notify_key(seat, ts, 42,
+				WL_KEYBOARD_KEY_STATE_PRESSED);
+		}
+
+		wlr_seat_keyboard_notify_key(seat, ts, evdev_kc,
+			WL_KEYBOARD_KEY_STATE_PRESSED);
+		ts = (guint32)(g_get_monotonic_time() / 1000);
+		wlr_seat_keyboard_notify_key(seat, ts, evdev_kc,
+			WL_KEYBOARD_KEY_STATE_RELEASED);
+
+		if (found_level == 1) {
+			ts = (guint32)(g_get_monotonic_time() / 1000);
+			wlr_seat_keyboard_notify_key(seat, ts, 42,
+				WL_KEYBOARD_KEY_STATE_RELEASED);
+		}
+	}
+}
+
+/**
+ * gowl_seat_send_mouse_move:
+ */
+void
+gowl_seat_send_mouse_move(
+	GowlSeat *self,
+	gdouble   x,
+	gdouble   y
+){
+	g_return_if_fail(GOWL_IS_SEAT(self));
+
+	/* Cursor movement requires the wlr_cursor, not the seat.
+	 * This is dispatched through the GowlCursor wrapper. */
+	if (self->cursor != NULL) {
+		GowlCursor *cur = GOWL_CURSOR(self->cursor);
+		struct wlr_cursor *wlr_cur;
+
+		wlr_cur = (struct wlr_cursor *)cur->wlr_cursor;
+		if (wlr_cur != NULL)
+			wlr_cursor_warp_absolute(wlr_cur, NULL,
+				x / 1.0, y / 1.0);
+	}
+}
+
+/**
+ * gowl_seat_send_mouse_button:
+ */
+void
+gowl_seat_send_mouse_button(
+	GowlSeat *self,
+	guint32   button,
+	gboolean  pressed
+){
+	struct wlr_seat *seat;
+
+	g_return_if_fail(GOWL_IS_SEAT(self));
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL)
+		return;
+
+	wlr_seat_pointer_notify_button(seat,
+		(guint32)(g_get_monotonic_time() / 1000),
+		button,
+		pressed ? WL_POINTER_BUTTON_STATE_PRESSED
+		        : WL_POINTER_BUTTON_STATE_RELEASED);
+}
+
+/**
+ * gowl_seat_send_scroll:
+ */
+void
+gowl_seat_send_scroll(
+	GowlSeat *self,
+	gdouble   dx,
+	gdouble   dy
+){
+	struct wlr_seat *seat;
+
+	g_return_if_fail(GOWL_IS_SEAT(self));
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL)
+		return;
+
+	if (dy != 0.0)
+		wlr_seat_pointer_notify_axis(seat,
+			(guint32)(g_get_monotonic_time() / 1000),
+			WL_POINTER_AXIS_VERTICAL_SCROLL,
+			dy, (gint32)(dy * 120),
+			WL_POINTER_AXIS_SOURCE_WHEEL,
+			WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
+	if (dx != 0.0)
+		wlr_seat_pointer_notify_axis(seat,
+			(guint32)(g_get_monotonic_time() / 1000),
+			WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+			dx, (gint32)(dx * 120),
+			WL_POINTER_AXIS_SOURCE_WHEEL,
+			WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
+}
+
+/* --- Clipboard --- */
+
+/*
+ * Custom wlr_data_source that serves a text string.
+ * Used by gowl_seat_set_clipboard().
+ */
+struct gowl_text_source {
+	struct wlr_data_source base;
+	gchar *text;
+};
+
+static void
+gowl_text_source_send(
+	struct wlr_data_source *source,
+	const char             *mime_type,
+	int32_t                 fd
+){
+	struct gowl_text_source *ts;
+
+	ts = wl_container_of(source, ts, base);
+	(void)mime_type;
+
+	if (ts->text != NULL) {
+		size_t len = strlen(ts->text);
+		ssize_t written = 0;
+
+		while ((size_t)written < len) {
+			ssize_t n = write(fd, ts->text + written,
+			                  len - (size_t)written);
+			if (n <= 0)
+				break;
+			written += n;
+		}
+	}
+	close(fd);
+}
+
+static void
+gowl_text_source_destroy(struct wlr_data_source *source)
+{
+	struct gowl_text_source *ts;
+
+	ts = wl_container_of(source, ts, base);
+	g_free(ts->text);
+	g_free(ts);
+}
+
+static const struct wlr_data_source_impl gowl_text_source_impl = {
+	.send    = gowl_text_source_send,
+	.destroy = gowl_text_source_destroy,
+};
+
+/*
+ * Custom wlr_primary_selection_source that serves a text string.
+ * Used by gowl_seat_set_primary_selection().
+ */
+struct gowl_primary_text_source {
+	struct wlr_primary_selection_source base;
+	gchar *text;
+};
+
+static void
+gowl_primary_text_source_send(
+	struct wlr_primary_selection_source *source,
+	const char                          *mime_type,
+	int                                  fd
+){
+	struct gowl_primary_text_source *ts;
+
+	ts = wl_container_of(source, ts, base);
+	(void)mime_type;
+
+	if (ts->text != NULL) {
+		size_t len = strlen(ts->text);
+		ssize_t written = 0;
+
+		while ((size_t)written < len) {
+			ssize_t n = write(fd, ts->text + written,
+			                  len - (size_t)written);
+			if (n <= 0)
+				break;
+			written += n;
+		}
+	}
+	close(fd);
+}
+
+static void
+gowl_primary_text_source_destroy(
+	struct wlr_primary_selection_source *source
+){
+	struct gowl_primary_text_source *ts;
+
+	ts = wl_container_of(source, ts, base);
+	g_free(ts->text);
+	g_free(ts);
+}
+
+static const struct wlr_primary_selection_source_impl
+gowl_primary_text_source_impl = {
+	.send    = gowl_primary_text_source_send,
+	.destroy = gowl_primary_text_source_destroy,
+};
+
+/*
+ * Helper: read text from a data source by requesting "text/plain;charset=utf-8"
+ * (falling back to "text/plain") through a pipe.  The send callback writes
+ * directly to the fd for compositor-owned sources.
+ */
+static gchar *
+read_text_from_source_pipe(int read_fd)
+{
+	GString *buf;
+	gchar tmp[4096];
+	ssize_t n;
+
+	buf = g_string_new(NULL);
+	for (;;) {
+		n = read(read_fd, tmp, sizeof(tmp));
+		if (n <= 0)
+			break;
+		g_string_append_len(buf, tmp, n);
+	}
+	close(read_fd);
+
+	if (buf->len == 0) {
+		g_string_free(buf, TRUE);
+		return NULL;
+	}
+	return g_string_free(buf, FALSE);
+}
+
+static gboolean
+mime_array_contains(const struct wl_array *arr, const char *mime)
+{
+	char **p;
+
+	wl_array_for_each(p, arr) {
+		if (g_strcmp0(*p, mime) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/**
+ * gowl_seat_get_clipboard:
+ * @self: a #GowlSeat
+ *
+ * Reads the current clipboard content as text.  Works for
+ * compositor-owned sources (including those set via
+ * gowl_seat_set_clipboard).  For client-owned sources, the
+ * read is synchronous through a pipe — this works for local
+ * Wayland clients but may block briefly.
+ *
+ * Returns: (transfer full) (nullable): clipboard text, or %NULL
+ */
+gchar *
+gowl_seat_get_clipboard(GowlSeat *self)
+{
+	struct wlr_seat *seat;
+	struct wlr_data_source *source;
+	const char *mime;
+	int fds[2];
+
+	g_return_val_if_fail(GOWL_IS_SEAT(self), NULL);
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL)
+		return NULL;
+
+	source = seat->selection_source;
+	if (source == NULL)
+		return NULL;
+
+	/* Pick best MIME type. */
+	if (mime_array_contains(&source->mime_types,
+	                        "text/plain;charset=utf-8"))
+		mime = "text/plain;charset=utf-8";
+	else if (mime_array_contains(&source->mime_types,
+	                             "text/plain"))
+		mime = "text/plain";
+	else if (mime_array_contains(&source->mime_types,
+	                             "UTF8_STRING"))
+		mime = "UTF8_STRING";
+	else
+		return NULL;
+
+	if (pipe(fds) != 0)
+		return NULL;
+
+	wlr_data_source_send(source, mime, fds[1]);
+	/* send callback closes fds[1] */
+
+	return read_text_from_source_pipe(fds[0]);
+}
+
+/**
+ * gowl_seat_set_clipboard:
+ * @self: a #GowlSeat
+ * @text: the UTF-8 text to place on the clipboard
+ *
+ * Sets the Wayland clipboard to @text by creating a compositor-
+ * owned data source offering text/plain and UTF8_STRING.
+ */
+void
+gowl_seat_set_clipboard(
+	GowlSeat    *self,
+	const gchar *text
+){
+	struct wlr_seat *seat;
+	struct gowl_text_source *ts;
+	char *mime_plain, *mime_utf8, *mime_utf8_str;
+
+	g_return_if_fail(GOWL_IS_SEAT(self));
+	g_return_if_fail(text != NULL);
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL)
+		return;
+
+	ts = g_new0(struct gowl_text_source, 1);
+	ts->text = g_strdup(text);
+	wlr_data_source_init(&ts->base, &gowl_text_source_impl);
+
+	/* Offer MIME types. wl_array entries are char* pointers. */
+	mime_plain = g_strdup("text/plain");
+	mime_utf8  = g_strdup("text/plain;charset=utf-8");
+	mime_utf8_str = g_strdup("UTF8_STRING");
+
+	{
+		char **slot;
+		slot = wl_array_add(&ts->base.mime_types, sizeof(char *));
+		*slot = mime_plain;
+		slot = wl_array_add(&ts->base.mime_types, sizeof(char *));
+		*slot = mime_utf8;
+		slot = wl_array_add(&ts->base.mime_types, sizeof(char *));
+		*slot = mime_utf8_str;
+	}
+
+	wlr_seat_set_selection(seat, &ts->base,
+	                       wl_display_next_serial(seat->display));
+}
+
+/**
+ * gowl_seat_get_primary_selection:
+ * @self: a #GowlSeat
+ *
+ * Reads the current primary selection content as text.
+ *
+ * Returns: (transfer full) (nullable): selection text, or %NULL
+ */
+gchar *
+gowl_seat_get_primary_selection(GowlSeat *self)
+{
+	struct wlr_seat *seat;
+	struct wlr_primary_selection_source *source;
+	const char *mime;
+	int fds[2];
+
+	g_return_val_if_fail(GOWL_IS_SEAT(self), NULL);
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL)
+		return NULL;
+
+	source = seat->primary_selection_source;
+	if (source == NULL)
+		return NULL;
+
+	if (mime_array_contains(&source->mime_types,
+	                        "text/plain;charset=utf-8"))
+		mime = "text/plain;charset=utf-8";
+	else if (mime_array_contains(&source->mime_types,
+	                             "text/plain"))
+		mime = "text/plain";
+	else if (mime_array_contains(&source->mime_types,
+	                             "UTF8_STRING"))
+		mime = "UTF8_STRING";
+	else
+		return NULL;
+
+	if (pipe(fds) != 0)
+		return NULL;
+
+	wlr_primary_selection_source_send(source, mime, fds[1]);
+
+	return read_text_from_source_pipe(fds[0]);
+}
+
+/**
+ * gowl_seat_set_primary_selection:
+ * @self: a #GowlSeat
+ * @text: the UTF-8 text to place in the primary selection
+ *
+ * Sets the primary selection to @text.
+ */
+void
+gowl_seat_set_primary_selection(
+	GowlSeat    *self,
+	const gchar *text
+){
+	struct wlr_seat *seat;
+	struct gowl_primary_text_source *ts;
+	char *mime_plain, *mime_utf8, *mime_utf8_str;
+
+	g_return_if_fail(GOWL_IS_SEAT(self));
+	g_return_if_fail(text != NULL);
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL)
+		return;
+
+	ts = g_new0(struct gowl_primary_text_source, 1);
+	ts->text = g_strdup(text);
+	wlr_primary_selection_source_init(&ts->base,
+	                                  &gowl_primary_text_source_impl);
+
+	mime_plain = g_strdup("text/plain");
+	mime_utf8  = g_strdup("text/plain;charset=utf-8");
+	mime_utf8_str = g_strdup("UTF8_STRING");
+
+	{
+		char **slot;
+		slot = wl_array_add(&ts->base.mime_types, sizeof(char *));
+		*slot = mime_plain;
+		slot = wl_array_add(&ts->base.mime_types, sizeof(char *));
+		*slot = mime_utf8;
+		slot = wl_array_add(&ts->base.mime_types, sizeof(char *));
+		*slot = mime_utf8_str;
+	}
+
+	wlr_seat_set_primary_selection(seat, &ts->base,
+	                               wl_display_next_serial(seat->display));
 }

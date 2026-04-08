@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "gowl-idle-manager.h"
+#include "gowl-core-private.h"
 
 /**
  * GowlIdleManager:
@@ -26,15 +26,9 @@
  * timeout elapses without user input, the "idle" signal is emitted;
  * when input resumes, the "resume" signal is emitted.  Idle inhibit
  * clients can prevent the transition to idle.
+ *
+ * The struct definition lives in gowl-core-private.h.
  */
-struct _GowlIdleManager {
-	GObject   parent_instance;
-
-	gpointer  wlr_idle_notifier;          /* struct wlr_idle_notifier_v1* */
-	gpointer  wlr_idle_inhibit_manager;   /* struct wlr_idle_inhibit_manager_v1* */
-	gint      timeout_secs;
-	gint      state;                       /* 0 = ACTIVE, 1 = IDLE */
-};
 
 G_DEFINE_FINAL_TYPE(GowlIdleManager, gowl_idle_manager, G_TYPE_OBJECT)
 

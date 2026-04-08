@@ -272,6 +272,103 @@ guint gowl_compositor_get_monitor_count (GowlCompositor *self);
 GowlModuleManager *gowl_compositor_get_module_manager (GowlCompositor *self);
 
 /**
+ * gowl_compositor_get_seat:
+ * @self: a #GowlCompositor
+ *
+ * Returns the #GowlSeat GObject wrapping the compositor's input seat.
+ * The seat provides the "focus-changed" signal and holds references
+ * to the cursor and keyboard group sub-objects.
+ * Only valid after gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the #GowlSeat, or %NULL
+ */
+GowlSeat *gowl_compositor_get_seat (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_cursor:
+ * @self: a #GowlCompositor
+ *
+ * Returns the #GowlCursor GObject wrapping the compositor's pointer.
+ * Provides "motion", "button", and "axis" signals.
+ * Only valid after gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the #GowlCursor, or %NULL
+ */
+GowlCursor *gowl_compositor_get_cursor (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_keyboard_group:
+ * @self: a #GowlCompositor
+ *
+ * Returns the #GowlKeyboardGroup GObject wrapping the compositor's
+ * keyboard group.  Provides "key" and "modifiers" signals and
+ * repeat rate/delay properties.
+ * Only valid after gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the #GowlKeyboardGroup, or %NULL
+ */
+GowlKeyboardGroup *gowl_compositor_get_keyboard_group (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_idle_manager:
+ * @self: a #GowlCompositor
+ *
+ * Returns the #GowlIdleManager GObject.  Provides "idle" and "resume"
+ * signals for detecting user inactivity.
+ * Only valid after gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the #GowlIdleManager, or %NULL
+ */
+GowlIdleManager *gowl_compositor_get_idle_manager (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_bar:
+ * @self: a #GowlCompositor
+ *
+ * Returns the #GowlBar GObject for the status bar, or %NULL if no bar
+ * module is active.  Provides "render" and "click" signals.
+ *
+ * Returns: (transfer none) (nullable): the #GowlBar, or %NULL
+ */
+GowlBar *gowl_compositor_get_bar (GowlCompositor *self);
+
+/**
+ * gowl_compositor_set_bar:
+ * @self: a #GowlCompositor
+ * @bar: (transfer none) (nullable): the #GowlBar to register
+ *
+ * Registers a bar object with the compositor.  Called by bar provider
+ * modules during initialization.  The compositor borrows the reference.
+ */
+void gowl_compositor_set_bar (GowlCompositor *self,
+                               GowlBar        *bar);
+
+/**
+ * gowl_compositor_swap_clients:
+ * @self: a #GowlCompositor
+ * @c1: the first #GowlClient
+ * @c2: the second #GowlClient
+ *
+ * Swaps the positions of @c1 and @c2 in the tiling stack and
+ * re-arranges the layout.
+ */
+void gowl_compositor_swap_clients (GowlCompositor *self,
+                                    GowlClient     *c1,
+                                    GowlClient     *c2);
+
+/**
+ * gowl_compositor_zoom_client:
+ * @self: a #GowlCompositor
+ * @client: (nullable): the #GowlClient to promote, or %NULL for focused
+ *
+ * Promotes @client to the master position in the tiling stack.
+ * If @client is already master, promotes the second visible client.
+ * If @client is %NULL, operates on the currently focused client.
+ */
+void gowl_compositor_zoom_client (GowlCompositor *self,
+                                   GowlClient     *client);
+
+/**
  * gowl_compositor_is_locked:
  * @self: a #GowlCompositor
  *
@@ -474,6 +571,44 @@ typedef void (*GowlClientMapFunc)(GowlCompositor *compositor,
 void gowl_compositor_set_client_map_callback (GowlCompositor  *self,
                                               GowlClientMapFunc func,
                                               gpointer          user_data);
+
+/**
+ * gowl_compositor_screenshot_output:
+ * @self: a #GowlCompositor
+ * @output_name: (nullable): output name, or %NULL for focused monitor
+ * @width: (out): receives the screenshot width
+ * @height: (out): receives the screenshot height
+ * @error: (nullable): return location for a #GError
+ *
+ * Captures a screenshot of the specified output.
+ *
+ * Returns: (transfer full) (nullable): a #GBytes containing RGBA
+ *   pixel data, or %NULL on error
+ */
+GBytes *gowl_compositor_screenshot_output (GowlCompositor  *self,
+                                           const gchar     *output_name,
+                                           gint            *width,
+                                           gint            *height,
+                                           GError         **error);
+
+/**
+ * gowl_compositor_screenshot_client:
+ * @self: a #GowlCompositor
+ * @client: the #GowlClient to capture
+ * @width: (out): receives the screenshot width
+ * @height: (out): receives the screenshot height
+ * @error: (nullable): return location for a #GError
+ *
+ * Captures a screenshot of a specific client surface.
+ *
+ * Returns: (transfer full) (nullable): a #GBytes containing RGBA
+ *   pixel data, or %NULL on error
+ */
+GBytes *gowl_compositor_screenshot_client (GowlCompositor  *self,
+                                            GowlClient      *client,
+                                            gint            *width,
+                                            gint            *height,
+                                            GError         **error);
 
 G_END_DECLS
 

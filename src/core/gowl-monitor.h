@@ -298,6 +298,17 @@ gint            gowl_monitor_get_transform     (GowlMonitor *self);
 gboolean        gowl_monitor_set_transform     (GowlMonitor *self,
                                                 gint         transform);
 
+/**
+ * gowl_monitor_get_layer_surfaces:
+ * @self: a #GowlMonitor
+ *
+ * Returns the list of layer surfaces on this monitor.
+ *
+ * Returns: (transfer none) (element-type GowlLayerSurface): the layer
+ *   surface list, owned by the monitor
+ */
+GList          *gowl_monitor_get_layer_surfaces (GowlMonitor *self);
+
 G_END_DECLS
 
 #endif /* GOWL_MONITOR_H */

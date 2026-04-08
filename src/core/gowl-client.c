@@ -645,6 +645,29 @@ gowl_client_get_pid(GowlClient *self)
 }
 
 /**
+ * gowl_client_get_process_info:
+ * @self: a #GowlClient
+ *
+ * Returns process information for the owning process by reading
+ * /proc.  Returns %NULL if the PID is unavailable.
+ *
+ * Returns: (transfer full) (nullable): a #GowlProcessInfo
+ */
+GowlProcessInfo *
+gowl_client_get_process_info(GowlClient *self)
+{
+	pid_t pid;
+
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), NULL);
+
+	pid = gowl_client_get_pid(self);
+	if (pid == (pid_t)-1)
+		return NULL;
+
+	return gowl_process_info_new(pid);
+}
+
+/**
  * gowl_client_get_wlr_surface:
  * @self: a #GowlClient
  *

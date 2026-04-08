@@ -39,7 +39,10 @@
 #include "core/gowl-seat.h"
 #include "core/gowl-keyboard-group.h"
 #include "core/gowl-cursor.h"
+#include "core/gowl-idle-manager.h"
+#include "core/gowl-bar.h"
 #include "core/gowl-layer-surface.h"
+#include "boxed/gowl-process-info.h"
 
 /* wayland */
 #include <wayland-server-core.h>
@@ -93,6 +96,7 @@
 #include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_drm.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
+#include <wlr/types/wlr_buffer.h>
 
 /* wlroots - utility */
 #include <wlr/util/log.h>
@@ -188,6 +192,13 @@ struct _GowlCompositor {
 	struct wlr_cursor            *wlr_cursor;
 	struct wlr_xcursor_manager   *xcursor_mgr;
 	struct wlr_keyboard_group    *wlr_kb_group;
+
+	/* GObject wrappers for input sub-objects (owned, created in start) */
+	GowlSeat                    *seat;
+	GowlCursor                  *cursor_obj;
+	GowlKeyboardGroup           *kb_group_obj;
+	GowlIdleManager             *idle_mgr;
+	GowlBar                     *bar;           /* NULL unless bar module active */
 
 	/* keybind state for key-repeat */
 	gint                          kb_nsyms;
@@ -409,6 +420,36 @@ struct _GowlCursor {
 	gdouble  grab_y;
 	gint     grab_width;
 	gint     grab_height;
+};
+
+/**
+ * struct _GowlIdleManager:
+ *
+ * Wraps the wlroots idle notification system.  Tracks idle timeout
+ * and current state (active / idle).
+ */
+struct _GowlIdleManager {
+	GObject   parent_instance;
+
+	gpointer  wlr_idle_notifier;          /* struct wlr_idle_notifier_v1* */
+	gpointer  wlr_idle_inhibit_manager;   /* struct wlr_idle_inhibit_manager_v1* */
+	gint      timeout_secs;
+	gint      state;                       /* 0 = ACTIVE, 1 = IDLE */
+};
+
+/**
+ * struct _GowlBar:
+ *
+ * Wraps a status bar rendered via a wlr_scene_buffer.  Tracks bar
+ * height, visibility, and the associated monitor.
+ */
+struct _GowlBar {
+	GObject   parent_instance;
+
+	gpointer  scene_buffer;   /* struct wlr_scene_buffer* */
+	gint      height;
+	gboolean  visible;
+	gpointer  monitor;        /* GowlMonitor* */
 };
 
 /**

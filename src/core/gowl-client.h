@@ -108,6 +108,18 @@ void           gowl_client_close              (GowlClient  *self);
 pid_t          gowl_client_get_pid            (GowlClient  *self);
 
 /**
+ * gowl_client_get_process_info:
+ * @self: a #GowlClient
+ *
+ * Returns process information (pid, comm, cmdline, cwd) for the
+ * process that owns this client's Wayland connection.
+ *
+ * Returns: (transfer full) (nullable): a #GowlProcessInfo, or %NULL
+ *          if the PID is unavailable.  Free with gowl_process_info_free().
+ */
+GowlProcessInfo *gowl_client_get_process_info  (GowlClient  *self);
+
+/**
  * gowl_client_get_wlr_surface:
  * @self: a #GowlClient
  *

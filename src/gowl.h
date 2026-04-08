@@ -35,6 +35,7 @@
 #include "boxed/gowl-border-spec.h"
 #include "boxed/gowl-rule.h"
 #include "boxed/gowl-output-mode.h"
+#include "boxed/gowl-process-info.h"
 
 /* Module system */
 #include "module/gowl-module.h"

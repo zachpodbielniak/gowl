@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "gowl-bar.h"
+#include "gowl-core-private.h"
 
 /**
  * GowlBar:
@@ -24,15 +24,9 @@
  * Represents the built-in status bar rendered by the compositor.
  * Each monitor may have its own bar instance.  The bar owns a
  * scene buffer for rendering and exposes height/visibility controls.
+ *
+ * The struct definition lives in gowl-core-private.h.
  */
-struct _GowlBar {
-	GObject   parent_instance;
-
-	gpointer  scene_buffer;   /* struct wlr_scene_buffer* */
-	gint      height;
-	gboolean  visible;
-	gpointer  monitor;        /* GowlMonitor* */
-};
 
 G_DEFINE_FINAL_TYPE(GowlBar, gowl_bar, G_TYPE_OBJECT)
 

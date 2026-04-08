@@ -44,6 +44,9 @@ G_DEFINE_FINAL_TYPE(GowlCompositor, gowl_compositor, G_TYPE_OBJECT)
 enum {
 	SIGNAL_STARTUP,
 	SIGNAL_SHUTDOWN,
+	SIGNAL_CLIENT_ADDED,
+	SIGNAL_CLIENT_REMOVED,
+	SIGNAL_FOCUS_CHANGED,
 	N_SIGNALS
 };
 
@@ -206,6 +209,13 @@ gowl_compositor_dispose(GObject *object)
 	self = GOWL_COMPOSITOR(object);
 	self->running = FALSE;
 
+	/* Release GObject sub-object wrappers */
+	g_clear_object(&self->seat);
+	g_clear_object(&self->cursor_obj);
+	g_clear_object(&self->kb_group_obj);
+	g_clear_object(&self->idle_mgr);
+	g_clear_object(&self->bar);
+
 	G_OBJECT_CLASS(gowl_compositor_parent_class)->dispose(object);
 }
 
@@ -300,6 +310,66 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 		             NULL,
 		             G_TYPE_NONE,
 		             0);
+
+	/**
+	 * GowlCompositor::client-added:
+	 * @compositor: the #GowlCompositor that emitted the signal
+	 * @client: the #GowlClient that was mapped
+	 *
+	 * Emitted when a new client surface has been mapped and is
+	 * ready for display.  The client has already been inserted
+	 * into the compositor's client list and assigned a monitor.
+	 */
+	compositor_signals[SIGNAL_CLIENT_ADDED] =
+		g_signal_new("client-added",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             G_TYPE_OBJECT);
+
+	/**
+	 * GowlCompositor::client-removed:
+	 * @compositor: the #GowlCompositor that emitted the signal
+	 * @client: the #GowlClient that is being unmapped
+	 *
+	 * Emitted when a client surface is about to be unmapped.
+	 * The client is still in the compositor's client list when
+	 * this signal fires; it is removed immediately after.
+	 */
+	compositor_signals[SIGNAL_CLIENT_REMOVED] =
+		g_signal_new("client-removed",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             G_TYPE_OBJECT);
+
+	/**
+	 * GowlCompositor::focus-changed:
+	 * @compositor: the #GowlCompositor that emitted the signal
+	 * @client: (nullable): the #GowlClient that gained focus,
+	 *   or %NULL if focus was cleared
+	 *
+	 * Emitted when the focused client changes.  This is a
+	 * compositor-level mirror of GowlSeat::focus-changed.
+	 */
+	compositor_signals[SIGNAL_FOCUS_CHANGED] =
+		g_signal_new("focus-changed",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             G_TYPE_OBJECT);
 }
 
 static void
@@ -783,6 +853,408 @@ gowl_compositor_find_client_by_title(
 }
 
 /**
+ * gowl_compositor_get_seat:
+ * @self: a #GowlCompositor
+ *
+ * Returns the #GowlSeat wrapping the Wayland seat.  The seat is
+ * created during gowl_compositor_start() and owned by the compositor.
+ *
+ * Returns: (transfer none) (nullable): the #GowlSeat, or %NULL if
+ *   the compositor has not been started
+ */
+GowlSeat *
+gowl_compositor_get_seat(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->seat;
+}
+
+/**
+ * gowl_compositor_get_cursor:
+ * @self: a #GowlCompositor
+ *
+ * Returns the #GowlCursor wrapping the wlroots cursor and
+ * xcursor manager.
+ *
+ * Returns: (transfer none) (nullable): the #GowlCursor, or %NULL
+ *   if the compositor has not been started
+ */
+GowlCursor *
+gowl_compositor_get_cursor(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->cursor_obj;
+}
+
+/**
+ * gowl_compositor_get_keyboard_group:
+ * @self: a #GowlCompositor
+ *
+ * Returns the #GowlKeyboardGroup wrapping the XKB keyboard group,
+ * including repeat rate and delay settings.
+ *
+ * Returns: (transfer none) (nullable): the #GowlKeyboardGroup,
+ *   or %NULL if the compositor has not been started
+ */
+GowlKeyboardGroup *
+gowl_compositor_get_keyboard_group(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->kb_group_obj;
+}
+
+/**
+ * gowl_compositor_get_idle_manager:
+ * @self: a #GowlCompositor
+ *
+ * Returns the #GowlIdleManager wrapping the idle notification
+ * and idle-inhibit subsystems.
+ *
+ * Returns: (transfer none) (nullable): the #GowlIdleManager,
+ *   or %NULL if the compositor has not been started
+ */
+GowlIdleManager *
+gowl_compositor_get_idle_manager(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->idle_mgr;
+}
+
+/**
+ * gowl_compositor_get_bar:
+ * @self: a #GowlCompositor
+ *
+ * Returns the #GowlBar status bar for the compositor, or %NULL
+ * if no bar module is active.
+ *
+ * Returns: (transfer none) (nullable): the #GowlBar, or %NULL
+ */
+GowlBar *
+gowl_compositor_get_bar(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->bar;
+}
+
+/**
+ * gowl_compositor_set_bar:
+ * @self: a #GowlCompositor
+ * @bar: (nullable): a #GowlBar to set, or %NULL to clear
+ *
+ * Sets or clears the compositor's status bar.  The compositor
+ * takes a reference on @bar which is released on dispose or
+ * when a new bar is set.
+ */
+void
+gowl_compositor_set_bar(
+	GowlCompositor *self,
+	GowlBar        *bar
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->bar == bar)
+		return;
+
+	g_clear_object(&self->bar);
+
+	if (bar != NULL)
+		self->bar = g_object_ref(bar);
+}
+
+/**
+ * gowl_compositor_swap_clients:
+ * @self: a #GowlCompositor
+ * @c1: a #GowlClient
+ * @c2: a #GowlClient
+ *
+ * Swaps the positions of @c1 and @c2 in the tiling client list
+ * and re-arranges the layout on each affected monitor.
+ */
+void
+gowl_compositor_swap_clients(
+	GowlCompositor *self,
+	GowlClient     *c1,
+	GowlClient     *c2
+){
+	GList *l1, *l2;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(c1 != NULL);
+	g_return_if_fail(c2 != NULL);
+
+	if (c1 == c2)
+		return;
+
+	l1 = g_list_find(self->clients, c1);
+	l2 = g_list_find(self->clients, c2);
+
+	if (l1 == NULL || l2 == NULL)
+		return;
+
+	/* Swap data pointers (faster than relinking) */
+	l1->data = c2;
+	l2->data = c1;
+
+	/* Re-arrange affected monitors */
+	gowl_compositor_arrange(self, c1->mon);
+	if (c2->mon != c1->mon)
+		gowl_compositor_arrange(self, c2->mon);
+}
+
+/**
+ * gowl_compositor_zoom_client:
+ * @self: a #GowlCompositor
+ * @client: (nullable): the client to zoom, or %NULL for focused
+ *
+ * Promotes @client to the head of the tiling list (master
+ * position).  If @client is already master, promotes the second
+ * visible tiled client instead.  Floating clients are ignored.
+ *
+ * Ported from dwl's zoom().
+ */
+void
+gowl_compositor_zoom_client(
+	GowlCompositor *self,
+	GowlClient     *client
+){
+	GowlClient *sel, *first_visible;
+	GList *l;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	sel = client;
+	if (sel == NULL)
+		sel = focustop(self, self->selmon);
+
+	if (sel == NULL || sel->isfloating)
+		return;
+
+	/* Find the first visible tiled client on this monitor */
+	first_visible = NULL;
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *tc = (GowlClient *)l->data;
+		if (VISIBLEON(tc, self->selmon) && !tc->isfloating) {
+			first_visible = tc;
+			break;
+		}
+	}
+
+	/* If sel is already master, swap with next visible */
+	if (sel == first_visible) {
+		for (l = g_list_find(self->clients, sel)->next;
+		     l != NULL; l = l->next) {
+			GowlClient *tc = (GowlClient *)l->data;
+			if (VISIBLEON(tc, self->selmon) && !tc->isfloating) {
+				sel = tc;
+				break;
+			}
+		}
+	}
+
+	/* Move sel to the front of the client list */
+	if (sel != first_visible) {
+		self->clients = g_list_remove(self->clients, sel);
+		self->clients = g_list_prepend(self->clients, sel);
+		gowl_compositor_focus_client(self, sel, TRUE);
+		gowl_compositor_arrange(self, self->selmon);
+	}
+}
+
+/**
+ * gowl_compositor_screenshot_output:
+ * @self: a #GowlCompositor
+ * @output_name: (nullable): output name, or %NULL for focused monitor
+ * @width: (out): receives the screenshot width
+ * @height: (out): receives the screenshot height
+ * @error: (nullable): return location for a #GError
+ *
+ * Captures a screenshot of the specified output by reading back
+ * pixels from the output's framebuffer.
+ *
+ * Returns: (transfer full) (nullable): a #GBytes containing RGBA
+ *   pixel data (4 bytes per pixel, row-major), or %NULL on error
+ */
+GBytes *
+gowl_compositor_screenshot_output(
+	GowlCompositor  *self,
+	const gchar     *output_name,
+	gint            *width,
+	gint            *height,
+	GError         **error
+){
+	GowlMonitor *mon;
+	struct wlr_output *output;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	/* Find the target output */
+	if (output_name != NULL) {
+		GList *l;
+
+		mon = NULL;
+		for (l = self->monitors; l != NULL; l = l->next) {
+			GowlMonitor *m = GOWL_MONITOR(l->data);
+			if (g_strcmp0(m->wlr_output->name, output_name) == 0) {
+				mon = m;
+				break;
+			}
+		}
+	} else {
+		mon = self->selmon;
+	}
+
+	if (mon == NULL || mon->wlr_output == NULL) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		                    "No output found for screenshot");
+		return NULL;
+	}
+
+	output = mon->wlr_output;
+
+	/* Render the scene to a buffer via wlr_scene_output_build_state
+	 * and read back pixels with wlr_buffer_begin_data_ptr_access. */
+	{
+		struct wlr_output_state state;
+		struct wlr_buffer *buffer;
+		void *data;
+		uint32_t fmt;
+		size_t stride, size;
+		guint8 *pixels;
+
+		if (mon->scene_output == NULL) {
+			if (width != NULL)  *width  = 0;
+			if (height != NULL) *height = 0;
+			g_set_error_literal(error, G_IO_ERROR,
+			                    G_IO_ERROR_FAILED,
+			                    "Monitor has no scene output");
+			return NULL;
+		}
+
+		wlr_output_state_init(&state);
+
+		if (!wlr_scene_output_build_state(mon->scene_output,
+		                                   &state, NULL)) {
+			wlr_output_state_finish(&state);
+			if (width != NULL)  *width  = 0;
+			if (height != NULL) *height = 0;
+			g_set_error_literal(error, G_IO_ERROR,
+			                    G_IO_ERROR_FAILED,
+			                    "Failed to render scene for screenshot");
+			return NULL;
+		}
+
+		if (!(state.committed & WLR_OUTPUT_STATE_BUFFER) ||
+		    state.buffer == NULL) {
+			wlr_output_state_finish(&state);
+			if (width != NULL)  *width  = 0;
+			if (height != NULL) *height = 0;
+			g_set_error_literal(error, G_IO_ERROR,
+			                    G_IO_ERROR_FAILED,
+			                    "Scene render produced no buffer");
+			return NULL;
+		}
+
+		buffer = state.buffer;
+
+		if (!wlr_buffer_begin_data_ptr_access(buffer,
+		        WLR_BUFFER_DATA_PTR_ACCESS_READ,
+		        &data, &fmt, &stride)) {
+			wlr_output_state_finish(&state);
+			if (width != NULL)  *width  = 0;
+			if (height != NULL) *height = 0;
+			g_set_error_literal(error, G_IO_ERROR,
+			                    G_IO_ERROR_FAILED,
+			                    "Cannot access output buffer data");
+			return NULL;
+		}
+
+		if (width != NULL)  *width  = buffer->width;
+		if (height != NULL) *height = buffer->height;
+
+		size = stride * (size_t)buffer->height;
+		pixels = g_malloc(size);
+		memcpy(pixels, data, size);
+
+		wlr_buffer_end_data_ptr_access(buffer);
+		wlr_output_state_finish(&state);
+
+		return g_bytes_new_take(pixels, size);
+	}
+}
+
+/**
+ * gowl_compositor_screenshot_client:
+ * @self: a #GowlCompositor
+ * @client: the #GowlClient to capture
+ * @width: (out): receives the screenshot width
+ * @height: (out): receives the screenshot height
+ * @error: (nullable): return location for a #GError
+ *
+ * Captures a screenshot of a specific client surface.
+ *
+ * Returns: (transfer full) (nullable): a #GBytes containing RGBA
+ *   pixel data, or %NULL on error
+ */
+GBytes *
+gowl_compositor_screenshot_client(
+	GowlCompositor  *self,
+	GowlClient      *client,
+	gint            *width,
+	gint            *height,
+	GError         **error
+){
+	struct wlr_surface *surface;
+	struct wlr_buffer *buffer;
+	void *data;
+	uint32_t fmt;
+	size_t stride, size;
+	guint8 *pixels;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	g_return_val_if_fail(GOWL_IS_CLIENT(client), NULL);
+
+	surface = gowl_client_get_wlr_surface(client);
+	if (surface == NULL || surface->buffer == NULL) {
+		if (width != NULL)  *width  = 0;
+		if (height != NULL) *height = 0;
+		g_set_error_literal(error, G_IO_ERROR,
+		                    G_IO_ERROR_NOT_FOUND,
+		                    "Client has no surface buffer");
+		return NULL;
+	}
+
+	buffer = &surface->buffer->base;
+
+	if (!wlr_buffer_begin_data_ptr_access(buffer,
+	        WLR_BUFFER_DATA_PTR_ACCESS_READ,
+	        &data, &fmt, &stride)) {
+		if (width != NULL)  *width  = 0;
+		if (height != NULL) *height = 0;
+		g_set_error_literal(error, G_IO_ERROR,
+		                    G_IO_ERROR_FAILED,
+		                    "Cannot access client buffer data");
+		return NULL;
+	}
+
+	if (width != NULL)  *width  = buffer->width;
+	if (height != NULL) *height = buffer->height;
+
+	/* Copy pixel data — 4 bytes per pixel (ARGB/XRGB). */
+	size = stride * (size_t)buffer->height;
+	pixels = g_malloc(size);
+	memcpy(pixels, data, size);
+
+	wlr_buffer_end_data_ptr_access(buffer);
+
+	return g_bytes_new_take(pixels, size);
+}
+
+/**
  * gowl_compositor_start:
  * @self: a #GowlCompositor
  * @error: (nullable): return location for a #GError
@@ -1020,6 +1492,24 @@ gowl_compositor_start(
 		wlr_seat_set_keyboard(self->wlr_seat,
 		                      &self->wlr_kb_group->keyboard);
 	}
+
+	/* 17b. GObject sub-object wrappers */
+	self->seat = gowl_seat_new();
+	self->seat->wlr_seat = self->wlr_seat;
+
+	self->cursor_obj = gowl_cursor_new();
+	self->cursor_obj->wlr_cursor      = self->wlr_cursor;
+	self->cursor_obj->xcursor_manager = self->xcursor_mgr;
+
+	self->kb_group_obj = gowl_keyboard_group_new();
+	self->kb_group_obj->wlr_group = self->wlr_kb_group;
+
+	self->idle_mgr = gowl_idle_manager_new();
+	self->idle_mgr->wlr_idle_notifier = self->idle_notifier;
+
+	/* Wire cross-references */
+	self->seat->keyboard_group = self->kb_group_obj;
+	self->seat->cursor         = self->cursor_obj;
 
 	/* 18. Output manager */
 	self->output_mgr = wlr_output_manager_v1_create(self->wl_display);
@@ -1780,6 +2270,11 @@ gowl_compositor_focus_client(
 		/* No client: clear focus */
 		wlr_seat_keyboard_notify_clear_focus(self->wlr_seat);
 
+		if (self->seat != NULL)
+			gowl_seat_set_focused_client(self->seat, NULL);
+		g_signal_emit(self, compositor_signals[SIGNAL_FOCUS_CHANGED],
+		              0, NULL);
+
 		/* Push empty title to IPC subscribers */
 		if (self->ipc != NULL)
 			gowl_ipc_push_event(self->ipc, "EVENT title ");
@@ -1803,6 +2298,13 @@ gowl_compositor_focus_client(
 
 	/* Activate the surface */
 	wlr_xdg_toplevel_set_activated(c->xdg_toplevel, TRUE);
+
+	/* Sync GowlSeat focused client (emits seat "focus-changed" signal) */
+	if (self->seat != NULL)
+		gowl_seat_set_focused_client(self->seat, c);
+
+	/* Emit compositor-level focus-changed signal */
+	g_signal_emit(self, compositor_signals[SIGNAL_FOCUS_CHANGED], 0, c);
 
 	/* Push title to IPC subscribers */
 	if (self->ipc != NULL)
@@ -2555,48 +3057,7 @@ keybinding(
 				return TRUE;
 			}
 			case GOWL_ACTION_ZOOM: {
-				/*
-				 * Promote the focused client to the head of the
-				 * tiling list (master position).  If it is already
-				 * master, promote the second visible client instead.
-				 * Ported from dwl's zoom().
-				 */
-				GowlClient *sel, *first_visible;
-				GList *l;
-
-				sel = focustop(self, self->selmon);
-				if (sel == NULL || sel->isfloating)
-					return TRUE;
-
-				/* Find the first visible tiled client on this monitor */
-				first_visible = NULL;
-				for (l = self->clients; l != NULL; l = l->next) {
-					GowlClient *tc = (GowlClient *)l->data;
-					if (VISIBLEON(tc, self->selmon) && !tc->isfloating) {
-						first_visible = tc;
-						break;
-					}
-				}
-
-				/* If sel is already master, swap with next visible */
-				if (sel == first_visible) {
-					for (l = g_list_find(self->clients, sel)->next;
-					     l != NULL; l = l->next) {
-						GowlClient *tc = (GowlClient *)l->data;
-						if (VISIBLEON(tc, self->selmon) && !tc->isfloating) {
-							sel = tc;
-							break;
-						}
-					}
-				}
-
-				/* Move sel to the front of the client list */
-				if (sel != first_visible) {
-					self->clients = g_list_remove(self->clients, sel);
-					self->clients = g_list_prepend(self->clients, sel);
-					gowl_compositor_focus_client(self, sel, TRUE);
-					gowl_compositor_arrange(self, self->selmon);
-				}
+				gowl_compositor_zoom_client(self, NULL);
 				return TRUE;
 			}
 			case GOWL_ACTION_FOCUS_MONITOR: {
@@ -3504,6 +3965,8 @@ on_client_map(struct wl_listener *listener, void *data)
 	if (self->client_map_func != NULL)
 		self->client_map_func(self, c, self->client_map_data);
 
+	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_ADDED], 0, c);
+
 	g_debug("Client mapped: %s (%s)",
 	        c->xdg_toplevel->title ? c->xdg_toplevel->title : "(untitled)",
 	        c->xdg_toplevel->app_id ? c->xdg_toplevel->app_id : "(no app_id)");
@@ -3525,6 +3988,8 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	c = wl_container_of(listener, c, unmap);
 	self = c->compositor;
 	(void)data;
+
+	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_REMOVED], 0, c);
 
 	/* Cancel any interactive grab */
 	if (c == self->grabbed_client) {

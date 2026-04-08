@@ -732,3 +732,19 @@ gowl_monitor_set_transform(
 
 	return ok;
 }
+
+/**
+ * gowl_monitor_get_layer_surfaces:
+ * @self: a #GowlMonitor
+ *
+ * Returns the list of layer surfaces on this monitor.
+ *
+ * Returns: (transfer none) (element-type GowlLayerSurface): the list
+ */
+GList *
+gowl_monitor_get_layer_surfaces(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), NULL);
+
+	return self->layer_surfaces;
+}

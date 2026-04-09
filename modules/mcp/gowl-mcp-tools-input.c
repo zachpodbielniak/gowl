@@ -304,10 +304,12 @@ handle_send_key(
  * a key press/release pair.  Characters that live on a higher
  * keymap level (e.g. Shift for uppercase letters, symbols like
  * '(', ')', ':') are handled by sending real modifier key press/release
- * events via wlr_seat_keyboard_notify_key rather than using
- * wlr_seat_keyboard_notify_modifiers.  This ensures wlroots updates the
- * XKB state machine correctly and emits wl_keyboard.modifiers with
- * proper serials, which GTK-based clients require.
+ * events via wlr_seat_keyboard_notify_key.  However, those key events
+ * alone do NOT cause wlroots to emit wl_keyboard.modifiers to the
+ * client, so we must also call wlr_seat_keyboard_notify_modifiers to
+ * explicitly push the modifier state before the character key and
+ * restore the original state afterwards.  Without this, clients see
+ * the bare keycode without modifiers (e.g. '2' instead of '@').
  * Characters that cannot be mapped are skipped.
  */
 static McpToolResult *
@@ -373,12 +375,12 @@ tool_send_text(
 		 * If the keysym lives on a level that requires modifiers
 		 * (e.g. level 1 = Shift for uppercase letters and symbols
 		 * like '&', '?', ':', '!', '@', etc.), send the modifier
-		 * keys as real key press/release events rather than using
-		 * wlr_seat_keyboard_notify_modifiers.  Real modifier key
-		 * events cause wlroots to update the XKB state machine and
-		 * emit wl_keyboard.modifiers with correct serials, which
-		 * GTK-based clients (e.g. Firefox) require to properly
-		 * scope the modifier to the adjacent character key event.
+		 * keys as real key press/release events AND explicitly
+		 * push the modifier state via
+		 * wlr_seat_keyboard_notify_modifiers.  The key events
+		 * alone do not cause wlroots to send wl_keyboard.modifiers
+		 * to the client, so without the explicit modifiers call
+		 * the client sees the bare keycode (e.g. '2' not '@').
 		 */
 		if (level > 0) {
 			xkb_mod_mask_t masks[8];
@@ -387,6 +389,7 @@ tool_send_text(
 			gint nmod_keys;
 			gint i;
 			gint bit;
+			struct wlr_keyboard_modifiers orig_mods;
 
 			nmasks = xkb_keymap_key_get_mods_for_level(
 				kb->keymap, xkb_kc, layout, level,
@@ -410,12 +413,24 @@ tool_send_text(
 				}
 			}
 
+			/* Save original modifier state */
+			orig_mods = kb->modifiers;
+
 			/* Press modifier keys */
 			for (i = 0; i < nmod_keys; i++) {
 				wlr_seat_keyboard_notify_key(
 					module->compositor->wlr_seat,
 					time_ms++, mod_evdev[i],
 					WL_KEYBOARD_KEY_STATE_PRESSED);
+			}
+
+			/* Explicitly push modifier state to client */
+			{
+				struct wlr_keyboard_modifiers mod_state = orig_mods;
+				mod_state.depressed = masks[0];
+				wlr_seat_keyboard_notify_modifiers(
+					module->compositor->wlr_seat,
+					&mod_state);
 			}
 
 			/* Press and release the character key */
@@ -436,6 +451,11 @@ tool_send_text(
 					time_ms++, mod_evdev[i],
 					WL_KEYBOARD_KEY_STATE_RELEASED);
 			}
+
+			/* Restore original modifier state */
+			wlr_seat_keyboard_notify_modifiers(
+				module->compositor->wlr_seat,
+				&orig_mods);
 
 		} else {
 			/* No modifier needed — send key press/release directly */

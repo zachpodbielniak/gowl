@@ -238,6 +238,7 @@ gowl_client_init(GowlClient *self)
 	memset(&self->prev, 0, sizeof(self->prev));
 	self->tags          = 1;
 	self->bw            = 1;
+	self->alpha         = 1.0f;
 	self->isfloating    = FALSE;
 	self->isurgent      = FALSE;
 	self->isfullscreen  = FALSE;
@@ -782,4 +783,46 @@ gowl_client_set_embedded(
 ){
 	g_return_if_fail(GOWL_IS_CLIENT(self));
 	self->isembedded = embedded;
+}
+
+/* --- Alpha / opacity --- */
+
+static void
+set_opacity_iter(struct wlr_scene_buffer *buffer,
+                 int sx, int sy, void *data)
+{
+	gfloat *alpha = (gfloat *)data;
+	(void)sx;
+	(void)sy;
+	wlr_scene_buffer_set_opacity(buffer, *alpha);
+}
+
+/**
+ * gowl_client_get_alpha:
+ */
+gfloat
+gowl_client_get_alpha(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), 1.0f);
+	return self->alpha;
+}
+
+/**
+ * gowl_client_set_alpha:
+ */
+void
+gowl_client_set_alpha(
+	GowlClient *self,
+	gfloat      alpha
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	if (alpha < 0.0f) alpha = 0.0f;
+	if (alpha > 1.0f) alpha = 1.0f;
+
+	self->alpha = alpha;
+
+	if (self->scene != NULL)
+		wlr_scene_node_for_each_buffer(&self->scene->node,
+		                                set_opacity_iter, &self->alpha);
 }

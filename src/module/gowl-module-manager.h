@@ -56,6 +56,18 @@ void                gowl_module_manager_deactivate_all   (GowlModuleManager *sel
 
 GList              *gowl_module_manager_get_modules      (GowlModuleManager *self);
 
+/**
+ * gowl_module_manager_find_module:
+ * @self: a #GowlModuleManager
+ * @name: the module name to search for
+ *
+ * Finds a loaded module by name.
+ *
+ * Returns: (transfer none) (nullable): the #GowlModule, or %NULL
+ */
+GowlModule         *gowl_module_manager_find_module      (GowlModuleManager *self,
+                                                           const gchar       *name);
+
 void                gowl_module_manager_load_from_directory(GowlModuleManager *self,
                                                              const gchar       *dir_path);
 

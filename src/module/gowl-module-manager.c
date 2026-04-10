@@ -575,6 +575,37 @@ gowl_module_manager_get_modules(GowlModuleManager *self)
 }
 
 /**
+ * gowl_module_manager_find_module:
+ * @self: a #GowlModuleManager
+ * @name: the module name to search for
+ *
+ * Finds a loaded module by name.
+ *
+ * Returns: (transfer none) (nullable): the #GowlModule, or %NULL
+ */
+GowlModule *
+gowl_module_manager_find_module(GowlModuleManager *self,
+                                const gchar       *name)
+{
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+	g_return_val_if_fail(name != NULL, NULL);
+
+	for (i = 0; i < self->modules->len; i++) {
+		GowlModule *mod;
+		const gchar *mod_name;
+
+		mod = (GowlModule *)g_ptr_array_index(self->modules, i);
+		mod_name = gowl_module_get_name(mod);
+		if (mod_name != NULL && strcmp(mod_name, name) == 0)
+			return mod;
+	}
+
+	return NULL;
+}
+
+/**
  * gowl_module_manager_load_from_directory:
  * @self: a #GowlModuleManager
  * @dir_path: path to a directory containing .so module files

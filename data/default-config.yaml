@@ -201,6 +201,12 @@ modules:
     path: "~/Pictures/wallpaper.png"
     # Scaling mode: fill | fit | center | stretch | tile
     mode: fill
+  alpha:
+    enabled: false
+    # Opacity for the focused window (0.0 = transparent, 1.0 = opaque)
+    focused-alpha: 1.0
+    # Opacity for unfocused windows
+    unfocused-alpha: 0.8
   pertag:
     enabled: false
   autostart:

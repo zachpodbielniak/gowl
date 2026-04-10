@@ -182,6 +182,29 @@ gboolean           gowl_client_get_embedded      (GowlClient  *self);
 void               gowl_client_set_embedded      (GowlClient  *self,
                                                    gboolean     embedded);
 
+/**
+ * gowl_client_get_alpha:
+ * @self: a #GowlClient
+ *
+ * Returns the opacity of this client.  The value ranges from
+ * 0.0 (fully transparent) to 1.0 (fully opaque).
+ *
+ * Returns: the alpha value
+ */
+gfloat             gowl_client_get_alpha         (GowlClient  *self);
+
+/**
+ * gowl_client_set_alpha:
+ * @self: a #GowlClient
+ * @alpha: opacity value between 0.0 and 1.0
+ *
+ * Sets the opacity of this client by walking its scene tree and
+ * calling wlr_scene_buffer_set_opacity() on each buffer node.
+ * Values are clamped to the [0.0, 1.0] range.
+ */
+void               gowl_client_set_alpha         (GowlClient  *self,
+                                                   gfloat       alpha);
+
 G_END_DECLS
 
 #endif /* GOWL_CLIENT_H */

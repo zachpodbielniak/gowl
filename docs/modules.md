@@ -534,6 +534,37 @@ Gowl ships with several modules in the `modules/` directory:
 | `centeredmaster` | Centered master layout |
 | `ipc` | IPC socket command handler |
 | `copyhighlight` | Sync primary selection to clipboard on text highlight |
+| `alpha` | Per-client window opacity with focus dimming |
+
+### Alpha Module
+
+The alpha module controls per-client window opacity. When the focused client changes, the previously focused client fades to `unfocused-alpha` and the newly focused client is set to `focused-alpha`.
+
+**Interfaces:** `GowlStartupHandler`, `GowlShutdownHandler`
+
+**Configuration keys:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `focused-alpha` | float | 1.0 | Opacity for the focused window (0.0--1.0) |
+| `unfocused-alpha` | float | 0.8 | Opacity for unfocused windows (0.0--1.0) |
+
+**YAML example:**
+
+```yaml
+modules:
+  alpha:
+    enabled: true
+    focused-alpha: 1.0
+    unfocused-alpha: 0.7
+```
+
+**Implementation notes:**
+
+- Uses `gowl_client_set_alpha()` which walks the client's scene tree via `wlr_scene_node_for_each_buffer()` and calls `wlr_scene_buffer_set_opacity()` on each buffer.
+- Connects to the compositor's `focus-changed` signal to automatically apply alpha on focus changes.
+- On deactivation, resets all clients to fully opaque (alpha 1.0).
+- Applying configuration while running immediately re-applies alpha to all existing clients.
 
 ## Tips
 

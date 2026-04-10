@@ -349,6 +349,7 @@ struct _GowlClient {
 	gboolean isurgent;
 	gboolean isfullscreen;
 	gboolean isembedded;     /* externally managed (skip arrange) */
+	gfloat   alpha;          /* opacity: 0.0 (transparent) to 1.0 (opaque) */
 	guint32  resize;         /* pending configure serial */
 
 	gchar *title;

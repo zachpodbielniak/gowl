@@ -3876,6 +3876,12 @@ on_client_commit(struct wl_listener *listener, void *data)
 	if (c->resize != 0 &&
 	    c->resize <= c->xdg_toplevel->base->current.configure_serial)
 		c->resize = 0;
+
+	/* Re-apply client opacity.  wlr_scene_surface's commit handler
+	 * resets the scene buffer opacity to 1.0 on every commit, so
+	 * we must re-apply our custom alpha after each frame. */
+	if (c->alpha < 1.0f)
+		gowl_client_set_alpha(c, c->alpha);
 }
 
 /**
@@ -3902,9 +3908,16 @@ on_client_map(struct wl_listener *listener, void *data)
 	/* Disabled until arrange() turns it on */
 	wlr_scene_node_set_enabled(&c->scene->node, FALSE);
 
-	/* Create the XDG surface scene tree within the client container */
+	/* Create the XDG surface scene tree within the client container.
+	 * wlr_scene_xdg_surface_create adds an internal commit listener
+	 * that resets scene buffer opacity to 1.0 on every frame.
+	 * Re-register our commit listener AFTER this so gowl's handler
+	 * fires last and can re-apply per-client alpha. */
 	c->scene_surface = wlr_scene_xdg_surface_create(c->scene,
 	                                                  c->xdg_toplevel->base);
+	wl_list_remove(&c->commit.link);
+	wl_signal_add(&c->xdg_toplevel->base->surface->events.commit,
+	              &c->commit);
 	c->scene->node.data = c;
 	c->scene_surface->node.data = c;
 

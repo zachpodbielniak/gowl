@@ -74,3 +74,74 @@ gowl_client_decorator_should_draw_border(
 		return iface->should_draw_border(self, client);
 	return FALSE;
 }
+
+/**
+ * gowl_client_decorator_render_decoration:
+ * @self: a #GowlClientDecorator
+ * @client: the client to decorate
+ * @width: total client geometry width (including borders)
+ * @height: total client geometry height (including borders)
+ * @bw: border width in pixels
+ * @color: (array fixed-size=4): RGBA border color (pre-multiplied floats)
+ *
+ * Renders the decoration for @client.  The implementor creates or
+ * updates scene-graph nodes (typically a cairo-rendered wlr_scene_buffer)
+ * positioned relative to the client's scene tree.
+ */
+void
+gowl_client_decorator_render_decoration(
+	GowlClientDecorator *self,
+	gpointer             client,
+	gint                 width,
+	gint                 height,
+	guint                bw,
+	const float         *color
+){
+	GowlClientDecoratorInterface *iface;
+
+	g_return_if_fail(GOWL_IS_CLIENT_DECORATOR(self));
+
+	iface = GOWL_CLIENT_DECORATOR_GET_IFACE(self);
+	if (iface->render_decoration != NULL)
+		iface->render_decoration(self, client, width, height, bw, color);
+}
+
+/**
+ * gowl_client_decorator_destroy_decoration:
+ * @self: a #GowlClientDecorator
+ * @client: the client whose decoration should be removed
+ *
+ * Cleans up all decoration state for @client.
+ */
+void
+gowl_client_decorator_destroy_decoration(
+	GowlClientDecorator *self,
+	gpointer             client
+){
+	GowlClientDecoratorInterface *iface;
+
+	g_return_if_fail(GOWL_IS_CLIENT_DECORATOR(self));
+
+	iface = GOWL_CLIENT_DECORATOR_GET_IFACE(self);
+	if (iface->destroy_decoration != NULL)
+		iface->destroy_decoration(self, client);
+}
+
+/**
+ * gowl_client_decorator_get_corner_radius:
+ * @self: a #GowlClientDecorator
+ *
+ * Returns: the corner radius in pixels, or 0 for square corners
+ */
+gint
+gowl_client_decorator_get_corner_radius(GowlClientDecorator *self)
+{
+	GowlClientDecoratorInterface *iface;
+
+	g_return_val_if_fail(GOWL_IS_CLIENT_DECORATOR(self), 0);
+
+	iface = GOWL_CLIENT_DECORATOR_GET_IFACE(self);
+	if (iface->get_corner_radius != NULL)
+		return iface->get_corner_radius(self);
+	return 0;
+}

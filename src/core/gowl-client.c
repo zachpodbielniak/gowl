@@ -689,6 +689,13 @@ gowl_client_get_wlr_surface(GowlClient *self)
 	return self->xdg_toplevel->base->surface;
 }
 
+struct wlr_scene_tree *
+gowl_client_get_scene(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), NULL);
+	return self->scene;
+}
+
 /**
  * gowl_client_get_border_width:
  * @self: a #GowlClient

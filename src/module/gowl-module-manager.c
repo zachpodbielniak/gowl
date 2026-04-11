@@ -29,6 +29,7 @@
 #include "interfaces/gowl-wallpaper-provider.h"
 #include "interfaces/gowl-lock-handler.h"
 #include "interfaces/gowl-bar-provider.h"
+#include "interfaces/gowl-client-decorator.h"
 #include "interfaces/gowl-screenshot-provider.h"
 #include "interfaces/gowl-recording-provider.h"
 
@@ -57,6 +58,7 @@ struct _GowlModuleManager {
 	GPtrArray *wallpaper_providers; /* element-type GowlWallpaperProvider* */
 	GPtrArray *lock_handlers;      /* element-type GowlLockHandler*       */
 	GPtrArray *bar_providers;      /* element-type GowlBarProvider*       */
+	GPtrArray *decorator_providers;   /* element-type GowlClientDecorator*    */
 	GPtrArray *screenshot_providers; /* element-type GowlScreenshotProvider* */
 	GPtrArray *recording_providers;  /* element-type GowlRecordingProvider*  */
 };
@@ -161,6 +163,7 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->wallpaper_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->lock_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->bar_providers, g_ptr_array_unref);
+	g_clear_pointer(&self->decorator_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->screenshot_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->recording_providers, g_ptr_array_unref);
 
@@ -265,6 +268,7 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->wallpaper_providers = g_ptr_array_new();
 	self->lock_handlers         = g_ptr_array_new();
 	self->bar_providers         = g_ptr_array_new();
+	self->decorator_providers   = g_ptr_array_new();
 	self->screenshot_providers  = g_ptr_array_new();
 	self->recording_providers   = g_ptr_array_new();
 }
@@ -333,6 +337,11 @@ classify_module(
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_BAR_PROVIDER)) {
 		g_ptr_array_add(self->bar_providers, (gpointer)mod);
 		sort_dispatch_array(self->bar_providers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_CLIENT_DECORATOR)) {
+		g_ptr_array_add(self->decorator_providers, (gpointer)mod);
+		sort_dispatch_array(self->decorator_providers);
 	}
 
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_SCREENSHOT_PROVIDER)) {
@@ -1241,4 +1250,32 @@ gowl_module_manager_dispatch_bar_render(
 
 		gowl_bar_provider_render_bar(provider, monitor);
 	}
+}
+
+/**
+ * gowl_module_manager_get_decorator:
+ * @self: a #GowlModuleManager
+ *
+ * Returns the first active #GowlClientDecorator module, or %NULL.
+ *
+ * Returns: (transfer none) (nullable): the active decorator
+ */
+gpointer
+gowl_module_manager_get_decorator(GowlModuleManager *self)
+{
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+
+	for (i = 0; i < self->decorator_providers->len; i++) {
+		GowlClientDecorator *dec;
+
+		dec = (GowlClientDecorator *)g_ptr_array_index(
+			self->decorator_providers, i);
+
+		if (gowl_module_get_is_active(GOWL_MODULE(dec)))
+			return dec;
+	}
+
+	return NULL;
 }

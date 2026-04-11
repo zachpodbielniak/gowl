@@ -19,6 +19,7 @@
 #include "gowl-core-private.h"
 #include "config/gowl-keybind.h"
 #include "module/gowl-module-manager.h"
+#include "interfaces/gowl-client-decorator.h"
 
 #ifdef GOWL_HAVE_LIBDECOR
 #include "gowl-decor.h"
@@ -1995,18 +1996,54 @@ resize_client(
 	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 
-	/* top, bottom, left, right borders */
-	wlr_scene_rect_set_size(c->border[0], c->geom.width, c->bw);
-	wlr_scene_rect_set_size(c->border[1], c->geom.width, c->bw);
-	wlr_scene_rect_set_size(c->border[2], c->bw,
-	                        c->geom.height - 2 * (gint)c->bw);
-	wlr_scene_rect_set_size(c->border[3], c->bw,
-	                        c->geom.height - 2 * (gint)c->bw);
-	wlr_scene_node_set_position(&c->border[1]->node,
-	                            0, c->geom.height - (gint)c->bw);
-	wlr_scene_node_set_position(&c->border[2]->node, 0, c->bw);
-	wlr_scene_node_set_position(&c->border[3]->node,
-	                            c->geom.width - (gint)c->bw, c->bw);
+	/* Borders: delegate to decorator module if active, else use rects */
+	{
+		GowlClientDecorator *dec;
+
+		dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
+		          self->module_mgr);
+		if (dec != NULL) {
+			gint bi;
+
+			/* Hide rect borders when decorator is active */
+			for (bi = 0; bi < 4; bi++) {
+				if (c->border[bi] != NULL)
+					wlr_scene_node_set_enabled(
+						&c->border[bi]->node, FALSE);
+			}
+			/* Decorator renders the rounded frame */
+			gowl_client_decorator_render_decoration(
+				dec, c, c->geom.width, c->geom.height, c->bw,
+				(c == gowl_compositor_get_focused_client(self))
+					? self->focus_color : self->unfocus_color);
+		} else {
+			gint bi;
+
+			/* Re-enable rect borders if decorator was deactivated */
+			for (bi = 0; bi < 4; bi++) {
+				if (c->border[bi] != NULL)
+					wlr_scene_node_set_enabled(
+						&c->border[bi]->node, TRUE);
+			}
+			/* top, bottom, left, right borders */
+			wlr_scene_rect_set_size(c->border[0],
+			                        c->geom.width, c->bw);
+			wlr_scene_rect_set_size(c->border[1],
+			                        c->geom.width, c->bw);
+			wlr_scene_rect_set_size(c->border[2], c->bw,
+			                        c->geom.height - 2 * (gint)c->bw);
+			wlr_scene_rect_set_size(c->border[3], c->bw,
+			                        c->geom.height - 2 * (gint)c->bw);
+			wlr_scene_node_set_position(&c->border[1]->node,
+			                            0,
+			                            c->geom.height - (gint)c->bw);
+			wlr_scene_node_set_position(&c->border[2]->node,
+			                            0, c->bw);
+			wlr_scene_node_set_position(&c->border[3]->node,
+			                            c->geom.width - (gint)c->bw,
+			                            c->bw);
+		}
+	}
 
 	/* Send configure to the XDG toplevel */
 	c->resize = wlr_xdg_toplevel_set_size(c->xdg_toplevel,
@@ -2244,10 +2281,21 @@ pointerfocus(
  */
 static void
 client_set_border_color(
-	GowlClient *c,
-	float       color[4]
+	GowlCompositor *self,
+	GowlClient     *c,
+	float           color[4]
 ){
 	gint i;
+	GowlClientDecorator *dec;
+
+	/* If a decorator module is active, delegate to it */
+	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
+	          self->module_mgr);
+	if (dec != NULL) {
+		gowl_client_decorator_render_decoration(
+			dec, c, c->geom.width, c->geom.height, c->bw, color);
+		return;
+	}
 
 	for (i = 0; i < 4; i++) {
 		if (c->border[i] != NULL)
@@ -2506,7 +2554,7 @@ gowl_compositor_focus_client(
 
 		/* Set focused border colour */
 		if (self->wlr_seat->drag == NULL)
-			client_set_border_color(c, self->focus_color);
+			client_set_border_color(self, c, self->focus_color);
 	}
 
 	/* Deactivate old client */
@@ -2527,7 +2575,7 @@ gowl_compositor_focus_client(
 
 				old_c = (GowlClient *)old_toplevel->base->data;
 				if (old_c != NULL)
-					client_set_border_color(old_c, self->unfocus_color);
+					client_set_border_color(self, old_c, self->unfocus_color);
 				wlr_xdg_toplevel_set_activated(old_toplevel, FALSE);
 			}
 		}

@@ -621,6 +621,36 @@ modules:
 - Subprocess widgets (cmd, volume, media, podman, weather) use `g_spawn_command_line_sync()`
 - Git widget reads focused client's CWD via `gowl_client_get_process_info()` → `/proc/PID/cwd`
 
+### Rounded Corners Module
+
+Replaces flat rectangular window borders with cairo-rendered rounded rectangle frames. Each client gets a single `wlr_scene_buffer` with a rounded border stroke and transparent interior.
+
+**Interfaces:** `GowlClientDecorator`, `GowlStartupHandler`, `GowlShutdownHandler`
+
+**Configuration keys:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `radius` | int | 12 | Corner radius in pixels (0-100) |
+
+**YAML example:**
+
+```yaml
+modules:
+  roundcorners:
+    enabled: true
+    radius: 12
+```
+
+**Implementation notes:**
+
+- Implements `GowlClientDecorator` interface — the compositor delegates border rendering to this module when active
+- Per-client decoration state cached in a GHashTable (key: GowlClient pointer, value: RoundDecor struct)
+- Rendering uses cairo: rounded rectangle path with 4 arcs, stroked with border width/color
+- Cached — only re-rendered when client size, border width, or color changes
+- When the module is disabled, the compositor reverts to its default 4-rect borders
+- The `GowlClientDecorator` interface is extensible — other modules could implement custom decoration styles (e.g., title bars, shadows)
+
 ### Alpha Module
 
 The alpha module controls per-client window opacity. When the focused client changes, the previously focused client fades to `unfocused-alpha` and the newly focused client is set to `focused-alpha`.

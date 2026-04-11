@@ -131,6 +131,17 @@ GowlProcessInfo *gowl_client_get_process_info  (GowlClient  *self);
 struct wlr_surface *gowl_client_get_wlr_surface (GowlClient *self);
 
 /**
+ * gowl_client_get_scene:
+ * @self: a #GowlClient
+ *
+ * Returns the client's top-level scene tree container node.
+ * Border decorations and the surface tree are children of this node.
+ *
+ * Returns: (transfer none) (nullable): the wlr_scene_tree
+ */
+struct wlr_scene_tree *gowl_client_get_scene    (GowlClient *self);
+
+/**
  * gowl_client_get_border_width:
  * @self: a #GowlClient
  *

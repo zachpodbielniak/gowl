@@ -137,6 +137,17 @@ void                gowl_module_manager_dispatch_bar_render
                                                            gpointer           compositor,
                                                            gpointer           monitor);
 
+/**
+ * gowl_module_manager_get_decorator:
+ * @self: a #GowlModuleManager
+ *
+ * Returns the first active #GowlClientDecorator module, or %NULL
+ * if no decorator is loaded and active.
+ *
+ * Returns: (transfer none) (nullable): the active decorator
+ */
+gpointer            gowl_module_manager_get_decorator (GowlModuleManager *self);
+
 G_END_DECLS
 
 #endif /* GOWL_MODULE_MANAGER_H */

@@ -34,6 +34,8 @@ G_DEFINE_FINAL_TYPE(GowlSeat, gowl_seat, G_TYPE_OBJECT)
 /* Signal identifiers */
 enum {
 	SIGNAL_FOCUS_CHANGED,
+	SIGNAL_CLIPBOARD_CHANGED,
+	SIGNAL_PRIMARY_SELECTION_CHANGED,
 	N_SIGNALS
 };
 
@@ -81,6 +83,42 @@ gowl_seat_class_init(GowlSeatClass *klass)
 	 */
 	seat_signals[SIGNAL_FOCUS_CHANGED] =
 		g_signal_new("focus-changed",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             0);
+
+	/**
+	 * GowlSeat::clipboard-changed:
+	 * @seat: the #GowlSeat that emitted the signal
+	 *
+	 * Emitted when a Wayland client changes the clipboard selection.
+	 * Listeners can call gowl_seat_get_clipboard() to read the
+	 * new content.
+	 */
+	seat_signals[SIGNAL_CLIPBOARD_CHANGED] =
+		g_signal_new("clipboard-changed",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             0);
+
+	/**
+	 * GowlSeat::primary-selection-changed:
+	 * @seat: the #GowlSeat that emitted the signal
+	 *
+	 * Emitted when a Wayland client changes the primary selection.
+	 * Listeners can call gowl_seat_get_primary_selection() to read
+	 * the new content.
+	 */
+	seat_signals[SIGNAL_PRIMARY_SELECTION_CHANGED] =
+		g_signal_new("primary-selection-changed",
 		             G_TYPE_FROM_CLASS(klass),
 		             G_SIGNAL_RUN_LAST,
 		             0,
@@ -706,4 +744,18 @@ gowl_seat_set_primary_selection(
 
 	wlr_seat_set_primary_selection(seat, &ts->base,
 	                               wl_display_next_serial(seat->display));
+}
+
+void
+gowl_seat_emit_clipboard_changed(GowlSeat *self)
+{
+	g_return_if_fail(GOWL_IS_SEAT(self));
+	g_signal_emit(self, seat_signals[SIGNAL_CLIPBOARD_CHANGED], 0);
+}
+
+void
+gowl_seat_emit_primary_selection_changed(GowlSeat *self)
+{
+	g_return_if_fail(GOWL_IS_SEAT(self));
+	g_signal_emit(self, seat_signals[SIGNAL_PRIMARY_SELECTION_CHANGED], 0);
 }

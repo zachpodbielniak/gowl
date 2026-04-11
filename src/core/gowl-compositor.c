@@ -4039,6 +4039,10 @@ on_request_set_sel(struct wl_listener *listener, void *data)
 
 	wlr_seat_set_selection(self->wlr_seat,
 	                       event->source, event->serial);
+
+	/* Notify GObject layer that clipboard changed */
+	if (self->seat != NULL)
+		gowl_seat_emit_clipboard_changed(self->seat);
 }
 
 static void
@@ -4052,6 +4056,10 @@ on_request_set_psel(struct wl_listener *listener, void *data)
 
 	wlr_seat_set_primary_selection(self->wlr_seat,
 	                               event->source, event->serial);
+
+	/* Notify GObject layer that primary selection changed */
+	if (self->seat != NULL)
+		gowl_seat_emit_primary_selection_changed(self->seat);
 }
 
 static void

@@ -155,6 +155,24 @@ gchar    *gowl_seat_get_primary_selection  (GowlSeat   *self);
 void      gowl_seat_set_primary_selection  (GowlSeat   *self,
                                             const gchar *text);
 
+/**
+ * gowl_seat_emit_clipboard_changed:
+ * @self: a #GowlSeat
+ *
+ * Emits the "clipboard-changed" signal.  Called by the compositor
+ * after a client sets the clipboard selection.
+ */
+void      gowl_seat_emit_clipboard_changed          (GowlSeat *self);
+
+/**
+ * gowl_seat_emit_primary_selection_changed:
+ * @self: a #GowlSeat
+ *
+ * Emits the "primary-selection-changed" signal.  Called by the
+ * compositor after a client sets the primary selection.
+ */
+void      gowl_seat_emit_primary_selection_changed   (GowlSeat *self);
+
 G_END_DECLS
 
 #endif /* GOWL_SEAT_H */

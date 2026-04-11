@@ -29,6 +29,8 @@
 #include "interfaces/gowl-wallpaper-provider.h"
 #include "interfaces/gowl-lock-handler.h"
 #include "interfaces/gowl-bar-provider.h"
+#include "interfaces/gowl-screenshot-provider.h"
+#include "interfaces/gowl-recording-provider.h"
 
 /**
  * GowlModuleManager:
@@ -55,6 +57,8 @@ struct _GowlModuleManager {
 	GPtrArray *wallpaper_providers; /* element-type GowlWallpaperProvider* */
 	GPtrArray *lock_handlers;      /* element-type GowlLockHandler*       */
 	GPtrArray *bar_providers;      /* element-type GowlBarProvider*       */
+	GPtrArray *screenshot_providers; /* element-type GowlScreenshotProvider* */
+	GPtrArray *recording_providers;  /* element-type GowlRecordingProvider*  */
 };
 
 G_DEFINE_FINAL_TYPE(GowlModuleManager, gowl_module_manager, G_TYPE_OBJECT)
@@ -157,6 +161,8 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->wallpaper_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->lock_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->bar_providers, g_ptr_array_unref);
+	g_clear_pointer(&self->screenshot_providers, g_ptr_array_unref);
+	g_clear_pointer(&self->recording_providers, g_ptr_array_unref);
 
 	/* Unref all module instances */
 	g_clear_pointer(&self->modules, g_ptr_array_unref);
@@ -257,8 +263,10 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->ipc_handlers      = g_ptr_array_new();
 	self->gap_providers     = g_ptr_array_new();
 	self->wallpaper_providers = g_ptr_array_new();
-	self->lock_handlers       = g_ptr_array_new();
-	self->bar_providers       = g_ptr_array_new();
+	self->lock_handlers         = g_ptr_array_new();
+	self->bar_providers         = g_ptr_array_new();
+	self->screenshot_providers  = g_ptr_array_new();
+	self->recording_providers   = g_ptr_array_new();
 }
 
 /* --- Internal: classify a module into dispatch arrays --- */
@@ -325,6 +333,16 @@ classify_module(
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_BAR_PROVIDER)) {
 		g_ptr_array_add(self->bar_providers, (gpointer)mod);
 		sort_dispatch_array(self->bar_providers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_SCREENSHOT_PROVIDER)) {
+		g_ptr_array_add(self->screenshot_providers, (gpointer)mod);
+		sort_dispatch_array(self->screenshot_providers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_RECORDING_PROVIDER)) {
+		g_ptr_array_add(self->recording_providers, (gpointer)mod);
+		sort_dispatch_array(self->recording_providers);
 	}
 }
 

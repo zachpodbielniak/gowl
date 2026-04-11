@@ -611,6 +611,66 @@ GBytes *gowl_compositor_screenshot_client (GowlCompositor  *self,
                                             GError         **error);
 
 /**
+ * gowl_compositor_screenshot_region:
+ * @self: a #GowlCompositor
+ * @output_name: (nullable): output name, or %NULL for focused monitor
+ * @rx: region X offset within the output
+ * @ry: region Y offset within the output
+ * @rw: region width
+ * @rh: region height
+ * @out_width: (out): receives the cropped width
+ * @out_height: (out): receives the cropped height
+ * @error: (nullable): return location for a #GError
+ *
+ * Captures a rectangular region from the specified output.
+ *
+ * Returns: (transfer full) (nullable): cropped RGBA pixel data
+ */
+GBytes *gowl_compositor_screenshot_region (GowlCompositor  *self,
+                                            const gchar     *output_name,
+                                            gint             rx,
+                                            gint             ry,
+                                            gint             rw,
+                                            gint             rh,
+                                            gint            *out_width,
+                                            gint            *out_height,
+                                            GError         **error);
+
+/**
+ * gowl_compositor_screenshot_all:
+ * @self: a #GowlCompositor
+ * @width: (out): receives the stitched image width
+ * @height: (out): receives the stitched image height
+ * @error: (nullable): return location for a #GError
+ *
+ * Captures all monitors and stitches them into a single image.
+ *
+ * Returns: (transfer full) (nullable): stitched RGBA pixel data
+ */
+GBytes *gowl_compositor_screenshot_all (GowlCompositor  *self,
+                                         gint            *width,
+                                         gint            *height,
+                                         GError         **error);
+
+/**
+ * gowl_compositor_save_png:
+ * @rgba_data: (transfer none): raw RGBA pixel data
+ * @width: image width in pixels
+ * @height: image height in pixels
+ * @path: output file path
+ * @error: (nullable): return location for a #GError
+ *
+ * Saves RGBA pixel data to a PNG file using cairo.
+ *
+ * Returns: %TRUE on success, %FALSE on error
+ */
+gboolean gowl_compositor_save_png (GBytes       *rgba_data,
+                                    gint          width,
+                                    gint          height,
+                                    const gchar  *path,
+                                    GError      **error);
+
+/**
  * gowl_compositor_arrangelayers:
  * @self: a #GowlCompositor
  * @m: the #GowlMonitor to arrange

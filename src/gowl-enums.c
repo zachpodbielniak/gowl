@@ -379,4 +379,33 @@ gowl_idle_state_get_type(void)
 	return (GType)g_type_id;
 }
 
+/* --- GowlCaptureMode GType registration --- */
+
+/**
+ * gowl_capture_mode_get_type:
+ *
+ * Retrieves the #GType for #GowlCaptureMode.
+ *
+ * Returns: the #GType for #GowlCaptureMode
+ */
+GType
+gowl_capture_mode_get_type(void)
+{
+	static volatile gsize g_type_id = 0;
+
+	if (g_once_init_enter(&g_type_id)) {
+		static const GEnumValue values[] = {
+			{ GOWL_CAPTURE_MODE_DESKTOP, "GOWL_CAPTURE_MODE_DESKTOP", "desktop" },
+			{ GOWL_CAPTURE_MODE_WINDOW,  "GOWL_CAPTURE_MODE_WINDOW",  "window" },
+			{ GOWL_CAPTURE_MODE_AREA,    "GOWL_CAPTURE_MODE_AREA",    "area" },
+			{ GOWL_CAPTURE_MODE_ALL,     "GOWL_CAPTURE_MODE_ALL",     "all" },
+			{ 0, NULL, NULL }
+		};
+		GType type_id = g_enum_register_static("GowlCaptureMode", values);
+		g_once_init_leave(&g_type_id, type_id);
+	}
+
+	return (GType)g_type_id;
+}
+
 #pragma GCC diagnostic pop

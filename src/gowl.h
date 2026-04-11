@@ -63,6 +63,11 @@
 #include "interfaces/gowl-cursor-provider.h"
 #include "interfaces/gowl-wallpaper-provider.h"
 #include "interfaces/gowl-lock-handler.h"
+#include "interfaces/gowl-screenshot-provider.h"
+#include "interfaces/gowl-recording-provider.h"
+
+/* Boxed types */
+#include "boxed/gowl-capture-result.h"
 
 /* Configuration */
 #include "config/gowl-config.h"

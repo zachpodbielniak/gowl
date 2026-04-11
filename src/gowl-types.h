@@ -56,6 +56,9 @@ typedef struct _GowlOutputMode      GowlOutputMode;
 typedef struct _GowlModuleInfo      GowlModuleInfo;
 typedef struct _GowlProcessInfo     GowlProcessInfo;
 
+/* Forward declarations for capture types */
+typedef struct _GowlCaptureResult   GowlCaptureResult;
+
 /* Forward declaration for IPC */
 typedef struct _GowlIpc             GowlIpc;
 

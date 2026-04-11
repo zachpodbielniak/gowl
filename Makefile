@@ -38,6 +38,7 @@ LIB_SRCS := \
 	src/boxed/gowl-rule.c \
 	src/boxed/gowl-output-mode.c \
 	src/boxed/gowl-process-info.c \
+	src/boxed/gowl-capture-result.c \
 	src/module/gowl-module.c \
 	src/module/gowl-module-manager.c \
 	src/module/gowl-module-info.c \
@@ -61,6 +62,8 @@ LIB_SRCS := \
 	src/interfaces/gowl-cursor-provider.c \
 	src/interfaces/gowl-wallpaper-provider.c \
 	src/interfaces/gowl-lock-handler.c \
+	src/interfaces/gowl-screenshot-provider.c \
+	src/interfaces/gowl-recording-provider.c \
 	src/config/gowl-config.c \
 	src/config/gowl-config-compiler.c \
 	src/config/gowl-keybind.c \

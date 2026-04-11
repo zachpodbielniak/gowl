@@ -30,6 +30,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <cairo.h>
 
 /**
  * GowlCompositor:
@@ -1253,6 +1254,271 @@ gowl_compositor_screenshot_client(
 	wlr_buffer_end_data_ptr_access(buffer);
 
 	return g_bytes_new_take(pixels, size);
+}
+
+/**
+ * gowl_compositor_screenshot_region:
+ * @self: a #GowlCompositor
+ * @output_name: (nullable): output name, or %NULL for focused monitor
+ * @rx: region X offset within the output
+ * @ry: region Y offset within the output
+ * @rw: region width
+ * @rh: region height
+ * @out_width: (out): receives the cropped width
+ * @out_height: (out): receives the cropped height
+ * @error: (nullable): return location for a #GError
+ *
+ * Captures a rectangular region from the specified output.
+ * The region is clamped to the output dimensions.
+ *
+ * Returns: (transfer full) (nullable): cropped RGBA pixel data
+ */
+GBytes *
+gowl_compositor_screenshot_region(
+	GowlCompositor  *self,
+	const gchar     *output_name,
+	gint             rx,
+	gint             ry,
+	gint             rw,
+	gint             rh,
+	gint            *out_width,
+	gint            *out_height,
+	GError         **error
+){
+	g_autoptr(GBytes) full = NULL;
+	const guint8 *src;
+	guint8 *dst;
+	gsize full_size;
+	gint fw, fh, stride, y;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	full = gowl_compositor_screenshot_output(self, output_name,
+	                                         &fw, &fh, error);
+	if (full == NULL)
+		return NULL;
+
+	/* Clamp region to output bounds */
+	if (rx < 0) { rw += rx; rx = 0; }
+	if (ry < 0) { rh += ry; ry = 0; }
+	if (rx + rw > fw) rw = fw - rx;
+	if (ry + rh > fh) rh = fh - ry;
+
+	if (rw <= 0 || rh <= 0) {
+		if (out_width != NULL)  *out_width  = 0;
+		if (out_height != NULL) *out_height = 0;
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+		                    "Region is empty after clamping");
+		return NULL;
+	}
+
+	src = g_bytes_get_data(full, &full_size);
+	stride = (gint)(full_size / (gsize)fh);  /* bytes per row */
+
+	dst = g_malloc((gsize)rw * 4 * (gsize)rh);
+	for (y = 0; y < rh; y++) {
+		memcpy(dst + (gsize)y * (gsize)rw * 4,
+		       src + (gsize)(ry + y) * (gsize)stride + (gsize)rx * 4,
+		       (gsize)rw * 4);
+	}
+
+	if (out_width != NULL)  *out_width  = rw;
+	if (out_height != NULL) *out_height = rh;
+
+	return g_bytes_new_take(dst, (gsize)rw * 4 * (gsize)rh);
+}
+
+/**
+ * gowl_compositor_screenshot_all:
+ * @self: a #GowlCompositor
+ * @width: (out): receives the stitched image width
+ * @height: (out): receives the stitched image height
+ * @error: (nullable): return location for a #GError
+ *
+ * Captures all monitors and stitches them into a single image
+ * using the output layout positions.
+ *
+ * Returns: (transfer full) (nullable): stitched RGBA pixel data
+ */
+GBytes *
+gowl_compositor_screenshot_all(
+	GowlCompositor  *self,
+	gint            *width,
+	gint            *height,
+	GError         **error
+){
+	GList *l;
+	gint min_x, min_y, max_x, max_y, cw, ch;
+	guint8 *canvas;
+	gsize canvas_size;
+	gboolean first;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	if (self->monitors == NULL) {
+		if (width != NULL)  *width  = 0;
+		if (height != NULL) *height = 0;
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+		                    "No monitors available");
+		return NULL;
+	}
+
+	/* Compute bounding box from output layout */
+	min_x = min_y = G_MAXINT;
+	max_x = max_y = G_MININT;
+	first = TRUE;
+
+	for (l = self->monitors; l != NULL; l = l->next) {
+		GowlMonitor *m = GOWL_MONITOR(l->data);
+		struct wlr_box box;
+
+		if (m->wlr_output == NULL)
+			continue;
+		wlr_output_layout_get_box(self->output_layout,
+		                          m->wlr_output, &box);
+		if (box.width <= 0 || box.height <= 0)
+			continue;
+
+		if (box.x < min_x) min_x = box.x;
+		if (box.y < min_y) min_y = box.y;
+		if (box.x + box.width > max_x)  max_x = box.x + box.width;
+		if (box.y + box.height > max_y) max_y = box.y + box.height;
+		first = FALSE;
+	}
+
+	if (first) {
+		if (width != NULL)  *width  = 0;
+		if (height != NULL) *height = 0;
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+		                    "No active outputs found");
+		return NULL;
+	}
+
+	cw = max_x - min_x;
+	ch = max_y - min_y;
+	canvas_size = (gsize)cw * 4 * (gsize)ch;
+	canvas = g_malloc0(canvas_size);
+
+	/* Blit each output into the canvas */
+	for (l = self->monitors; l != NULL; l = l->next) {
+		GowlMonitor *m = GOWL_MONITOR(l->data);
+		struct wlr_box box;
+		g_autoptr(GBytes) shot = NULL;
+		const guint8 *src;
+		gsize src_size;
+		gint mw, mh, src_stride, y, ox, oy;
+
+		if (m->wlr_output == NULL)
+			continue;
+		wlr_output_layout_get_box(self->output_layout,
+		                          m->wlr_output, &box);
+		if (box.width <= 0 || box.height <= 0)
+			continue;
+
+		shot = gowl_compositor_screenshot_output(self,
+		         m->wlr_output->name, &mw, &mh, NULL);
+		if (shot == NULL)
+			continue;
+
+		src = g_bytes_get_data(shot, &src_size);
+		src_stride = (gint)(src_size / (gsize)mh);
+
+		ox = box.x - min_x;
+		oy = box.y - min_y;
+
+		for (y = 0; y < mh && (oy + y) < ch; y++) {
+			gint copy_w = mw;
+			if (ox + copy_w > cw) copy_w = cw - ox;
+			if (copy_w <= 0) continue;
+
+			memcpy(canvas + (gsize)(oy + y) * (gsize)cw * 4
+			              + (gsize)ox * 4,
+			       src + (gsize)y * (gsize)src_stride,
+			       (gsize)copy_w * 4);
+		}
+	}
+
+	if (width != NULL)  *width  = cw;
+	if (height != NULL) *height = ch;
+
+	return g_bytes_new_take(canvas, canvas_size);
+}
+
+/**
+ * gowl_compositor_save_png:
+ * @rgba_data: (transfer none): raw RGBA pixel data
+ * @width: image width in pixels
+ * @height: image height in pixels
+ * @path: output file path
+ * @error: (nullable): return location for a #GError
+ *
+ * Saves RGBA pixel data to a PNG file using cairo.  The RGBA data
+ * is swizzled to cairo's ARGB32 format before writing.
+ *
+ * Returns: %TRUE on success, %FALSE on error
+ */
+gboolean
+gowl_compositor_save_png(
+	GBytes       *rgba_data,
+	gint          width,
+	gint          height,
+	const gchar  *path,
+	GError      **error
+){
+	cairo_surface_t *surface;
+	cairo_status_t status;
+	const guint8 *src;
+	guint8 *dst;
+	gsize src_size;
+	gint x, y, src_stride, dst_stride;
+
+	g_return_val_if_fail(rgba_data != NULL, FALSE);
+	g_return_val_if_fail(path != NULL, FALSE);
+
+	src = g_bytes_get_data(rgba_data, &src_size);
+	src_stride = (gint)(src_size / (gsize)height);
+
+	surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+	                                     width, height);
+	if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		                    "Failed to create cairo surface");
+		cairo_surface_destroy(surface);
+		return FALSE;
+	}
+
+	dst = cairo_image_surface_get_data(surface);
+	dst_stride = cairo_image_surface_get_stride(surface);
+
+	cairo_surface_flush(surface);
+
+	/*
+	 * Swizzle from RGBA/BGRA (GPU format) to cairo ARGB32.
+	 * wlroots typically returns DRM_FORMAT_ARGB8888 which in
+	 * little-endian memory is [B, G, R, A] — matching cairo's
+	 * ARGB32.  So we can memcpy row-by-row.
+	 */
+	for (y = 0; y < height; y++) {
+		memcpy(dst + (gsize)y * (gsize)dst_stride,
+		       src + (gsize)y * (gsize)src_stride,
+		       (gsize)width * 4);
+	}
+
+	(void)x; /* suppress unused warning */
+
+	cairo_surface_mark_dirty(surface);
+
+	status = cairo_surface_write_to_png(surface, path);
+	cairo_surface_destroy(surface);
+
+	if (status != CAIRO_STATUS_SUCCESS) {
+		g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		            "cairo PNG write failed: %s",
+		            cairo_status_to_string(status));
+		return FALSE;
+	}
+
+	return TRUE;
 }
 
 /**

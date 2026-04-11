@@ -360,6 +360,28 @@ typedef enum {
 #define GOWL_TYPE_SCENE_LAYER (gowl_scene_layer_get_type())
 GType gowl_scene_layer_get_type(void) G_GNUC_CONST;
 
+/* --- GowlCaptureMode --- */
+
+/**
+ * GowlCaptureMode:
+ * @GOWL_CAPTURE_MODE_DESKTOP: Capture the current monitor output.
+ * @GOWL_CAPTURE_MODE_WINDOW:  Capture a specific client surface.
+ * @GOWL_CAPTURE_MODE_AREA:    Interactive rubber-band region selection.
+ * @GOWL_CAPTURE_MODE_ALL:     Capture all monitors stitched together.
+ *
+ * Selection mode for screenshot and recording operations.  Used by
+ * #GowlScreenshotProvider and #GowlRecordingProvider interfaces.
+ */
+typedef enum {
+	GOWL_CAPTURE_MODE_DESKTOP,
+	GOWL_CAPTURE_MODE_WINDOW,
+	GOWL_CAPTURE_MODE_AREA,
+	GOWL_CAPTURE_MODE_ALL
+} GowlCaptureMode;
+
+#define GOWL_TYPE_CAPTURE_MODE (gowl_capture_mode_get_type())
+GType gowl_capture_mode_get_type(void) G_GNUC_CONST;
+
 G_END_DECLS
 
 #endif /* GOWL_ENUMS_H */

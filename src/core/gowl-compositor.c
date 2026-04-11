@@ -2684,11 +2684,38 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 static void
 on_monitor_request_state(struct wl_listener *listener, void *data)
 {
+	GowlMonitor *m;
+	GowlCompositor *self;
 	struct wlr_output_event_request_state *ev;
+	struct wlr_box new_box;
 
-	(void)listener;
+	m = wl_container_of(listener, m, request_state);
+	self = m->compositor;
 	ev = (struct wlr_output_event_request_state *)data;
 	wlr_output_commit_state(ev->output, ev->state);
+
+	/* After committing a state change (e.g. nested window resize),
+	 * read the effective dimensions directly from the output —
+	 * the layout's commit listener may not have fired yet. */
+	new_box.x = m->m.x;
+	new_box.y = m->m.y;
+	new_box.width  = ev->output->width;
+	new_box.height = ev->output->height;
+
+	if (!wlr_box_equal(&new_box, &m->m)) {
+		m->m = new_box;
+		m->w = m->m;
+		if (self->root_bg != NULL)
+			wlr_scene_rect_set_size(self->root_bg,
+			                        new_box.width, new_box.height);
+		if (self->module_mgr != NULL) {
+			gowl_module_manager_dispatch_wallpaper_output(
+				self->module_mgr, self, m);
+			gowl_module_manager_dispatch_bar_render(
+				self->module_mgr, self, m);
+		}
+		gowl_compositor_arrangelayers(self, m);
+	}
 }
 
 /**
@@ -2732,18 +2759,21 @@ on_layout_change(struct wl_listener *listener, void *data)
 		wlr_scene_rect_set_size(self->root_bg, full.width, full.height);
 	}
 
-	/* Notify wallpaper providers so they can update per-monitor images */
+	/* Notify wallpaper and bar providers so they can resize */
 	if (self->module_mgr != NULL) {
-		for (l = self->monitors; l != NULL; l = l->next)
+		for (l = self->monitors; l != NULL; l = l->next) {
 			gowl_module_manager_dispatch_wallpaper_output(
 				self->module_mgr, self, l->data);
+			gowl_module_manager_dispatch_bar_render(
+				self->module_mgr, self, l->data);
+		}
 	}
 
-	/* Re-arrange clients on all monitors with updated geometry.
-	 * This catches hotplug, parent-initiated resizes, and any
-	 * mode/scale/transform paths where on_layout_change fires. */
+	/* Recalculate usable area (m->w) from the new monitor geometry
+	 * (m->m), subtracting bar height and layer-shell exclusive zones.
+	 * arrangelayers calls arrange() internally if m->w changed. */
 	for (l = self->monitors; l != NULL; l = l->next)
-		gowl_compositor_arrange(self, (GowlMonitor *)l->data);
+		gowl_compositor_arrangelayers(self, (GowlMonitor *)l->data);
 }
 
 static void

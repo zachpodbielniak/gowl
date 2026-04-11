@@ -575,7 +575,26 @@ static void
 bar_render_bar(GowlBarProvider *provider, gpointer monitor)
 {
 	GowlModuleBar *self = GOWL_MODULE_BAR(provider);
-	(void)monitor;
+
+	/* If a specific monitor was given, check if its geometry changed
+	 * and recreate the surface at the new size. */
+	if (monitor != NULL) {
+		GowlMonitor *mon = GOWL_MONITOR(monitor);
+		const gchar *name = gowl_monitor_get_name(mon);
+		gint mon_x, mon_y, mon_w, mon_h;
+		BarSurface *surface;
+
+		gowl_monitor_get_geometry(mon, &mon_x, &mon_y, &mon_w, &mon_h);
+		surface = (BarSurface *)g_hash_table_lookup(self->surfaces, name);
+
+		if (surface == NULL || surface->width != mon_w
+		    || surface->mon_x != mon_x || surface->mon_y != mon_y) {
+			/* Geometry changed or new monitor — recreate */
+			bar_create_surface(self, mon);
+			return;
+		}
+	}
+
 	bar_redraw_all(self);
 }
 

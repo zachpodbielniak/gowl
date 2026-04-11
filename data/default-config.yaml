@@ -209,6 +209,14 @@ modules:
     fg-color: "#cdd6f4"
     font: "monospace"
     font-size: 13
+    # Right-side widgets (space-separated): cpu memory disk battery clock
+    widgets: "cpu memory disk battery clock"
+    # Per-widget colors (optional, falls back to fg-color)
+    # cpu-color: "#a6e3a1"
+    # memory-color: "#89b4fa"
+    # disk-color: "#f9e2af"
+    # battery-color: "#94e2d5"
+    # clock-color: "#cdd6f4"
   alpha:
     enabled: false
     # Opacity for the focused window (0.0 = transparent, 1.0 = opaque)

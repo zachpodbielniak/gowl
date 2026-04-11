@@ -148,6 +148,7 @@ struct _GowlModuleBar {
 	/* State */
 	GHashTable *surfaces;  /* monitor name -> BarSurface* */
 	gpointer    compositor;
+	gchar      *custom_title; /* set by Elisp, overrides focused client */
 	gulong      focus_handler_id;
 	gulong      client_added_id;
 	gulong      client_removed_id;
@@ -233,16 +234,21 @@ bar_render(GowlModuleBar *self, gint width, gint height)
 	if (text_y < 2)
 		text_y = 2;
 
-	/* Left: focused client title */
+	/* Left: title — use custom_title from Elisp if set,
+	 * otherwise fall back to focused client title */
 	cairo_set_source_rgba(cr, self->fg_color[0], self->fg_color[1],
 	                      self->fg_color[2], self->fg_color[3]);
 
-	focused = (self->compositor != NULL) ?
-		gowl_compositor_get_focused_client(
-			GOWL_COMPOSITOR(self->compositor)) : NULL;
-	title = (focused != NULL) ? gowl_client_get_title(focused) : "cmacs";
-	if (title == NULL)
-		title = "cmacs";
+	if (self->custom_title != NULL && self->custom_title[0] != '\0') {
+		title = self->custom_title;
+	} else {
+		focused = (self->compositor != NULL) ?
+			gowl_compositor_get_focused_client(
+				GOWL_COMPOSITOR(self->compositor)) : NULL;
+		title = (focused != NULL) ? gowl_client_get_title(focused) : "cmacs";
+		if (title == NULL)
+			title = "cmacs";
+	}
 
 	pango_layout_set_text(layout, title, -1);
 	pango_layout_set_width(layout, (width / 2 - padding * 2) * PANGO_SCALE);
@@ -539,6 +545,12 @@ bar_configure(GowlModule *mod, gpointer config)
 		self->font_desc = desc;
 	}
 
+	val = (const gchar *)g_hash_table_lookup(settings, "title");
+	if (val != NULL) {
+		g_free(self->custom_title);
+		self->custom_title = g_strdup(val);
+	}
+
 	g_message("bar: configured height=%d font=%s",
 	          self->bar_height, self->font_desc);
 
@@ -680,6 +692,7 @@ gowl_module_bar_finalize(GObject *object)
 	GowlModuleBar *self = GOWL_MODULE_BAR(object);
 
 	g_free(self->font_desc);
+	g_free(self->custom_title);
 	g_hash_table_unref(self->surfaces);
 
 	G_OBJECT_CLASS(gowl_module_bar_parent_class)->finalize(object);
@@ -722,6 +735,7 @@ gowl_module_bar_init(GowlModuleBar *self)
 	self->surfaces  = g_hash_table_new_full(g_str_hash, g_str_equal,
 	                                        g_free, NULL);
 	self->compositor       = NULL;
+	self->custom_title     = NULL;
 	self->focus_handler_id = 0;
 	self->client_added_id  = 0;
 	self->client_removed_id = 0;

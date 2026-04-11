@@ -146,6 +146,23 @@ void           gowl_monitor_get_geometry      (GowlMonitor *self,
                                                gint        *height);
 
 /**
+ * gowl_monitor_get_window_area:
+ * @self: a #GowlMonitor
+ * @x: (out) (nullable): usable area x
+ * @y: (out) (nullable): usable area y
+ * @width: (out) (nullable): usable area width
+ * @height: (out) (nullable): usable area height
+ *
+ * Returns the usable window area after subtracting exclusive
+ * zones (layer-shell, bar height).
+ */
+void           gowl_monitor_get_window_area   (GowlMonitor *self,
+                                               gint        *x,
+                                               gint        *y,
+                                               gint        *width,
+                                               gint        *height);
+
+/**
  * gowl_monitor_get_wlr_output:
  * @self: a #GowlMonitor
  *

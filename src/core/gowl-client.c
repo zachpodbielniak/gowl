@@ -822,7 +822,14 @@ gowl_client_set_alpha(
 
 	self->alpha = alpha;
 
-	if (self->scene != NULL)
+	/* Walk only the client's own surface tree, not the full scene
+	 * container.  The container (self->scene) may include reparented
+	 * child clients (embedded apps) whose opacity is managed
+	 * separately — walking the container would overwrite their alpha. */
+	if (self->scene_surface != NULL)
+		wlr_scene_node_for_each_buffer(&self->scene_surface->node,
+		                                set_opacity_iter, &self->alpha);
+	else if (self->scene != NULL)
 		wlr_scene_node_for_each_buffer(&self->scene->node,
 		                                set_opacity_iter, &self->alpha);
 }

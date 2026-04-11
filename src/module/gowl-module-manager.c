@@ -28,6 +28,7 @@
 #include "interfaces/gowl-gap-provider.h"
 #include "interfaces/gowl-wallpaper-provider.h"
 #include "interfaces/gowl-lock-handler.h"
+#include "interfaces/gowl-bar-provider.h"
 
 /**
  * GowlModuleManager:
@@ -53,6 +54,7 @@ struct _GowlModuleManager {
 	GPtrArray *gap_providers;      /* element-type GowlGapProvider*    */
 	GPtrArray *wallpaper_providers; /* element-type GowlWallpaperProvider* */
 	GPtrArray *lock_handlers;      /* element-type GowlLockHandler*       */
+	GPtrArray *bar_providers;      /* element-type GowlBarProvider*       */
 };
 
 G_DEFINE_FINAL_TYPE(GowlModuleManager, gowl_module_manager, G_TYPE_OBJECT)
@@ -154,6 +156,7 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->gap_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->wallpaper_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->lock_handlers, g_ptr_array_unref);
+	g_clear_pointer(&self->bar_providers, g_ptr_array_unref);
 
 	/* Unref all module instances */
 	g_clear_pointer(&self->modules, g_ptr_array_unref);
@@ -255,6 +258,7 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->gap_providers     = g_ptr_array_new();
 	self->wallpaper_providers = g_ptr_array_new();
 	self->lock_handlers       = g_ptr_array_new();
+	self->bar_providers       = g_ptr_array_new();
 }
 
 /* --- Internal: classify a module into dispatch arrays --- */
@@ -316,6 +320,11 @@ classify_module(
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_LOCK_HANDLER)) {
 		g_ptr_array_add(self->lock_handlers, (gpointer)mod);
 		sort_dispatch_array(self->lock_handlers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_BAR_PROVIDER)) {
+		g_ptr_array_add(self->bar_providers, (gpointer)mod);
+		sort_dispatch_array(self->bar_providers);
 	}
 }
 
@@ -1146,5 +1155,72 @@ gowl_module_manager_notify_lock_activity(
 			continue;
 
 		gowl_lock_handler_on_activity(handler);
+	}
+}
+
+/**
+ * gowl_module_manager_get_bar_height:
+ * @self: a #GowlModuleManager
+ * @monitor: (nullable): the monitor being laid out
+ *
+ * Returns the bar height from the first active bar provider.
+ *
+ * Returns: the bar height in pixels, or 0 if no bar is active
+ */
+gint
+gowl_module_manager_get_bar_height(
+	GowlModuleManager *self,
+	gpointer           monitor
+){
+	guint i;
+	gint height;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), 0);
+
+	for (i = 0; i < self->bar_providers->len; i++) {
+		GowlBarProvider *provider;
+
+		provider = (GowlBarProvider *)g_ptr_array_index(
+			self->bar_providers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(provider)))
+			continue;
+
+		height = gowl_bar_provider_get_bar_height(provider, monitor);
+		if (height > 0)
+			return height;
+	}
+
+	return 0;
+}
+
+/**
+ * gowl_module_manager_dispatch_bar_render:
+ * @self: a #GowlModuleManager
+ * @compositor: (nullable): the compositor instance
+ * @monitor: (nullable): the monitor to render the bar for
+ *
+ * Broadcasts a render request to all active bar providers.
+ */
+void
+gowl_module_manager_dispatch_bar_render(
+	GowlModuleManager *self,
+	gpointer           compositor,
+	gpointer           monitor
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	for (i = 0; i < self->bar_providers->len; i++) {
+		GowlBarProvider *provider;
+
+		provider = (GowlBarProvider *)g_ptr_array_index(
+			self->bar_providers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(provider)))
+			continue;
+
+		gowl_bar_provider_render_bar(provider, monitor);
 	}
 }

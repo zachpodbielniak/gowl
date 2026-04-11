@@ -535,6 +535,44 @@ Gowl ships with several modules in the `modules/` directory:
 | `ipc` | IPC socket command handler |
 | `copyhighlight` | Sync primary selection to clipboard on text highlight |
 | `alpha` | Per-client window opacity with focus dimming |
+| `bar` | Compositor status bar with title and system info |
+
+### Bar Module
+
+The bar module renders a compositor-level status bar on the TOP scene layer. It shows the focused client title (left) and system info — battery percentage and date/time (right). The background is semi-transparent so the wallpaper shows through.
+
+**Interfaces:** `GowlBarProvider`, `GowlStartupHandler`, `GowlShutdownHandler`
+
+**Configuration keys:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `height` | int | 28 | Bar height in pixels |
+| `bg-color` | hex | #1e1e2ecc | Background color (RRGGBBAA for transparency) |
+| `fg-color` | hex | #cdd6f4 | Text color |
+| `font` | string | monospace | Font family |
+| `font-size` | float | 13 | Font size |
+
+**YAML example:**
+
+```yaml
+modules:
+  bar:
+    enabled: true
+    height: 28
+    bg-color: "#1e1e2ecc"
+    fg-color: "#cdd6f4"
+    font: "Hack Nerd Font Mono"
+    font-size: 13
+```
+
+**Implementation notes:**
+
+- Renders via cairo+pango to a custom `wlr_buffer` (ARGB8888)
+- Creates per-monitor `wlr_scene_buffer` nodes on the TOP layer
+- Connects to compositor `focus-changed`, `client-added`, `client-removed` signals for reactive updates
+- Uses `wl_event_loop_add_timer` for 60-second clock updates
+- The compositor's `arrangelayers` subtracts bar height from usable area so tiled clients don't overlap
 
 ### Alpha Module
 

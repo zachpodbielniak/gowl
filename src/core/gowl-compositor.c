@@ -18,6 +18,7 @@
 
 #include "gowl-core-private.h"
 #include "config/gowl-keybind.h"
+#include "module/gowl-module-manager.h"
 
 #ifdef GOWL_HAVE_LIBDECOR
 #include "gowl-decor.h"
@@ -3879,8 +3880,10 @@ on_client_commit(struct wl_listener *listener, void *data)
 
 	/* Re-apply client opacity.  wlr_scene_surface's commit handler
 	 * resets the scene buffer opacity to 1.0 on every commit, so
-	 * we must re-apply our custom alpha after each frame. */
-	if (c->alpha < 1.0f)
+	 * we must re-apply our custom alpha after each frame.
+	 * Skip embedded clients — they render on top of their parent
+	 * and should stay fully opaque (alpha 1.0). */
+	if (c->alpha < 1.0f && !c->isembedded)
 		gowl_client_set_alpha(c, c->alpha);
 }
 
@@ -3946,6 +3949,18 @@ on_client_map(struct wl_listener *listener, void *data)
 	/* Assign to selected monitor with current tags */
 	setmon(self, c, self->selmon,
 	       self->selmon ? self->selmon->tagset[self->selmon->seltags] : 1);
+
+	/* Center floating clients within usable area if they have
+	 * no explicit position (default 0,0 from XDG). */
+	if (c->isfloating && !c->isfullscreen && c->mon != NULL) {
+		if (c->geom.x == 0 && c->geom.y == 0) {
+			c->geom.x = c->mon->w.x +
+				(c->mon->w.width - c->geom.width) / 2;
+			c->geom.y = c->mon->w.y +
+				(c->mon->w.height - c->geom.height) / 2;
+			resize_client(self, c, c->geom, TRUE);
+		}
+	}
 
 	/* Check if this PID was registered for embedding.
 	 * Mark it embedded+floating, reparent to OVERLAY (above FS),
@@ -4268,6 +4283,15 @@ gowl_compositor_arrangelayers(
 
 			wlr_scene_layer_surface_v1_configure(
 				ls->scene_layer_surface, &m->m, &usable_area);
+		}
+	}
+
+	/* Subtract bar height from usable area (top position) */
+	if (self->module_mgr != NULL) {
+		gint bh = gowl_module_manager_get_bar_height(self->module_mgr, m);
+		if (bh > 0) {
+			usable_area.y += bh;
+			usable_area.height -= bh;
 		}
 	}
 

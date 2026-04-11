@@ -382,6 +382,33 @@ gowl_monitor_get_geometry(
 }
 
 /**
+ * gowl_monitor_get_window_area:
+ * @self: a #GowlMonitor
+ * @x: (out) (nullable): return location for x
+ * @y: (out) (nullable): return location for y
+ * @width: (out) (nullable): return location for width
+ * @height: (out) (nullable): return location for height
+ *
+ * Returns the usable window area after subtracting exclusive
+ * zones (layer-shell surfaces, bar height, etc.).
+ */
+void
+gowl_monitor_get_window_area(
+	GowlMonitor *self,
+	gint        *x,
+	gint        *y,
+	gint        *width,
+	gint        *height
+){
+	g_return_if_fail(GOWL_IS_MONITOR(self));
+
+	if (x != NULL)      *x      = self->w.x;
+	if (y != NULL)      *y      = self->w.y;
+	if (width != NULL)  *width  = self->w.width;
+	if (height != NULL) *height = self->w.height;
+}
+
+/**
  * gowl_monitor_get_wlr_output:
  * @self: a #GowlMonitor
  *

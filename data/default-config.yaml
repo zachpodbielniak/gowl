@@ -201,6 +201,14 @@ modules:
     path: "~/Pictures/wallpaper.png"
     # Scaling mode: fill | fit | center | stretch | tile
     mode: fill
+  bar:
+    enabled: false
+    height: 28
+    # Background with alpha for transparency (8-digit hex = RRGGBBAA)
+    bg-color: "#1e1e2ecc"
+    fg-color: "#cdd6f4"
+    font: "monospace"
+    font-size: 13
   alpha:
     enabled: false
     # Opacity for the focused window (0.0 = transparent, 1.0 = opaque)

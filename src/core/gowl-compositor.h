@@ -610,6 +610,18 @@ GBytes *gowl_compositor_screenshot_client (GowlCompositor  *self,
                                             gint            *height,
                                             GError         **error);
 
+/**
+ * gowl_compositor_arrangelayers:
+ * @self: a #GowlCompositor
+ * @m: the #GowlMonitor to arrange
+ *
+ * Recalculates the usable window area for @m by processing
+ * layer-shell exclusive zones and bar height, then re-tiles
+ * all clients if the usable area changed.
+ */
+void gowl_compositor_arrangelayers (GowlCompositor *self,
+                                     GowlMonitor    *m);
+
 G_END_DECLS
 
 #endif /* GOWL_COMPOSITOR_H */

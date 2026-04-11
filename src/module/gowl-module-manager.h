@@ -129,6 +129,14 @@ void                gowl_module_manager_dispatch_lock_output_destroy
 void                gowl_module_manager_notify_lock_activity
                                                           (GowlModuleManager *self);
 
+gint                gowl_module_manager_get_bar_height    (GowlModuleManager *self,
+                                                           gpointer           monitor);
+
+void                gowl_module_manager_dispatch_bar_render
+                                                          (GowlModuleManager *self,
+                                                           gpointer           compositor,
+                                                           gpointer           monitor);
+
 G_END_DECLS
 
 #endif /* GOWL_MODULE_MANAGER_H */

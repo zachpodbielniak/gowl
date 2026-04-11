@@ -82,12 +82,14 @@ alpha_on_focus_changed(GowlCompositor *comp,
 	prev = (GowlClient *)self->prev_focused;
 	client = (client_obj != NULL) ? GOWL_CLIENT(client_obj) : NULL;
 
-	/* Dim the previously focused client */
-	if (prev != NULL && prev != client)
+	/* Dim the previously focused client (skip embedded — they render
+	 * on top of their parent, not over the wallpaper) */
+	if (prev != NULL && prev != client
+	    && !gowl_client_get_embedded(prev))
 		gowl_client_set_alpha(prev, self->unfocused_alpha);
 
 	/* Brighten the newly focused client */
-	if (client != NULL)
+	if (client != NULL && !gowl_client_get_embedded(client))
 		gowl_client_set_alpha(client, self->focused_alpha);
 
 	self->prev_focused = client;
@@ -111,6 +113,11 @@ alpha_apply_initial(GowlModuleAlpha *self)
 
 	for (l = clients; l != NULL; l = l->next) {
 		GowlClient *c = GOWL_CLIENT(l->data);
+
+		/* Skip embedded clients — they render on top of their
+		 * parent and should stay fully opaque. */
+		if (gowl_client_get_embedded(c))
+			continue;
 
 		if (c == focused)
 			gowl_client_set_alpha(c, self->focused_alpha);

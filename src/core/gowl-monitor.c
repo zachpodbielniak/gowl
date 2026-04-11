@@ -604,6 +604,23 @@ gowl_monitor_set_position(
 
 	wlr_output_layout_add(self->compositor->output_layout,
 	                       self->wlr_output, x, y);
+
+	/* Update geometry and re-tile immediately.  on_layout_change
+	 * may not fire synchronously in all backends, and even when
+	 * it does, arrangelayers may skip arrange() if only the
+	 * position changed (same dimensions).  Mirror the pattern
+	 * used by gowl_monitor_set_mode(). */
+	{
+		struct wlr_box box;
+		wlr_output_layout_get_box(self->compositor->output_layout,
+		                          self->wlr_output, &box);
+		if (!wlr_box_empty(&box)) {
+			self->m = box;
+			self->w = self->m;
+		}
+	}
+	gowl_compositor_arrangelayers(self->compositor, self);
+
 	return TRUE;
 }
 

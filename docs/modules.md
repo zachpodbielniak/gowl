@@ -539,7 +539,7 @@ Gowl ships with several modules in the `modules/` directory:
 
 ### Bar Module
 
-The bar module renders a compositor-level status bar on the TOP scene layer. It shows the focused client title (left) and system info — battery percentage and date/time (right). The background is semi-transparent so the wallpaper shows through.
+The bar module renders a compositor-level status bar on the TOP scene layer. It shows the focused client title (left) and 25 configurable system widgets (right). The background is semi-transparent so the wallpaper shows through.
 
 **Interfaces:** `GowlBarProvider`, `GowlStartupHandler`, `GowlShutdownHandler`
 
@@ -552,6 +552,44 @@ The bar module renders a compositor-level status bar on the TOP scene layer. It 
 | `fg-color` | hex | #cdd6f4 | Text color |
 | `font` | string | monospace | Font family |
 | `font-size` | float | 13 | Font size |
+| `widgets` | string | cpu memory disk battery clock | Space-separated widget list |
+| `TYPE-color` | hex | (fg-color) | Per-widget color (e.g. `cpu-color`) |
+| `cmd-interval` | int | 10 | Seconds between `cmd` widget re-runs |
+| `widget-data-KEY` | string | -- | Push data for external widgets (e.g. `widget-data-todo`) |
+
+**Available widgets (25 total):**
+
+| Widget | Syntax | Data Source | Cache |
+|--------|--------|-------------|-------|
+| `cpu` | `cpu` | /proc/stat delta | 2s |
+| `load` | `load` | /proc/loadavg | 5s |
+| `memory` | `memory` or `mem` | /proc/meminfo | 5s |
+| `swap` | `swap` | /proc/meminfo | 5s |
+| `temp` | `temp` | /sys/class/hwmon/ | 10s |
+| `gpu` | `gpu` | sysfs (AMD amdgpu) | 5s |
+| `disk` | `disk` or `disk:/path` | statvfs | 30s |
+| `io` | `io` or `io:DEVICE` | /proc/diskstats | 2s |
+| `battery` | `battery` or `bat` | /sys/class/power_supply | 60s |
+| `net` | `net` or `net:IFACE` | /proc/net/dev delta | 2s |
+| `volume` | `volume` or `vol` | wpctl (PipeWire) | 2s |
+| `media` | `media` | playerctl (MPRIS) | 2s |
+| `wifi` | `wifi` | /proc/net/wireless | 10s |
+| `ip` | `ip` or `ip:IFACE` | getifaddrs() | 30s |
+| `vpn` | `vpn` | /sys/class/net/tun0\|wg0 | 10s |
+| `git` | `git` | .git/HEAD + git status | 5s |
+| `todo` | `todo` | widget-data push | -- |
+| `podman` | `podman` or `pod` | podman ps | 30s |
+| `cmd` | `cmd:COMMAND` | subprocess | 10s |
+| `weather` | `weather` or `weather:LOC` | wttr.in | 15min |
+| `uptime` | `uptime` | /proc/uptime | 60s |
+| `host` | `host` or `hostname` | g_get_host_name() | once |
+| `user` | `user` | g_get_user_name() | once |
+| `keymap` | `keymap` | xkb_state | 2s |
+| `clock` | `clock` or `time` | localtime() | 2s |
+
+**CMD widget ANSI color support:**
+
+The `cmd` widget parses ANSI escape sequences in command output and applies foreground colors via PangoAttrList. Colors apply only to ASCII printable characters (0x20-0x7E); Unicode characters (emoji, CJK) render in the widget's base color. Supported: standard 8 colors (30-37), bright 8 (90-97), 256-color (38;5;N), truecolor (38;2;R;G;B), and reset (0).
 
 **YAML example:**
 
@@ -564,6 +602,11 @@ modules:
     fg-color: "#cdd6f4"
     font: "Hack Nerd Font Mono"
     font-size: 13
+    widgets: "cpu load memory swap temp disk:/ net volume git clock"
+    cpu-color: "#a6e3a1"
+    load-color: "#fab387"
+    net-color: "#89b4fa"
+    git-color: "#cba6f7"
 ```
 
 **Implementation notes:**
@@ -571,8 +614,12 @@ modules:
 - Renders via cairo+pango to a custom `wlr_buffer` (ARGB8888)
 - Creates per-monitor `wlr_scene_buffer` nodes on the TOP layer
 - Connects to compositor `focus-changed`, `client-added`, `client-removed` signals for reactive updates
-- Uses `wl_event_loop_add_timer` for 60-second clock updates
+- 2-second tick timer drives system data refresh and bar redraw
 - The compositor's `arrangelayers` subtracts bar height from usable area so tiled clients don't overlap
+- Data readers use time-based caching (2s-15min depending on widget) to minimize syscall overhead
+- Delta-based widgets (CPU, net, IO) track previous values for rate calculation
+- Subprocess widgets (cmd, volume, media, podman, weather) use `g_spawn_command_line_sync()`
+- Git widget reads focused client's CWD via `gowl_client_get_process_info()` → `/proc/PID/cwd`
 
 ### Alpha Module
 

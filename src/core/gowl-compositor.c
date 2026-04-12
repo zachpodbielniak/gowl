@@ -34,6 +34,7 @@
 #include <cairo.h>
 #include <drm_fourcc.h>
 #include <wlr/render/wlr_texture.h>
+#include <wlr/types/wlr_damage_ring.h>
 
 /**
  * GowlCompositor:
@@ -1141,6 +1142,11 @@ gowl_compositor_screenshot_output(
 		}
 
 		wlr_output_state_init(&state);
+
+		/* Force full damage so build_state always produces a buffer,
+		 * even when the scene hasn't changed since the last frame.
+		 * Required for recording (repeated captures). */
+		wlr_damage_ring_add_whole(&mon->scene_output->damage_ring);
 
 		if (!wlr_scene_output_build_state(mon->scene_output,
 		                                   &state, NULL)) {

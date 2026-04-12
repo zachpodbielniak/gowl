@@ -2565,6 +2565,44 @@ gowl_compositor_position_embedded(
 	clip.width  = width - 2 * (gint)client->bw;
 	clip.height = height - 2 * (gint)client->bw;
 	wlr_scene_subsurface_tree_set_clip(&client->scene_surface->node, &clip);
+
+	/* Embed path bypasses resize_client(), so the decorator hook
+	   never ran at the new dimensions.  Refresh it here so any
+	   active decoration (e.g. roundcorners) follows the embed
+	   geometry instead of staying at the stale tiled size. */
+	gowl_compositor_refresh_client_decoration(self, client);
+}
+
+void
+gowl_compositor_refresh_client_decoration(
+	GowlCompositor *self,
+	GowlClient     *client
+){
+	GowlClientDecorator *dec;
+	const float         *color;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(client));
+
+	if (self->module_mgr == NULL)
+		return;
+
+	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
+	          self->module_mgr);
+	if (dec == NULL)
+		return;
+
+	if (client->bw == 0 || client->geom.width <= 0
+	    || client->geom.height <= 0) {
+		gowl_client_decorator_destroy_decoration(dec, client);
+		return;
+	}
+
+	color = (client == gowl_compositor_get_focused_client(self))
+	        ? self->focus_color : self->unfocus_color;
+	gowl_client_decorator_render_decoration(
+		dec, client, client->geom.width, client->geom.height,
+		client->bw, color);
 }
 
 /**

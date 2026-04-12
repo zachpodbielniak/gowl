@@ -21,6 +21,8 @@
 
 #include <glib-object.h>
 
+struct wl_event_loop;
+
 G_BEGIN_DECLS
 
 #define GOWL_TYPE_SEAT (gowl_seat_get_type())
@@ -172,6 +174,62 @@ void      gowl_seat_emit_clipboard_changed          (GowlSeat *self);
  * compositor after a client sets the primary selection.
  */
 void      gowl_seat_emit_primary_selection_changed   (GowlSeat *self);
+
+/**
+ * GowlSeatClipboardReadCallback:
+ * @text: (transfer full) (nullable): the clipboard/selection text, or
+ *        %NULL if the read failed or the source was empty
+ * @user_data: caller-provided opaque pointer
+ *
+ * Called when an async clipboard/primary-selection read finishes.
+ * The callback owns @text and must g_free() it.  Runs on the
+ * compositor dispatch thread (the same thread wl_event_loop_dispatch
+ * runs on).
+ */
+typedef void (*GowlSeatClipboardReadCallback) (gchar    *text,
+                                                gpointer  user_data);
+
+/**
+ * gowl_seat_read_clipboard_async:
+ * @self: a #GowlSeat
+ * @loop: the wl_event_loop to attach the fd watch to
+ * @callback: called with the text when the read completes
+ * @user_data: opaque pointer passed to @callback
+ *
+ * Starts an asynchronous read of the current clipboard content.
+ * Unlike gowl_seat_get_clipboard(), this is safe to call from inside
+ * a signal handler on the dispatch thread: it registers an fd watch
+ * on the pipe and returns immediately, so the dispatch loop can
+ * flush events to the owning client before the read fires.  The
+ * callback is invoked once EOF is reached on the pipe.
+ *
+ * Returns: %TRUE if the async read was scheduled, %FALSE if there
+ * is no current selection source or the pipe could not be created.
+ * If %FALSE is returned, @callback is NOT invoked.
+ */
+gboolean  gowl_seat_read_clipboard_async (
+	GowlSeat                       *self,
+	struct wl_event_loop           *loop,
+	GowlSeatClipboardReadCallback   callback,
+	gpointer                        user_data);
+
+/**
+ * gowl_seat_read_primary_selection_async:
+ * @self: a #GowlSeat
+ * @loop: the wl_event_loop to attach the fd watch to
+ * @callback: called with the text when the read completes
+ * @user_data: opaque pointer passed to @callback
+ *
+ * Like gowl_seat_read_clipboard_async() but reads the primary
+ * selection instead of the clipboard.
+ *
+ * Returns: %TRUE if the async read was scheduled, %FALSE otherwise.
+ */
+gboolean  gowl_seat_read_primary_selection_async (
+	GowlSeat                       *self,
+	struct wl_event_loop           *loop,
+	GowlSeatClipboardReadCallback   callback,
+	gpointer                        user_data);
 
 G_END_DECLS
 

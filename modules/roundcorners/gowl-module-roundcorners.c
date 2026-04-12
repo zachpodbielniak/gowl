@@ -109,6 +109,19 @@ typedef struct {
 	float   color[4];
 } RoundDecor;
 
+/* Pointer hit-test callback for the decoration buffer. Always
+   reports "not hit" so the cairo stroke pixels never block clicks
+   to the client surface beneath -- critical for embedded clients
+   where the decoration can cover a large area. */
+static bool
+rc_no_input(struct wlr_scene_buffer *buffer, double *sx, double *sy)
+{
+	(void)buffer;
+	(void)sx;
+	(void)sy;
+	return false;
+}
+
 /* ----------------------------------------------------------------
  * Module type
  * ---------------------------------------------------------------- */
@@ -126,9 +139,11 @@ struct _GowlModuleRoundCorners {
 	GHashTable     *decorations;  /* GowlClient* → RoundDecor* */
 };
 
-static void rc_decorator_init (GowlClientDecoratorInterface *iface);
-static void rc_startup_init   (GowlStartupHandlerInterface *iface);
-static void rc_shutdown_init  (GowlShutdownHandlerInterface *iface);
+static void rc_decorator_init  (GowlClientDecoratorInterface *iface);
+static void rc_startup_init    (GowlStartupHandlerInterface *iface);
+static void rc_shutdown_init   (GowlShutdownHandlerInterface *iface);
+static void rc_destroy_decoration (GowlClientDecorator *decorator,
+                                   gpointer             client_ptr);
 
 G_DEFINE_TYPE_WITH_CODE(GowlModuleRoundCorners, gowl_module_round_corners,
     GOWL_TYPE_MODULE,
@@ -235,6 +250,15 @@ rc_render_decoration(GowlClientDecorator *decorator,
 	RoundBuffer *buf;
 	struct wlr_scene_tree *scene;
 
+	/* Degenerate/borderless case: nothing to draw.  Make sure any
+	   pre-existing decoration for this client is destroyed so a
+	   stale buffer doesn't linger with old dimensions (critical for
+	   embedded clients where bw is forced to 0). */
+	if (width <= 0 || height <= 0 || bw == 0) {
+		rc_destroy_decoration(decorator, client_ptr);
+		return;
+	}
+
 	decor = (RoundDecor *)g_hash_table_lookup(self->decorations, client);
 
 	/* Check if we can skip re-rendering (size/color unchanged) */
@@ -263,6 +287,12 @@ rc_render_decoration(GowlClientDecorator *decorator,
 
 		decor->frame_buf = wlr_scene_buffer_create(scene, &buf->base);
 		wlr_scene_node_set_position(&decor->frame_buf->node, 0, 0);
+		/* Make the decoration transparent to pointer input so clicks
+		   pass through to the client surface underneath.  Without
+		   this, the opaque cairo stroke pixels eat pointer events
+		   anywhere they're drawn, even though they're visually a
+		   thin border. */
+		decor->frame_buf->point_accepts_input = rc_no_input;
 
 		g_hash_table_insert(self->decorations,
 		                    g_object_ref(client), decor);

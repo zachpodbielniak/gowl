@@ -510,6 +510,22 @@ void gowl_compositor_position_embedded (GowlCompositor *self,
                                          gint            height);
 
 /**
+ * gowl_compositor_refresh_client_decoration:
+ * @self: a #GowlCompositor
+ * @client: a #GowlClient
+ *
+ * Re-dispatches the active client decorator for @client at its
+ * current geom/bw.  If a decorator module is active and
+ * @client has bw > 0, renders the decoration at the current
+ * dimensions; if bw == 0, destroys any existing decoration.  If
+ * no decorator is active, no-op.  Safe to call after changing
+ * @client->bw or @client->geom outside the normal resize_client()
+ * path (e.g. embed/unembed).
+ */
+void gowl_compositor_refresh_client_decoration (GowlCompositor *self,
+                                                 GowlClient     *client);
+
+/**
  * GowlKeyInterceptFunc:
  * @compositor: the compositor
  * @modifiers: active modifier bitmask

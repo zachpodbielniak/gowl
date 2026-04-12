@@ -18,6 +18,8 @@
 
 #include "gowl-core-private.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -744,6 +746,222 @@ gowl_seat_set_primary_selection(
 
 	wlr_seat_set_primary_selection(seat, &ts->base,
 	                               wl_display_next_serial(seat->display));
+}
+
+/* ------------------------------------------------------------------
+ * Async clipboard/primary-selection reads
+ *
+ * Synchronous pipe reads deadlock when the current source is
+ * client-owned and the handler runs inside the wl dispatch loop:
+ * wlr_data_source_send() queues an event in the client's output
+ * buffer which isn't flushed until the dispatch cycle returns, but
+ * we'd be blocking in read() before that happens.  The async variant
+ * registers an fd watch via wl_event_loop_add_fd() and returns
+ * immediately, so the dispatch loop flushes events to the client,
+ * the client writes to the pipe, and our POLLIN callback later
+ * drains the data.
+ * ------------------------------------------------------------------ */
+
+typedef struct {
+	int                           read_fd;
+	GString                      *buf;
+	struct wl_event_source       *source;
+	GowlSeatClipboardReadCallback callback;
+	gpointer                      user_data;
+} GowlSeatAsyncRead;
+
+static void
+gowl_seat_async_read_finish(GowlSeatAsyncRead *ctx)
+{
+	gchar *text = NULL;
+
+	if (ctx->source != NULL)
+		wl_event_source_remove(ctx->source);
+	if (ctx->read_fd >= 0)
+		close(ctx->read_fd);
+
+	if (ctx->buf != NULL && ctx->buf->len > 0)
+		text = g_string_free(ctx->buf, FALSE);
+	else if (ctx->buf != NULL)
+		g_string_free(ctx->buf, TRUE);
+
+	ctx->callback(text, ctx->user_data);
+	g_free(ctx);
+}
+
+static int
+gowl_seat_async_read_fd_cb(int fd, uint32_t mask, void *data)
+{
+	GowlSeatAsyncRead *ctx = (GowlSeatAsyncRead *)data;
+	gchar tmp[4096];
+	ssize_t n;
+
+	(void)fd;
+
+	if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
+		/* Still drain whatever data is readable before closing. */
+		while ((n = read(ctx->read_fd, tmp, sizeof(tmp))) > 0)
+			g_string_append_len(ctx->buf, tmp, (gssize)n);
+		gowl_seat_async_read_finish(ctx);
+		return 0;
+	}
+
+	if (mask & WL_EVENT_READABLE) {
+		for (;;) {
+			n = read(ctx->read_fd, tmp, sizeof(tmp));
+			if (n > 0) {
+				g_string_append_len(ctx->buf, tmp, (gssize)n);
+				continue;
+			}
+			if (n == 0) {
+				/* EOF -- client finished writing. */
+				gowl_seat_async_read_finish(ctx);
+				return 0;
+			}
+			if (errno == EAGAIN || errno == EINTR) {
+				/* More may come later; keep watching. */
+				return 0;
+			}
+			/* Hard error */
+			gowl_seat_async_read_finish(ctx);
+			return 0;
+		}
+	}
+
+	return 0;
+}
+
+/* Pick best MIME for plain-text from a wl_array of char* entries. */
+static const char *
+pick_text_mime(const struct wl_array *mimes)
+{
+	if (mime_array_contains(mimes, "text/plain;charset=utf-8"))
+		return "text/plain;charset=utf-8";
+	if (mime_array_contains(mimes, "text/plain"))
+		return "text/plain";
+	if (mime_array_contains(mimes, "UTF8_STRING"))
+		return "UTF8_STRING";
+	return NULL;
+}
+
+static gboolean
+gowl_seat_start_async_read(struct wl_event_loop          *loop,
+                           int                            read_fd,
+                           GowlSeatClipboardReadCallback  cb,
+                           gpointer                       user_data)
+{
+	GowlSeatAsyncRead *ctx;
+
+	/* Make the read end non-blocking so our fd-watch callback can
+	   drain-in-a-loop without risk of stalling the dispatch thread. */
+	{
+		int flags = fcntl(read_fd, F_GETFL, 0);
+		if (flags >= 0)
+			fcntl(read_fd, F_SETFL, flags | O_NONBLOCK);
+		fcntl(read_fd, F_SETFD, FD_CLOEXEC);
+	}
+
+	ctx = g_new0(GowlSeatAsyncRead, 1);
+	ctx->read_fd   = read_fd;
+	ctx->buf       = g_string_new(NULL);
+	ctx->callback  = cb;
+	ctx->user_data = user_data;
+
+	ctx->source = wl_event_loop_add_fd(loop, read_fd,
+	                                   WL_EVENT_READABLE,
+	                                   gowl_seat_async_read_fd_cb, ctx);
+	if (ctx->source == NULL) {
+		g_string_free(ctx->buf, TRUE);
+		close(read_fd);
+		g_free(ctx);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+gboolean
+gowl_seat_read_clipboard_async(
+	GowlSeat                      *self,
+	struct wl_event_loop          *loop,
+	GowlSeatClipboardReadCallback  callback,
+	gpointer                       user_data)
+{
+	struct wlr_seat *seat;
+	struct wlr_data_source *source;
+	const char *mime;
+	int fds[2];
+
+	g_return_val_if_fail(GOWL_IS_SEAT(self), FALSE);
+	g_return_val_if_fail(loop != NULL, FALSE);
+	g_return_val_if_fail(callback != NULL, FALSE);
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL)
+		return FALSE;
+
+	source = seat->selection_source;
+	if (source == NULL)
+		return FALSE;
+
+	mime = pick_text_mime(&source->mime_types);
+	if (mime == NULL)
+		return FALSE;
+
+	if (pipe(fds) != 0)
+		return FALSE;
+
+	/* wlr's client-source .send impl closes fds[1] after queuing the
+	   wl_data_source.send event; for compositor-owned sources the
+	   impl writes and closes synchronously.  Either way we never
+	   touch fds[1] again. */
+	wlr_data_source_send(source, mime, fds[1]);
+
+	if (!gowl_seat_start_async_read(loop, fds[0], callback, user_data)) {
+		/* start_async_read already closed fds[0] on failure. */
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+gboolean
+gowl_seat_read_primary_selection_async(
+	GowlSeat                      *self,
+	struct wl_event_loop          *loop,
+	GowlSeatClipboardReadCallback  callback,
+	gpointer                       user_data)
+{
+	struct wlr_seat *seat;
+	struct wlr_primary_selection_source *source;
+	const char *mime;
+	int fds[2];
+
+	g_return_val_if_fail(GOWL_IS_SEAT(self), FALSE);
+	g_return_val_if_fail(loop != NULL, FALSE);
+	g_return_val_if_fail(callback != NULL, FALSE);
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL)
+		return FALSE;
+
+	source = seat->primary_selection_source;
+	if (source == NULL)
+		return FALSE;
+
+	mime = pick_text_mime(&source->mime_types);
+	if (mime == NULL)
+		return FALSE;
+
+	if (pipe(fds) != 0)
+		return FALSE;
+
+	wlr_primary_selection_source_send(source, mime, fds[1]);
+
+	if (!gowl_seat_start_async_read(loop, fds[0], callback, user_data))
+		return FALSE;
+
+	return TRUE;
 }
 
 void

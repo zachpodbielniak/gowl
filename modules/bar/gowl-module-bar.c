@@ -165,10 +165,16 @@ typedef struct {
 	gdouble       color[4];  /* (0,0,0,0) = use fg_color */
 	gboolean      has_color;
 	gchar        *param;     /* type-specific: disk mount, net iface, cmd string */
-	/* Per-widget output cache (for subprocess/IPC widgets) */
+	/* Per-widget output cache (for subprocess/IPC widgets).
+	   cached_output is written by worker threads and read by the
+	   dispatch thread's render; guarded by bar->output_mutex. */
 	gchar        *cached_output;
 	time_t        output_read_time;
-	gint          output_interval; /* seconds, default varies by type */
+	gint          output_interval;  /* seconds, default varies by type */
+	gboolean      interval_explicit; /* TRUE if set via per-widget @N syntax */
+	/* Set to 1 while a worker thread is running a subprocess for this
+	   widget; gated atomically to prevent duplicate spawns. */
+	volatile gint spawn_in_flight;
 } BarWidget;
 
 /* ----------------------------------------------------------------
@@ -266,11 +272,330 @@ struct _GowlModuleBar {
 
 	/* Widget data (Elisp-driven values) */
 	GHashTable *widget_data;
+
+	/* Async subprocess dispatch.  Subprocess-based widget reads run
+	   on this pool so they never block the compositor dispatch
+	   thread (which holds cmacs_gowl_mutex during wl_event_loop
+	   iteration -- blocking there deadlocks every main-thread DEFUN
+	   that needs the mutex). */
+	GThreadPool *worker_pool;
+	GMutex       output_mutex; /* protects BarWidget::cached_output */
 };
 
 static void bar_provider_iface_init(GowlBarProviderInterface *iface);
 static void bar_startup_init(GowlStartupHandlerInterface *iface);
 static void bar_shutdown_init(GowlShutdownHandlerInterface *iface);
+
+/* ----------------------------------------------------------------
+ * Async subprocess worker infrastructure
+ *
+ * Subprocess-based widgets (cmd, volume, media, git, podman, weather)
+ * used to call g_spawn_sync() directly from bar_tick on the compositor
+ * dispatch thread.  That thread holds cmacs_gowl_mutex for the entire
+ * wl_event_loop iteration, so any slow subprocess would block every
+ * main-thread DEFUN that needs the mutex (deadlocking the editor).
+ *
+ * We now push those reads to a GThreadPool.  Workers run the spawn,
+ * parse the output, and swap in a new cached_output under
+ * bar->output_mutex.  The dispatch thread never blocks on I/O.
+ * ---------------------------------------------------------------- */
+
+typedef enum {
+	WORK_KIND_CMD,
+	WORK_KIND_VOLUME,
+	WORK_KIND_MEDIA,
+	WORK_KIND_GIT,
+	WORK_KIND_PODMAN,
+	WORK_KIND_WEATHER,
+} WorkKind;
+
+typedef struct {
+	GowlModuleBar *bar;       /* borrowed; outlives work items */
+	BarWidget     *widget;    /* borrowed; spawn_in_flight pins lifetime */
+	WorkKind       kind;
+	gchar         *param;     /* copy -- worker must not touch widget->param */
+	gchar         *git_cwd;   /* for WORK_KIND_GIT only */
+} WorkItem;
+
+/* Store a freshly-built cached_output string. Takes ownership of
+   new_output (even if NULL).  Safe to call from any thread. */
+static void
+bar_widget_store_output(GowlModuleBar *self, BarWidget *w, gchar *new_output)
+{
+	g_mutex_lock(&self->output_mutex);
+	g_free(w->cached_output);
+	w->cached_output = new_output;
+	g_mutex_unlock(&self->output_mutex);
+}
+
+/* Run an argv-style command synchronously and return the first line
+   of stdout, trimmed. Returns NULL on failure or empty output. */
+static gchar *
+run_command_first_line(const gchar * const *argv)
+{
+	gchar *out = NULL;
+	gchar *nl;
+
+	if (!g_spawn_sync(NULL, (gchar **)argv, NULL,
+	                  G_SPAWN_SEARCH_PATH | G_SPAWN_STDERR_TO_DEV_NULL,
+	                  NULL, NULL, &out, NULL, NULL, NULL)) {
+		g_free(out);
+		return NULL;
+	}
+	if (out == NULL)
+		return NULL;
+
+	nl = strchr(out, '\n');
+	if (nl != NULL)
+		*nl = '\0';
+	g_strchomp(out);
+	if (out[0] == '\0') {
+		g_free(out);
+		return NULL;
+	}
+	return out;
+}
+
+/* Argument to g_strsplit a shell-parsed command, honoring tilde.
+   Callers must g_strfreev() the result. Returns NULL on parse
+   failure. */
+static gchar **
+parse_shell_argv(const gchar *cmdline)
+{
+	gchar      **argv = NULL;
+	gint         argc = 0;
+	const gchar *home;
+	gint         i;
+
+	if (!g_shell_parse_argv(cmdline, &argc, &argv, NULL))
+		return NULL;
+
+	home = g_get_home_dir();
+	if (home != NULL) {
+		for (i = 0; i < argc; i++) {
+			if (argv[i][0] == '~' && argv[i][1] == '/') {
+				gchar *expanded =
+					g_strdup_printf("%s%s", home, argv[i] + 1);
+				g_free(argv[i]);
+				argv[i] = expanded;
+			}
+		}
+	}
+	return argv;
+}
+
+/* Worker body: runs on a GThreadPool thread, never holds any
+   compositor mutex.  Must only touch: self->output_mutex and the
+   widget's cached_output / spawn_in_flight fields. */
+static void
+bar_worker_func(gpointer data, gpointer user_data)
+{
+	WorkItem      *item = data;
+	GowlModuleBar *self = item->bar;
+	BarWidget     *w    = item->widget;
+	gchar         *new_output = NULL;
+	gchar         *out = NULL;
+
+	(void)user_data;
+
+	switch (item->kind) {
+	case WORK_KIND_CMD:
+		{
+			gchar **argv = parse_shell_argv(item->param);
+			if (argv != NULL) {
+				new_output =
+					run_command_first_line((const gchar * const *)argv);
+				g_strfreev(argv);
+			}
+		}
+		break;
+
+	case WORK_KIND_VOLUME:
+		{
+			const gchar *argv[] = {
+				"wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@", NULL
+			};
+			if (g_spawn_sync(NULL, (gchar **)argv, NULL,
+			        G_SPAWN_SEARCH_PATH | G_SPAWN_STDERR_TO_DEV_NULL,
+			        NULL, NULL, &out, NULL, NULL, NULL) && out != NULL) {
+				gdouble vol;
+				gboolean muted = (strstr(out, "[MUTED]") != NULL);
+				if (muted) {
+					new_output = g_strdup("VOL MUTE");
+				} else if (sscanf(out, "Volume: %lf", &vol) == 1) {
+					new_output = g_strdup_printf("VOL %d%%",
+					    (gint)(vol * 100));
+				} else {
+					new_output = g_strdup("VOL ?");
+				}
+			}
+			g_free(out);
+		}
+		break;
+
+	case WORK_KIND_MEDIA:
+		{
+			const gchar *argv[] = {
+				"playerctl", "metadata", "--format",
+				"{{artist}} - {{title}}", NULL
+			};
+			if (g_spawn_sync(NULL, (gchar **)argv, NULL,
+			        G_SPAWN_SEARCH_PATH | G_SPAWN_STDERR_TO_DEV_NULL,
+			        NULL, NULL, &out, NULL, NULL, NULL) && out != NULL) {
+				g_strstrip(out);
+				if (out[0] != '\0' && strcmp(out, " - ") != 0) {
+					if (strlen(out) > 40)
+						out[40] = '\0';
+					new_output = g_strdup_printf("\xe2\x99\xab %s", out);
+				}
+			}
+			g_free(out);
+		}
+		break;
+
+	case WORK_KIND_PODMAN:
+		{
+			const gchar *argv[] = { "podman", "ps", "-q", NULL };
+			if (g_spawn_sync(NULL, (gchar **)argv, NULL,
+			        G_SPAWN_SEARCH_PATH | G_SPAWN_STDERR_TO_DEV_NULL,
+			        NULL, NULL, &out, NULL, NULL, NULL) && out != NULL) {
+				gint count;
+				gchar **lines;
+
+				g_strstrip(out);
+				if (out[0] == '\0') {
+					count = 0;
+				} else {
+					lines = g_strsplit(out, "\n", -1);
+					count = (gint)g_strv_length(lines);
+					g_strfreev(lines);
+				}
+				new_output = g_strdup_printf("POD %d", count);
+			}
+			g_free(out);
+		}
+		break;
+
+	case WORK_KIND_WEATHER:
+		{
+			const gchar *loc = (item->param != NULL) ? item->param : "";
+			gchar *url = g_strdup_printf("wttr.in/%s?format=%%c+%%t", loc);
+			const gchar *argv[] = { "curl", "-sf", url, NULL };
+			if (g_spawn_sync(NULL, (gchar **)argv, NULL,
+			        G_SPAWN_SEARCH_PATH | G_SPAWN_STDERR_TO_DEV_NULL,
+			        NULL, NULL, &out, NULL, NULL, NULL) && out != NULL) {
+				g_strstrip(out);
+				if (out[0] != '\0')
+					new_output = g_strdup(out);
+			}
+			g_free(out);
+			g_free(url);
+		}
+		break;
+
+	case WORK_KIND_GIT:
+		if (item->git_cwd != NULL) {
+			gchar  head_path[PATH_MAX];
+			gchar  dir[PATH_MAX];
+			FILE  *f;
+			char   ref_line[512];
+			gchar *branch;
+			gint   dirty = 0;
+
+			g_strlcpy(dir, item->git_cwd, sizeof(dir));
+			/* Walk up to find .git/HEAD */
+			while (dir[0] != '\0') {
+				g_snprintf(head_path, sizeof(head_path),
+				           "%s/.git/HEAD", dir);
+				if (g_file_test(head_path, G_FILE_TEST_EXISTS))
+					break;
+				{
+					gchar *slash = strrchr(dir, '/');
+					if (slash == NULL || slash == dir) {
+						dir[0] = '\0';
+						break;
+					}
+					*slash = '\0';
+				}
+			}
+
+			if (dir[0] != '\0' &&
+			    (f = fopen(head_path, "r")) != NULL) {
+				if (fgets(ref_line, sizeof(ref_line), f) != NULL) {
+					g_strstrip(ref_line);
+					if (strncmp(ref_line, "ref: refs/heads/", 16) == 0)
+						branch = ref_line + 16;
+					else
+						branch = ref_line;
+
+					{
+						const gchar *argv[] = {
+							"git", "-C", dir, "status", "--porcelain", NULL
+						};
+						gchar *status_out = NULL;
+						if (g_spawn_sync(NULL, (gchar **)argv, NULL,
+						        G_SPAWN_SEARCH_PATH
+						        | G_SPAWN_STDERR_TO_DEV_NULL,
+						        NULL, NULL, &status_out, NULL, NULL, NULL)
+						    && status_out != NULL) {
+							gchar *p;
+							for (p = status_out; *p != '\0'; p++)
+								if (*p == '\n')
+									dirty++;
+						}
+						g_free(status_out);
+					}
+
+					if (dirty > 0)
+						new_output =
+							g_strdup_printf("%s*%d", branch, dirty);
+					else
+						new_output = g_strdup(branch);
+				}
+				fclose(f);
+			}
+		}
+		break;
+	}
+
+	bar_widget_store_output(self, w, new_output);
+
+	/* Release the lifetime pin so the widget can be freed and so the
+	   next tick can schedule another read. */
+	g_atomic_int_set(&w->spawn_in_flight, 0);
+
+	g_free(item->param);
+	g_free(item->git_cwd);
+	g_free(item);
+}
+
+/* Schedule a worker if one isn't already running for this widget.
+   Called from the dispatch thread. Never blocks. */
+static void
+bar_schedule_work(GowlModuleBar *self, BarWidget *w, WorkKind kind,
+                  const gchar *param, const gchar *git_cwd)
+{
+	WorkItem *item;
+
+	if (self->worker_pool == NULL)
+		return;
+	if (!g_atomic_int_compare_and_exchange(&w->spawn_in_flight, 0, 1))
+		return; /* already running */
+
+	item = g_new0(WorkItem, 1);
+	item->bar     = self;
+	item->widget  = w;
+	item->kind    = kind;
+	item->param   = (param   != NULL) ? g_strdup(param)   : NULL;
+	item->git_cwd = (git_cwd != NULL) ? g_strdup(git_cwd) : NULL;
+
+	if (!g_thread_pool_push(self->worker_pool, item, NULL)) {
+		g_atomic_int_set(&w->spawn_in_flight, 0);
+		g_free(item->param);
+		g_free(item->git_cwd);
+		g_free(item);
+	}
+}
 
 G_DEFINE_TYPE_WITH_CODE(GowlModuleBar, gowl_module_bar,
 	GOWL_TYPE_MODULE,
@@ -651,45 +976,31 @@ read_temp(GowlModuleBar *self)
 }
 
 static void
-read_gpu(BarWidget *w)
+read_gpu(GowlModuleBar *self, BarWidget *w)
 {
 	FILE *f;
 	gint pct;
-	time_t now;
-
-	now = time(NULL);
-	if (now - w->output_read_time < 5)
-		return;
-	w->output_read_time = now;
 
 	/* AMD amdgpu sysfs */
 	f = fopen("/sys/class/drm/card0/device/gpu_busy_percent", "r");
 	if (f == NULL)
 		f = fopen("/sys/class/drm/card1/device/gpu_busy_percent", "r");
 	if (f == NULL) {
-		g_free(w->cached_output);
-		w->cached_output = NULL;
+		bar_widget_store_output(self, w, NULL);
 		return;
 	}
 
-	if (fscanf(f, "%d", &pct) == 1) {
-		g_free(w->cached_output);
-		w->cached_output = g_strdup_printf("GPU %d%%", pct);
-	}
+	if (fscanf(f, "%d", &pct) == 1)
+		bar_widget_store_output(self, w,
+		    g_strdup_printf("GPU %d%%", pct));
 	fclose(f);
 }
 
 static void
-read_wifi(BarWidget *w)
+read_wifi(GowlModuleBar *self, BarWidget *w)
 {
 	FILE *f;
 	char line[512];
-	time_t now;
-
-	now = time(NULL);
-	if (now - w->output_read_time < 10)
-		return;
-	w->output_read_time = now;
 
 	f = fopen("/proc/net/wireless", "r");
 	if (f == NULL)
@@ -705,25 +1016,18 @@ read_wifi(BarWidget *w)
 
 		if (sscanf(line, " %63[^:]: %*d %lf %lf",
 		           iface, &link, &level) >= 3) {
-			g_free(w->cached_output);
-			w->cached_output = g_strdup_printf("WiFi %ddBm",
-			                                   (gint)level);
+			bar_widget_store_output(self, w,
+			    g_strdup_printf("WiFi %ddBm", (gint)level));
 		}
 	}
 	fclose(f);
 }
 
 static void
-read_ip(BarWidget *w)
+read_ip(GowlModuleBar *self, BarWidget *w)
 {
 	struct ifaddrs *ifaddr, *ifa;
 	const gchar *target_iface;
-	time_t now;
-
-	now = time(NULL);
-	if (now - w->output_read_time < 30)
-		return;
-	w->output_read_time = now;
 
 	target_iface = (w->param != NULL) ? w->param : NULL;
 
@@ -747,8 +1051,7 @@ read_ip(BarWidget *w)
 		inet_ntop(AF_INET,
 		          &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr,
 		          host, sizeof(host));
-		g_free(w->cached_output);
-		w->cached_output = g_strdup(host);
+		bar_widget_store_output(self, w, g_strdup(host));
 		break;
 	}
 
@@ -756,104 +1059,43 @@ read_ip(BarWidget *w)
 }
 
 static void
-read_vpn(BarWidget *w)
+read_vpn(GowlModuleBar *self, BarWidget *w)
 {
-	time_t now;
+	const gchar *text;
 
-	now = time(NULL);
-	if (now - w->output_read_time < 10)
-		return;
-	w->output_read_time = now;
-
-	g_free(w->cached_output);
 	if (g_file_test("/sys/class/net/tun0", G_FILE_TEST_IS_DIR) ||
 	    g_file_test("/sys/class/net/wg0", G_FILE_TEST_IS_DIR))
-		w->cached_output = g_strdup("VPN \xe2\x9c\x93");
+		text = "VPN \xe2\x9c\x93";
 	else
-		w->cached_output = g_strdup("VPN \xe2\x9c\x97");
+		text = "VPN \xe2\x9c\x97";
+
+	bar_widget_store_output(self, w, g_strdup(text));
 }
 
 static void
-read_volume(BarWidget *w)
+read_volume(GowlModuleBar *self, BarWidget *w)
 {
-	gchar *out = NULL;
-	time_t now;
-
-	now = time(NULL);
-	if (now - w->output_read_time < 2)
-		return;
-	w->output_read_time = now;
-
-	if (g_spawn_command_line_sync(
-	        "wpctl get-volume @DEFAULT_AUDIO_SINK@",
-	        &out, NULL, NULL, NULL) && out != NULL) {
-		gdouble vol;
-		gboolean muted;
-
-		muted = (strstr(out, "[MUTED]") != NULL);
-		g_free(w->cached_output);
-
-		if (muted) {
-			w->cached_output = g_strdup("VOL MUTE");
-		} else if (sscanf(out, "Volume: %lf", &vol) == 1) {
-			w->cached_output = g_strdup_printf("VOL %d%%",
-			                                   (gint)(vol * 100));
-		} else {
-			w->cached_output = g_strdup("VOL ?");
-		}
-	}
-	g_free(out);
+	bar_schedule_work(self, w, WORK_KIND_VOLUME, NULL, NULL);
 }
 
 static void
-read_media(BarWidget *w)
+read_media(GowlModuleBar *self, BarWidget *w)
 {
-	gchar *out = NULL;
-	time_t now;
-
-	now = time(NULL);
-	if (now - w->output_read_time < 2)
-		return;
-	w->output_read_time = now;
-
-	/* Use playerctl for MPRIS — simpler than raw D-Bus from a module */
-	if (g_spawn_command_line_sync(
-	        "playerctl metadata --format '{{artist}} - {{title}}'",
-	        &out, NULL, NULL, NULL) && out != NULL) {
-		g_strstrip(out);
-		if (out[0] != '\0' && strcmp(out, " - ") != 0) {
-			g_free(w->cached_output);
-			/* Truncate to ~40 chars */
-			if (strlen(out) > 40)
-				out[40] = '\0';
-			w->cached_output = g_strdup_printf("\xe2\x99\xab %s", out);
-		} else {
-			g_free(w->cached_output);
-			w->cached_output = NULL;
-		}
-	}
-	g_free(out);
+	bar_schedule_work(self, w, WORK_KIND_MEDIA, NULL, NULL);
 }
 
 static void
 read_git(GowlModuleBar *self, BarWidget *w)
 {
-	GowlClient *focused;
+	GowlClient      *focused;
 	GowlProcessInfo *info;
-	gchar head_path[PATH_MAX];
-	gchar dir[PATH_MAX];
-	FILE *f;
-	char ref_line[512];
-	gchar *out = NULL;
-	gchar *branch;
-	gint dirty;
-	time_t now;
+	gchar           *cwd_copy = NULL;
 
-	now = time(NULL);
-	if (now - w->output_read_time < 5)
-		return;
-	w->output_read_time = now;
-
+	/* The focused-client lookup must happen on the dispatch thread
+	   (it's guarded by cmacs_gowl_mutex, which this thread holds).
+	   We snapshot the CWD and hand it to the worker thread which
+	   then walks the directory tree and runs `git status` without
+	   touching compositor state. */
 	if (self->compositor == NULL)
 		return;
 
@@ -864,194 +1106,77 @@ read_git(GowlModuleBar *self, BarWidget *w)
 
 	info = gowl_client_get_process_info(focused);
 	if (info == NULL || info->cwd == NULL) {
-		if (info != NULL) gowl_process_info_free(info);
+		if (info != NULL)
+			gowl_process_info_free(info);
 		return;
 	}
-
-	/* Walk up from CWD to find .git/ */
-	g_strlcpy(dir, info->cwd, sizeof(dir));
+	cwd_copy = g_strdup(info->cwd);
 	gowl_process_info_free(info);
 
-	while (dir[0] != '\0') {
-		g_snprintf(head_path, sizeof(head_path), "%s/.git/HEAD", dir);
-		if (g_file_test(head_path, G_FILE_TEST_EXISTS))
-			break;
-		/* Go up one level */
-		{
-			gchar *slash = strrchr(dir, '/');
-			if (slash == NULL || slash == dir) {
-				dir[0] = '\0';
-				break;
-			}
-			*slash = '\0';
-		}
-	}
-
-	if (dir[0] == '\0') {
-		g_free(w->cached_output);
-		w->cached_output = NULL;
-		return;
-	}
-
-	/* Read branch from .git/HEAD */
-	f = fopen(head_path, "r");
-	if (f == NULL) {
-		g_free(w->cached_output);
-		w->cached_output = NULL;
-		return;
-	}
-	if (fgets(ref_line, sizeof(ref_line), f) == NULL) {
-		fclose(f);
-		g_free(w->cached_output);
-		w->cached_output = NULL;
-		return;
-	}
-	fclose(f);
-
-	g_strstrip(ref_line);
-	if (strncmp(ref_line, "ref: refs/heads/", 16) == 0)
-		branch = ref_line + 16;
-	else
-		branch = ref_line; /* detached HEAD */
-
-	/* Check dirty count */
-	dirty = 0;
-	{
-		gchar *cmd = g_strdup_printf(
-			"git -C '%s' status --porcelain 2>/dev/null | wc -l",
-			dir);
-		if (g_spawn_command_line_sync(cmd, &out, NULL, NULL, NULL)
-		    && out != NULL) {
-			dirty = atoi(out);
-		}
-		g_free(cmd);
-		g_free(out);
-	}
-
-	g_free(w->cached_output);
-	if (dirty > 0)
-		w->cached_output = g_strdup_printf("%s*%d", branch, dirty);
-	else
-		w->cached_output = g_strdup(branch);
+	bar_schedule_work(self, w, WORK_KIND_GIT, NULL, cwd_copy);
+	g_free(cwd_copy);
 }
 
 static void
-read_podman(BarWidget *w)
+read_podman(GowlModuleBar *self, BarWidget *w)
 {
-	gchar *out = NULL;
-	time_t now;
-
-	now = time(NULL);
-	if (now - w->output_read_time < 30)
-		return;
-	w->output_read_time = now;
-
-	if (g_spawn_command_line_sync("podman ps -q",
-	        &out, NULL, NULL, NULL) && out != NULL) {
-		gint count;
-		gchar **lines;
-
-		g_strstrip(out);
-		if (out[0] == '\0') {
-			count = 0;
-		} else {
-			lines = g_strsplit(out, "\n", -1);
-			count = (gint)g_strv_length(lines);
-			g_strfreev(lines);
-		}
-		g_free(w->cached_output);
-		w->cached_output = g_strdup_printf("POD %d", count);
-	}
-	g_free(out);
+	bar_schedule_work(self, w, WORK_KIND_PODMAN, NULL, NULL);
 }
 
 static void
-read_weather(BarWidget *w)
+read_weather(GowlModuleBar *self, BarWidget *w)
 {
-	gchar *out = NULL;
-	gchar *cmd;
-	const gchar *loc;
-	time_t now;
-
-	now = time(NULL);
-	if (now - w->output_read_time < 900) /* 15 min cache */
-		return;
-	w->output_read_time = now;
-
-	loc = (w->param != NULL) ? w->param : "";
-	cmd = g_strdup_printf("curl -sf 'wttr.in/%s?format=%%c+%%t' 2>/dev/null",
-	                      loc);
-
-	if (g_spawn_command_line_sync(cmd, &out, NULL, NULL, NULL)
-	    && out != NULL) {
-		g_strstrip(out);
-		if (out[0] != '\0') {
-			g_free(w->cached_output);
-			w->cached_output = g_strdup(out);
-		}
-	}
-
-	g_free(cmd);
-	g_free(out);
+	bar_schedule_work(self, w, WORK_KIND_WEATHER, w->param, NULL);
 }
 
 static void
-read_cmd(BarWidget *w)
+read_cmd(GowlModuleBar *self, BarWidget *w)
 {
-	gchar *out = NULL;
-	gchar *nl;
-	time_t now;
-	gint interval;
-
-	interval = (w->output_interval > 0) ? w->output_interval : 10;
-	now = time(NULL);
-	if (now - w->output_read_time < interval)
-		return;
-	w->output_read_time = now;
-
 	if (w->param == NULL || w->param[0] == '\0')
 		return;
-
-	if (g_spawn_command_line_sync(w->param,
-	        &out, NULL, NULL, NULL) && out != NULL) {
-		/* Take only the first line */
-		nl = strchr(out, '\n');
-		if (nl != NULL)
-			*nl = '\0';
-		/* Trim trailing whitespace */
-		g_strchomp(out);
-		g_free(w->cached_output);
-		w->cached_output = g_strdup(out);
-	}
-	g_free(out);
+	bar_schedule_work(self, w, WORK_KIND_CMD, w->param, NULL);
 }
 
 static void
 read_all_data(GowlModuleBar *self)
 {
-	gint i;
+	BarWidget *w;
+	time_t     now;
+	gint       i;
+
+	now = time(NULL);
 
 	for (i = 0; i < self->n_widgets; i++) {
-		switch (self->widgets[i].type) {
+		w = &self->widgets[i];
+
+		/* Unified throttle: if the widget has an interval set, only
+		   re-read when the interval has elapsed. Widgets with
+		   output_interval == 0 run on every tick. */
+		if (w->output_interval > 0 &&
+		    now - w->output_read_time < w->output_interval)
+			continue;
+		w->output_read_time = now;
+
+		switch (w->type) {
 		case BAR_WIDGET_CPU:     read_cpu(self);                 break;
 		case BAR_WIDGET_MEMORY:  read_memory(self);              break;
 		case BAR_WIDGET_DISK:    read_disk(self);                break;
 		case BAR_WIDGET_BATTERY: read_battery(self);             break;
 		case BAR_WIDGET_LOAD:    read_load(self);                break;
 		case BAR_WIDGET_SWAP:    read_swap(self);                break;
-		case BAR_WIDGET_NET:     read_net(self, &self->widgets[i]); break;
-		case BAR_WIDGET_IO:      read_io(self, &self->widgets[i]); break;
+		case BAR_WIDGET_NET:     read_net(self, w);              break;
+		case BAR_WIDGET_IO:      read_io(self, w);               break;
 		case BAR_WIDGET_TEMP:    read_temp(self);                break;
-		case BAR_WIDGET_GPU:     read_gpu(&self->widgets[i]);    break;
-		case BAR_WIDGET_WIFI:    read_wifi(&self->widgets[i]);   break;
-		case BAR_WIDGET_IP:      read_ip(&self->widgets[i]);     break;
-		case BAR_WIDGET_VPN:     read_vpn(&self->widgets[i]);    break;
-		case BAR_WIDGET_VOLUME:  read_volume(&self->widgets[i]); break;
-		case BAR_WIDGET_MEDIA:   read_media(&self->widgets[i]);  break;
-		case BAR_WIDGET_GIT:     read_git(self, &self->widgets[i]); break;
-		case BAR_WIDGET_PODMAN:  read_podman(&self->widgets[i]); break;
-		case BAR_WIDGET_WEATHER: read_weather(&self->widgets[i]); break;
-		case BAR_WIDGET_CMD:     read_cmd(&self->widgets[i]);    break;
+		case BAR_WIDGET_GPU:     read_gpu(self, w);              break;
+		case BAR_WIDGET_WIFI:    read_wifi(self, w);             break;
+		case BAR_WIDGET_IP:      read_ip(self, w);               break;
+		case BAR_WIDGET_VPN:     read_vpn(self, w);              break;
+		case BAR_WIDGET_VOLUME:  read_volume(self, w);           break;
+		case BAR_WIDGET_MEDIA:   read_media(self, w);            break;
+		case BAR_WIDGET_GIT:     read_git(self, w);              break;
+		case BAR_WIDGET_PODMAN:  read_podman(self, w);           break;
+		case BAR_WIDGET_WEATHER: read_weather(self, w);          break;
+		case BAR_WIDGET_CMD:     read_cmd(self, w);              break;
 		default: break;
 		}
 	}
@@ -1198,11 +1323,14 @@ widget_text(GowlModuleBar *self, BarWidget *w, char *buf, gsize bufsz)
 	case BAR_WIDGET_PODMAN:
 	case BAR_WIDGET_WEATHER:
 	case BAR_WIDGET_CMD:
-		/* These use per-widget cached_output */
+		/* These use per-widget cached_output, which worker threads
+		   may be updating concurrently. Copy under the mutex. */
+		g_mutex_lock(&self->output_mutex);
 		if (w->cached_output != NULL)
-			snprintf(buf, bufsz, "%s", w->cached_output);
+			g_strlcpy(buf, w->cached_output, bufsz);
 		else
 			buf[0] = '\0';
+		g_mutex_unlock(&self->output_mutex);
 		break;
 	case BAR_WIDGET_TODO:
 		{
@@ -1302,11 +1430,21 @@ parse_widget_list(GowlModuleBar *self, const gchar *spec)
 	gint i;
 
 	parts = g_strsplit(spec, " ", -1);
-	self->n_widgets = 0;
 
-	/* Free old widget params */
-	for (i = 0; i < self->n_widgets; i++)
+	/* Free old widget params and cached output. The widgets array
+	   is stable storage inside the bar struct, so a worker that's
+	   still running against an old slot can safely update it under
+	   output_mutex -- the worst case is one tick of stale text in
+	   the new widget occupying that slot, corrected on the next
+	   read_all_data pass. */
+	for (i = 0; i < self->n_widgets; i++) {
 		g_free(self->widgets[i].param);
+		self->widgets[i].param = NULL;
+		g_mutex_lock(&self->output_mutex);
+		g_free(self->widgets[i].cached_output);
+		self->widgets[i].cached_output = NULL;
+		g_mutex_unlock(&self->output_mutex);
+	}
 
 	self->n_widgets = 0;
 
@@ -1315,9 +1453,27 @@ parse_widget_list(GowlModuleBar *self, const gchar *spec)
 		gchar *name;
 		gchar *param;
 		gchar *colon;
+		gchar *at;
+		gint   interval_override;
 
 		if (parts[i][0] == '\0')
 			continue;
+
+		/* Per-widget "@N" refresh interval suffix (works for any
+		   widget). Uses the LAST '@' so commands that legitimately
+		   contain '@' still parse -- e.g. "cmd:ssh user@host@5" is
+		   ("ssh user@host", interval 5). If the text after the final
+		   '@' isn't a positive integer, the whole token stands. */
+		interval_override = 0;
+		at = strrchr(parts[i], '@');
+		if (at != NULL && at[1] != '\0') {
+			gchar *endptr = NULL;
+			glong  n = g_ascii_strtoll(at + 1, &endptr, 10);
+			if (n > 0 && endptr != NULL && *endptr == '\0') {
+				*at = '\0';
+				interval_override = (gint)n;
+			}
+		}
 
 		/* Support "disk:/home" syntax for parameterized widgets */
 		name  = parts[i];
@@ -1338,12 +1494,28 @@ parse_widget_list(GowlModuleBar *self, const gchar *spec)
 			(param != NULL && param[0] != '\0') ? g_strdup(param) : NULL;
 		self->widgets[self->n_widgets].cached_output = NULL;
 		self->widgets[self->n_widgets].output_read_time = 0;
-		/* Default refresh intervals per type */
+		self->widgets[self->n_widgets].interval_explicit = FALSE;
+		self->widgets[self->n_widgets].spawn_in_flight = 0;
+		/* Default refresh intervals per type (seconds). 0 means
+		   "run every tick". These defaults are picked to match the
+		   cost of each read path. */
 		switch (t) {
-		case BAR_WIDGET_CMD:     self->widgets[self->n_widgets].output_interval = 10; break;
+		case BAR_WIDGET_GPU:     self->widgets[self->n_widgets].output_interval = 5;   break;
+		case BAR_WIDGET_WIFI:    self->widgets[self->n_widgets].output_interval = 10;  break;
+		case BAR_WIDGET_IP:      self->widgets[self->n_widgets].output_interval = 30;  break;
+		case BAR_WIDGET_VPN:     self->widgets[self->n_widgets].output_interval = 10;  break;
+		case BAR_WIDGET_VOLUME:  self->widgets[self->n_widgets].output_interval = 2;   break;
+		case BAR_WIDGET_MEDIA:   self->widgets[self->n_widgets].output_interval = 2;   break;
+		case BAR_WIDGET_GIT:     self->widgets[self->n_widgets].output_interval = 5;   break;
+		case BAR_WIDGET_CMD:     self->widgets[self->n_widgets].output_interval = 10;  break;
 		case BAR_WIDGET_WEATHER: self->widgets[self->n_widgets].output_interval = 900; break;
-		case BAR_WIDGET_PODMAN:  self->widgets[self->n_widgets].output_interval = 30; break;
-		default:                 self->widgets[self->n_widgets].output_interval = 0; break;
+		case BAR_WIDGET_PODMAN:  self->widgets[self->n_widgets].output_interval = 30;  break;
+		default:                 self->widgets[self->n_widgets].output_interval = 0;   break;
+		}
+		if (interval_override > 0) {
+			self->widgets[self->n_widgets].output_interval =
+				interval_override;
+			self->widgets[self->n_widgets].interval_explicit = TRUE;
 		}
 		self->n_widgets++;
 	}
@@ -1692,16 +1864,16 @@ bar_render(GowlModuleBar *self, gint width, gint height)
 		c = self->widgets[i].has_color ? self->widgets[i].color
 		                               : self->fg_color;
 
-		/* CMD widgets: ANSI color rendering */
+		/* CMD widgets: ANSI color rendering. Work from the local
+		   `wtext` copy since cached_output may be swapped by a
+		   worker thread at any moment. */
 		if (self->widgets[i].type == BAR_WIDGET_CMD &&
-		    self->widgets[i].cached_output != NULL &&
-		    strchr(self->widgets[i].cached_output, '\033') != NULL) {
+		    strchr(wtext, '\033') != NULL) {
 			GString *plain;
 			PangoAttrList *cmd_attrs;
 
 			plain = g_string_new(NULL);
-			cmd_attrs = render_ansi_text(self->widgets[i].cached_output,
-			                             c, plain);
+			cmd_attrs = render_ansi_text(wtext, c, plain);
 			pango_layout_set_text(layout, plain->str, (gint)plain->len);
 			pango_layout_set_attributes(layout, cmd_attrs);
 			pango_layout_get_pixel_extents(layout, &ink, &logical);
@@ -1864,6 +2036,27 @@ bar_on_client_changed(GowlCompositor *comp, GObject *client,
 	bar_redraw_all(GOWL_MODULE_BAR(user_data));
 }
 
+/* Compute tick period in ms. Defaults to 2s for the dynamic system
+   widgets (cpu/memory/clock/...); a cmd widget with a smaller explicit
+   @N interval speeds up the tick so it can actually reach that rate.
+   Slow cmd widgets (e.g. weather@900) do not slow the tick down --
+   they just use their cached output across the extra redraws. */
+static int
+bar_tick_ms(GowlModuleBar *self)
+{
+	gint min_s = 2;
+	gint i;
+
+	for (i = 0; i < self->n_widgets; i++) {
+		gint ival = self->widgets[i].output_interval;
+		if (ival > 0 && ival < min_s)
+			min_s = ival;
+	}
+	if (min_s < 1)
+		min_s = 1;
+	return min_s * 1000;
+}
+
 static int
 bar_tick(void *data)
 {
@@ -1871,7 +2064,7 @@ bar_tick(void *data)
 	bar_redraw_all(self);
 
 	if (self->tick_timer != NULL)
-		wl_event_source_timer_update(self->tick_timer, 2 * 1000);
+		wl_event_source_timer_update(self->tick_timer, bar_tick_ms(self));
 
 	return 0;
 }
@@ -2027,13 +2220,14 @@ bar_configure(GowlModule *mod, gpointer config)
 		}
 	}
 
-	/* CMD widget interval */
+	/* CMD widget interval (global default; per-widget @N wins) */
 	val = (const gchar *)g_hash_table_lookup(settings, "cmd-interval");
 	if (val != NULL) {
 		gint interval = (gint)g_ascii_strtoll(val, NULL, 10);
 		if (interval > 0) {
 			for (i = 0; i < self->n_widgets; i++) {
-				if (self->widgets[i].type == BAR_WIDGET_CMD)
+				if (self->widgets[i].type == BAR_WIDGET_CMD &&
+				    !self->widgets[i].interval_explicit)
 					self->widgets[i].output_interval = interval;
 			}
 		}
@@ -2054,6 +2248,11 @@ bar_configure(GowlModule *mod, gpointer config)
 			}
 		}
 	}
+
+	/* Re-adjust tick to match the new fastest widget interval. */
+	if (self->tick_timer != NULL)
+		wl_event_source_timer_update(self->tick_timer,
+		                             bar_tick_ms(self));
 
 	if (self->compositor != NULL)
 		bar_redraw_all(self);
@@ -2130,14 +2329,16 @@ bar_on_startup(GowlStartupHandler *handler, gpointer compositor)
 	for (l = monitors; l != NULL; l = l->next)
 		bar_create_surface(self, GOWL_MONITOR(l->data));
 
-	/* 2-second tick timer for system data updates */
+	/* Tick timer for system data updates. Period adapts to the
+	   fastest per-widget interval; 2s default, 1s floor. */
 	loop = wl_display_get_event_loop(
 		gowl_compositor_get_wl_display(comp));
 	if (loop != NULL) {
 		self->tick_timer = wl_event_loop_add_timer(loop,
 			bar_tick, self);
 		if (self->tick_timer != NULL)
-			wl_event_source_timer_update(self->tick_timer, 2 * 1000);
+			wl_event_source_timer_update(self->tick_timer,
+			                             bar_tick_ms(self));
 	}
 
 	monitors = gowl_compositor_get_monitors(comp);
@@ -2202,6 +2403,15 @@ gowl_module_bar_finalize(GObject *object)
 {
 	GowlModuleBar *self = GOWL_MODULE_BAR(object);
 
+	/* Drain in-flight subprocess workers before touching widgets --
+	   they hold raw pointers into the widgets array. immediate=FALSE
+	   lets queued items complete; wait=TRUE blocks until they all
+	   finish. */
+	if (self->worker_pool != NULL) {
+		g_thread_pool_free(self->worker_pool, FALSE, TRUE);
+		self->worker_pool = NULL;
+	}
+
 	{
 		gint i;
 		for (i = 0; i < self->n_widgets; i++) {
@@ -2219,6 +2429,7 @@ gowl_module_bar_finalize(GObject *object)
 	if (self->widget_data != NULL)
 		g_hash_table_unref(self->widget_data);
 	g_hash_table_unref(self->surfaces);
+	g_mutex_clear(&self->output_mutex);
 
 	G_OBJECT_CLASS(gowl_module_bar_parent_class)->finalize(object);
 }
@@ -2275,22 +2486,13 @@ gowl_module_bar_init(GowlModuleBar *self)
 	self->tick_timer       = NULL;
 
 	/* Default widgets: cpu memory disk battery clock */
+	memset(self->widgets, 0, sizeof(self->widgets));
 	self->n_widgets = 5;
 	self->widgets[0].type = BAR_WIDGET_CPU;
-	self->widgets[0].has_color = FALSE;
-	self->widgets[0].param = NULL;
 	self->widgets[1].type = BAR_WIDGET_MEMORY;
-	self->widgets[1].has_color = FALSE;
-	self->widgets[1].param = NULL;
 	self->widgets[2].type = BAR_WIDGET_DISK;
-	self->widgets[2].has_color = FALSE;
-	self->widgets[2].param = NULL;
 	self->widgets[3].type = BAR_WIDGET_BATTERY;
-	self->widgets[3].has_color = FALSE;
-	self->widgets[3].param = NULL;
 	self->widgets[4].type = BAR_WIDGET_CLOCK;
-	self->widgets[4].has_color = FALSE;
-	self->widgets[4].param = NULL;
 
 	/* Zero cached data */
 	self->prev_cpu_idle  = 0;
@@ -2330,6 +2532,13 @@ gowl_module_bar_init(GowlModuleBar *self)
 	self->keymap_read_time     = 0;
 	self->widget_data = g_hash_table_new_full(g_str_hash, g_str_equal,
 	                                          g_free, g_free);
+
+	/* Async subprocess dispatch. Pool cap of 4 is plenty for a
+	   handful of bar widgets. Exclusive=FALSE so threads are shared
+	   with other glib thread pools. */
+	g_mutex_init(&self->output_mutex);
+	self->worker_pool = g_thread_pool_new(bar_worker_func, NULL,
+	                                      4, FALSE, NULL);
 }
 
 /* ----------------------------------------------------------------

@@ -254,7 +254,7 @@ modules: lib $(OUTDIR)/modules
 				OUTDIR=$(abspath $(OUTDIR)/modules) \
 				LIBDIR=$(abspath $(OUTDIR)) \
 				CFLAGS="$(MODULE_CFLAGS)" \
-				LDFLAGS="$(MODULE_LDFLAGS)"; \
+				LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"; \
 		fi \
 	done
 

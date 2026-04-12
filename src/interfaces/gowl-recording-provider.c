@@ -82,3 +82,15 @@ gowl_recording_provider_is_recording(GowlRecordingProvider *self)
 
 	return iface->is_recording(self);
 }
+
+void
+gowl_recording_provider_finalize(GowlRecordingProvider *self)
+{
+	GowlRecordingProviderInterface *iface;
+
+	g_return_if_fail(GOWL_IS_RECORDING_PROVIDER(self));
+
+	iface = GOWL_RECORDING_PROVIDER_GET_IFACE(self);
+	if (iface->finalize != NULL)
+		iface->finalize(self);
+}

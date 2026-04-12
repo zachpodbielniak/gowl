@@ -43,6 +43,10 @@
  *       container: mp4
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #undef G_LOG_DOMAIN
 #define G_LOG_DOMAIN "gowl-recording"
 
@@ -54,6 +58,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <wordexp.h>
 
 #include <wayland-server-core.h>
@@ -87,8 +93,11 @@ struct _GowlModuleRecording {
 	/* Recording state */
 	gboolean    recording;
 	GPid        ffmpeg_pid;
+	GPid        ffmpeg_pid_to_reap;   /* pid handed off to finalize */
 	gint        ffmpeg_stdin_fd;
-	struct wl_event_source *frame_timer;
+	gulong      frame_rendered_id; /* signal handler id */
+	gint64      last_frame_us;     /* for FPS throttling */
+	gint64      frame_interval_us;
 
 	/* Capture parameters (fixed for duration of recording) */
 	GowlCaptureMode mode;
@@ -176,21 +185,33 @@ generate_filename(GowlModuleRecording *self)
 }
 
 /* ----------------------------------------------------------------
- * Frame capture timer callback
+ * Frame capture: signal handler (runs on compositor dispatch thread)
  * ---------------------------------------------------------------- */
 
-static int
-frame_timer_callback(void *data)
+static void
+on_frame_rendered(GowlCompositor *compositor, GObject *monitor,
+                  gpointer user_data)
 {
-	GowlModuleRecording *self = data;
+	GowlModuleRecording *self = GOWL_MODULE_RECORDING(user_data);
 	GBytes *frame = NULL;
 	const guint8 *pixels;
 	gsize size;
 	ssize_t written;
 	gint w, h;
+	gint64 now_us;
 
-	if (!self->recording)
-		return 0;
+	(void)compositor;
+	(void)monitor;
+
+	if (!self->recording || self->ffmpeg_stdin_fd < 0)
+		return;
+
+	/* FPS throttle: skip if last capture was too recent */
+	now_us = g_get_monotonic_time();
+	if (self->last_frame_us > 0 &&
+	    (now_us - self->last_frame_us) < self->frame_interval_us)
+		return;
+	self->last_frame_us = now_us;
 
 	/* Capture frame based on mode */
 	switch (self->mode) {
@@ -218,33 +239,72 @@ frame_timer_callback(void *data)
 	}
 
 	if (frame == NULL)
-		goto rearm;
+		return;
 
 	pixels = g_bytes_get_data(frame, &size);
 
-	/* Non-blocking write to ffmpeg stdin */
-	written = write(self->ffmpeg_stdin_fd, pixels, size);
-	if (written < 0) {
-		if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			g_signal_emit(self,
-			              recording_signals[SIGNAL_FRAME_DROPPED],
-			              0);
-		} else {
-			g_warning("recording: write error: %s",
+	/* Blocking write — loop on EINTR only.  In blocking mode,
+	 * write() either writes all bytes or fails. Short writes only
+	 * happen on interrupt (EINTR) before any bytes are written,
+	 * or when writing more than PIPE_BUF in some edge cases. */
+	{
+		gsize offset = 0;
+
+		while (offset < size) {
+			written = write(self->ffmpeg_stdin_fd,
+			                pixels + offset, size - offset);
+			if (written > 0) {
+				offset += (gsize)written;
+				continue;
+			}
+			if (written < 0 && errno == EINTR)
+				continue;
+			/* Fatal: EPIPE, ECONNRESET, etc. */
+			g_warning("recording: write error: %s — stopping",
 			          g_strerror(errno));
+			self->recording = FALSE;
+			if (self->ffmpeg_stdin_fd >= 0) {
+				close(self->ffmpeg_stdin_fd);
+				self->ffmpeg_stdin_fd = -1;
+			}
+			g_signal_emit(self,
+			              recording_signals[SIGNAL_RECORDING_ERROR],
+			              0, g_strerror(errno));
+			break;
 		}
 	}
 
 	g_bytes_unref(frame);
+}
 
-rearm:
-	/* Re-arm the timer */
-	if (self->recording && self->frame_timer != NULL) {
-		wl_event_source_timer_update(self->frame_timer,
-		                             1000 / self->framerate);
+/* ----------------------------------------------------------------
+ * Child setup: redirect stderr to log, restore signal dispositions
+ * ---------------------------------------------------------------- */
+
+static void
+recording_child_setup(gpointer user_data)
+{
+	gint log_fd;
+
+	(void)user_data;
+
+	/* Restore default signal dispositions so ffmpeg behaves normally.
+	 * Emacs sets SIGPIPE to SIG_IGN and SIGCHLD to a handler; children
+	 * inherit these.  ffmpeg needs the defaults. */
+	signal(SIGPIPE, SIG_DFL);
+	signal(SIGCHLD, SIG_DFL);
+	signal(SIGINT,  SIG_DFL);
+	signal(SIGQUIT, SIG_DFL);
+	signal(SIGTERM, SIG_DFL);
+
+	/* Redirect stderr to log file for diagnostics */
+	log_fd = open("/tmp/gowl-recording.log",
+	              O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (log_fd >= 0) {
+		dup2(log_fd, STDERR_FILENO);
+		if (log_fd != STDERR_FILENO)
+			close(log_fd);
 	}
-
-	return 0;
 }
 
 /* ----------------------------------------------------------------
@@ -263,14 +323,13 @@ do_start(GowlModuleRecording *self,
          const gchar         *output_path,
          GError             **error)
 {
-	struct wl_event_loop *loop;
 	GBytes *probe;
 	gint pw, ph;
 	gchar size_str[32];
 	gchar fps_str[16];
 	gchar crf_str[16];
 	gint stdin_fd;
-	gchar *argv[20];
+	gchar *argv[32];
 	gint argc;
 	gboolean ok;
 
@@ -378,20 +437,41 @@ do_start(GowlModuleRecording *self,
 	argv[argc++] = "pipe:0";
 	argv[argc++] = "-c:v";
 	argv[argc++] = self->codec;
+	/* ultrafast + zerolatency: libx264 outputs frames immediately
+	 * (no lookahead, no B-frames), encoding is faster than realtime.
+	 * Without these, libx264 buffers 40+ frames before outputting
+	 * anything, so short recordings never flush any data. */
+	argv[argc++] = "-preset";
+	argv[argc++] = "ultrafast";
+	argv[argc++] = "-tune";
+	argv[argc++] = "zerolatency";
+	/* Force keyframes every 1 second (30 frames at 30fps) so
+	 * fragmented MP4 flushes a new fragment every second. */
+	argv[argc++] = "-g";
+	argv[argc++] = fps_str;  /* keyframe interval = framerate */
 	argv[argc++] = "-crf";
 	argv[argc++] = crf_str;
 	argv[argc++] = "-pix_fmt";
 	argv[argc++] = self->pixel_format;
+	/* Fragmented MP4: write moov atom at start, each keyframe
+	 * starts a new fragment (mdat/moof pair).  File is playable
+	 * and current even if ffmpeg is killed abruptly. */
+	argv[argc++] = "-movflags";
+	argv[argc++] = "+frag_keyframe+empty_moov+default_base_moof";
 	argv[argc++] = self->output_path;
 	argv[argc] = NULL;
 
-	/* Spawn ffmpeg */
+	/* Spawn ffmpeg with stderr redirected to /tmp/gowl-recording.log
+	 * via a child setup callback. */
+	{
+		g_autofree gchar *dup_argv_str = g_strjoinv(" ", argv);
+		g_message("recording: spawn cmd: %s", dup_argv_str);
+	}
 	ok = g_spawn_async_with_pipes(
 	         NULL, argv, NULL,
 	         G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD
-	             | G_SPAWN_STDOUT_TO_DEV_NULL
-	             | G_SPAWN_STDERR_TO_DEV_NULL,
-	         NULL, NULL,
+	             | G_SPAWN_STDOUT_TO_DEV_NULL,
+	         recording_child_setup, NULL,
 	         &self->ffmpeg_pid,
 	         &stdin_fd,
 	         NULL, NULL,
@@ -400,23 +480,46 @@ do_start(GowlModuleRecording *self,
 	if (!ok)
 		return FALSE;
 
-	/* Set non-blocking on the pipe */
+	/* Use BLOCKING writes on the ffmpeg pipe. Non-blocking writes
+	 * combined with 3-30+ MB frames would require us to either loop
+	 * on EAGAIN (stalling anyway) or drop partial writes (corrupting
+	 * the stream). Blocking writes handle any frame size correctly:
+	 * the compositor thread briefly stalls when ffmpeg can't keep up,
+	 * but libx264 at 30fps on modern hardware drains frames faster
+	 * than they arrive, so stalls are typically sub-millisecond.
+	 *
+	 * As an optimization, grow the pipe buffer to the kernel's max
+	 * (often 1MB on default systems, up to 16MB with permissions).
+	 * A larger buffer reduces blocking frequency. */
 	{
-		gint flags = fcntl(stdin_fd, F_GETFL, 0);
-		if (flags >= 0)
-			fcntl(stdin_fd, F_SETFL, flags | O_NONBLOCK);
+		gint desired_sizes[] = {
+			16 * 1024 * 1024,
+			 8 * 1024 * 1024,
+			 4 * 1024 * 1024,
+			 2 * 1024 * 1024,
+			 1 * 1024 * 1024,
+			 0
+		};
+		gint i;
+		for (i = 0; desired_sizes[i] > 0; i++) {
+			if (fcntl(stdin_fd, F_SETPIPE_SZ,
+			          desired_sizes[i]) >= 0)
+				break;
+		}
 	}
 
 	self->ffmpeg_stdin_fd = stdin_fd;
 	self->recording = TRUE;
 	self->start_time_us = g_get_real_time();
+	self->last_frame_us = 0;
+	self->frame_interval_us = (gint64)(1000000 / self->framerate);
 
-	/* Start frame capture timer */
-	loop = gowl_compositor_get_event_loop(self->compositor);
-	self->frame_timer = wl_event_loop_add_timer(loop,
-	                        frame_timer_callback, self);
-	wl_event_source_timer_update(self->frame_timer,
-	                             1000 / self->framerate);
+	/* Connect to compositor's frame-rendered signal, which fires on
+	 * the dispatch thread AFTER each monitor renders.  EGL context
+	 * is free at that point, so screenshot_output() works correctly. */
+	self->frame_rendered_id = g_signal_connect(
+	    self->compositor, "frame-rendered",
+	    G_CALLBACK(on_frame_rendered), self);
 
 	g_signal_emit(self, recording_signals[SIGNAL_RECORDING_STARTED],
 	              0, self->output_path);
@@ -432,7 +535,9 @@ do_stop(GowlModuleRecording  *self,
         gchar               **out_path,
         GError              **error)
 {
-	if (!self->recording) {
+	if (!self->recording && self->frame_rendered_id == 0 &&
+	    self->ffmpeg_stdin_fd < 0 && self->ffmpeg_pid <= 0) {
+		/* Already fully stopped and cleaned up */
 		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_INITIALIZED,
 		                    "No recording in progress");
 		return FALSE;
@@ -440,23 +545,43 @@ do_stop(GowlModuleRecording  *self,
 
 	self->recording = FALSE;
 
-	/* Remove frame timer */
-	if (self->frame_timer != NULL) {
-		wl_event_source_remove(self->frame_timer);
-		self->frame_timer = NULL;
+	/* Disconnect frame-rendered signal.  Any in-flight callback on
+	 * the compositor dispatch thread is protected by cmacs_gowl_mutex
+	 * which the caller holds; by the time this returns, no new
+	 * callbacks will fire. */
+	if (self->frame_rendered_id != 0 && self->compositor != NULL) {
+		g_signal_handler_disconnect(self->compositor,
+		                            self->frame_rendered_id);
+		self->frame_rendered_id = 0;
 	}
 
-	/* Close stdin pipe — causes ffmpeg to finalize the file */
+	/* Close our copy of stdin — ideally this would cause ffmpeg to
+	 * see EOF and finalize cleanly.  However, in an Emacs process
+	 * that spawns other subprocesses (vterm, shell-mode, etc.),
+	 * the pipe's write end can be inherited by those subprocesses
+	 * via fork() before CLOEXEC fires, keeping the pipe alive from
+	 * ffmpeg's POV even after our close().  Closing our copy is
+	 * still correct housekeeping but not sufficient for termination. */
 	if (self->ffmpeg_stdin_fd >= 0) {
 		close(self->ffmpeg_stdin_fd);
 		self->ffmpeg_stdin_fd = -1;
 	}
 
-	/* Reap the child process */
+	/* Send SIGINT first for a chance at graceful shutdown.  If
+	 * ffmpeg doesn't exit in finalize(), we escalate to SIGTERM
+	 * then SIGKILL.  The fragmented MP4 output format ensures the
+	 * file is playable even if ffmpeg is killed abruptly. */
 	if (self->ffmpeg_pid > 0) {
-		g_spawn_close_pid(self->ffmpeg_pid);
-		self->ffmpeg_pid = 0;
+		if (kill(self->ffmpeg_pid, SIGINT) < 0 && errno != ESRCH) {
+			g_warning("recording: kill(SIGINT) failed: %s",
+			          g_strerror(errno));
+		}
 	}
+
+	/* Transfer the pid to ffmpeg_pid_to_reap so the caller can
+	 * wait for ffmpeg after releasing its mutex. */
+	self->ffmpeg_pid_to_reap = self->ffmpeg_pid;
+	self->ffmpeg_pid = 0;
 
 	g_signal_emit(self, recording_signals[SIGNAL_RECORDING_STOPPED],
 	              0, self->output_path);
@@ -506,11 +631,85 @@ recording_is_recording(GowlRecordingProvider *provider)
 }
 
 static void
+recording_finalize(GowlRecordingProvider *provider)
+{
+	GowlModuleRecording *self = GOWL_MODULE_RECORDING(provider);
+	GPid pid;
+	int status;
+	pid_t r;
+	gint64 deadline_us;
+
+	/* MUST be called WITHOUT holding cmacs_gowl_mutex — this
+	 * function blocks for up to ~6 seconds waiting for ffmpeg
+	 * to finalize its output file.  Holding the compositor mutex
+	 * during that time deadlocks the dispatch thread. */
+	pid = self->ffmpeg_pid_to_reap;
+	if (pid <= 0)
+		return;
+	self->ffmpeg_pid_to_reap = 0;
+
+	/* Stage 1: SIGINT was already sent in do_stop.  Wait a short
+	 * time for ffmpeg to exit gracefully.  With fragmented MP4
+	 * output, the file is already playable, so we don't need to
+	 * wait long. */
+	deadline_us = g_get_monotonic_time() + 500 * 1000; /* 500ms */
+	while (g_get_monotonic_time() < deadline_us) {
+		r = waitpid(pid, &status, WNOHANG);
+		if (r > 0)
+			goto reaped;
+		if (r < 0 && errno != EINTR) {
+			g_warning("recording: waitpid failed: %s",
+			          g_strerror(errno));
+			goto reaped;
+		}
+		g_usleep(50 * 1000); /* 50ms */
+	}
+
+	/* Stage 2: ffmpeg still alive.  Send SIGTERM and wait 500ms. */
+	kill(pid, SIGTERM);
+	deadline_us = g_get_monotonic_time() + 500 * 1000;
+	while (g_get_monotonic_time() < deadline_us) {
+		r = waitpid(pid, &status, WNOHANG);
+		if (r > 0)
+			goto reaped;
+		if (r < 0 && errno != EINTR) {
+			g_warning("recording: waitpid failed: %s",
+			          g_strerror(errno));
+			goto reaped;
+		}
+		g_usleep(50 * 1000);
+	}
+
+	/* Stage 3: still alive.  SIGKILL and reap.  Safe because we're
+	 * using fragmented MP4 (moov atom written at start). */
+	kill(pid, SIGKILL);
+	do {
+		r = waitpid(pid, &status, 0);
+	} while (r < 0 && errno == EINTR);
+
+reaped:
+	if (r > 0) {
+		if (WIFEXITED(status)) {
+			int ec = WEXITSTATUS(status);
+			if (ec != 0)
+				g_warning("recording: ffmpeg exited with %d",
+				          ec);
+		} else if (WIFSIGNALED(status)) {
+			g_warning("recording: ffmpeg killed by signal %d",
+			          WTERMSIG(status));
+		}
+	}
+
+	g_spawn_close_pid(pid);
+}
+
+static void
 recording_provider_init(GowlRecordingProviderInterface *iface)
 {
 	iface->start        = recording_start;
 	iface->stop         = recording_stop;
 	iface->is_recording = recording_is_recording;
+	iface->finalize     = recording_finalize;
 }
 
 /* ----------------------------------------------------------------
@@ -759,8 +958,11 @@ gowl_module_recording_init(GowlModuleRecording *self)
 	self->compositor       = NULL;
 	self->recording        = FALSE;
 	self->ffmpeg_pid       = 0;
+	self->ffmpeg_pid_to_reap = 0;
 	self->ffmpeg_stdin_fd  = -1;
-	self->frame_timer      = NULL;
+	self->frame_rendered_id = 0;
+	self->last_frame_us    = 0;
+	self->frame_interval_us = 0;
 	self->output_name      = NULL;
 	self->target_client    = NULL;
 	self->output_path      = NULL;

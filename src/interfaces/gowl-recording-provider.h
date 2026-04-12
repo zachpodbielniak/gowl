@@ -62,6 +62,7 @@ struct _GowlRecordingProviderInterface {
 	                          gchar                **output_path,
 	                          GError               **error);
 	gboolean (*is_recording) (GowlRecordingProvider *self);
+	void     (*finalize)     (GowlRecordingProvider *self);
 };
 
 /**
@@ -114,6 +115,18 @@ gboolean gowl_recording_provider_stop         (GowlRecordingProvider *self,
  * Returns: %TRUE if a recording is currently active
  */
 gboolean gowl_recording_provider_is_recording (GowlRecordingProvider *self);
+
+/**
+ * gowl_recording_provider_finalize:
+ * @self: a #GowlRecordingProvider
+ *
+ * Blocks until any recording subprocess (e.g. ffmpeg) started by
+ * stop() has fully exited and finalized its output file.  This
+ * is a separate step from stop() so that the caller can release
+ * any locks held during the fast cleanup before blocking on the
+ * potentially slow finalization.
+ */
+void     gowl_recording_provider_finalize     (GowlRecordingProvider *self);
 
 G_END_DECLS
 

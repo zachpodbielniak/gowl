@@ -53,6 +53,7 @@ enum {
 	SIGNAL_CLIENT_ADDED,
 	SIGNAL_CLIENT_REMOVED,
 	SIGNAL_FOCUS_CHANGED,
+	SIGNAL_FRAME_RENDERED,
 	N_SIGNALS
 };
 
@@ -368,6 +369,29 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	 */
 	compositor_signals[SIGNAL_FOCUS_CHANGED] =
 		g_signal_new("focus-changed",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             G_TYPE_OBJECT);
+
+	/**
+	 * GowlCompositor::frame-rendered:
+	 * @self: the compositor
+	 * @monitor: the #GowlMonitor that just rendered a frame
+	 *
+	 * Emitted on the compositor dispatch thread after a monitor
+	 * completes its frame render.  Signal handlers run on the
+	 * same thread that owns the wlroots renderer and EGL context,
+	 * so they can safely call screenshot APIs.
+	 *
+	 * Used by the recording module to capture frames.
+	 */
+	compositor_signals[SIGNAL_FRAME_RENDERED] =
+		g_signal_new("frame-rendered",
 		             G_TYPE_FROM_CLASS(klass),
 		             G_SIGNAL_RUN_LAST,
 		             0,
@@ -2953,6 +2977,15 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 	/* Notify clients that a frame has been rendered */
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(m->scene_output, &now);
+
+	/* Emit frame-rendered on the compositor so modules (e.g. recording)
+	 * can safely capture from the dispatch thread.  EGL is idle at
+	 * this point. */
+	if (m->compositor != NULL) {
+		g_signal_emit(m->compositor,
+		              compositor_signals[SIGNAL_FRAME_RENDERED],
+		              0, m);
+	}
 }
 
 /**

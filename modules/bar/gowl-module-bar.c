@@ -185,6 +185,17 @@ typedef struct {
 G_DECLARE_FINAL_TYPE(GowlModuleBar, gowl_module_bar,
                      GOWL, MODULE_BAR, GowlModule)
 
+/* Position of a bar instance on the monitor.  TOP sits flush with
+   the monitor's top edge, BOTTOM sits flush with the bottom.  Two
+   instances per module is the intentional limit -- stacking more
+   bars on one edge doesn't fit the screen budget of a typical
+   tiling WM. */
+typedef enum {
+	GOWL_BAR_POSITION_TOP = 0,
+	GOWL_BAR_POSITION_BOTTOM = 1,
+	GOWL_BAR_POSITION_COUNT
+} GowlBarPosition;
+
 typedef struct {
 	struct wlr_scene_buffer *scene_buf;
 	gint width;
@@ -193,8 +204,12 @@ typedef struct {
 	gint mon_y;
 } BarSurface;
 
-struct _GowlModuleBar {
-	GowlModule parent_instance;
+/* Per-bar instance state.  A module owns two of these: one for
+   the top slot, one for the bottom. */
+typedef struct {
+	GowlBarPosition position;
+	gboolean        enabled;   /* has been configured OR explicitly shown */
+	gboolean        visible;   /* hide/show toggle, independent of enabled */
 
 	/* Config */
 	gint     bar_height;
@@ -202,7 +217,9 @@ struct _GowlModuleBar {
 	gdouble  fg_color[4];
 	gchar   *font_desc;
 
-	/* Title colorization */
+	/* Title colorization (per slot -- top bar typically carries the
+	   focused-window title, but a bottom bar can have its own) */
+	gchar   *custom_title;
 	gchar   *title_delimiters;            /* chars that split segments */
 	gdouble  title_delimiter_color[4];    /* color for delimiter chars */
 	gdouble  title_palette[8][4];         /* segment color cycle */
@@ -212,16 +229,24 @@ struct _GowlModuleBar {
 	BarWidget widgets[BAR_MAX_WIDGETS];
 	gint      n_widgets;
 
-	/* State */
+	/* One BarSurface per monitor (key = monitor name, owned by hash) */
 	GHashTable *surfaces;
+} GowlBarInstance;
+
+struct _GowlModuleBar {
+	GowlModule parent_instance;
+
+	/* Per-slot state */
+	GowlBarInstance bars[GOWL_BAR_POSITION_COUNT];
+
+	/* Shared compositor state */
 	gpointer    compositor;
-	gchar      *custom_title;
 	gulong      focus_handler_id;
 	gulong      client_added_id;
 	gulong      client_removed_id;
 	struct wl_event_source *tick_timer;
 
-	/* Cached system data */
+	/* Cached system data (read once per tick, shared by both bars) */
 	glong   prev_cpu_idle;
 	glong   prev_cpu_total;
 	gint    cached_cpu_pct;
@@ -270,7 +295,9 @@ struct _GowlModuleBar {
 	gchar  *cached_keymap;
 	time_t  keymap_read_time;
 
-	/* Widget data (Elisp-driven values) */
+	/* Widget data (Elisp-driven values) -- shared across bars so
+	   widgets like "todo" see the same values wherever they're
+	   placed. */
 	GHashTable *widget_data;
 
 	/* Async subprocess dispatch.  Subprocess-based widget reads run
@@ -281,6 +308,30 @@ struct _GowlModuleBar {
 	GThreadPool *worker_pool;
 	GMutex       output_mutex; /* protects BarWidget::cached_output */
 };
+
+/* Resolve a #GowlBarPosition to its slot pointer.  NULL on invalid
+   position. */
+static inline GowlBarInstance *
+bar_slot(GowlModuleBar *self, GowlBarPosition pos)
+{
+	if ((guint)pos >= GOWL_BAR_POSITION_COUNT)
+		return NULL;
+	return &self->bars[pos];
+}
+
+/* Parse a "position" string from config into a #GowlBarPosition.
+   Accepts "top" / "bottom" (case-insensitive).  Returns the default
+   (TOP) if @s is NULL or unrecognised, so existing single-bar
+   configs keep working. */
+static GowlBarPosition
+bar_position_from_string(const gchar *s)
+{
+	if (s == NULL)
+		return GOWL_BAR_POSITION_TOP;
+	if (g_ascii_strcasecmp(s, "bottom") == 0)
+		return GOWL_BAR_POSITION_BOTTOM;
+	return GOWL_BAR_POSITION_TOP;
+}
 
 static void bar_provider_iface_init(GowlBarProviderInterface *iface);
 static void bar_startup_init(GowlStartupHandlerInterface *iface);
@@ -1142,42 +1193,53 @@ read_all_data(GowlModuleBar *self)
 {
 	BarWidget *w;
 	time_t     now;
-	gint       i;
+	gint       bi, i;
 
 	now = time(NULL);
 
-	for (i = 0; i < self->n_widgets; i++) {
-		w = &self->widgets[i];
+	/* Walk every widget in every configured slot.  Module-level
+	   caches (cpu, memory, disk, load, swap, net, io, temp) mean
+	   that reading the same stat twice in one tick just bumps the
+	   same cached_* counters -- cheap and correct. */
+	for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++) {
+		GowlBarInstance *bar = &self->bars[bi];
 
-		/* Unified throttle: if the widget has an interval set, only
-		   re-read when the interval has elapsed. Widgets with
-		   output_interval == 0 run on every tick. */
-		if (w->output_interval > 0 &&
-		    now - w->output_read_time < w->output_interval)
+		if (!bar->enabled)
 			continue;
-		w->output_read_time = now;
 
-		switch (w->type) {
-		case BAR_WIDGET_CPU:     read_cpu(self);                 break;
-		case BAR_WIDGET_MEMORY:  read_memory(self);              break;
-		case BAR_WIDGET_DISK:    read_disk(self);                break;
-		case BAR_WIDGET_BATTERY: read_battery(self);             break;
-		case BAR_WIDGET_LOAD:    read_load(self);                break;
-		case BAR_WIDGET_SWAP:    read_swap(self);                break;
-		case BAR_WIDGET_NET:     read_net(self, w);              break;
-		case BAR_WIDGET_IO:      read_io(self, w);               break;
-		case BAR_WIDGET_TEMP:    read_temp(self);                break;
-		case BAR_WIDGET_GPU:     read_gpu(self, w);              break;
-		case BAR_WIDGET_WIFI:    read_wifi(self, w);             break;
-		case BAR_WIDGET_IP:      read_ip(self, w);               break;
-		case BAR_WIDGET_VPN:     read_vpn(self, w);              break;
-		case BAR_WIDGET_VOLUME:  read_volume(self, w);           break;
-		case BAR_WIDGET_MEDIA:   read_media(self, w);            break;
-		case BAR_WIDGET_GIT:     read_git(self, w);              break;
-		case BAR_WIDGET_PODMAN:  read_podman(self, w);           break;
-		case BAR_WIDGET_WEATHER: read_weather(self, w);          break;
-		case BAR_WIDGET_CMD:     read_cmd(self, w);              break;
-		default: break;
+		for (i = 0; i < bar->n_widgets; i++) {
+			w = &bar->widgets[i];
+
+			/* Unified throttle: if the widget has an interval set,
+			   only re-read when the interval has elapsed.  Widgets
+			   with output_interval == 0 run on every tick. */
+			if (w->output_interval > 0 &&
+			    now - w->output_read_time < w->output_interval)
+				continue;
+			w->output_read_time = now;
+
+			switch (w->type) {
+			case BAR_WIDGET_CPU:     read_cpu(self);                 break;
+			case BAR_WIDGET_MEMORY:  read_memory(self);              break;
+			case BAR_WIDGET_DISK:    read_disk(self);                break;
+			case BAR_WIDGET_BATTERY: read_battery(self);             break;
+			case BAR_WIDGET_LOAD:    read_load(self);                break;
+			case BAR_WIDGET_SWAP:    read_swap(self);                break;
+			case BAR_WIDGET_NET:     read_net(self, w);              break;
+			case BAR_WIDGET_IO:      read_io(self, w);               break;
+			case BAR_WIDGET_TEMP:    read_temp(self);                break;
+			case BAR_WIDGET_GPU:     read_gpu(self, w);              break;
+			case BAR_WIDGET_WIFI:    read_wifi(self, w);             break;
+			case BAR_WIDGET_IP:      read_ip(self, w);               break;
+			case BAR_WIDGET_VPN:     read_vpn(self, w);              break;
+			case BAR_WIDGET_VOLUME:  read_volume(self, w);           break;
+			case BAR_WIDGET_MEDIA:   read_media(self, w);            break;
+			case BAR_WIDGET_GIT:     read_git(self, w);              break;
+			case BAR_WIDGET_PODMAN:  read_podman(self, w);           break;
+			case BAR_WIDGET_WEATHER: read_weather(self, w);          break;
+			case BAR_WIDGET_CMD:     read_cmd(self, w);              break;
+			default: break;
+			}
 		}
 	}
 }
@@ -1424,7 +1486,8 @@ widget_color_key(BarWidgetType type)
 }
 
 static void
-parse_widget_list(GowlModuleBar *self, const gchar *spec)
+parse_widget_list(GowlModuleBar *self, GowlBarInstance *bar,
+                  const gchar *spec)
 {
 	gchar **parts;
 	gint i;
@@ -1437,18 +1500,18 @@ parse_widget_list(GowlModuleBar *self, const gchar *spec)
 	   output_mutex -- the worst case is one tick of stale text in
 	   the new widget occupying that slot, corrected on the next
 	   read_all_data pass. */
-	for (i = 0; i < self->n_widgets; i++) {
-		g_free(self->widgets[i].param);
-		self->widgets[i].param = NULL;
+	for (i = 0; i < bar->n_widgets; i++) {
+		g_free(bar->widgets[i].param);
+		bar->widgets[i].param = NULL;
 		g_mutex_lock(&self->output_mutex);
-		g_free(self->widgets[i].cached_output);
-		self->widgets[i].cached_output = NULL;
+		g_free(bar->widgets[i].cached_output);
+		bar->widgets[i].cached_output = NULL;
 		g_mutex_unlock(&self->output_mutex);
 	}
 
-	self->n_widgets = 0;
+	bar->n_widgets = 0;
 
-	for (i = 0; parts[i] != NULL && self->n_widgets < BAR_MAX_WIDGETS; i++) {
+	for (i = 0; parts[i] != NULL && bar->n_widgets < BAR_MAX_WIDGETS; i++) {
 		BarWidgetType t;
 		gchar *name;
 		gchar *param;
@@ -1488,36 +1551,36 @@ parse_widget_list(GowlModuleBar *self, const gchar *spec)
 		if (t == BAR_WIDGET_COUNT)
 			continue;
 
-		self->widgets[self->n_widgets].type = t;
-		self->widgets[self->n_widgets].has_color = FALSE;
-		self->widgets[self->n_widgets].param =
+		bar->widgets[bar->n_widgets].type = t;
+		bar->widgets[bar->n_widgets].has_color = FALSE;
+		bar->widgets[bar->n_widgets].param =
 			(param != NULL && param[0] != '\0') ? g_strdup(param) : NULL;
-		self->widgets[self->n_widgets].cached_output = NULL;
-		self->widgets[self->n_widgets].output_read_time = 0;
-		self->widgets[self->n_widgets].interval_explicit = FALSE;
-		self->widgets[self->n_widgets].spawn_in_flight = 0;
+		bar->widgets[bar->n_widgets].cached_output = NULL;
+		bar->widgets[bar->n_widgets].output_read_time = 0;
+		bar->widgets[bar->n_widgets].interval_explicit = FALSE;
+		bar->widgets[bar->n_widgets].spawn_in_flight = 0;
 		/* Default refresh intervals per type (seconds). 0 means
 		   "run every tick". These defaults are picked to match the
 		   cost of each read path. */
 		switch (t) {
-		case BAR_WIDGET_GPU:     self->widgets[self->n_widgets].output_interval = 5;   break;
-		case BAR_WIDGET_WIFI:    self->widgets[self->n_widgets].output_interval = 10;  break;
-		case BAR_WIDGET_IP:      self->widgets[self->n_widgets].output_interval = 30;  break;
-		case BAR_WIDGET_VPN:     self->widgets[self->n_widgets].output_interval = 10;  break;
-		case BAR_WIDGET_VOLUME:  self->widgets[self->n_widgets].output_interval = 2;   break;
-		case BAR_WIDGET_MEDIA:   self->widgets[self->n_widgets].output_interval = 2;   break;
-		case BAR_WIDGET_GIT:     self->widgets[self->n_widgets].output_interval = 5;   break;
-		case BAR_WIDGET_CMD:     self->widgets[self->n_widgets].output_interval = 10;  break;
-		case BAR_WIDGET_WEATHER: self->widgets[self->n_widgets].output_interval = 900; break;
-		case BAR_WIDGET_PODMAN:  self->widgets[self->n_widgets].output_interval = 30;  break;
-		default:                 self->widgets[self->n_widgets].output_interval = 0;   break;
+		case BAR_WIDGET_GPU:     bar->widgets[bar->n_widgets].output_interval = 5;   break;
+		case BAR_WIDGET_WIFI:    bar->widgets[bar->n_widgets].output_interval = 10;  break;
+		case BAR_WIDGET_IP:      bar->widgets[bar->n_widgets].output_interval = 30;  break;
+		case BAR_WIDGET_VPN:     bar->widgets[bar->n_widgets].output_interval = 10;  break;
+		case BAR_WIDGET_VOLUME:  bar->widgets[bar->n_widgets].output_interval = 2;   break;
+		case BAR_WIDGET_MEDIA:   bar->widgets[bar->n_widgets].output_interval = 2;   break;
+		case BAR_WIDGET_GIT:     bar->widgets[bar->n_widgets].output_interval = 5;   break;
+		case BAR_WIDGET_CMD:     bar->widgets[bar->n_widgets].output_interval = 10;  break;
+		case BAR_WIDGET_WEATHER: bar->widgets[bar->n_widgets].output_interval = 900; break;
+		case BAR_WIDGET_PODMAN:  bar->widgets[bar->n_widgets].output_interval = 30;  break;
+		default:                 bar->widgets[bar->n_widgets].output_interval = 0;   break;
 		}
 		if (interval_override > 0) {
-			self->widgets[self->n_widgets].output_interval =
+			bar->widgets[bar->n_widgets].output_interval =
 				interval_override;
-			self->widgets[self->n_widgets].interval_explicit = TRUE;
+			bar->widgets[bar->n_widgets].interval_explicit = TRUE;
 		}
-		self->n_widgets++;
+		bar->n_widgets++;
 	}
 	g_strfreev(parts);
 }
@@ -1726,7 +1789,8 @@ render_ansi_text(const gchar *input, const gdouble base_color[4],
  * ---------------------------------------------------------------- */
 
 static BarBuffer *
-bar_render(GowlModuleBar *self, gint width, gint height)
+bar_render(GowlModuleBar *self, GowlBarInstance *bar,
+           gint width, gint height)
 {
 	cairo_surface_t *cs;
 	cairo_t *cr;
@@ -1749,13 +1813,13 @@ bar_render(GowlModuleBar *self, gint width, gint height)
 	cr = cairo_create(cs);
 
 	/* Background */
-	cairo_set_source_rgba(cr, self->bg_color[0], self->bg_color[1],
-	                      self->bg_color[2], self->bg_color[3]);
+	cairo_set_source_rgba(cr, bar->bg_color[0], bar->bg_color[1],
+	                      bar->bg_color[2], bar->bg_color[3]);
 	cairo_paint(cr);
 
 	/* Set up pango */
 	layout = pango_cairo_create_layout(cr);
-	font = pango_font_description_from_string(self->font_desc);
+	font = pango_font_description_from_string(bar->font_desc);
 	pango_layout_set_font_description(layout, font);
 
 	padding = 10;
@@ -1770,8 +1834,8 @@ bar_render(GowlModuleBar *self, gint width, gint height)
 	separator_w = logical.width;
 
 	/* Left: title */
-	if (self->custom_title != NULL && self->custom_title[0] != '\0') {
-		title = self->custom_title;
+	if (bar->custom_title != NULL && bar->custom_title[0] != '\0') {
+		title = bar->custom_title;
 	} else {
 		focused = (self->compositor != NULL) ?
 			gowl_compositor_get_focused_client(
@@ -1786,7 +1850,7 @@ bar_render(GowlModuleBar *self, gint width, gint height)
 	pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
 
 	/* Colorize title: split on delimiters, cycle palette colors */
-	if (self->title_palette_size > 0 && self->title_delimiters != NULL) {
+	if (bar->title_palette_size > 0 && bar->title_delimiters != NULL) {
 		PangoAttrList *attrs;
 		gint seg_idx;
 		gint pos;
@@ -1800,16 +1864,16 @@ bar_render(GowlModuleBar *self, gint width, gint height)
 			PangoAttribute *attr;
 			const gdouble *c;
 
-			if (strchr(self->title_delimiters, title[pos]) != NULL) {
+			if (strchr(bar->title_delimiters, title[pos]) != NULL) {
 				/* Delimiter character */
-				c = self->title_delimiter_color;
+				c = bar->title_delimiter_color;
 			} else {
 				/* Regular character — find end of segment */
 				gint start = pos;
 				while (pos < len &&
-				       strchr(self->title_delimiters, title[pos]) == NULL)
+				       strchr(bar->title_delimiters, title[pos]) == NULL)
 					pos++;
-				c = self->title_palette[seg_idx % self->title_palette_size];
+				c = bar->title_palette[seg_idx % bar->title_palette_size];
 				attr = pango_attr_foreground_new(
 					(guint16)(c[0] * 65535),
 					(guint16)(c[1] * 65535),
@@ -1833,14 +1897,14 @@ bar_render(GowlModuleBar *self, gint width, gint height)
 		pango_layout_set_attributes(layout, attrs);
 		pango_attr_list_unref(attrs);
 	} else {
-		cairo_set_source_rgba(cr, self->fg_color[0], self->fg_color[1],
-		                      self->fg_color[2], self->fg_color[3]);
+		cairo_set_source_rgba(cr, bar->fg_color[0], bar->fg_color[1],
+		                      bar->fg_color[2], bar->fg_color[3]);
 	}
 
 	cairo_move_to(cr, padding, text_y);
 	/* When using pango attributes, set cairo source to white so
 	 * the attribute colors are used directly. */
-	if (self->title_palette_size > 0)
+	if (bar->title_palette_size > 0)
 		cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
 	pango_cairo_show_layout(cr, layout);
 	pango_layout_set_attributes(layout, NULL);
@@ -1850,24 +1914,21 @@ bar_render(GowlModuleBar *self, gint width, gint height)
 	pango_layout_set_width(layout, -1);
 	pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
 
-	/* Read fresh system data */
-	read_all_data(self);
-
-	for (i = self->n_widgets - 1; i >= 0; i--) {
+	for (i = bar->n_widgets - 1; i >= 0; i--) {
 		const gdouble *c;
 
-		widget_text(self, &self->widgets[i], wtext, sizeof(wtext));
+		widget_text(self, &bar->widgets[i], wtext, sizeof(wtext));
 		if (wtext[0] == '\0')
 			continue;
 
 		/* Use per-widget color if set, otherwise fg_color */
-		c = self->widgets[i].has_color ? self->widgets[i].color
-		                               : self->fg_color;
+		c = bar->widgets[i].has_color ? bar->widgets[i].color
+		                              : bar->fg_color;
 
 		/* CMD widgets: ANSI color rendering. Work from the local
 		   `wtext` copy since cached_output may be swapped by a
 		   worker thread at any moment. */
-		if (self->widgets[i].type == BAR_WIDGET_CMD &&
+		if (bar->widgets[i].type == BAR_WIDGET_CMD &&
 		    strchr(wtext, '\033') != NULL) {
 			GString *plain;
 			PangoAttrList *cmd_attrs;
@@ -1922,8 +1983,20 @@ bar_render(GowlModuleBar *self, gint width, gint height)
  * Scene buffer management
  * ---------------------------------------------------------------- */
 
+/* Compute the y-origin of @bar on @monitor given its rendered
+   height.  TOP bars sit flush with the monitor's top edge; BOTTOM
+   bars sit flush with the bottom. */
+static gint
+bar_surface_y(GowlBarInstance *bar, gint mon_y, gint mon_h)
+{
+	if (bar->position == GOWL_BAR_POSITION_BOTTOM)
+		return mon_y + mon_h - bar->bar_height;
+	return mon_y;
+}
+
 static void
-bar_create_surface(GowlModuleBar *self, GowlMonitor *monitor)
+bar_create_surface(GowlModuleBar *self, GowlBarInstance *bar,
+                   GowlMonitor *monitor)
 {
 	GowlCompositor *comp;
 	struct wlr_scene_tree *top_layer;
@@ -1931,6 +2004,10 @@ bar_create_surface(GowlModuleBar *self, GowlMonitor *monitor)
 	BarBuffer *buf;
 	const gchar *name;
 	gint mon_x, mon_y, mon_w, mon_h;
+	gint surf_y;
+
+	if (!bar->enabled || !bar->visible || bar->bar_height <= 0)
+		return;
 
 	comp = GOWL_COMPOSITOR(self->compositor);
 	name = gowl_monitor_get_name(monitor);
@@ -1940,11 +2017,11 @@ bar_create_surface(GowlModuleBar *self, GowlMonitor *monitor)
 		return;
 
 	/* Remove existing surface for this monitor */
-	surface = (BarSurface *)g_hash_table_lookup(self->surfaces, name);
+	surface = (BarSurface *)g_hash_table_lookup(bar->surfaces, name);
 	if (surface != NULL) {
 		if (surface->scene_buf != NULL)
 			wlr_scene_node_destroy(&surface->scene_buf->node);
-		g_hash_table_remove(self->surfaces, name);
+		g_hash_table_remove(bar->surfaces, name);
 		g_free(surface);
 	}
 
@@ -1953,19 +2030,29 @@ bar_create_surface(GowlModuleBar *self, GowlMonitor *monitor)
 	if (top_layer == NULL)
 		return;
 
-	buf = bar_render(self, mon_w, self->bar_height);
+	buf = bar_render(self, bar, mon_w, bar->bar_height);
+
+	surf_y = bar_surface_y(bar, mon_y, mon_h);
 
 	surface = g_new0(BarSurface, 1);
 	surface->scene_buf = wlr_scene_buffer_create(top_layer, &buf->base);
 	surface->width  = mon_w;
-	surface->height = self->bar_height;
+	surface->height = bar->bar_height;
 	surface->mon_x  = mon_x;
-	surface->mon_y  = mon_y;
+	surface->mon_y  = surf_y;
 
-	wlr_scene_node_set_position(&surface->scene_buf->node, mon_x, mon_y);
+	wlr_scene_node_set_position(&surface->scene_buf->node, mon_x, surf_y);
+	/* Force the new node to the top of the layer's z-stack.
+	   wlroots' scene damage-tracking otherwise leaves the new
+	   sibling silently invisible when another bar surface
+	   already exists in GOWL_SCENE_LAYER_TOP -- the bottom-bar
+	   surface gets added but never rendered until something
+	   re-traverses the layer.  raise_to_top forces that
+	   re-traversal. */
+	wlr_scene_node_raise_to_top(&surface->scene_buf->node);
 	wlr_buffer_drop(&buf->base);
 
-	g_hash_table_insert(self->surfaces, g_strdup(name), surface);
+	g_hash_table_insert(bar->surfaces, g_strdup(name), surface);
 }
 
 static void
@@ -1973,45 +2060,85 @@ bar_redraw_all(GowlModuleBar *self)
 {
 	GowlCompositor *comp;
 	GList *monitors, *l;
+	gint bi;
 
 	if (self->compositor == NULL)
 		return;
 
 	comp = GOWL_COMPOSITOR(self->compositor);
+
+	/* Refresh cached system data once per tick; both bars read from
+	   the same cached_* fields. */
+	read_all_data(self);
+
 	monitors = gowl_compositor_get_monitors(comp);
 
-	for (l = monitors; l != NULL; l = l->next) {
-		GowlMonitor *mon = GOWL_MONITOR(l->data);
-		const gchar *name = gowl_monitor_get_name(mon);
-		BarSurface *surface;
-		BarBuffer *buf;
+	for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++) {
+		GowlBarInstance *bar = &self->bars[bi];
 
-		surface = (BarSurface *)g_hash_table_lookup(self->surfaces, name);
-		if (surface == NULL || surface->scene_buf == NULL) {
-			bar_create_surface(self, mon);
+		if (!bar->enabled || !bar->visible || bar->bar_height <= 0)
 			continue;
-		}
 
-		buf = bar_render(self, surface->width, surface->height);
-		wlr_scene_buffer_set_buffer(surface->scene_buf, &buf->base);
-		wlr_buffer_drop(&buf->base);
+		for (l = monitors; l != NULL; l = l->next) {
+			GowlMonitor *mon = GOWL_MONITOR(l->data);
+			const gchar *name = gowl_monitor_get_name(mon);
+			BarSurface *surface;
+			BarBuffer *buf;
+			gint mon_x, mon_y, mon_w, mon_h;
+			gint surf_y;
+
+			surface = (BarSurface *)g_hash_table_lookup(bar->surfaces,
+			                                             name);
+			if (surface == NULL || surface->scene_buf == NULL) {
+				bar_create_surface(self, bar, mon);
+				continue;
+			}
+
+			/* Refresh cached position in case the monitor moved or
+			   the bar toggled between TOP and BOTTOM. */
+			gowl_monitor_get_geometry(mon, &mon_x, &mon_y,
+			                          &mon_w, &mon_h);
+			surf_y = bar_surface_y(bar, mon_y, mon_h);
+			if (surface->mon_x != mon_x || surface->mon_y != surf_y) {
+				wlr_scene_node_set_position(
+					&surface->scene_buf->node, mon_x, surf_y);
+				surface->mon_x = mon_x;
+				surface->mon_y = surf_y;
+			}
+
+			buf = bar_render(self, bar,
+			                  surface->width, surface->height);
+			wlr_scene_buffer_set_buffer(surface->scene_buf, &buf->base);
+			wlr_buffer_drop(&buf->base);
+		}
 	}
 }
 
 static void
-bar_destroy_all(GowlModuleBar *self)
+bar_instance_destroy_surfaces(GowlBarInstance *bar)
 {
 	GHashTableIter iter;
 	gpointer key, value;
 
-	g_hash_table_iter_init(&iter, self->surfaces);
+	if (bar->surfaces == NULL)
+		return;
+
+	g_hash_table_iter_init(&iter, bar->surfaces);
 	while (g_hash_table_iter_next(&iter, &key, &value)) {
 		BarSurface *surface = (BarSurface *)value;
 		if (surface->scene_buf != NULL)
 			wlr_scene_node_destroy(&surface->scene_buf->node);
 		g_free(surface);
 	}
-	g_hash_table_remove_all(self->surfaces);
+	g_hash_table_remove_all(bar->surfaces);
+}
+
+static void
+bar_destroy_all(GowlModuleBar *self)
+{
+	gint i;
+	for (i = 0; i < GOWL_BAR_POSITION_COUNT; i++)
+		bar_instance_destroy_surfaces(&self->bars[i]);
 }
 
 /* ----------------------------------------------------------------
@@ -2040,17 +2167,24 @@ bar_on_client_changed(GowlCompositor *comp, GObject *client,
    widgets (cpu/memory/clock/...); a cmd widget with a smaller explicit
    @N interval speeds up the tick so it can actually reach that rate.
    Slow cmd widgets (e.g. weather@900) do not slow the tick down --
-   they just use their cached output across the extra redraws. */
+   they just use their cached output across the extra redraws.  The
+   min runs across widgets in every enabled bar slot so fast widgets
+   on either bar pull the tick. */
 static int
 bar_tick_ms(GowlModuleBar *self)
 {
 	gint min_s = 2;
-	gint i;
+	gint bi, i;
 
-	for (i = 0; i < self->n_widgets; i++) {
-		gint ival = self->widgets[i].output_interval;
-		if (ival > 0 && ival < min_s)
-			min_s = ival;
+	for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++) {
+		GowlBarInstance *bar = &self->bars[bi];
+		if (!bar->enabled)
+			continue;
+		for (i = 0; i < bar->n_widgets; i++) {
+			gint ival = bar->widgets[i].output_interval;
+			if (ival > 0 && ival < min_s)
+				min_s = ival;
+		}
 	}
 	if (min_s < 1)
 		min_s = 1;
@@ -2136,6 +2270,8 @@ bar_configure(GowlModule *mod, gpointer config)
 {
 	GowlModuleBar *self;
 	GHashTable *settings;
+	GowlBarInstance *bar;
+	GowlBarPosition pos;
 	const gchar *val;
 	gint i;
 
@@ -2146,94 +2282,123 @@ bar_configure(GowlModule *mod, gpointer config)
 
 	settings = (GHashTable *)config;
 
+	/* Dispatch to a specific slot based on the optional "position"
+	   key.  Missing / unknown = top, so a single-bar config keeps
+	   targeting the same slot it always has. */
+	val = (const gchar *)g_hash_table_lookup(settings, "position");
+	pos = bar_position_from_string(val);
+	bar = &self->bars[pos];
+	/* Any configure call marks the slot as "in play". visible stays
+	   at its current value so repeat configures don't un-hide a
+	   slot the user explicitly hid. */
+	bar->enabled = TRUE;
+
 	val = (const gchar *)g_hash_table_lookup(settings, "height");
 	if (val != NULL)
-		self->bar_height = (gint)g_ascii_strtoll(val, NULL, 10);
+		bar->bar_height = (gint)g_ascii_strtoll(val, NULL, 10);
+
+	/* Visibility toggle.  Accepts "true"/"false"/"t"/"nil"/"1"/"0".
+	   Hiding releases scene surfaces and triggers a fresh
+	   arrangelayers so the tiling area grows back; the slot's
+	   configuration is preserved across hide/show cycles. */
+	val = (const gchar *)g_hash_table_lookup(settings, "visible");
+	if (val != NULL) {
+		gboolean want;
+		want = (g_ascii_strcasecmp(val, "true") == 0
+		    || g_ascii_strcasecmp(val, "t")    == 0
+		    || g_ascii_strcasecmp(val, "1")    == 0
+		    || g_ascii_strcasecmp(val, "yes")  == 0);
+		bar->visible = want;
+		if (!want)
+			bar_instance_destroy_surfaces(bar);
+	}
 
 	val = (const gchar *)g_hash_table_lookup(settings, "bg-color");
 	if (val != NULL)
-		parse_hex_color(val, self->bg_color);
+		parse_hex_color(val, bar->bg_color);
 
 	val = (const gchar *)g_hash_table_lookup(settings, "fg-color");
 	if (val != NULL)
-		parse_hex_color(val, self->fg_color);
+		parse_hex_color(val, bar->fg_color);
 
 	val = (const gchar *)g_hash_table_lookup(settings, "font");
 	if (val != NULL) {
-		g_free(self->font_desc);
-		self->font_desc = g_strdup(val);
+		g_free(bar->font_desc);
+		bar->font_desc = g_strdup(val);
 	}
 
 	val = (const gchar *)g_hash_table_lookup(settings, "font-size");
 	if (val != NULL) {
 		gdouble sz = g_ascii_strtod(val, NULL);
-		g_free(self->font_desc);
-		self->font_desc = g_strdup_printf("monospace %.0f", sz);
+		g_free(bar->font_desc);
+		bar->font_desc = g_strdup_printf("monospace %.0f", sz);
 	}
 
 	val = (const gchar *)g_hash_table_lookup(settings, "title");
 	if (val != NULL) {
-		g_free(self->custom_title);
-		self->custom_title = g_strdup(val);
+		g_free(bar->custom_title);
+		bar->custom_title = g_strdup(val);
 	}
 
 	/* Title colorization */
 	val = (const gchar *)g_hash_table_lookup(settings, "title-delimiters");
 	if (val != NULL) {
-		g_free(self->title_delimiters);
-		self->title_delimiters = g_strdup(val);
+		g_free(bar->title_delimiters);
+		bar->title_delimiters = g_strdup(val);
 	}
 
 	val = (const gchar *)g_hash_table_lookup(settings, "title-delimiter-color");
 	if (val != NULL)
-		parse_hex_color(val, self->title_delimiter_color);
+		parse_hex_color(val, bar->title_delimiter_color);
 
 	val = (const gchar *)g_hash_table_lookup(settings, "title-palette");
 	if (val != NULL) {
 		gchar **colors = g_strsplit(val, " ", -1);
 		gint ci;
 
-		self->title_palette_size = 0;
+		bar->title_palette_size = 0;
 		for (ci = 0; colors[ci] != NULL && ci < 8; ci++) {
 			if (colors[ci][0] == '\0')
 				continue;
 			parse_hex_color(colors[ci],
-			                self->title_palette[self->title_palette_size]);
-			self->title_palette_size++;
+			                bar->title_palette[bar->title_palette_size]);
+			bar->title_palette_size++;
 		}
 		g_strfreev(colors);
 	}
 
 	val = (const gchar *)g_hash_table_lookup(settings, "widgets");
 	if (val != NULL)
-		parse_widget_list(self, val);
+		parse_widget_list(self, bar, val);
 
 	/* Per-widget colors */
-	for (i = 0; i < self->n_widgets; i++) {
-		const gchar *key = widget_color_key(self->widgets[i].type);
+	for (i = 0; i < bar->n_widgets; i++) {
+		const gchar *key = widget_color_key(bar->widgets[i].type);
 		if (key != NULL) {
 			val = (const gchar *)g_hash_table_lookup(settings, key);
 			if (val != NULL) {
-				parse_hex_color(val, self->widgets[i].color);
-				self->widgets[i].has_color = TRUE;
+				parse_hex_color(val, bar->widgets[i].color);
+				bar->widgets[i].has_color = TRUE;
 			}
 		}
 	}
 
-	/* CMD widget interval (global default; per-widget @N wins) */
+	/* CMD widget interval (global default; per-widget @N wins).
+	   The key applies only to the slot being configured. */
 	val = (const gchar *)g_hash_table_lookup(settings, "cmd-interval");
 	if (val != NULL) {
 		gint interval = (gint)g_ascii_strtoll(val, NULL, 10);
 		if (interval > 0) {
-			for (i = 0; i < self->n_widgets; i++) {
-				if (self->widgets[i].type == BAR_WIDGET_CMD &&
-				    !self->widgets[i].interval_explicit)
-					self->widgets[i].output_interval = interval;
+			for (i = 0; i < bar->n_widgets; i++) {
+				if (bar->widgets[i].type == BAR_WIDGET_CMD &&
+				    !bar->widgets[i].interval_explicit)
+					bar->widgets[i].output_interval = interval;
 			}
 		}
 	}
 
-	/* Widget data (for Elisp-driven widgets like todo) */
+	/* Widget data is shared across slots (Elisp-driven values like
+	   todo). */
 	{
 		GHashTableIter iter;
 		gpointer k, v;
@@ -2254,8 +2419,18 @@ bar_configure(GowlModule *mod, gpointer config)
 		wl_event_source_timer_update(self->tick_timer,
 		                             bar_tick_ms(self));
 
-	if (self->compositor != NULL)
+	if (self->compositor != NULL) {
+		/* Ask the compositor to re-run arrangelayers so the usable
+		   area reflects the new bar height, then redraw. */
+		GList *monitors =
+			gowl_compositor_get_monitors(GOWL_COMPOSITOR(self->compositor));
+		GList *l;
+		for (l = monitors; l != NULL; l = l->next)
+			gowl_compositor_arrangelayers(
+				GOWL_COMPOSITOR(self->compositor),
+				GOWL_MONITOR(l->data));
 		bar_redraw_all(self);
+	}
 }
 
 /* ----------------------------------------------------------------
@@ -2266,31 +2441,42 @@ static gint
 bar_get_bar_height(GowlBarProvider *provider, gpointer monitor)
 {
 	GowlModuleBar *self = GOWL_MODULE_BAR(provider);
+	GowlBarInstance *top = &self->bars[GOWL_BAR_POSITION_TOP];
 	(void)monitor;
-	return self->bar_height;
+	/* Back-compat scalar: report the TOP slot's height only.  The
+	   insets API below reports both slots. */
+	if (top->enabled && top->visible)
+		return top->bar_height;
+	return 0;
+}
+
+static void
+bar_get_bar_insets_impl(GowlBarProvider *provider, gpointer monitor,
+                        gint *top_out, gint *bottom_out)
+{
+	GowlModuleBar *self = GOWL_MODULE_BAR(provider);
+	GowlBarInstance *top = &self->bars[GOWL_BAR_POSITION_TOP];
+	GowlBarInstance *bot = &self->bars[GOWL_BAR_POSITION_BOTTOM];
+	gint t = 0, b = 0;
+
+	(void)monitor;
+
+	if (top->enabled && top->visible && top->bar_height > 0)
+		t = top->bar_height;
+	if (bot->enabled && bot->visible && bot->bar_height > 0)
+		b = bot->bar_height;
+
+	if (top_out    != NULL) *top_out    = t;
+	if (bottom_out != NULL) *bottom_out = b;
 }
 
 static void
 bar_render_bar(GowlBarProvider *provider, gpointer monitor)
 {
 	GowlModuleBar *self = GOWL_MODULE_BAR(provider);
-
-	if (monitor != NULL) {
-		GowlMonitor *mon = GOWL_MONITOR(monitor);
-		const gchar *name = gowl_monitor_get_name(mon);
-		gint mon_x, mon_y, mon_w, mon_h;
-		BarSurface *surface;
-
-		gowl_monitor_get_geometry(mon, &mon_x, &mon_y, &mon_w, &mon_h);
-		surface = (BarSurface *)g_hash_table_lookup(self->surfaces, name);
-
-		if (surface == NULL || surface->width != mon_w
-		    || surface->mon_x != mon_x || surface->mon_y != mon_y) {
-			bar_create_surface(self, mon);
-			return;
-		}
-	}
-
+	(void)monitor;
+	/* bar_redraw_all walks both slots and every monitor, creating
+	   surfaces on demand if geometry changed. */
 	bar_redraw_all(self);
 }
 
@@ -2298,6 +2484,7 @@ static void
 bar_provider_iface_init(GowlBarProviderInterface *iface)
 {
 	iface->get_bar_height = bar_get_bar_height;
+	iface->get_bar_insets = bar_get_bar_insets_impl;
 	iface->render_bar     = bar_render_bar;
 }
 
@@ -2326,8 +2513,12 @@ bar_on_startup(GowlStartupHandler *handler, gpointer compositor)
 		                 G_CALLBACK(bar_on_client_changed), self);
 
 	monitors = gowl_compositor_get_monitors(comp);
-	for (l = monitors; l != NULL; l = l->next)
-		bar_create_surface(self, GOWL_MONITOR(l->data));
+	for (l = monitors; l != NULL; l = l->next) {
+		GowlMonitor *mon = GOWL_MONITOR(l->data);
+		gint bi;
+		for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++)
+			bar_create_surface(self, &self->bars[bi], mon);
+	}
 
 	/* Tick timer for system data updates. Period adapts to the
 	   fastest per-widget interval; 2s default, 1s floor. */
@@ -2413,22 +2604,26 @@ gowl_module_bar_finalize(GObject *object)
 	}
 
 	{
-		gint i;
-		for (i = 0; i < self->n_widgets; i++) {
-			g_free(self->widgets[i].param);
-			g_free(self->widgets[i].cached_output);
+		gint bi, i;
+		for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++) {
+			GowlBarInstance *bar = &self->bars[bi];
+			for (i = 0; i < bar->n_widgets; i++) {
+				g_free(bar->widgets[i].param);
+				g_free(bar->widgets[i].cached_output);
+			}
+			g_free(bar->font_desc);
+			g_free(bar->custom_title);
+			g_free(bar->title_delimiters);
+			if (bar->surfaces != NULL)
+				g_hash_table_unref(bar->surfaces);
 		}
 	}
-	g_free(self->font_desc);
-	g_free(self->custom_title);
-	g_free(self->title_delimiters);
 	g_free(self->temp_path);
 	g_free(self->cached_hostname);
 	g_free(self->cached_username);
 	g_free(self->cached_keymap);
 	if (self->widget_data != NULL)
 		g_hash_table_unref(self->widget_data);
-	g_hash_table_unref(self->surfaces);
 	g_mutex_clear(&self->output_mutex);
 
 	G_OBJECT_CLASS(gowl_module_bar_parent_class)->finalize(object);
@@ -2452,47 +2647,70 @@ gowl_module_bar_class_init(GowlModuleBarClass *klass)
 	mod_class->configure       = bar_configure;
 }
 
+/* Populate a fresh #GowlBarInstance with defaults. */
+static void
+bar_instance_init_defaults(GowlBarInstance *bar, GowlBarPosition pos)
+{
+	memset(bar, 0, sizeof(*bar));
+
+	bar->position    = pos;
+	bar->enabled     = FALSE;
+	bar->visible     = TRUE;
+	bar->bar_height  = 28;
+
+	/* Semi-transparent Catppuccin Mocha base */
+	bar->bg_color[0] = 0.118;
+	bar->bg_color[1] = 0.118;
+	bar->bg_color[2] = 0.180;
+	bar->bg_color[3] = 0.8;
+	/* Catppuccin text */
+	bar->fg_color[0] = 0.804;
+	bar->fg_color[1] = 0.839;
+	bar->fg_color[2] = 0.957;
+	bar->fg_color[3] = 1.0;
+
+	bar->font_desc          = g_strdup("monospace 13");
+	bar->title_delimiters   = NULL;  /* disabled by default */
+	bar->title_palette_size = 0;
+	/* dim delimiter color default */
+	bar->title_delimiter_color[0] = 0.45;
+	bar->title_delimiter_color[1] = 0.46;
+	bar->title_delimiter_color[2] = 0.50;
+	bar->title_delimiter_color[3] = 1.0;
+
+	bar->surfaces  = g_hash_table_new_full(g_str_hash, g_str_equal,
+	                                        g_free, NULL);
+	bar->custom_title = NULL;
+	bar->n_widgets    = 0;
+}
+
 static void
 gowl_module_bar_init(GowlModuleBar *self)
 {
-	self->bar_height = 28;
-	/* Semi-transparent Catppuccin Mocha base */
-	self->bg_color[0] = 0.118;
-	self->bg_color[1] = 0.118;
-	self->bg_color[2] = 0.180;
-	self->bg_color[3] = 0.8;
-	/* Catppuccin text */
-	self->fg_color[0] = 0.804;
-	self->fg_color[1] = 0.839;
-	self->fg_color[2] = 0.957;
-	self->fg_color[3] = 1.0;
+	GowlBarInstance *top;
 
-	self->font_desc = g_strdup("monospace 13");
-	self->title_delimiters   = NULL;  /* disabled by default */
-	self->title_palette_size = 0;
-	/* dim delimiter color default */
-	self->title_delimiter_color[0] = 0.45;
-	self->title_delimiter_color[1] = 0.46;
-	self->title_delimiter_color[2] = 0.50;
-	self->title_delimiter_color[3] = 1.0;
+	/* Both slots start with default styling; only TOP is enabled by
+	   default so existing single-bar users get the same behavior. */
+	bar_instance_init_defaults(&self->bars[GOWL_BAR_POSITION_TOP],
+	                            GOWL_BAR_POSITION_TOP);
+	bar_instance_init_defaults(&self->bars[GOWL_BAR_POSITION_BOTTOM],
+	                            GOWL_BAR_POSITION_BOTTOM);
 
-	self->surfaces  = g_hash_table_new_full(g_str_hash, g_str_equal,
-	                                        g_free, NULL);
+	/* Default top-bar widgets: cpu memory disk battery clock */
+	top = &self->bars[GOWL_BAR_POSITION_TOP];
+	top->enabled    = TRUE;
+	top->n_widgets  = 5;
+	top->widgets[0].type = BAR_WIDGET_CPU;
+	top->widgets[1].type = BAR_WIDGET_MEMORY;
+	top->widgets[2].type = BAR_WIDGET_DISK;
+	top->widgets[3].type = BAR_WIDGET_BATTERY;
+	top->widgets[4].type = BAR_WIDGET_CLOCK;
+
 	self->compositor       = NULL;
-	self->custom_title     = NULL;
 	self->focus_handler_id = 0;
 	self->client_added_id  = 0;
 	self->client_removed_id = 0;
 	self->tick_timer       = NULL;
-
-	/* Default widgets: cpu memory disk battery clock */
-	memset(self->widgets, 0, sizeof(self->widgets));
-	self->n_widgets = 5;
-	self->widgets[0].type = BAR_WIDGET_CPU;
-	self->widgets[1].type = BAR_WIDGET_MEMORY;
-	self->widgets[2].type = BAR_WIDGET_DISK;
-	self->widgets[3].type = BAR_WIDGET_BATTERY;
-	self->widgets[4].type = BAR_WIDGET_CLOCK;
 
 	/* Zero cached data */
 	self->prev_cpu_idle  = 0;

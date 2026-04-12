@@ -71,3 +71,28 @@ gowl_bar_provider_render_bar(
 	if (iface->render_bar != NULL)
 		iface->render_bar(self, monitor);
 }
+
+void
+gowl_bar_provider_get_bar_insets(
+	GowlBarProvider *self,
+	gpointer         monitor,
+	gint            *top,
+	gint            *bottom
+){
+	GowlBarProviderInterface *iface;
+	gint t = 0, b = 0;
+
+	g_return_if_fail(GOWL_IS_BAR_PROVIDER(self));
+
+	iface = GOWL_BAR_PROVIDER_GET_IFACE(self);
+	if (iface->get_bar_insets != NULL) {
+		iface->get_bar_insets(self, monitor, &t, &b);
+	} else if (iface->get_bar_height != NULL) {
+		/* Back-compat: providers that only implement the legacy
+		   scalar height are treated as top-only. */
+		t = iface->get_bar_height(self, monitor);
+	}
+
+	if (top    != NULL) *top    = t;
+	if (bottom != NULL) *bottom = b;
+}

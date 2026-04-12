@@ -132,6 +132,11 @@ void                gowl_module_manager_notify_lock_activity
 gint                gowl_module_manager_get_bar_height    (GowlModuleManager *self,
                                                            gpointer           monitor);
 
+void                gowl_module_manager_get_bar_insets    (GowlModuleManager *self,
+                                                           gpointer           monitor,
+                                                           gint              *top,
+                                                           gint              *bottom);
+
 void                gowl_module_manager_dispatch_bar_render
                                                           (GowlModuleManager *self,
                                                            gpointer           compositor,

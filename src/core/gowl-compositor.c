@@ -4744,13 +4744,19 @@ gowl_compositor_arrangelayers(
 		}
 	}
 
-	/* Subtract bar height from usable area (top position) */
+	/* Subtract bar insets.  The active bar provider reports separate
+	   top and bottom insets so a two-bar layout (top + bottom) shrinks
+	   the usable area from both edges. */
 	if (self->module_mgr != NULL) {
-		gint bh = gowl_module_manager_get_bar_height(self->module_mgr, m);
-		if (bh > 0) {
-			usable_area.y += bh;
-			usable_area.height -= bh;
+		gint top = 0, bottom = 0;
+		gowl_module_manager_get_bar_insets(self->module_mgr, m,
+		                                    &top, &bottom);
+		if (top > 0) {
+			usable_area.y += top;
+			usable_area.height -= top;
 		}
+		if (bottom > 0)
+			usable_area.height -= bottom;
 	}
 
 	/* If usable area changed, update window area and re-tile */

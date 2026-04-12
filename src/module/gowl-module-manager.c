@@ -1199,13 +1199,39 @@ gowl_module_manager_get_bar_height(
 	GowlModuleManager *self,
 	gpointer           monitor
 ){
-	guint i;
-	gint height;
+	gint top = 0, bottom = 0;
 
-	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), 0);
+	gowl_module_manager_get_bar_insets(self, monitor, &top, &bottom);
+	return top;
+}
+
+/**
+ * gowl_module_manager_get_bar_insets:
+ * @self: a #GowlModuleManager
+ * @monitor: (nullable): the monitor being laid out
+ * @top: (out): accumulated top-edge inset in pixels
+ * @bottom: (out): accumulated bottom-edge inset in pixels
+ *
+ * Sums the @top and @bottom insets reported by every active bar
+ * provider.  Unlike gowl_module_manager_get_bar_height (which is
+ * now a back-compat wrapper), this reports the full vertical
+ * footprint of bars sitting on either edge of @monitor.
+ */
+void
+gowl_module_manager_get_bar_insets(
+	GowlModuleManager *self,
+	gpointer           monitor,
+	gint              *top,
+	gint              *bottom
+){
+	guint i;
+	gint  t_acc = 0, b_acc = 0;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
 
 	for (i = 0; i < self->bar_providers->len; i++) {
 		GowlBarProvider *provider;
+		gint p_top = 0, p_bottom = 0;
 
 		provider = (GowlBarProvider *)g_ptr_array_index(
 			self->bar_providers, i);
@@ -1213,12 +1239,14 @@ gowl_module_manager_get_bar_height(
 		if (!gowl_module_get_is_active(GOWL_MODULE(provider)))
 			continue;
 
-		height = gowl_bar_provider_get_bar_height(provider, monitor);
-		if (height > 0)
-			return height;
+		gowl_bar_provider_get_bar_insets(provider, monitor,
+		                                  &p_top, &p_bottom);
+		t_acc += p_top;
+		b_acc += p_bottom;
 	}
 
-	return 0;
+	if (top    != NULL) *top    = t_acc;
+	if (bottom != NULL) *bottom = b_acc;
 }
 
 /**

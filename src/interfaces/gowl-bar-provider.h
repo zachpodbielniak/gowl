@@ -32,11 +32,30 @@ struct _GowlBarProviderInterface {
 
 	gint (*get_bar_height) (GowlBarProvider *self, gpointer monitor);
 	void (*render_bar)     (GowlBarProvider *self, gpointer monitor);
+	/* Optional: returns top and bottom insets for @monitor.  If not
+	   implemented, the public dispatch falls back to get_bar_height
+	   and returns it as the top inset, bottom = 0. */
+	void (*get_bar_insets) (GowlBarProvider *self, gpointer monitor,
+	                        gint *top, gint *bottom);
 };
 
 /* Public dispatch functions */
 gint gowl_bar_provider_get_bar_height (GowlBarProvider *self, gpointer monitor);
 void gowl_bar_provider_render_bar     (GowlBarProvider *self, gpointer monitor);
+
+/**
+ * gowl_bar_provider_get_bar_insets:
+ * @self: a #GowlBarProvider
+ * @monitor: (nullable): the monitor to query
+ * @top: (out): top inset in pixels, or 0 if no top bar
+ * @bottom: (out): bottom inset in pixels, or 0 if no bottom bar
+ *
+ * Returns the vertical space this provider reserves on the given
+ * monitor.  Providers that implement only the legacy
+ * @get_bar_height are transparently reported as top-only.
+ */
+void gowl_bar_provider_get_bar_insets (GowlBarProvider *self, gpointer monitor,
+                                        gint *top, gint *bottom);
 
 G_END_DECLS
 

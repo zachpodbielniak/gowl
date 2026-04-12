@@ -32,6 +32,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <cairo.h>
+#include <drm_fourcc.h>
+#include <wlr/render/wlr_texture.h>
 
 /**
  * GowlCompositor:
@@ -1164,29 +1166,56 @@ gowl_compositor_screenshot_output(
 
 		buffer = state.buffer;
 
-		if (!wlr_buffer_begin_data_ptr_access(buffer,
-		        WLR_BUFFER_DATA_PTR_ACCESS_READ,
-		        &data, &fmt, &stride)) {
-			wlr_output_state_finish(&state);
-			if (width != NULL)  *width  = 0;
-			if (height != NULL) *height = 0;
-			g_set_error_literal(error, G_IO_ERROR,
-			                    G_IO_ERROR_FAILED,
-			                    "Cannot access output buffer data");
-			return NULL;
-		}
-
 		if (width != NULL)  *width  = buffer->width;
 		if (height != NULL) *height = buffer->height;
 
-		size = stride * (size_t)buffer->height;
-		pixels = g_malloc(size);
-		memcpy(pixels, data, size);
+		/* Try direct CPU readback first (works for SHM buffers) */
+		if (wlr_buffer_begin_data_ptr_access(buffer,
+		        WLR_BUFFER_DATA_PTR_ACCESS_READ,
+		        &data, &fmt, &stride)) {
+			size = stride * (size_t)buffer->height;
+			pixels = g_malloc(size);
+			memcpy(pixels, data, size);
+			wlr_buffer_end_data_ptr_access(buffer);
+			wlr_output_state_finish(&state);
+			return g_bytes_new_take(pixels, size);
+		}
 
-		wlr_buffer_end_data_ptr_access(buffer);
+		/* Fallback: GPU texture readback (for DMA-BUF / nested) */
+		{
+			struct wlr_texture *tex;
+
+			tex = wlr_texture_from_buffer(self->renderer, buffer);
+			if (tex != NULL) {
+				struct wlr_texture_read_pixels_options opts;
+
+				stride = (size_t)buffer->width * 4;
+				size   = stride * (size_t)buffer->height;
+				pixels = g_malloc(size);
+
+				memset(&opts, 0, sizeof(opts));
+				opts.data   = pixels;
+				opts.format = DRM_FORMAT_ARGB8888;
+				opts.stride = (uint32_t)stride;
+
+				if (wlr_texture_read_pixels(tex, &opts)) {
+					wlr_texture_destroy(tex);
+					wlr_output_state_finish(&state);
+					return g_bytes_new_take(pixels, size);
+				}
+
+				g_free(pixels);
+				wlr_texture_destroy(tex);
+			}
+		}
+
 		wlr_output_state_finish(&state);
-
-		return g_bytes_new_take(pixels, size);
+		if (width != NULL)  *width  = 0;
+		if (height != NULL) *height = 0;
+		g_set_error_literal(error, G_IO_ERROR,
+		                    G_IO_ERROR_FAILED,
+		                    "Cannot read output buffer pixels");
+		return NULL;
 	}
 }
 

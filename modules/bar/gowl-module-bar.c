@@ -202,6 +202,14 @@ typedef struct {
 	gint height;
 	gint mon_x;
 	gint mon_y;
+	/* Signature of the last rendered content (title + widget texts +
+	   colors + geometry). bar_redraw_all compares the freshly-computed
+	   signature against this one and skips bar_render +
+	   wlr_scene_buffer_set_buffer when nothing that affects the visual
+	   output has changed -- avoiding a cairo surface allocation, a
+	   Pango layout pass, a memcpy, and a scene-graph damage event
+	   (which would force a full compositor re-render at vblank). */
+	gchar *last_signature;
 } BarSurface;
 
 /* Per-bar instance state.  A module owns two of these: one for
@@ -2021,6 +2029,7 @@ bar_create_surface(GowlModuleBar *self, GowlBarInstance *bar,
 	if (surface != NULL) {
 		if (surface->scene_buf != NULL)
 			wlr_scene_node_destroy(&surface->scene_buf->node);
+		g_free(surface->last_signature);
 		g_hash_table_remove(bar->surfaces, name);
 		g_free(surface);
 	}
@@ -2055,6 +2064,96 @@ bar_create_surface(GowlModuleBar *self, GowlBarInstance *bar,
 	g_hash_table_insert(bar->surfaces, g_strdup(name), surface);
 }
 
+/* Build a canonical signature string capturing everything bar_render
+   reads: geometry, background/foreground/palette colors, font, title
+   (custom or focused client), and each widget's text + color. Callers
+   free the returned string with g_free().
+
+   Used by bar_redraw_all to skip expensive cairo/pango rendering (and
+   the scene-graph buffer swap that would force the compositor to
+   redamage the output) when nothing visible has changed since the
+   previous tick. */
+static gchar *
+bar_build_signature(GowlModuleBar *self, GowlBarInstance *bar,
+                    gint width, gint height)
+{
+	GString *s;
+	GowlClient *focused;
+	const gchar *title;
+	gint i, pi;
+	char wtext[128];
+
+	s = g_string_sized_new(256);
+
+	g_string_append_printf(s, "g:%dx%d;", width, height);
+	g_string_append_printf(s, "bg:%.3f,%.3f,%.3f,%.3f;",
+	                       bar->bg_color[0], bar->bg_color[1],
+	                       bar->bg_color[2], bar->bg_color[3]);
+	g_string_append_printf(s, "fg:%.3f,%.3f,%.3f,%.3f;",
+	                       bar->fg_color[0], bar->fg_color[1],
+	                       bar->fg_color[2], bar->fg_color[3]);
+	g_string_append_printf(s, "font:%s;",
+	                       bar->font_desc != NULL ? bar->font_desc : "");
+
+	/* Title palette state: size, delimiters, delimiter color, palette
+	   entries. Config changes on any of these must re-render even if
+	   the title string itself is unchanged. */
+	g_string_append_printf(s, "tps:%d;", bar->title_palette_size);
+	g_string_append_printf(s, "tdl:%s;",
+	                       bar->title_delimiters != NULL
+	                       ? bar->title_delimiters : "");
+	g_string_append_printf(s, "tdc:%.3f,%.3f,%.3f,%.3f;",
+	                       bar->title_delimiter_color[0],
+	                       bar->title_delimiter_color[1],
+	                       bar->title_delimiter_color[2],
+	                       bar->title_delimiter_color[3]);
+	for (pi = 0; pi < bar->title_palette_size && pi < 8; pi++) {
+		g_string_append_printf(s, "tp%d:%.3f,%.3f,%.3f,%.3f;",
+		                       pi,
+		                       bar->title_palette[pi][0],
+		                       bar->title_palette[pi][1],
+		                       bar->title_palette[pi][2],
+		                       bar->title_palette[pi][3]);
+	}
+
+	/* Title text (custom override, or focused client title, or
+	   fallback). Matches the selection logic in bar_render. */
+	if (bar->custom_title != NULL && bar->custom_title[0] != '\0') {
+		title = bar->custom_title;
+	} else {
+		focused = (self->compositor != NULL)
+			? gowl_compositor_get_focused_client(
+				GOWL_COMPOSITOR(self->compositor))
+			: NULL;
+		title = (focused != NULL)
+			? gowl_client_get_title(focused)
+			: "cmacs";
+		if (title == NULL)
+			title = "cmacs";
+	}
+	g_string_append(s, "t:");
+	g_string_append(s, title);
+	g_string_append_c(s, ';');
+
+	g_string_append_printf(s, "nw:%d;", bar->n_widgets);
+	for (i = 0; i < bar->n_widgets; i++) {
+		BarWidget *w = &bar->widgets[i];
+		widget_text(self, w, wtext, sizeof(wtext));
+		g_string_append_printf(s, "w%d:t=%d,c=%d,", i,
+		                       (gint)w->type, w->has_color ? 1 : 0);
+		if (w->has_color) {
+			g_string_append_printf(s, "%.3f,%.3f,%.3f,%.3f,",
+			                       w->color[0], w->color[1],
+			                       w->color[2], w->color[3]);
+		}
+		g_string_append(s, "|");
+		g_string_append(s, wtext);
+		g_string_append_c(s, ';');
+	}
+
+	return g_string_free(s, FALSE);
+}
+
 static void
 bar_redraw_all(GowlModuleBar *self)
 {
@@ -2084,6 +2183,7 @@ bar_redraw_all(GowlModuleBar *self)
 			const gchar *name = gowl_monitor_get_name(mon);
 			BarSurface *surface;
 			BarBuffer *buf;
+			gchar *sig;
 			gint mon_x, mon_y, mon_w, mon_h;
 			gint surf_y;
 
@@ -2105,6 +2205,18 @@ bar_redraw_all(GowlModuleBar *self)
 				surface->mon_x = mon_x;
 				surface->mon_y = surf_y;
 			}
+
+			/* Skip the cairo/pango render + scene buffer swap when
+			   nothing visible has changed. */
+			sig = bar_build_signature(self, bar,
+			                          surface->width, surface->height);
+			if (surface->last_signature != NULL &&
+			    strcmp(sig, surface->last_signature) == 0) {
+				g_free(sig);
+				continue;
+			}
+			g_free(surface->last_signature);
+			surface->last_signature = sig;
 
 			buf = bar_render(self, bar,
 			                  surface->width, surface->height);
@@ -2128,6 +2240,7 @@ bar_instance_destroy_surfaces(GowlBarInstance *bar)
 		BarSurface *surface = (BarSurface *)value;
 		if (surface->scene_buf != NULL)
 			wlr_scene_node_destroy(&surface->scene_buf->node);
+		g_free(surface->last_signature);
 		g_free(surface);
 	}
 	g_hash_table_remove_all(bar->surfaces);
@@ -2163,17 +2276,24 @@ bar_on_client_changed(GowlCompositor *comp, GObject *client,
 	bar_redraw_all(GOWL_MODULE_BAR(user_data));
 }
 
-/* Compute tick period in ms. Defaults to 2s for the dynamic system
+/* Compute tick period in ms. Defaults to 5s for the dynamic system
    widgets (cpu/memory/clock/...); a cmd widget with a smaller explicit
    @N interval speeds up the tick so it can actually reach that rate.
    Slow cmd widgets (e.g. weather@900) do not slow the tick down --
    they just use their cached output across the extra redraws.  The
    min runs across widgets in every enabled bar slot so fast widgets
-   on either bar pull the tick. */
+   on either bar pull the tick.
+
+   The 5 s default is a battery / idle-CPU tradeoff: at 2 s the bar
+   ticked often enough that cpu/memory deltas produced scene damage
+   every second tick, forcing the compositor to render a frame and
+   burning ~1-2% idle CPU for widgets nobody reads sub-second anyway.
+   Widgets that genuinely need faster updates can still pull the tick
+   via @N. */
 static int
 bar_tick_ms(GowlModuleBar *self)
 {
-	gint min_s = 2;
+	gint min_s = 5;
 	gint bi, i;
 
 	for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++) {

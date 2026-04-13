@@ -82,6 +82,9 @@ struct _GowlConfig {
 	/* Rules - array of GowlRuleEntry* (heap-allocated) */
 	GPtrArray *rules;
 
+	/* Dropdowns - array of GowlDropdownEntry* (heap-allocated) */
+	GPtrArray *dropdowns;
+
 	/* Module configs - maps module name (gchar*) to per-module
 	 * GHashTable<gchar*, gchar*> of key-value settings parsed
 	 * from the YAML modules section. */
@@ -120,6 +123,25 @@ gowl_rule_entry_free(gpointer entry)
 	g_free(r->app_id);
 	g_free(r->title);
 	g_free(r);
+}
+
+/**
+ * gowl_dropdown_entry_free:
+ * @entry: a heap-allocated #GowlDropdownEntry
+ *
+ * Frees the strings owned by the entry and then the entry.
+ */
+static void
+gowl_dropdown_entry_free(gpointer entry)
+{
+	GowlDropdownEntry *d = (GowlDropdownEntry *)entry;
+
+	if (d == NULL)
+		return;
+	g_free(d->name);
+	g_free(d->spawn_cmd);
+	g_free(d->keybind);
+	g_free(d);
 }
 
 /* --- Helper: free a GowlKeybindEntry (array element) --- */
@@ -299,6 +321,8 @@ gowl_config_finalize(GObject *object)
 		g_array_unref(self->keybinds);
 	if (self->rules != NULL)
 		g_ptr_array_unref(self->rules);
+	if (self->dropdowns != NULL)
+		g_ptr_array_unref(self->dropdowns);
 
 	g_clear_pointer(&self->module_configs, g_hash_table_unref);
 
@@ -498,6 +522,8 @@ gowl_config_init(GowlConfig *self)
 	g_array_set_clear_func(self->keybinds, gowl_keybind_entry_clear);
 
 	self->rules = g_ptr_array_new_with_free_func(gowl_rule_entry_free);
+	self->dropdowns = g_ptr_array_new_with_free_func(
+		gowl_dropdown_entry_free);
 
 	/* Module configs: outer table maps module name -> inner table,
 	 * inner table maps setting key -> string value.
@@ -692,14 +718,28 @@ gowl_config_apply_mapping(
 
 			for (i = 0; i < len; i++) {
 				YamlMapping *rule_map = yaml_sequence_get_mapping_element(seq, i);
+				const gchar *app_id;
+				const gchar *title;
+				guint32 tags;
+				gboolean floating;
+				gint monitor;
+				gint width;
+				gint height;
+				gboolean center;
+				gboolean regex_mode;
+
 				if (rule_map == NULL)
 					continue;
 
-				const gchar *app_id = NULL;
-				const gchar *title = NULL;
-				guint32 tags = 0;
-				gboolean floating = FALSE;
-				gint monitor = -1;
+				app_id = NULL;
+				title = NULL;
+				tags = 0;
+				floating = FALSE;
+				monitor = -1;
+				width = 0;
+				height = 0;
+				center = TRUE;
+				regex_mode = FALSE;
 
 				if (yaml_mapping_has_member(rule_map, "app-id"))
 					app_id = yaml_mapping_get_string_member(rule_map, "app-id");
@@ -711,8 +751,103 @@ gowl_config_apply_mapping(
 					floating = yaml_mapping_get_boolean_member(rule_map, "floating");
 				if (yaml_mapping_has_member(rule_map, "monitor"))
 					monitor = (gint)yaml_mapping_get_int_member(rule_map, "monitor");
+				if (yaml_mapping_has_member(rule_map, "width"))
+					width = (gint)yaml_mapping_get_int_member(rule_map, "width");
+				if (yaml_mapping_has_member(rule_map, "height"))
+					height = (gint)yaml_mapping_get_int_member(rule_map, "height");
+				if (yaml_mapping_has_member(rule_map, "center"))
+					center = yaml_mapping_get_boolean_member(rule_map, "center");
+				if (yaml_mapping_has_member(rule_map, "regex"))
+					regex_mode = yaml_mapping_get_boolean_member(rule_map, "regex");
 
-				gowl_config_add_rule(self, app_id, title, tags, floating, monitor);
+				gowl_config_add_rule_full(self, app_id, title, tags,
+				                           floating, monitor,
+				                           width, height, center,
+				                           regex_mode);
+			}
+		}
+	}
+
+	/* Dropdowns: sequence of mappings with keys:
+	 *   name: "term"                 (required)
+	 *   spawn-cmd: "foot"            (required)
+	 *   keybind: "Super+grave"       (optional)
+	 *   width-pct: 1.0               (optional, default 1.0)
+	 *   height-pct: 0.4              (optional, default 0.4)
+	 *   width: 800                   (optional, absolute px)
+	 *   height: 600                  (optional, absolute px)
+	 *   anchor: "top"|"bottom"|"left"|"right"  (optional, default top)
+	 */
+	if (yaml_mapping_has_member(mapping, "dropdowns")) {
+		YamlSequence *seq = yaml_mapping_get_sequence_member(mapping,
+		                                                      "dropdowns");
+		if (seq != NULL) {
+			guint len = yaml_sequence_get_length(seq);
+			guint i;
+
+			for (i = 0; i < len; i++) {
+				YamlMapping *dd_map;
+				const gchar *name;
+				const gchar *spawn_cmd;
+				const gchar *keybind;
+				const gchar *anchor_str;
+				gdouble width_pct;
+				gdouble height_pct;
+				gint width_abs;
+				gint height_abs;
+				gint anchor;
+
+				dd_map = yaml_sequence_get_mapping_element(seq, i);
+				if (dd_map == NULL)
+					continue;
+
+				name = NULL;
+				spawn_cmd = NULL;
+				keybind = NULL;
+				anchor_str = NULL;
+				width_pct = 1.0;
+				height_pct = 0.4;
+				width_abs = 0;
+				height_abs = 0;
+				anchor = 0; /* top */
+
+				if (yaml_mapping_has_member(dd_map, "name"))
+					name = yaml_mapping_get_string_member(dd_map, "name");
+				if (yaml_mapping_has_member(dd_map, "spawn-cmd"))
+					spawn_cmd = yaml_mapping_get_string_member(dd_map, "spawn-cmd");
+				if (yaml_mapping_has_member(dd_map, "keybind"))
+					keybind = yaml_mapping_get_string_member(dd_map, "keybind");
+				if (yaml_mapping_has_member(dd_map, "anchor"))
+					anchor_str = yaml_mapping_get_string_member(dd_map, "anchor");
+				if (yaml_mapping_has_member(dd_map, "width-pct"))
+					width_pct = yaml_mapping_get_double_member(dd_map, "width-pct");
+				if (yaml_mapping_has_member(dd_map, "height-pct"))
+					height_pct = yaml_mapping_get_double_member(dd_map, "height-pct");
+				if (yaml_mapping_has_member(dd_map, "width"))
+					width_abs = (gint)yaml_mapping_get_int_member(dd_map, "width");
+				if (yaml_mapping_has_member(dd_map, "height"))
+					height_abs = (gint)yaml_mapping_get_int_member(dd_map, "height");
+
+				if (anchor_str != NULL) {
+					if (g_ascii_strcasecmp(anchor_str, "bottom") == 0)
+						anchor = 1;
+					else if (g_ascii_strcasecmp(anchor_str, "left") == 0)
+						anchor = 2;
+					else if (g_ascii_strcasecmp(anchor_str, "right") == 0)
+						anchor = 3;
+					else
+						anchor = 0;
+				}
+
+				if (name == NULL || spawn_cmd == NULL) {
+					g_warning("gowl-config: dropdown entry %u missing name or spawn-cmd", i);
+					continue;
+				}
+
+				gowl_config_add_dropdown(self, name, spawn_cmd, keybind,
+				                          width_pct, height_pct,
+				                          width_abs, height_abs,
+				                          anchor);
 			}
 		}
 	}
@@ -1012,6 +1147,14 @@ gowl_config_generate_yaml(GowlConfig *self)
 			g_string_append_printf(yaml, "tags: %u\n    ", (guint)rule->tags);
 			g_string_append_printf(yaml, "floating: %s\n    ", rule->floating ? "true" : "false");
 			g_string_append_printf(yaml, "monitor: %d\n", rule->monitor);
+			if (rule->width != 0)
+				g_string_append_printf(yaml, "    width: %d\n", rule->width);
+			if (rule->height != 0)
+				g_string_append_printf(yaml, "    height: %d\n", rule->height);
+			if (!rule->center)
+				g_string_append(yaml, "    center: false\n");
+			if (rule->regex_mode)
+				g_string_append(yaml, "    regex: true\n");
 		}
 	}
 
@@ -1186,18 +1329,190 @@ gowl_config_add_rule(
 	gboolean     floating,
 	gint         monitor
 ){
+	gowl_config_add_rule_full(self, app_id, title, tags, floating,
+	                           monitor, 0, 0, TRUE, FALSE);
+}
+
+/**
+ * gowl_config_add_rule_full:
+ * @self: a #GowlConfig
+ * @app_id: (nullable): app_id pattern or %NULL
+ * @title: (nullable): title pattern or %NULL
+ * @tags: tag bitmask
+ * @floating: whether to float
+ * @monitor: target monitor index or -1
+ * @width: explicit width in pixels, or 0 for natural
+ * @height: explicit height in pixels, or 0 for natural
+ * @center: center on monitor when floating
+ * @regex_mode: interpret patterns as PCRE regexes
+ *
+ * Allocates a new #GowlRuleEntry with every tunable field and
+ * appends it to the rules array.  Called by gowl_config_add_rule()
+ * with sensible defaults for the v2 fields.
+ */
+void
+gowl_config_add_rule_full(
+	GowlConfig  *self,
+	const gchar *app_id,
+	const gchar *title,
+	guint32      tags,
+	gboolean     floating,
+	gint         monitor,
+	gint         width,
+	gint         height,
+	gboolean     center,
+	gboolean     regex_mode
+){
 	GowlRuleEntry *rule;
 
 	g_return_if_fail(GOWL_IS_CONFIG(self));
 
 	rule = g_new0(GowlRuleEntry, 1);
-	rule->app_id   = g_strdup(app_id);
-	rule->title    = g_strdup(title);
-	rule->tags     = tags;
-	rule->floating = floating;
-	rule->monitor  = monitor;
+	rule->app_id     = g_strdup(app_id);
+	rule->title      = g_strdup(title);
+	rule->tags       = tags;
+	rule->floating   = floating;
+	rule->monitor    = monitor;
+	rule->width      = width;
+	rule->height     = height;
+	rule->center     = center;
+	rule->regex_mode = regex_mode;
 
 	g_ptr_array_add(self->rules, rule);
+}
+
+/**
+ * gowl_config_remove_rule:
+ * @self: a #GowlConfig
+ * @app_id: (nullable): app_id pattern to match the rule by
+ * @title: (nullable): title pattern to match the rule by
+ *
+ * Removes the first rule entry whose @app_id and @title strings
+ * match the arguments verbatim.  Comparison is by literal string;
+ * %NULL matches %NULL, non-%NULL uses g_strcmp0().  Returns the
+ * number of rules removed.
+ */
+guint
+gowl_config_remove_rule(
+	GowlConfig  *self,
+	const gchar *app_id,
+	const gchar *title
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0);
+
+	for (i = 0; i < self->rules->len; i++) {
+		GowlRuleEntry *rule;
+
+		rule = (GowlRuleEntry *)g_ptr_array_index(self->rules, i);
+		if (g_strcmp0(rule->app_id, app_id) == 0 &&
+		    g_strcmp0(rule->title, title) == 0) {
+			g_ptr_array_remove_index(self->rules, i);
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * gowl_config_clear_rules:
+ * @self: a #GowlConfig
+ *
+ * Removes every rule from the config.
+ */
+void
+gowl_config_clear_rules(GowlConfig *self)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (self->rules->len > 0)
+		g_ptr_array_remove_range(self->rules, 0, self->rules->len);
+}
+
+/* --- Dropdown management --- */
+
+/**
+ * gowl_config_add_dropdown:
+ *
+ * Allocates a new #GowlDropdownEntry, copies the strings, and
+ * appends it to the dropdowns array.  Adding an entry with a
+ * duplicate @name silently replaces the existing entry.
+ */
+void
+gowl_config_add_dropdown(
+	GowlConfig  *self,
+	const gchar *name,
+	const gchar *spawn_cmd,
+	const gchar *keybind,
+	gdouble      width_pct,
+	gdouble      height_pct,
+	gint         width_abs,
+	gint         height_abs,
+	gint         anchor
+){
+	GowlDropdownEntry *dd;
+
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_return_if_fail(name != NULL);
+	g_return_if_fail(spawn_cmd != NULL);
+
+	gowl_config_remove_dropdown(self, name);
+
+	dd = g_new0(GowlDropdownEntry, 1);
+	dd->name       = g_strdup(name);
+	dd->spawn_cmd  = g_strdup(spawn_cmd);
+	dd->keybind    = g_strdup(keybind);
+	dd->width_pct  = width_pct;
+	dd->height_pct = height_pct;
+	dd->width_abs  = width_abs;
+	dd->height_abs = height_abs;
+	dd->anchor     = anchor;
+
+	g_ptr_array_add(self->dropdowns, dd);
+}
+
+/**
+ * gowl_config_remove_dropdown:
+ *
+ * Removes the dropdown entry whose @name matches exactly.
+ * Returns 1 on removal, 0 if nothing matched.
+ */
+guint
+gowl_config_remove_dropdown(
+	GowlConfig  *self,
+	const gchar *name
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0);
+	g_return_val_if_fail(name != NULL, 0);
+
+	for (i = 0; i < self->dropdowns->len; i++) {
+		GowlDropdownEntry *dd;
+
+		dd = (GowlDropdownEntry *)g_ptr_array_index(self->dropdowns, i);
+		if (g_strcmp0(dd->name, name) == 0) {
+			g_ptr_array_remove_index(self->dropdowns, i);
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * gowl_config_get_dropdowns:
+ *
+ * Returns the #GPtrArray backing the dropdown entries.  The
+ * array is borrowed; the caller must not free it.
+ */
+GPtrArray *
+gowl_config_get_dropdowns(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->dropdowns;
 }
 
 /**

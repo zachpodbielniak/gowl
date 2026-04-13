@@ -57,6 +57,7 @@ LIB_SRCS := \
 	src/interfaces/gowl-gap-provider.c \
 	src/interfaces/gowl-bar-provider.c \
 	src/interfaces/gowl-scratchpad-handler.c \
+	src/interfaces/gowl-dropdown-provider.c \
 	src/interfaces/gowl-swallow-handler.c \
 	src/interfaces/gowl-sticky-handler.c \
 	src/interfaces/gowl-cursor-provider.c \
@@ -117,6 +118,7 @@ LIB_HDRS := \
 	src/interfaces/gowl-gap-provider.h \
 	src/interfaces/gowl-bar-provider.h \
 	src/interfaces/gowl-scratchpad-handler.h \
+	src/interfaces/gowl-dropdown-provider.h \
 	src/interfaces/gowl-swallow-handler.h \
 	src/interfaces/gowl-sticky-handler.h \
 	src/interfaces/gowl-cursor-provider.h \

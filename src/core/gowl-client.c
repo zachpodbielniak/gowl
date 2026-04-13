@@ -247,6 +247,9 @@ gowl_client_init(GowlClient *self)
 	self->app_id        = NULL;
 	self->mon           = NULL;
 	self->compositor    = NULL;
+	self->pending_rule_tags     = 0;
+	self->pending_rule_monitor  = -1;
+	self->pending_rule_geom_set = FALSE;
 }
 
 /* --- Public API --- */
@@ -839,4 +842,27 @@ gowl_client_set_alpha(
 	else if (self->scene != NULL)
 		wlr_scene_node_for_each_buffer(&self->scene->node,
 		                                set_opacity_iter, &self->alpha);
+}
+
+/**
+ * gowl_client_set_rule_overrides:
+ *
+ * Stashes initial-placement overrides for on_client_map() to
+ * consume after the client-pre-map signal handlers run.  The
+ * compositor clears these fields after reading them, so this
+ * setter is only meaningful when called from a client-pre-map
+ * handler on a client that has not yet been placed.
+ */
+void
+gowl_client_set_rule_overrides(
+	GowlClient *self,
+	guint32     tags,
+	gint        monitor,
+	gboolean    geom_set
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	self->pending_rule_tags     = tags;
+	self->pending_rule_monitor  = monitor;
+	self->pending_rule_geom_set = geom_set;
 }

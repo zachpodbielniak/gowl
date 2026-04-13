@@ -33,6 +33,7 @@
 #include <unistd.h>
 #include <cairo.h>
 #include <drm_fourcc.h>
+#include <linux/input-event-codes.h>
 #include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_damage_ring.h>
 
@@ -50,6 +51,7 @@ G_DEFINE_FINAL_TYPE(GowlCompositor, gowl_compositor, G_TYPE_OBJECT)
 enum {
 	SIGNAL_STARTUP,
 	SIGNAL_SHUTDOWN,
+	SIGNAL_CLIENT_PRE_MAP,
 	SIGNAL_CLIENT_ADDED,
 	SIGNAL_CLIENT_REMOVED,
 	SIGNAL_FOCUS_CHANGED,
@@ -58,6 +60,23 @@ enum {
 };
 
 static guint compositor_signals[N_SIGNALS] = { 0, };
+
+/**
+ * GowlPrefloatHintEntry:
+ *
+ * Per-entry storage for prefloat_hints.  Each record captures
+ * the pid to watch, the explicit geometry to place the client
+ * at, the scene layer to reparent into, and an optional
+ * on_mapped callback that fires once the match completes.
+ * Consumed on first match.
+ */
+typedef struct {
+	pid_t                  pid;
+	struct wlr_box         geom;
+	gint                   layer;
+	GowlPrefloatMappedFunc on_mapped;
+	gpointer               user_data;
+} GowlPrefloatHintEntry;
 
 /* -----------------------------------------------------------
  * Colour parsing helper
@@ -268,6 +287,8 @@ gowl_compositor_finalize(GObject *object)
 
 	if (self->prefloat_pids != NULL)
 		g_array_unref(self->prefloat_pids);
+	if (self->prefloat_hints != NULL)
+		g_array_unref(self->prefloat_hints);
 
 	G_OBJECT_CLASS(gowl_compositor_parent_class)->finalize(object);
 }
@@ -317,6 +338,40 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 		             NULL,
 		             G_TYPE_NONE,
 		             0);
+
+	/**
+	 * GowlCompositor::client-pre-map:
+	 * @compositor: the #GowlCompositor that emitted the signal
+	 * @client: the #GowlClient that is about to be placed
+	 *
+	 * Emitted during on_client_map() *before* the client is
+	 * assigned to a monitor or placed by the layout engine.  At
+	 * this point the client's @app_id, @title, and initial @geom
+	 * are readable but @mon and @tags are still zero.
+	 *
+	 * Handlers can mutate @client to influence initial placement:
+	 * set @c->isfloating to force a floating spawn; set @c->geom
+	 * to pin a geometry; read @c->app_id and @c->title to drive
+	 * rule matching.  A handler that wants to override the target
+	 * monitor or tag mask should stash its choice in the client's
+	 * transient rule-override fields via gowl_client_set_rule_
+	 * override() — the compositor consumes those after the signal
+	 * returns.
+	 *
+	 * This is the extension point used by the windowrules module
+	 * to apply float/tag/monitor rules without causing a visible
+	 * tile→float flicker.
+	 */
+	compositor_signals[SIGNAL_CLIENT_PRE_MAP] =
+		g_signal_new("client-pre-map",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             G_TYPE_OBJECT);
 
 	/**
 	 * GowlCompositor::client-added:
@@ -418,6 +473,8 @@ gowl_compositor_init(GowlCompositor *self)
 	self->fullscreen_bg_color[3] = 1.0f;
 
 	self->prefloat_pids = g_array_new(FALSE, FALSE, sizeof(pid_t));
+	self->prefloat_hints = g_array_new(FALSE, FALSE,
+	                                    sizeof(GowlPrefloatHintEntry));
 }
 
 /* -----------------------------------------------------------
@@ -2455,6 +2512,42 @@ gowl_compositor_prefloat_pid(
 }
 
 /**
+ * gowl_compositor_prefloat_pid_with_hint:
+ *
+ * Registers a pid+geometry+layer hint and optional on_mapped
+ * callback.  Dropdown-style: reparents and sizes the client on
+ * first map without marking it embedded or hiding it.
+ */
+void
+gowl_compositor_prefloat_pid_with_hint(
+	GowlCompositor         *self,
+	pid_t                   pid,
+	gint                    x,
+	gint                    y,
+	gint                    width,
+	gint                    height,
+	gint                    layer,
+	GowlPrefloatMappedFunc  on_mapped,
+	gpointer                user_data
+){
+	GowlPrefloatHintEntry entry;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(layer >= 0 && layer < GOWL_SCENE_LAYER_COUNT);
+
+	entry.pid         = pid;
+	entry.geom.x      = x;
+	entry.geom.y      = y;
+	entry.geom.width  = width;
+	entry.geom.height = height;
+	entry.layer       = layer;
+	entry.on_mapped   = on_mapped;
+	entry.user_data   = user_data;
+
+	g_array_append_val(self->prefloat_hints, entry);
+}
+
+/**
  * gowl_compositor_reparent_client:
  *
  * Moves a client's scene node to the specified scene layer.
@@ -2501,6 +2594,26 @@ gowl_compositor_resize_client(
 	geo.width = width;
 	geo.height = height;
 	resize_client(self, client, geo, TRUE);
+}
+
+/**
+ * gowl_compositor_set_floating:
+ *
+ * Public wrapper around the internal setfloating().  Flips
+ * the float flag, reparents the scene node to the appropriate
+ * layer, and re-arranges the client's monitor so the tile
+ * layout reflects the new state.
+ */
+void
+gowl_compositor_set_floating(
+	GowlCompositor *self,
+	GowlClient     *client,
+	gboolean        floating
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(client));
+
+	setfloating(self, client, floating);
 }
 
 /**
@@ -3867,6 +3980,52 @@ on_kb_key(struct wl_listener *listener, void *data)
 		}
 	}
 
+	/* Module keybind dispatch: give every loaded module that
+	 * implements GowlKeybindHandler a chance to consume the key.
+	 * Runs after config-level keybinds (which are empty in cmacs
+	 * --gowl mode) and before the cmacs key-intercept hook so
+	 * module keybinds — e.g. windowrules Super+Space, dropdown
+	 * Super+grave — fire even though the Emacs intercept would
+	 * otherwise swallow them.
+	 *
+	 * Modules are given the *cleaned* modifier mask (NumLock and
+	 * CapsLock stripped) so that keybinds work regardless of
+	 * those lock states, matching the behavior of the config
+	 * keybind check above. */
+	if (!handled && self->module_mgr != NULL &&
+	    event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+		guint clean_mods;
+
+		clean_mods = GOWL_CLEANMASK(mods);
+		for (i = 0; i < nsyms; i++) {
+			if (gowl_module_manager_dispatch_key(
+				    self->module_mgr, clean_mods,
+				    (guint)syms[i], TRUE)) {
+				handled = TRUE;
+				break;
+			}
+		}
+		/* Level-0 fallback for Shift-modified keys. */
+		if (!handled) {
+			const xkb_keysym_t *raw_syms;
+			xkb_layout_index_t layout;
+			gint n_raw;
+
+			layout = xkb_state_key_get_layout(kb->xkb_state,
+			                                   keycode);
+			n_raw = xkb_keymap_key_get_syms_by_level(
+				kb->keymap, keycode, layout, 0, &raw_syms);
+			for (i = 0; i < n_raw; i++) {
+				if (gowl_module_manager_dispatch_key(
+					    self->module_mgr, clean_mods,
+					    (guint)raw_syms[i], TRUE)) {
+					handled = TRUE;
+					break;
+				}
+			}
+		}
+	}
+
 	if (!handled && self->key_intercept_func != NULL) {
 		for (i = 0; i < nsyms; i++) {
 			if (self->key_intercept_func(
@@ -4081,7 +4240,10 @@ on_cursor_button(struct wl_listener *listener, void *data)
 	                                     self->wlr_seat);
 
 	switch (event->state) {
-	case WL_POINTER_BUTTON_STATE_PRESSED:
+	case WL_POINTER_BUTTON_STATE_PRESSED: {
+		struct wlr_keyboard *kbd;
+		uint32_t             kmods;
+
 		self->cursor_mode = GOWL_CURSOR_MODE_PRESSED;
 
 		if (self->locked)
@@ -4095,7 +4257,50 @@ on_cursor_button(struct wl_listener *listener, void *data)
 		         NULL, &c, NULL, NULL);
 		if (c != NULL && !gowl_client_get_embedded(c))
 			gowl_compositor_focus_client(self, c, TRUE);
+
+		/* Super+LMB starts an interactive move grab, Super+RMB
+		 * starts an interactive resize grab.  Tiled clients are
+		 * auto-promoted to floating so dragging doesn't fight
+		 * the tile layout.  Embedded clients are skipped —
+		 * those are managed by the embedder. */
+		if (c == NULL || gowl_client_get_embedded(c))
+			break;
+
+		kbd = wlr_seat_get_keyboard(self->wlr_seat);
+		kmods = kbd != NULL ? wlr_keyboard_get_modifiers(kbd) : 0;
+		if (!(kmods & WLR_MODIFIER_LOGO))
+			break;
+
+		if (event->button == BTN_LEFT) {
+			if (!c->isfloating)
+				setfloating(self, c, TRUE);
+			self->cursor_mode    = GOWL_CURSOR_MODE_MOVE;
+			self->grabbed_client = c;
+			self->grab_x = self->wlr_cursor->x - (gdouble)c->geom.x;
+			self->grab_y = self->wlr_cursor->y - (gdouble)c->geom.y;
+			wlr_cursor_set_xcursor(self->wlr_cursor,
+			                        self->xcursor_mgr, "grabbing");
+			return;
+		}
+
+		if (event->button == BTN_RIGHT) {
+			if (!c->isfloating)
+				setfloating(self, c, TRUE);
+			self->cursor_mode    = GOWL_CURSOR_MODE_RESIZE;
+			self->grabbed_client = c;
+			/* Warp cursor to the client's bottom-right corner so
+			 * the motion handler's (cursor - geom) arithmetic
+			 * produces the right width/height delta. */
+			wlr_cursor_warp(self->wlr_cursor, NULL,
+			                 (gdouble)(c->geom.x + c->geom.width),
+			                 (gdouble)(c->geom.y + c->geom.height));
+			wlr_cursor_set_xcursor(self->wlr_cursor,
+			                        self->xcursor_mgr,
+			                        "se-resize");
+			return;
+		}
 		break;
+	}
 
 	case WL_POINTER_BUTTON_STATE_RELEASED:
 		/* End interactive move/resize on button release */
@@ -4400,17 +4605,57 @@ on_client_map(struct wl_listener *listener, void *data)
 	c->geom.width  += 2 * (gint)c->bw;
 	c->geom.height += 2 * (gint)c->bw;
 
+	/* Copy app_id/title onto the client for handler visibility.
+	 * These fields are normally populated by on_client_set_title /
+	 * the initial xdg configure, but we refresh them here so that
+	 * client-pre-map handlers see a consistent view. */
+	if (c->xdg_toplevel->app_id != NULL && c->app_id == NULL)
+		c->app_id = g_strdup(c->xdg_toplevel->app_id);
+	if (c->xdg_toplevel->title != NULL && c->title == NULL)
+		c->title = g_strdup(c->xdg_toplevel->title);
+
 	/* Insert into client lists */
 	self->clients = g_list_prepend(self->clients, c);
 	self->fstack  = g_list_prepend(self->fstack, c);
 
-	/* Assign to selected monitor with current tags */
-	setmon(self, c, self->selmon,
-	       self->selmon ? self->selmon->tagset[self->selmon->seltags] : 1);
+	/* Emit client-pre-map so modules (windowrules) can mutate
+	 * isfloating/tags/monitor/geom before initial placement.
+	 * Handlers stash tag/monitor overrides in the client's
+	 * pending_rule_* fields; we consume them here. */
+	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_PRE_MAP],
+	              0, c);
+
+	{
+		GowlMonitor *target_mon;
+		guint32      target_tags;
+
+		target_mon = self->selmon;
+		target_tags = self->selmon
+			? self->selmon->tagset[self->selmon->seltags]
+			: 1;
+
+		if (c->pending_rule_monitor >= 0) {
+			GList *ml = g_list_nth(self->monitors,
+			                        (guint)c->pending_rule_monitor);
+			if (ml != NULL)
+				target_mon = (GowlMonitor *)ml->data;
+		}
+		if (c->pending_rule_tags != 0)
+			target_tags = c->pending_rule_tags;
+
+		/* Consume the overrides; never read again. */
+		c->pending_rule_monitor = -1;
+		c->pending_rule_tags    = 0;
+
+		setmon(self, c, target_mon, target_tags);
+	}
 
 	/* Center floating clients within usable area if they have
-	 * no explicit position (default 0,0 from XDG). */
-	if (c->isfloating && !c->isfullscreen && c->mon != NULL) {
+	 * no explicit position (default 0,0 from XDG).  A handler
+	 * that set c->pending_rule_geom_set = TRUE opts out of the
+	 * centering path and owns the geometry itself. */
+	if (c->isfloating && !c->isfullscreen && c->mon != NULL &&
+	    !c->pending_rule_geom_set) {
 		if (c->geom.x == 0 && c->geom.y == 0) {
 			c->geom.x = c->mon->w.x +
 				(c->mon->w.width - c->geom.width) / 2;
@@ -4418,6 +4663,10 @@ on_client_map(struct wl_listener *listener, void *data)
 				(c->mon->w.height - c->geom.height) / 2;
 			resize_client(self, c, c->geom, TRUE);
 		}
+	}
+	if (c->pending_rule_geom_set) {
+		resize_client(self, c, c->geom, TRUE);
+		c->pending_rule_geom_set = FALSE;
 	}
 
 	/* Check if this PID was registered for embedding.
@@ -4444,6 +4693,64 @@ on_client_map(struct wl_listener *listener, void *data)
 				gowl_compositor_arrange(self, c->mon);
 				break;
 			}
+		}
+	}
+
+	/* New-style prefloat hints (dropdown-module path).
+	 * Matches a pid and reparents to the caller's chosen scene
+	 * layer at an explicit geometry, then floats the client and
+	 * invokes the on_mapped callback so the module can capture
+	 * the client pointer.  Unlike the embedder path above, this
+	 * does NOT mark the client embedded and does NOT hide it —
+	 * the dropdown module toggles visibility itself. */
+	if (self->prefloat_hints != NULL && self->prefloat_hints->len > 0) {
+		pid_t cpid;
+		guint hi;
+
+		cpid = gowl_client_get_pid(c);
+		for (hi = 0; hi < self->prefloat_hints->len; hi++) {
+			GowlPrefloatHintEntry *hint;
+
+			hint = &g_array_index(self->prefloat_hints,
+			                       GowlPrefloatHintEntry, hi);
+			if (hint->pid != cpid)
+				continue;
+
+			/* Copy the callback + payload before removing the
+			 * entry, since g_array_remove_index_fast may
+			 * relocate memory. */
+			{
+				GowlPrefloatHintEntry saved;
+				struct wlr_box target_geom;
+
+				saved = *hint;
+				g_array_remove_index_fast(self->prefloat_hints, hi);
+
+				target_geom = saved.geom;
+				c->isfloating = TRUE;
+				c->geom = target_geom;
+
+				if (saved.layer >= 0 &&
+				    saved.layer < GOWL_SCENE_LAYER_COUNT &&
+				    self->layers[saved.layer] != NULL) {
+					wlr_scene_node_reparent(&c->scene->node,
+					                         self->layers[saved.layer]);
+				}
+				resize_client(self, c, target_geom, TRUE);
+
+				/* Re-arrange so tile() drops this client from
+				 * the layout and the remaining tiled clients
+				 * reclaim the space.  setmon() above ran arrange
+				 * while isfloating was still FALSE, so the
+				 * dropdown got counted as a tile and squeezed
+				 * its neighbours. */
+				if (c->mon != NULL)
+					gowl_compositor_arrange(self, c->mon);
+
+				if (saved.on_mapped != NULL)
+					saved.on_mapped(self, c, saved.user_data);
+			}
+			break;
 		}
 	}
 

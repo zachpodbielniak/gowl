@@ -267,6 +267,56 @@ test_rule_matches(void)
 	gowl_rule_free(r);
 }
 
+/* ---- Rule regex mode ---- */
+
+static void
+test_rule_regex_mode(void)
+{
+	GowlRule *r;
+
+	/* PCRE anchored regex on title (matches Zoom's "Join Meeting"
+	 * dialog rename path). */
+	r = gowl_rule_new_full(NULL, "^Zoom Meeting$", 0, TRUE, -1,
+	                        0, 0, TRUE, TRUE);
+	g_assert_nonnull(r);
+	g_assert_true(r->regex_mode);
+	g_assert_true(gowl_rule_matches(r, "anything", "Zoom Meeting"));
+	g_assert_false(gowl_rule_matches(r, "anything", "Zoom Meetings"));
+	g_assert_false(gowl_rule_matches(r, "anything", "Not Zoom"));
+	gowl_rule_free(r);
+
+	/* Regex on app_id with alternation */
+	r = gowl_rule_new_full("^(zoom|Zoom)$", NULL, 0, TRUE, -1,
+	                        0, 0, TRUE, TRUE);
+	g_assert_true(gowl_rule_matches(r, "zoom", "x"));
+	g_assert_true(gowl_rule_matches(r, "Zoom", "x"));
+	g_assert_false(gowl_rule_matches(r, "zoomer", "x"));
+	gowl_rule_free(r);
+}
+
+/* ---- Rule geometry fields ---- */
+
+static void
+test_rule_geometry_fields(void)
+{
+	GowlRule *r;
+
+	r = gowl_rule_new_full("pavucontrol", NULL, 0, TRUE, -1,
+	                        800, 600, TRUE, FALSE);
+	g_assert_cmpint(r->width,  ==, 800);
+	g_assert_cmpint(r->height, ==, 600);
+	g_assert_true(r->center);
+	g_assert_false(r->regex_mode);
+	/* Back-compat constructor defaults geometry to 0 */
+	gowl_rule_free(r);
+
+	r = gowl_rule_new("x", NULL, 0, FALSE, -1);
+	g_assert_cmpint(r->width,  ==, 0);
+	g_assert_cmpint(r->height, ==, 0);
+	g_assert_false(r->regex_mode);
+	gowl_rule_free(r);
+}
+
 /* ---- OutputMode tests ---- */
 
 static void
@@ -360,6 +410,8 @@ main(int argc, char *argv[])
 	/* Rule */
 	g_test_add_func("/boxed/rule/new", test_rule_new);
 	g_test_add_func("/boxed/rule/matches", test_rule_matches);
+	g_test_add_func("/boxed/rule/regex", test_rule_regex_mode);
+	g_test_add_func("/boxed/rule/geom",  test_rule_geometry_fields);
 
 	/* OutputMode */
 	g_test_add_func("/boxed/output-mode/new", test_output_mode_new);

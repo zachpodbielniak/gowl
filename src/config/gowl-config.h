@@ -48,12 +48,53 @@ typedef struct {
 /* --- GowlRuleEntry --- */
 
 /**
+ * GowlDropdownEntry:
+ * @name: identifier used to toggle the dropdown (e.g. "term").
+ *        Duplicates across entries are disallowed.
+ * @spawn_cmd: shell command spawned on first toggle.  Interpreted
+ *             by g_spawn_command_line_async().
+ * @keybind: keybind string parsed via gowl_keybind_parse(), e.g.
+ *           "Super+grave".  May be %NULL, in which case the
+ *           dropdown is only toggleable via the elisp API.
+ * @width_pct: dropdown width as a fraction of the output width
+ *             (0.0 – 1.0).  0.0 means "not set".
+ * @height_pct: dropdown height as a fraction of the output
+ *              height (0.0 – 1.0).
+ * @width_abs: absolute width in pixels, takes precedence over
+ *             @width_pct when non-zero.
+ * @height_abs: absolute height in pixels, takes precedence over
+ *              @height_pct when non-zero.
+ * @anchor: 0=top, 1=bottom, 2=left, 3=right.  Controls which
+ *          edge of the output the dropdown attaches to.
+ *
+ * A dropdown (Guake-style toggleable terminal/window) entry.
+ */
+typedef struct {
+	gchar    *name;
+	gchar    *spawn_cmd;
+	gchar    *keybind;
+	gdouble   width_pct;
+	gdouble   height_pct;
+	gint      width_abs;
+	gint      height_abs;
+	gint      anchor;
+} GowlDropdownEntry;
+
+/**
  * GowlRuleEntry:
  * @app_id: (nullable): Wayland app_id to match, or %NULL for any
  * @title: (nullable): window title pattern to match, or %NULL for any
  * @tags: bitmask of tags to assign when matched
  * @floating: whether the matched client should float
  * @monitor: monitor index to place the client on, or -1 for default
+ * @width: explicit width in pixels for floated matches, or 0 to
+ *         keep the client's natural size
+ * @height: explicit height in pixels for floated matches, or 0
+ *          to keep the client's natural size
+ * @center: when @floating is %TRUE, center the client on its
+ *          target monitor's usable area
+ * @regex_mode: when %TRUE, interpret @app_id and @title as PCRE
+ *              regexes (via #GRegex) rather than shell globs
  *
  * A window rule entry stored in the config.
  */
@@ -63,6 +104,10 @@ typedef struct {
 	guint32   tags;
 	gboolean  floating;
 	gint      monitor;
+	gint      width;
+	gint      height;
+	gboolean  center;
+	gboolean  regex_mode;
 } GowlRuleEntry;
 
 /* --- Property IDs (for GObject property enumeration) --- */
@@ -356,6 +401,116 @@ gowl_config_add_rule(
 	gboolean     floating,
 	gint         monitor
 );
+
+/**
+ * gowl_config_add_rule_full:
+ * @self: a #GowlConfig
+ * @app_id: (nullable): app_id pattern or %NULL for any
+ * @title: (nullable): title pattern or %NULL for any
+ * @tags: tag bitmask to assign
+ * @floating: whether the matched client should float
+ * @monitor: target monitor index, or -1 for default
+ * @width: explicit width in pixels for floated matches, or 0
+ * @height: explicit height in pixels for floated matches, or 0
+ * @center: center the client on its monitor when floating
+ * @regex_mode: interpret @app_id and @title as PCRE regexes
+ *
+ * Appends a window rule entry with every tunable field exposed.
+ * gowl_config_add_rule() is a thin wrapper that defaults the v2
+ * fields to glob mode with no geometry override.
+ */
+void
+gowl_config_add_rule_full(
+	GowlConfig  *self,
+	const gchar *app_id,
+	const gchar *title,
+	guint32      tags,
+	gboolean     floating,
+	gint         monitor,
+	gint         width,
+	gint         height,
+	gboolean     center,
+	gboolean     regex_mode
+);
+
+/**
+ * gowl_config_remove_rule:
+ * @self: a #GowlConfig
+ * @app_id: (nullable): app_id pattern to match the rule by, or %NULL
+ * @title: (nullable): title pattern to match the rule by, or %NULL
+ *
+ * Removes the first rule whose @app_id and @title strings match
+ * the arguments exactly (both %NULL matches the first rule with
+ * no app_id and no title).  Returns the number of rules removed
+ * (0 or 1).
+ */
+guint
+gowl_config_remove_rule(
+	GowlConfig  *self,
+	const gchar *app_id,
+	const gchar *title
+);
+
+/**
+ * gowl_config_clear_rules:
+ * @self: a #GowlConfig
+ *
+ * Removes every rule from the config.  Useful when an elisp
+ * customisation wants to fully replace the set of rules inherited
+ * from YAML.
+ */
+void gowl_config_clear_rules (GowlConfig *self);
+
+/* --- Dropdown management --- */
+
+/**
+ * gowl_config_add_dropdown:
+ * @self: a #GowlConfig
+ * @name: unique dropdown identifier
+ * @spawn_cmd: command to spawn on first toggle
+ * @keybind: (nullable): keybind string, or %NULL for elisp-only
+ * @width_pct: fractional width (0.0 – 1.0), or 0 if using @width_abs
+ * @height_pct: fractional height (0.0 – 1.0), or 0 if using @height_abs
+ * @width_abs: absolute width in pixels, or 0 if using @width_pct
+ * @height_abs: absolute height in pixels, or 0 if using @height_pct
+ * @anchor: 0=top, 1=bottom, 2=left, 3=right
+ *
+ * Appends a dropdown entry to the config.  Used by YAML parsing
+ * and runtime customisation from elisp.
+ */
+void
+gowl_config_add_dropdown(
+	GowlConfig  *self,
+	const gchar *name,
+	const gchar *spawn_cmd,
+	const gchar *keybind,
+	gdouble      width_pct,
+	gdouble      height_pct,
+	gint         width_abs,
+	gint         height_abs,
+	gint         anchor
+);
+
+/**
+ * gowl_config_remove_dropdown:
+ * @self: a #GowlConfig
+ * @name: the dropdown name to remove
+ *
+ * Removes the dropdown entry whose @name matches exactly.
+ *
+ * Returns: 1 if removed, 0 if not found
+ */
+guint gowl_config_remove_dropdown (GowlConfig  *self,
+                                    const gchar *name);
+
+/**
+ * gowl_config_get_dropdowns:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlDropdownEntry): the
+ *          dropdowns array.  Do not free.
+ */
+GPtrArray *gowl_config_get_dropdowns (GowlConfig *self);
 
 /**
  * gowl_config_get_rules:

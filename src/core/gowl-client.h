@@ -216,6 +216,29 @@ gfloat             gowl_client_get_alpha         (GowlClient  *self);
 void               gowl_client_set_alpha         (GowlClient  *self,
                                                    gfloat       alpha);
 
+/**
+ * gowl_client_set_rule_overrides:
+ * @self: a #GowlClient
+ * @tags: tag bitmask to stash (0 = no override)
+ * @monitor: monitor index to stash (-1 = no override)
+ * @geom_set: %TRUE if the caller also set geometry via
+ *            gowl_client_set_geometry() and wants the compositor
+ *            to honour it instead of centering
+ *
+ * Stashes initial-placement overrides for consumption by the
+ * compositor's on_client_map() path, which reads them after the
+ * @client-pre-map signal returns and before calling setmon().
+ *
+ * Intended as the only public entry point for modules that
+ * implement placement policy (e.g. the windowrules module) —
+ * writing the fields directly would require access to the
+ * private client struct.
+ */
+void gowl_client_set_rule_overrides (GowlClient *self,
+                                      guint32     tags,
+                                      gint        monitor,
+                                      gboolean    geom_set);
+
 G_END_DECLS
 
 #endif /* GOWL_CLIENT_H */

@@ -273,6 +273,11 @@ struct _GowlCompositor {
 
 	/* PIDs that should be floated + hidden on map (for embedding) */
 	GArray  *prefloat_pids;
+	/* New-style prefloat: GArray of GowlPrefloatHintEntry for
+	 * dropdown-style pid→client capture with explicit geometry
+	 * and a caller-owned on_mapped callback.  Orthogonal to the
+	 * legacy prefloat_pids embedder path. */
+	GArray  *prefloat_hints;
 
 	/* Key intercept callback (embedder hook) */
 	GowlKeyInterceptFunc key_intercept_func;
@@ -354,6 +359,21 @@ struct _GowlClient {
 
 	gchar *title;
 	gchar *app_id;
+
+	/* Transient rule-override fields populated by handlers of
+	 * GowlCompositor::client-pre-map.  on_client_map() reads them
+	 * once after the signal returns, before calling setmon(), and
+	 * never touches them again.  Zero means "no override".
+	 *
+	 * pending_rule_tags:     non-zero tag bitmask to assign instead
+	 *                        of the selected monitor's current tags
+	 * pending_rule_monitor:  target monitor index (-1 = unset)
+	 * pending_rule_geom_set: TRUE if a handler set geom manually
+	 *                        and resize_client should respect it
+	 */
+	guint32  pending_rule_tags;
+	gint     pending_rule_monitor;
+	gboolean pending_rule_geom_set;
 
 	/* XDG decoration (may be NULL if client doesn't negotiate) */
 	struct wlr_xdg_toplevel_decoration_v1 *decoration;

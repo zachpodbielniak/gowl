@@ -442,6 +442,58 @@ void gowl_compositor_prefloat_pid (GowlCompositor *self,
                                     pid_t           pid);
 
 /**
+ * GowlPrefloatMappedFunc:
+ * @compositor: the #GowlCompositor
+ * @client: the newly mapped #GowlClient that matched the hint
+ * @user_data: caller-supplied payload
+ *
+ * Callback fired from on_client_map() when a client owned by a
+ * pid registered via gowl_compositor_prefloat_pid_with_hint()
+ * first appears.  The hint has already been consumed and the
+ * client has been reparented and sized per the hint; the
+ * callback's job is to capture the client pointer and wire any
+ * destroy listeners it needs.
+ */
+typedef void (*GowlPrefloatMappedFunc) (GowlCompositor *compositor,
+                                         GowlClient     *client,
+                                         gpointer        user_data);
+
+/**
+ * gowl_compositor_prefloat_pid_with_hint:
+ * @self: a #GowlCompositor
+ * @pid: the process ID to pre-float
+ * @x: explicit x position for the mapped client
+ * @y: explicit y position
+ * @width: explicit width in pixels (including borders)
+ * @height: explicit height in pixels (including borders)
+ * @layer: #GowlSceneLayer to reparent the client to, typically
+ *         %GOWL_SCENE_LAYER_OVERLAY for dropdown-style windows
+ * @on_mapped: (scope async) (nullable): callback fired after the
+ *             client is sized and reparented; receives the captured
+ *             #GowlClient pointer for the module to store
+ * @user_data: (closure on_mapped): payload passed to @on_mapped
+ *
+ * Registers a pid hint that, on first client map, reparents the
+ * client to @layer at the specified geometry and marks it as
+ * floating.  Unlike gowl_compositor_prefloat_pid(), this path
+ * does not hide the client or mark it embedded — the client is
+ * visible and fully under the compositor's normal lifecycle
+ * management.  Used by the dropdown module to capture a spawned
+ * terminal at a fixed location on first appearance.
+ *
+ * The hint is consumed on first match.
+ */
+void gowl_compositor_prefloat_pid_with_hint (GowlCompositor         *self,
+                                               pid_t                  pid,
+                                               gint                   x,
+                                               gint                   y,
+                                               gint                   width,
+                                               gint                   height,
+                                               gint                   layer,
+                                               GowlPrefloatMappedFunc on_mapped,
+                                               gpointer               user_data);
+
+/**
  * gowl_compositor_reparent_client:
  * @self: a #GowlCompositor
  * @client: a #GowlClient
@@ -474,6 +526,26 @@ void gowl_compositor_resize_client (GowlCompositor *self,
                                      gint            y,
                                      gint            width,
                                      gint            height);
+
+/**
+ * gowl_compositor_set_floating:
+ * @self: a #GowlCompositor
+ * @client: a #GowlClient
+ * @floating: %TRUE to float, %FALSE to tile
+ *
+ * Sets @client's floating state and re-arranges the layout.
+ * Reparents the scene node to the appropriate layer (FLOAT,
+ * TILE, or FS) and re-runs arrange() so neighbouring tiled
+ * clients reclaim or yield space.  This is the public
+ * equivalent of the internal setfloating() helper; callers
+ * outside the compositor should use this instead of
+ * gowl_client_set_floating(), which only flips the flag.
+ *
+ * No-op on embedded clients, since arrange() skips them.
+ */
+void gowl_compositor_set_floating (GowlCompositor *self,
+                                    GowlClient     *client,
+                                    gboolean        floating);
 
 /**
  * gowl_compositor_reparent_client_to_client:

@@ -58,6 +58,7 @@
 #include "interfaces/gowl-gap-provider.h"
 #include "interfaces/gowl-bar-provider.h"
 #include "interfaces/gowl-scratchpad-handler.h"
+#include "interfaces/gowl-dropdown-provider.h"
 #include "interfaces/gowl-swallow-handler.h"
 #include "interfaces/gowl-sticky-handler.h"
 #include "interfaces/gowl-cursor-provider.h"

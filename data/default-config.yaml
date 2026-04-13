@@ -135,41 +135,82 @@ keybinds:
 # Window rules
 # Each rule matches clients by app-id and/or title, then applies settings.
 # Fields:
-#   app-id:   (string) Wayland app_id to match (empty or omitted = match any)
-#   title:    (string) Window title pattern to match (empty or omitted = match any)
+#   app-id:   (string) Wayland app_id to match (omitted = match any)
+#   title:    (string) Window title pattern to match (omitted = match any)
+#   regex:    (bool)   Interpret app-id/title as PCRE regexes (default: glob)
 #   tags:     (int)    Bitmask of tags to assign (0 = no tag override)
 #   floating: (bool)   Whether the client should float
 #   monitor:  (int)    Monitor index to place on (-1 = default)
+#   width:    (int)    Explicit pixel width for floated matches (0 = natural)
+#   height:   (int)    Explicit pixel height for floated matches (0 = natural)
+#   center:   (bool)   Center floated match on target monitor (default true)
 rules:
+  # Tag assignment
   - app-id: "firefox"
-    title: ""
     tags: 2
-    floating: false
-    monitor: -1
-
   - app-id: "thunderbird"
-    title: ""
     tags: 4
-    floating: false
-    monitor: -1
 
+  # Modal / popup auto-float.  Rules for apps whose window
+  # should stay above the tiled Emacs frame rather than join
+  # the layout.
+  - app-id: "zoom"
+    floating: true
+  - title: "^Zoom Meeting$"
+    floating: true
+    regex: true
+  - title: "Join Meeting"
+    floating: true
+  - app-id: "ch.protonmail.protonmail-bridge"
+    floating: true
   - app-id: "org.keepassxc.KeePassXC"
-    title: ""
-    tags: 8
+    title: "Unlock"
     floating: true
-    monitor: -1
-
+  - app-id: "pinentry"
+    floating: true
+  - app-id: "pinentry-gtk-2"
+    floating: true
+  - app-id: "pinentry-qt"
+    floating: true
   - app-id: "pavucontrol"
-    title: ""
-    tags: 0
     floating: true
-    monitor: -1
-
+  - app-id: "nm-connection-editor"
+    floating: true
+  - app-id: "blueman-manager"
+    floating: true
+  - title: "^Open File$"
+    floating: true
+  - title: "^Save As$"
+    floating: true
+  - title: "^Print$"
+    floating: true
+  - title: "^Preferences$"
+    floating: true
   - app-id: "imv"
-    title: ""
-    tags: 0
     floating: true
-    monitor: -1
+  - app-id: "feh"
+    floating: true
+
+# Guake-style dropdown windows
+# Each entry is lazy-spawned on first keybind press, captured via the
+# compositor's prefloat-hint mechanism, then toggled show/hide on
+# subsequent presses.  The window follows the currently focused output.
+# Fields:
+#   name:       (string)  Unique identifier for the dropdown
+#   spawn-cmd:  (string)  Shell command spawned on first toggle
+#   keybind:    (string)  Keybind to toggle (e.g. "Super+grave")
+#   width-pct:  (float)   Fractional width (0.0–1.0) of target monitor
+#   height-pct: (float)   Fractional height (0.0–1.0) of target monitor
+#   width:      (int)     Absolute width in pixels (overrides width-pct)
+#   height:     (int)     Absolute height in pixels (overrides height-pct)
+#   anchor:     (string)  "top" | "bottom" | "left" | "right"
+dropdowns:
+  - name: term
+    spawn-cmd: "gst"
+    keybind: "Super+grave"
+    width-pct: 1.0
+    height-pct: 0.4
+    anchor: top
 
 # Autostart commands (executed once at compositor startup)
 autostart: []

@@ -18,6 +18,7 @@
 
 #include "gowl-core-private.h"
 #include "boxed/gowl-output-mode.h"
+#include "boxed/gowl-geometry.h"
 
 /**
  * GowlMonitor:
@@ -35,6 +36,7 @@ enum {
 	SIGNAL_LAYOUT_CHANGED,
 	SIGNAL_FRAME,
 	SIGNAL_DESTROY,
+	SIGNAL_USABLE_AREA_CHANGED,
 	N_SIGNALS
 };
 
@@ -139,6 +141,77 @@ gowl_monitor_class_init(GowlMonitorClass *klass)
 		             NULL,
 		             G_TYPE_NONE,
 		             0);
+
+	/**
+	 * GowlMonitor::usable-area-changed:
+	 * @monitor: the #GowlMonitor whose canvas shrank or grew
+	 * @old_area: (transfer none): the previous usable rectangle,
+	 *   monitor-local coordinates
+	 * @new_area: (transfer none): the new usable rectangle
+	 *
+	 * Emitted whenever the monitor's "window area" (the rectangle
+	 * inside which tiled clients are arranged, i.e. the monitor
+	 * rectangle minus any wlr_layer_surface exclusive_zones such
+	 * as a bar or waybar) changes.  Integration layers — notably
+	 * cmacs `--gowl` — subscribe to this signal to reflow embedded
+	 * app buffer geometry when a layer surface maps or unmaps,
+	 * replacing emskin's racy "compute offset from
+	 * surface-height - frame-height" approach.
+	 *
+	 * Both #GowlGeometry arguments are owned by the emitter; do not
+	 * free them.  Copy them via gowl_geometry_copy() if you need to
+	 * keep them past the signal callback.
+	 */
+	monitor_signals[SIGNAL_USABLE_AREA_CHANGED] =
+		g_signal_new("usable-area-changed",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             2,
+		             GOWL_TYPE_GEOMETRY,
+		             GOWL_TYPE_GEOMETRY);
+}
+
+/**
+ * gowl_monitor_emit_usable_area_changed:
+ * @self: a #GowlMonitor
+ * @old_x: previous usable area x (monitor-local)
+ * @old_y: previous usable area y
+ * @old_w: previous usable area width
+ * @old_h: previous usable area height
+ * @new_x: new usable area x
+ * @new_y: new usable area y
+ * @new_w: new usable area width
+ * @new_h: new usable area height
+ *
+ * Convenience wrapper that allocates temporary #GowlGeometry boxed
+ * values and emits the `usable-area-changed` signal.  Intended to be
+ * called by gowl_compositor_arrangelayers after the window-area box
+ * actually changes.
+ */
+void
+gowl_monitor_emit_usable_area_changed(GowlMonitor *self,
+                                       gint old_x, gint old_y,
+                                       gint old_w, gint old_h,
+                                       gint new_x, gint new_y,
+                                       gint new_w, gint new_h)
+{
+	GowlGeometry *old_geom;
+	GowlGeometry *new_geom;
+
+	g_return_if_fail(GOWL_IS_MONITOR(self));
+
+	old_geom = gowl_geometry_new(old_x, old_y, old_w, old_h);
+	new_geom = gowl_geometry_new(new_x, new_y, new_w, new_h);
+
+	g_signal_emit(self, monitor_signals[SIGNAL_USABLE_AREA_CHANGED],
+	              0, old_geom, new_geom);
+
+	gowl_geometry_free(old_geom);
+	gowl_geometry_free(new_geom);
 }
 
 static void

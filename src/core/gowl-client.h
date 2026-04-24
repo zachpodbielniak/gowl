@@ -22,6 +22,8 @@
 #include <glib-object.h>
 #include <sys/types.h>
 
+#include "gowl-mirror.h"
+
 struct wlr_surface;
 
 G_BEGIN_DECLS
@@ -215,6 +217,84 @@ gfloat             gowl_client_get_alpha         (GowlClient  *self);
  */
 void               gowl_client_set_alpha         (GowlClient  *self,
                                                    gfloat       alpha);
+
+/* -----------------------------------------------------------
+ * Mirror views.  A mirror is an additional scene node that
+ * displays this client's root surface buffer at a separate
+ * position / size.  Used under cmacs `--gowl` to show one
+ * embedded client in multiple Emacs windows.  Standalone and
+ * nested consumers are welcome to ignore the API — GowlClient's
+ * internal mirror list stays empty until add_mirror is called.
+ * ----------------------------------------------------------- */
+
+/**
+ * gowl_client_add_mirror:
+ * @self: a #GowlClient
+ * @x: initial x position in compositor coordinates
+ * @y: initial y position
+ * @w: initial width (>0 to scale to dest size)
+ * @h: initial height
+ *
+ * Creates a new #GowlMirror attached to the compositor's
+ * overlay scene layer and registers it on @self.  The mirror
+ * displays @self's root surface buffer and updates on every
+ * client commit.  Emits `mirror-added`.
+ *
+ * Returns: (transfer none) (nullable): the new mirror, owned by
+ *          @self.  Remove via #gowl_client_remove_mirror.
+ */
+GowlMirror *
+gowl_client_add_mirror(GowlClient *self,
+                        gint        x,
+                        gint        y,
+                        gint        w,
+                        gint        h);
+
+/**
+ * gowl_client_update_mirror:
+ * @self: a #GowlClient
+ * @mirror: a mirror previously returned by
+ *   #gowl_client_add_mirror
+ * @x: new x
+ * @y: new y
+ * @w: new width
+ * @h: new height
+ *
+ * Reposition / resize the mirror.  Cheaper than remove+add
+ * because no scene graph reallocation happens.
+ */
+void
+gowl_client_update_mirror(GowlClient *self,
+                           GowlMirror *mirror,
+                           gint        x,
+                           gint        y,
+                           gint        w,
+                           gint        h);
+
+/**
+ * gowl_client_remove_mirror:
+ * @self: a #GowlClient
+ * @mirror: the mirror to remove
+ *
+ * Destroys the mirror's scene node, drops the commit listener,
+ * and releases the client's reference.  Emits `mirror-removed`.
+ * Safe with mirrors not belonging to @self (no-op).
+ */
+void
+gowl_client_remove_mirror(GowlClient *self,
+                           GowlMirror *mirror);
+
+/**
+ * gowl_client_list_mirrors:
+ * @self: a #GowlClient
+ *
+ * Returns: (transfer container) (element-type GowlMirror) (nullable):
+ *          a newly-allocated list of the client's current mirrors.
+ *          Caller frees the list with `g_list_free`; the contained
+ *          mirrors remain owned by @self.
+ */
+GList *
+gowl_client_list_mirrors(GowlClient *self);
 
 /**
  * gowl_client_set_rule_overrides:

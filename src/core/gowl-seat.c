@@ -38,6 +38,8 @@ enum {
 	SIGNAL_FOCUS_CHANGED,
 	SIGNAL_CLIPBOARD_CHANGED,
 	SIGNAL_PRIMARY_SELECTION_CHANGED,
+	SIGNAL_FOCUS_REDIRECTED,
+	SIGNAL_FOCUS_RESTORED,
 	N_SIGNALS
 };
 
@@ -128,6 +130,51 @@ gowl_seat_class_init(GowlSeatClass *klass)
 		             NULL,
 		             G_TYPE_NONE,
 		             0);
+
+	/**
+	 * GowlSeat::focus-redirected:
+	 * @seat: the #GowlSeat that emitted the signal
+	 * @from: (nullable): the client that lost focus (a
+	 *   #GowlClient, passed as a bare pointer)
+	 * @to: (nullable): the client that received focus
+	 * @reason: why the redirect was initiated
+	 *
+	 * Emitted inside #gowl_seat_push_focus_redirect immediately
+	 * after the new focus target takes effect.  Integration layers
+	 * (e.g. cmacs `--gowl`) observe this signal to record the
+	 * active token and decide when to pop.
+	 */
+	seat_signals[SIGNAL_FOCUS_REDIRECTED] =
+		g_signal_new("focus-redirected",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             3,
+		             G_TYPE_POINTER,
+		             G_TYPE_POINTER,
+		             GOWL_TYPE_FOCUS_REASON);
+
+	/**
+	 * GowlSeat::focus-restored:
+	 * @seat: the #GowlSeat that emitted the signal
+	 * @reason: the #GowlFocusReason that was recorded on push
+	 *
+	 * Emitted inside #gowl_seat_pop_focus_redirect after the saved
+	 * focus has been re-applied.
+	 */
+	seat_signals[SIGNAL_FOCUS_RESTORED] =
+		g_signal_new("focus-restored",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             GOWL_TYPE_FOCUS_REASON);
 }
 
 static void
@@ -976,4 +1023,71 @@ gowl_seat_emit_primary_selection_changed(GowlSeat *self)
 {
 	g_return_if_fail(GOWL_IS_SEAT(self));
 	g_signal_emit(self, seat_signals[SIGNAL_PRIMARY_SELECTION_CHANGED], 0);
+}
+
+/**
+ * gowl_seat_push_focus_redirect:
+ *
+ * Saves the current focused client into a new #GowlFocusToken,
+ * then transfers focus to @target.  The push/pop flow is
+ * deliberately stack-free on the seat side — tokens are plain
+ * boxed values owned by the caller, so nested redirects (two
+ * simultaneous prefix sequences, for instance) are safe as long
+ * as the consumer maintains matching token lifetimes.
+ *
+ * Emits `focus-redirected (from, to, reason)` after the focus
+ * change takes effect.
+ */
+GowlFocusToken *
+gowl_seat_push_focus_redirect(GowlSeat         *self,
+                               gpointer          target,
+                               GowlFocusReason   reason)
+{
+	gpointer        saved;
+	GowlFocusToken *token;
+
+	g_return_val_if_fail(GOWL_IS_SEAT(self), NULL);
+
+	saved = self->focused_client;
+	token = gowl_focus_token_new(saved, reason);
+
+	gowl_seat_set_focused_client(self, target);
+
+	g_signal_emit(self, seat_signals[SIGNAL_FOCUS_REDIRECTED], 0,
+	              saved, target, reason);
+
+	return token;
+}
+
+/**
+ * gowl_seat_pop_focus_redirect:
+ *
+ * Restores the focused client from @token.  Frees the token.
+ * Emits `focus-restored (reason)` afterwards.
+ *
+ * Calling with a %NULL token is a no-op (returns silently) so
+ * callers that track "am I in a redirect?" with a single Option-
+ * style pointer do not need separate guards.
+ */
+void
+gowl_seat_pop_focus_redirect(GowlSeat        *self,
+                              GowlFocusToken  *token)
+{
+	gpointer        saved;
+	GowlFocusReason reason;
+
+	g_return_if_fail(GOWL_IS_SEAT(self));
+
+	if (token == NULL)
+		return;
+
+	saved  = gowl_focus_token_get_saved_client(token);
+	reason = gowl_focus_token_get_reason(token);
+
+	gowl_seat_set_focused_client(self, saved);
+
+	g_signal_emit(self, seat_signals[SIGNAL_FOCUS_RESTORED], 0,
+	              reason);
+
+	gowl_focus_token_free(token);
 }

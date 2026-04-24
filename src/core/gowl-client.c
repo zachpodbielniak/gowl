@@ -44,6 +44,8 @@ enum {
 	SIGNAL_DESTROY,
 	SIGNAL_TAGS_CHANGED,
 	SIGNAL_STATE_CHANGED,
+	SIGNAL_MIRROR_ADDED,
+	SIGNAL_MIRROR_REMOVED,
 	N_SIGNALS
 };
 
@@ -51,12 +53,29 @@ static guint client_signals[N_SIGNALS] = { 0, };
 
 /* --- GObject lifecycle --- */
 
+/* Forward declaration from gowl-mirror.c. */
+extern void _gowl_mirror_detach_from_client(GowlMirror *self);
+
 static void
 gowl_client_dispose(GObject *object)
 {
 	GowlClient *self;
+	GList      *l;
 
 	self = GOWL_CLIENT(object);
+
+	/* Tear down mirrors BEFORE the underlying surface is freed so
+	 * each mirror can drop its commit listener while the surface
+	 * pointer is still valid.  After detach the mirrors are dead
+	 * handles and we drop our strong refs. */
+	for (l = self->mirrors; l != NULL; l = l->next) {
+		GowlMirror *m = GOWL_MIRROR(l->data);
+		if (m != NULL)
+			_gowl_mirror_detach_from_client(m);
+	}
+	g_list_free_full(self->mirrors, g_object_unref);
+	self->mirrors = NULL;
+
 	self->mon = NULL;
 	self->compositor = NULL;
 
@@ -224,6 +243,46 @@ gowl_client_class_init(GowlClientClass *klass)
 		             NULL,
 		             G_TYPE_NONE,
 		             0);
+
+	/**
+	 * GowlClient::mirror-added:
+	 * @client: the #GowlClient
+	 * @mirror: the newly-added #GowlMirror
+	 *
+	 * Emitted when #gowl_client_add_mirror creates a new mirror
+	 * scene node.  Listeners can record the mirror for
+	 * reconciliation with Emacs window state.
+	 */
+	client_signals[SIGNAL_MIRROR_ADDED] =
+		g_signal_new("mirror-added",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             GOWL_TYPE_MIRROR);
+
+	/**
+	 * GowlClient::mirror-removed:
+	 * @client: the #GowlClient
+	 * @mirror: the mirror about to be dropped
+	 *
+	 * Emitted just before the client's last reference on @mirror
+	 * is released by #gowl_client_remove_mirror.  Listeners that
+	 * index mirrors by id must drop their bookkeeping here.
+	 */
+	client_signals[SIGNAL_MIRROR_REMOVED] =
+		g_signal_new("mirror-removed",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             GOWL_TYPE_MIRROR);
 }
 
 static void
@@ -250,6 +309,8 @@ gowl_client_init(GowlClient *self)
 	self->pending_rule_tags     = 0;
 	self->pending_rule_monitor  = -1;
 	self->pending_rule_geom_set = FALSE;
+	self->mirrors               = NULL;
+	self->next_mirror_id        = 1;
 }
 
 /* --- Public API --- */
@@ -865,4 +926,117 @@ gowl_client_set_rule_overrides(
 	self->pending_rule_tags     = tags;
 	self->pending_rule_monitor  = monitor;
 	self->pending_rule_geom_set = geom_set;
+}
+
+/* -------------------------------------------------------------------
+ * Mirror views.  Implementation delegates the wlroots plumbing to
+ * gowl-mirror.c via two private helpers:
+ *   _gowl_mirror_new_for_client()      — constructs a GowlMirror
+ *                                        bound to the given scene
+ *                                        tree and surface.
+ *   _gowl_mirror_update_geometry()     — move/resize.
+ *   _gowl_mirror_detach_from_client()  — drop listeners before the
+ *                                        client's surface is freed.
+ * ------------------------------------------------------------------- */
+
+extern GowlMirror *_gowl_mirror_new_for_client(GowlClient            *client,
+                                                struct wlr_scene_tree *parent,
+                                                struct wlr_surface    *surface,
+                                                guint64                view_id,
+                                                gint                   x,
+                                                gint                   y,
+                                                gint                   w,
+                                                gint                   h);
+
+extern void _gowl_mirror_update_geometry(GowlMirror *self,
+                                          gint        x,
+                                          gint        y,
+                                          gint        w,
+                                          gint        h);
+
+GowlMirror *
+gowl_client_add_mirror(GowlClient *self,
+                        gint        x,
+                        gint        y,
+                        gint        w,
+                        gint        h)
+{
+	GowlMirror            *mirror;
+	struct wlr_scene_tree *parent;
+	struct wlr_surface    *surface;
+
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), NULL);
+	g_return_val_if_fail(self->compositor != NULL, NULL);
+	g_return_val_if_fail(self->xdg_toplevel != NULL, NULL);
+
+	/* Mirror scene node lives on the overlay layer so it floats
+	 * above tiled clients, matching emskin's behaviour when the
+	 * same client is shown in multiple Emacs windows. */
+	parent = self->compositor->layers[GOWL_SCENE_LAYER_OVERLAY];
+	surface = self->xdg_toplevel->base->surface;
+
+	mirror = _gowl_mirror_new_for_client(self,
+	                                      parent,
+	                                      surface,
+	                                      self->next_mirror_id++,
+	                                      x, y, w, h);
+	if (mirror == NULL)
+		return NULL;
+
+	self->mirrors = g_list_append(self->mirrors, g_object_ref(mirror));
+
+	g_signal_emit(self, client_signals[SIGNAL_MIRROR_ADDED], 0, mirror);
+
+	/* Drop the factory reference — the client's GList now holds
+	 * the strong ref, and callers get a borrowed pointer. */
+	g_object_unref(mirror);
+	return mirror;
+}
+
+void
+gowl_client_update_mirror(GowlClient *self,
+                           GowlMirror *mirror,
+                           gint        x,
+                           gint        y,
+                           gint        w,
+                           gint        h)
+{
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+	g_return_if_fail(GOWL_IS_MIRROR(mirror));
+
+	if (g_list_find(self->mirrors, mirror) == NULL)
+		return;
+
+	_gowl_mirror_update_geometry(mirror, x, y, w, h);
+}
+
+void
+gowl_client_remove_mirror(GowlClient *self,
+                           GowlMirror *mirror)
+{
+	GList *link;
+
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+	g_return_if_fail(GOWL_IS_MIRROR(mirror));
+
+	link = g_list_find(self->mirrors, mirror);
+	if (link == NULL)
+		return;
+
+	/* Emit before teardown so listeners see a live GObject. */
+	g_signal_emit(self, client_signals[SIGNAL_MIRROR_REMOVED],
+	              0, mirror);
+
+	_gowl_mirror_detach_from_client(mirror);
+
+	self->mirrors = g_list_delete_link(self->mirrors, link);
+	g_object_unref(mirror);
+}
+
+GList *
+gowl_client_list_mirrors(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), NULL);
+
+	return g_list_copy(self->mirrors);
 }

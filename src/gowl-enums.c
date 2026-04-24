@@ -408,4 +408,47 @@ gowl_capture_mode_get_type(void)
 	return (GType)g_type_id;
 }
 
+/* --- GowlFocusReason GType registration --- */
+
+/**
+ * gowl_focus_reason_get_type:
+ *
+ * Retrieves the #GType for #GowlFocusReason.  Carried on GowlSeat's
+ * focus-redirected / focus-restored signals to explain *why* a focus
+ * transition happened.
+ *
+ * Returns: the #GType for #GowlFocusReason
+ */
+GType
+gowl_focus_reason_get_type(void)
+{
+	static volatile gsize g_type_id = 0;
+
+	if (g_once_init_enter(&g_type_id)) {
+		static const GEnumValue values[] = {
+			{ GOWL_FOCUS_REASON_EXPLICIT,
+			  "GOWL_FOCUS_REASON_EXPLICIT",
+			  "explicit" },
+			{ GOWL_FOCUS_REASON_PREFIX_KEY,
+			  "GOWL_FOCUS_REASON_PREFIX_KEY",
+			  "prefix-key" },
+			{ GOWL_FOCUS_REASON_CLIENT_DESTROYED,
+			  "GOWL_FOCUS_REASON_CLIENT_DESTROYED",
+			  "client-destroyed" },
+			{ GOWL_FOCUS_REASON_WORKSPACE_SWITCHED,
+			  "GOWL_FOCUS_REASON_WORKSPACE_SWITCHED",
+			  "workspace-switched" },
+			{ GOWL_FOCUS_REASON_SEAT_RESET,
+			  "GOWL_FOCUS_REASON_SEAT_RESET",
+			  "seat-reset" },
+			{ 0, NULL, NULL }
+		};
+		GType type_id = g_enum_register_static("GowlFocusReason",
+		                                        values);
+		g_once_init_leave(&g_type_id, type_id);
+	}
+
+	return (GType)g_type_id;
+}
+
 #pragma GCC diagnostic pop

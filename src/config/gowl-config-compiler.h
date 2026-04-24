@@ -135,6 +135,31 @@ gowl_config_compiler_load_and_apply(
 void
 gowl_config_compiler_dispatch_ready(GowlConfigCompiler *self);
 
+/**
+ * gowl_config_compiler_probe_cmacs_gate:
+ * @so_path: path to a compiled C-config shared object
+ *
+ * Opens @so_path without executing any init function and probes for
+ * an optional root-level `evaluate_gowl_config_with_cmacs` symbol.
+ * This symbol may be either a `const gboolean` (static value) or a
+ * `gboolean(*)(void)` (thunk) — both are queried in that order.
+ *
+ * When the symbol is present and evaluates to %FALSE, the caller
+ * should NOT call #gowl_config_compiler_load_and_apply for this .so
+ * when running under cmacs `--gowl`.  When absent or %TRUE, the
+ * caller should proceed.
+ *
+ * Standalone gowl never calls this helper; it is exclusively part of
+ * the cmacs `--gowl` startup decision tree.  This means the presence
+ * or absence of the symbol is invisible to standalone usage.
+ *
+ * Returns: %TRUE if the C config should be applied by cmacs
+ *          (including when the symbol is absent), %FALSE if the user
+ *          explicitly opted out via the symbol.
+ */
+gboolean
+gowl_config_compiler_probe_cmacs_gate(const gchar *so_path);
+
 G_END_DECLS
 
 #endif /* GOWL_CONFIG_COMPILER_H */

@@ -43,6 +43,8 @@
 #define GOWL_CONFIG_DEFAULT_SLOPPYFOCUS         (TRUE)
 #define GOWL_CONFIG_DEFAULT_LOG_LEVEL           "warning"
 #define GOWL_CONFIG_DEFAULT_LOG_FILE            "~/.config/gowl/gowl.log"
+#define GOWL_CONFIG_DEFAULT_EVALUATE_GOWL_CONFIG_WITH_CMACS  (TRUE)
+#define GOWL_CONFIG_DEFAULT_EVALUATE_C_CONFIG_WITH_CMACS     (TRUE)
 
 /* Configuration file name */
 #define GOWL_CONFIG_FILENAME "config.yaml"
@@ -75,6 +77,12 @@ struct _GowlConfig {
 	/* Logging */
 	gchar   *log_level;
 	gchar   *log_file;
+
+	/* cmacs evaluation gates (root-level in YAML / C config).
+	 * Only consulted by cmacs `--gowl` startup logic; gowl's
+	 * standalone main.c never reads these fields. */
+	gboolean evaluate_gowl_config_with_cmacs;
+	gboolean evaluate_c_config_with_cmacs;
 
 	/* Keybinds - array of GowlKeybindEntry */
 	GArray  *keybinds;
@@ -227,6 +235,12 @@ gowl_config_set_property(
 		g_free(self->log_file);
 		self->log_file = g_value_dup_string(value);
 		break;
+	case GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS:
+		self->evaluate_gowl_config_with_cmacs = g_value_get_boolean(value);
+		break;
+	case GOWL_CONFIG_PROP_EVALUATE_C_CONFIG_WITH_CMACS:
+		self->evaluate_c_config_with_cmacs = g_value_get_boolean(value);
+		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
 		return;
@@ -292,6 +306,12 @@ gowl_config_get_property(
 		break;
 	case GOWL_CONFIG_PROP_LOG_FILE:
 		g_value_set_string(value, self->log_file);
+		break;
+	case GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS:
+		g_value_set_boolean(value, self->evaluate_gowl_config_with_cmacs);
+		break;
+	case GOWL_CONFIG_PROP_EVALUATE_C_CONFIG_WITH_CMACS:
+		g_value_set_boolean(value, self->evaluate_c_config_with_cmacs);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -452,6 +472,28 @@ gowl_config_class_init(GowlConfigClass *klass)
 		                     GOWL_CONFIG_DEFAULT_LOG_FILE,
 		                     G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
+	properties[GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS] =
+		g_param_spec_boolean("evaluate-gowl-config-with-cmacs",
+		                      "Evaluate Gowl Config With Cmacs",
+		                      "When FALSE, cmacs `--gowl` resets all "
+		                      "other config values to defaults after "
+		                      "parsing.  Ignored by standalone gowl.",
+		                      GOWL_CONFIG_DEFAULT_EVALUATE_GOWL_CONFIG_WITH_CMACS,
+		                      G_PARAM_READWRITE
+		                      | G_PARAM_EXPLICIT_NOTIFY
+		                      | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_EVALUATE_C_CONFIG_WITH_CMACS] =
+		g_param_spec_boolean("evaluate-c-config-with-cmacs",
+		                      "Evaluate C Config With Cmacs",
+		                      "When FALSE, cmacs `--gowl` skips loading "
+		                      "the user's C config entirely.  Ignored "
+		                      "by standalone gowl.",
+		                      GOWL_CONFIG_DEFAULT_EVALUATE_C_CONFIG_WITH_CMACS,
+		                      G_PARAM_READWRITE
+		                      | G_PARAM_EXPLICIT_NOTIFY
+		                      | G_PARAM_STATIC_STRINGS);
+
 	g_object_class_install_properties(object_class,
 	                                  GOWL_CONFIG_PROP_LAST,
 	                                  properties);
@@ -517,6 +559,10 @@ gowl_config_init(GowlConfig *self)
 	self->menu                = g_strdup(GOWL_CONFIG_DEFAULT_MENU);
 	self->log_level           = g_strdup(GOWL_CONFIG_DEFAULT_LOG_LEVEL);
 	self->log_file            = g_strdup(GOWL_CONFIG_DEFAULT_LOG_FILE);
+	self->evaluate_gowl_config_with_cmacs =
+		GOWL_CONFIG_DEFAULT_EVALUATE_GOWL_CONFIG_WITH_CMACS;
+	self->evaluate_c_config_with_cmacs =
+		GOWL_CONFIG_DEFAULT_EVALUATE_C_CONFIG_WITH_CMACS;
 
 	self->keybinds = g_array_new(FALSE, TRUE, sizeof(GowlKeybindEntry));
 	g_array_set_clear_func(self->keybinds, gowl_keybind_entry_clear);
@@ -627,6 +673,44 @@ gowl_config_apply_mapping(
 		const gchar *val = yaml_mapping_get_string_member(mapping, "log-file");
 		if (val != NULL)
 			g_object_set(self, "log-file", val, NULL);
+	}
+
+	/* cmacs evaluation gates.  Accept both snake_case (matches the
+	 * symbol form used in C configs) and kebab-case (matches every
+	 * other YAML key).  First match wins. */
+	{
+		const gchar *evaluate_gowl_keys[] = {
+			"evaluate_gowl_config_with_cmacs",
+			"evaluate-gowl-config-with-cmacs",
+			NULL
+		};
+		const gchar *evaluate_c_keys[] = {
+			"evaluate_c_config_with_cmacs",
+			"evaluate-c-config-with-cmacs",
+			NULL
+		};
+		guint k;
+
+		for (k = 0; evaluate_gowl_keys[k] != NULL; k++) {
+			if (yaml_mapping_has_member(mapping, evaluate_gowl_keys[k])) {
+				gboolean val = yaml_mapping_get_boolean_member(
+					mapping, evaluate_gowl_keys[k]);
+				g_object_set(self,
+				             "evaluate-gowl-config-with-cmacs",
+				             val, NULL);
+				break;
+			}
+		}
+		for (k = 0; evaluate_c_keys[k] != NULL; k++) {
+			if (yaml_mapping_has_member(mapping, evaluate_c_keys[k])) {
+				gboolean val = yaml_mapping_get_boolean_member(
+					mapping, evaluate_c_keys[k]);
+				g_object_set(self,
+				             "evaluate-c-config-with-cmacs",
+				             val, NULL);
+				break;
+			}
+		}
 	}
 
 	/* Keybinds: mapping of "Mod+Key": { action: <name>, arg: "<value>" }
@@ -1111,6 +1195,16 @@ gowl_config_generate_yaml(GowlConfig *self)
 	g_string_append_printf(yaml, "log-level: \"%s\"\n", self->log_level);
 	g_string_append_printf(yaml, "log-file: \"%s\"\n", self->log_file);
 
+	/* cmacs evaluation gates (kebab-case; snake_case also accepted on load) */
+	g_string_append_printf(yaml,
+	                       "evaluate-gowl-config-with-cmacs: %s\n",
+	                       self->evaluate_gowl_config_with_cmacs
+	                       ? "true" : "false");
+	g_string_append_printf(yaml,
+	                       "evaluate-c-config-with-cmacs: %s\n",
+	                       self->evaluate_c_config_with_cmacs
+	                       ? "true" : "false");
+
 	/* Keybinds */
 	if (self->keybinds->len > 0) {
 		g_string_append(yaml, "\nkeybinds:\n");
@@ -1259,6 +1353,111 @@ gowl_config_get_log_file(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_LOG_FILE);
 	return self->log_file;
+}
+
+/* --- cmacs evaluation gates --- */
+
+gboolean
+gowl_config_get_evaluate_gowl_config_with_cmacs(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_EVALUATE_GOWL_CONFIG_WITH_CMACS);
+	return self->evaluate_gowl_config_with_cmacs;
+}
+
+void
+gowl_config_set_evaluate_gowl_config_with_cmacs(GowlConfig *self,
+                                                 gboolean    value)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	value = value ? TRUE : FALSE;
+	if (self->evaluate_gowl_config_with_cmacs == value)
+		return;
+
+	self->evaluate_gowl_config_with_cmacs = value;
+	g_object_notify_by_pspec(
+		G_OBJECT(self),
+		properties[GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS]);
+	g_signal_emit(self, signals[SIGNAL_CHANGED], 0,
+	              "evaluate-gowl-config-with-cmacs");
+}
+
+gboolean
+gowl_config_get_evaluate_c_config_with_cmacs(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_EVALUATE_C_CONFIG_WITH_CMACS);
+	return self->evaluate_c_config_with_cmacs;
+}
+
+void
+gowl_config_set_evaluate_c_config_with_cmacs(GowlConfig *self,
+                                              gboolean    value)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	value = value ? TRUE : FALSE;
+	if (self->evaluate_c_config_with_cmacs == value)
+		return;
+
+	self->evaluate_c_config_with_cmacs = value;
+	g_object_notify_by_pspec(
+		G_OBJECT(self),
+		properties[GOWL_CONFIG_PROP_EVALUATE_C_CONFIG_WITH_CMACS]);
+	g_signal_emit(self, signals[SIGNAL_CHANGED], 0,
+	              "evaluate-c-config-with-cmacs");
+}
+
+/**
+ * gowl_config_reset_values_to_defaults:
+ *
+ * Restores every config property except the two cmacs evaluation
+ * gates to its compile-time default.  Used by cmacs `--gowl` startup
+ * when `evaluate-gowl-config-with-cmacs` is %FALSE: the YAML was
+ * parsed fully (so notify:: fired for user intent) but the resulting
+ * state is discarded except for the gates themselves.
+ *
+ * Also clears keybinds, rules, dropdowns, and module configs.  Emits
+ * "reloaded" at the end so downstream listeners treat this like a
+ * full reload.
+ */
+void
+gowl_config_reset_values_to_defaults(GowlConfig *self)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	g_object_freeze_notify(G_OBJECT(self));
+
+	g_object_set(self,
+	             "border-width",        GOWL_CONFIG_DEFAULT_BORDER_WIDTH,
+	             "border-color-focus",  GOWL_CONFIG_DEFAULT_BORDER_COLOR_FOCUS,
+	             "border-color-unfocus", GOWL_CONFIG_DEFAULT_BORDER_COLOR_UNFOCUS,
+	             "border-color-urgent",  GOWL_CONFIG_DEFAULT_BORDER_COLOR_URGENT,
+	             "mfact",               GOWL_CONFIG_DEFAULT_MFACT,
+	             "nmaster",             GOWL_CONFIG_DEFAULT_NMASTER,
+	             "tag-count",           GOWL_CONFIG_DEFAULT_TAG_COUNT,
+	             "repeat-rate",         GOWL_CONFIG_DEFAULT_REPEAT_RATE,
+	             "repeat-delay",        GOWL_CONFIG_DEFAULT_REPEAT_DELAY,
+	             "terminal",            GOWL_CONFIG_DEFAULT_TERMINAL,
+	             "menu",                GOWL_CONFIG_DEFAULT_MENU,
+	             "sloppyfocus",         GOWL_CONFIG_DEFAULT_SLOPPYFOCUS,
+	             "log-level",           GOWL_CONFIG_DEFAULT_LOG_LEVEL,
+	             "log-file",            GOWL_CONFIG_DEFAULT_LOG_FILE,
+	             NULL);
+
+	if (self->keybinds != NULL)
+		g_array_set_size(self->keybinds, 0);
+	if (self->rules != NULL)
+		g_ptr_array_set_size(self->rules, 0);
+	if (self->dropdowns != NULL)
+		g_ptr_array_set_size(self->dropdowns, 0);
+	if (self->module_configs != NULL)
+		g_hash_table_remove_all(self->module_configs);
+
+	g_object_thaw_notify(G_OBJECT(self));
+
+	g_signal_emit(self, signals[SIGNAL_RELOADED], 0);
 }
 
 /* --- Keybind management --- */

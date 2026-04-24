@@ -638,3 +638,48 @@ gowl_config_compiler_dispatch_ready(GowlConfigCompiler *self)
 	config_ready_fn = (void (*)(void))symbol;
 	config_ready_fn();
 }
+
+/**
+ * gowl_config_compiler_probe_cmacs_gate:
+ *
+ * Opens the .so briefly to query the user's opt-out gate without
+ * running `gowl_config_init`.  Accepts either a static gboolean or a
+ * thunk returning gboolean.  Missing symbol is treated as TRUE (the
+ * common case: users who wrote their C config before this gate
+ * existed still have their config applied by cmacs by default).
+ */
+gboolean
+gowl_config_compiler_probe_cmacs_gate(const gchar *so_path)
+{
+	GModule  *module;
+	gpointer  symbol;
+	gboolean  allow;
+
+	g_return_val_if_fail(so_path != NULL, TRUE);
+
+	module = g_module_open(so_path, G_MODULE_BIND_LAZY);
+	if (module == NULL) {
+		g_debug("gowl_config: cannot open '%s' to probe cmacs gate: %s",
+		        so_path, g_module_error());
+		return TRUE;
+	}
+
+	allow = TRUE;
+
+	/* Prefer a thunk (gboolean(*)(void)) — lets the config compute
+	 * the gate dynamically, e.g. by inspecting an env var.  Fall
+	 * back to a static gboolean value. */
+	if (g_module_symbol(module,
+	                    "evaluate_gowl_config_with_cmacs_fn",
+	                    &symbol) && symbol != NULL) {
+		gboolean (*fn)(void) = (gboolean (*)(void))symbol;
+		allow = fn();
+	} else if (g_module_symbol(module,
+	                           "evaluate_gowl_config_with_cmacs",
+	                           &symbol) && symbol != NULL) {
+		allow = *(const gboolean *)symbol;
+	}
+
+	g_module_close(module);
+	return allow ? TRUE : FALSE;
+}

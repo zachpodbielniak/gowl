@@ -39,6 +39,8 @@ LIB_SRCS := \
 	src/boxed/gowl-output-mode.c \
 	src/boxed/gowl-process-info.c \
 	src/boxed/gowl-capture-result.c \
+	src/boxed/gowl-focus-token.c \
+	src/boxed/gowl-workspace-id.c \
 	src/module/gowl-module.c \
 	src/module/gowl-module-manager.c \
 	src/module/gowl-module-info.c \
@@ -65,6 +67,10 @@ LIB_SRCS := \
 	src/interfaces/gowl-lock-handler.c \
 	src/interfaces/gowl-screenshot-provider.c \
 	src/interfaces/gowl-recording-provider.c \
+	src/interfaces/gowl-prefix-key-policy.c \
+	src/interfaces/gowl-session-provider.c \
+	src/interfaces/gowl-embed-renderer.c \
+	src/interfaces/gowl-workspace-provider.c \
 	src/config/gowl-config.c \
 	src/config/gowl-config-compiler.c \
 	src/config/gowl-keybind.c \
@@ -83,7 +89,15 @@ LIB_SRCS := \
 	src/core/gowl-bar.c \
 	src/core/gowl-session-lock.c \
 	src/core/gowl-idle-manager.c \
-	src/core/gowl-decor.c
+	src/core/gowl-decor.c \
+	src/core/gowl-static-prefix-key-policy.c \
+	src/core/gowl-session-default.c \
+	src/core/gowl-workspace.c \
+	src/core/gowl-frame-workspace-manager.c \
+	src/core/gowl-cairo-embed-renderer.c \
+	src/core/gowl-gl-embed-renderer.c \
+	src/core/gowl-mirror.c \
+	src/protocols/gowl-ext-workspace.c
 
 # Header files (for GIR scanner and installation)
 LIB_HDRS := \
@@ -100,6 +114,8 @@ LIB_HDRS := \
 	src/boxed/gowl-rule.h \
 	src/boxed/gowl-output-mode.h \
 	src/boxed/gowl-process-info.h \
+	src/boxed/gowl-focus-token.h \
+	src/boxed/gowl-workspace-id.h \
 	src/module/gowl-module.h \
 	src/module/gowl-module-manager.h \
 	src/module/gowl-module-info.h \
@@ -124,6 +140,10 @@ LIB_HDRS := \
 	src/interfaces/gowl-cursor-provider.h \
 	src/interfaces/gowl-wallpaper-provider.h \
 	src/interfaces/gowl-lock-handler.h \
+	src/interfaces/gowl-prefix-key-policy.h \
+	src/interfaces/gowl-session-provider.h \
+	src/interfaces/gowl-embed-renderer.h \
+	src/interfaces/gowl-workspace-provider.h \
 	src/config/gowl-config.h \
 	src/config/gowl-config-compiler.h \
 	src/config/gowl-keybind.h \
@@ -142,7 +162,15 @@ LIB_HDRS := \
 	src/core/gowl-bar.h \
 	src/core/gowl-session-lock.h \
 	src/core/gowl-idle-manager.h \
-	src/core/gowl-decor.h
+	src/core/gowl-decor.h \
+	src/core/gowl-static-prefix-key-policy.h \
+	src/core/gowl-session-default.h \
+	src/core/gowl-workspace.h \
+	src/core/gowl-frame-workspace-manager.h \
+	src/core/gowl-cairo-embed-renderer.h \
+	src/core/gowl-gl-embed-renderer.h \
+	src/core/gowl-mirror.h \
+	src/protocols/gowl-ext-workspace.h
 
 # yaml-glib sources (built-in dependency)
 YAMLGLIB_SRCS := \
@@ -201,6 +229,13 @@ BAR_SRCS := \
 
 # Object files
 LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
+
+# Generated wayland-scanner private-code objects live at project
+# root and need a dedicated path in the object tree.  Their
+# dependency on the matching `-protocol.h' is already declared via
+# the $(PROTO_HDRS) rule above.
+LIB_OBJS += $(OBJDIR)/ext-workspace-v1-protocol.o
+
 YAMLGLIB_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(YAMLGLIB_SRCS))
 CRISPY_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(CRISPY_SRCS))
 MAIN_OBJ := $(OBJDIR)/main.o

@@ -382,6 +382,39 @@ typedef enum {
 #define GOWL_TYPE_CAPTURE_MODE (gowl_capture_mode_get_type())
 GType gowl_capture_mode_get_type(void) G_GNUC_CONST;
 
+/* --- GowlFocusReason --- */
+
+/**
+ * GowlFocusReason:
+ * @GOWL_FOCUS_REASON_EXPLICIT: Focus changed by an explicit API call
+ *   (e.g. `gowl-focus-client` from Elisp, or a client requesting
+ *   activation via xdg_activation).
+ * @GOWL_FOCUS_REASON_PREFIX_KEY: A prefix key press matched the
+ *   compositor's #GowlPrefixKeyPolicy and focus was redirected to
+ *   the Emacs client.  Used by cmacs `--gowl`.
+ * @GOWL_FOCUS_REASON_CLIENT_DESTROYED: Focus was moved because the
+ *   previously focused client was destroyed / unmapped.
+ * @GOWL_FOCUS_REASON_WORKSPACE_SWITCHED: Focus changed because the
+ *   active workspace changed.
+ * @GOWL_FOCUS_REASON_SEAT_RESET: Internal compositor reset (e.g.
+ *   session lock, output hotplug) cleared focus.
+ *
+ * Why did the seat's keyboard focus change?  Carried on the
+ * #GowlSeat `focus-redirected` and `focus-restored` signals so
+ * listeners can distinguish user-driven from system-driven focus
+ * transitions.
+ */
+typedef enum {
+	GOWL_FOCUS_REASON_EXPLICIT,
+	GOWL_FOCUS_REASON_PREFIX_KEY,
+	GOWL_FOCUS_REASON_CLIENT_DESTROYED,
+	GOWL_FOCUS_REASON_WORKSPACE_SWITCHED,
+	GOWL_FOCUS_REASON_SEAT_RESET
+} GowlFocusReason;
+
+#define GOWL_TYPE_FOCUS_REASON (gowl_focus_reason_get_type())
+GType gowl_focus_reason_get_type(void) G_GNUC_CONST;
+
 G_END_DECLS
 
 #endif /* GOWL_ENUMS_H */

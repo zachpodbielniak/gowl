@@ -66,9 +66,15 @@
 #include "interfaces/gowl-lock-handler.h"
 #include "interfaces/gowl-screenshot-provider.h"
 #include "interfaces/gowl-recording-provider.h"
+#include "interfaces/gowl-prefix-key-policy.h"
+#include "interfaces/gowl-session-provider.h"
+#include "interfaces/gowl-embed-renderer.h"
+#include "interfaces/gowl-workspace-provider.h"
 
 /* Boxed types */
 #include "boxed/gowl-capture-result.h"
+#include "boxed/gowl-focus-token.h"
+#include "boxed/gowl-workspace-id.h"
 
 /* Configuration */
 #include "config/gowl-config.h"
@@ -91,6 +97,13 @@
 #include "core/gowl-bar.h"
 #include "core/gowl-session-lock.h"
 #include "core/gowl-idle-manager.h"
+#include "core/gowl-static-prefix-key-policy.h"
+#include "core/gowl-session-default.h"
+#include "core/gowl-mirror.h"
+#include "core/gowl-workspace.h"
+#include "core/gowl-frame-workspace-manager.h"
+#include "core/gowl-cairo-embed-renderer.h"
+#include "core/gowl-gl-embed-renderer.h"
 
 /* IPC */
 #include "ipc/gowl-ipc.h"

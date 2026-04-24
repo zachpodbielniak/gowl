@@ -5,7 +5,8 @@
 PROTO_HDRS := \
 	xdg-shell-protocol.h \
 	wlr-layer-shell-unstable-v1-protocol.h \
-	cursor-shape-v1-protocol.h
+	cursor-shape-v1-protocol.h \
+	ext-workspace-v1-protocol.h
 
 # All source objects depend on generated version header and protocol headers
 $(LIB_OBJS) $(MAIN_OBJ): src/gowl-version.h $(PROTO_HDRS)
@@ -44,6 +45,18 @@ $(OBJDIR)/ipc/%.o: src/ipc/%.c | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJDIR)/util/%.o: src/util/%.c | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJDIR)/protocols/%.o: src/protocols/%.c | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Generated wayland-scanner private-code lives in the project root
+# (alongside the *-protocol.h files it needs).  The LIB_SRCS entry
+# is `ext-workspace-v1-protocol.c' (no src/ prefix), so route it to
+# a dedicated pattern rule at the root.
+$(OBJDIR)/ext-workspace-v1-protocol.o: ext-workspace-v1-protocol.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -154,6 +167,17 @@ wlr-layer-shell-unstable-v1-protocol.h:
 cursor-shape-v1-protocol.h:
 	$(WAYLAND_SCANNER) enum-header \
 		$(WAYLAND_PROTOCOLS_DIR)/staging/cursor-shape/cursor-shape-v1.xml $@
+
+# ext-workspace-v1: staging protocol for workspace discovery /
+# activation by external bars.  Generates BOTH a server header and
+# the private-code dispatcher; consumed by gowl-ext-workspace.c.
+ext-workspace-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		$(WAYLAND_PROTOCOLS_DIR)/staging/ext-workspace/ext-workspace-v1.xml $@
+
+ext-workspace-v1-protocol.c: ext-workspace-v1-protocol.h
+	$(WAYLAND_SCANNER) private-code \
+		$(WAYLAND_PROTOCOLS_DIR)/staging/ext-workspace/ext-workspace-v1.xml $@
 
 # GIR generation
 $(OUTDIR)/$(GIR_FILE): $(LIB_SRCS) $(LIB_HDRS) | $(OUTDIR)/$(LIB_SHARED_FULL)

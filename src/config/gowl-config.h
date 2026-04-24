@@ -128,6 +128,15 @@ typedef struct {
  * @GOWL_CONFIG_PROP_SLOPPYFOCUS: "sloppyfocus" property.
  * @GOWL_CONFIG_PROP_LOG_LEVEL: "log-level" property.
  * @GOWL_CONFIG_PROP_LOG_FILE: "log-file" property.
+ * @GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS:
+ *   "evaluate-gowl-config-with-cmacs" property.  cmacs-only semantic:
+ *   when %FALSE, cmacs `--gowl` startup resets all other values in the
+ *   config back to defaults after parsing.  Ignored by gowl's
+ *   standalone main.
+ * @GOWL_CONFIG_PROP_EVALUATE_C_CONFIG_WITH_CMACS:
+ *   "evaluate-c-config-with-cmacs" property.  cmacs-only semantic:
+ *   when %FALSE, cmacs `--gowl` startup skips loading the user's C
+ *   config entirely.  Ignored by gowl's standalone main.
  * @GOWL_CONFIG_PROP_LAST: sentinel; total number of properties.
  *
  * Property identifiers for #GowlConfig GObject properties.
@@ -148,6 +157,8 @@ typedef enum {
 	GOWL_CONFIG_PROP_SLOPPYFOCUS,
 	GOWL_CONFIG_PROP_LOG_LEVEL,
 	GOWL_CONFIG_PROP_LOG_FILE,
+	GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS,
+	GOWL_CONFIG_PROP_EVALUATE_C_CONFIG_WITH_CMACS,
 	GOWL_CONFIG_PROP_LAST
 } GowlConfigProp;
 
@@ -346,6 +357,75 @@ const gchar *gowl_config_get_log_level(GowlConfig *self);
  * Returns: (transfer none): the log file path, or "stderr" for stderr only
  */
 const gchar *gowl_config_get_log_file(GowlConfig *self);
+
+/**
+ * gowl_config_get_evaluate_gowl_config_with_cmacs:
+ * @self: a #GowlConfig
+ *
+ * Reads the root-level cmacs evaluation gate.  When %FALSE, cmacs
+ * `--gowl` startup resets all other config values to their defaults
+ * after the YAML / C config load, preventing user customisations from
+ * affecting the embedded compositor.  Standalone and nested gowl
+ * ignore this flag; it is semantically a cmacs-only hint carried
+ * through the #GowlConfig property surface so it is introspectable.
+ *
+ * Returns: %TRUE if cmacs should honour this config
+ */
+gboolean
+gowl_config_get_evaluate_gowl_config_with_cmacs(GowlConfig *self);
+
+/**
+ * gowl_config_set_evaluate_gowl_config_with_cmacs:
+ * @self: a #GowlConfig
+ * @value: new value
+ *
+ * Sets the root-level cmacs evaluation gate.  Emits `notify::
+ * evaluate-gowl-config-with-cmacs` when the value changes.
+ */
+void
+gowl_config_set_evaluate_gowl_config_with_cmacs(GowlConfig *self,
+                                                 gboolean    value);
+
+/**
+ * gowl_config_get_evaluate_c_config_with_cmacs:
+ * @self: a #GowlConfig
+ *
+ * Reads the C-config evaluation gate.  When %FALSE, cmacs `--gowl`
+ * startup skips loading the user's C config entirely.  Independent
+ * from #gowl_config_get_evaluate_gowl_config_with_cmacs so a user can
+ * apply YAML but not C, or C but not YAML, or neither.  Standalone
+ * and nested gowl ignore this flag.
+ *
+ * Returns: %TRUE if cmacs should load the C config
+ */
+gboolean
+gowl_config_get_evaluate_c_config_with_cmacs(GowlConfig *self);
+
+/**
+ * gowl_config_set_evaluate_c_config_with_cmacs:
+ * @self: a #GowlConfig
+ * @value: new value
+ *
+ * Sets the C-config evaluation gate.  Emits `notify::
+ * evaluate-c-config-with-cmacs` when the value changes.
+ */
+void
+gowl_config_set_evaluate_c_config_with_cmacs(GowlConfig *self,
+                                              gboolean    value);
+
+/**
+ * gowl_config_reset_values_to_defaults:
+ * @self: a #GowlConfig
+ *
+ * Resets every config property except the two cmacs evaluation gates
+ * (`evaluate-gowl-config-with-cmacs` and
+ * `evaluate-c-config-with-cmacs`) back to its compile-time default.
+ * Also clears keybinds, rules, dropdowns, and module configs.  Used
+ * by cmacs `--gowl` when `evaluate-gowl-config-with-cmacs` is %FALSE
+ * to discard YAML-loaded customisations while keeping the gates
+ * themselves observable.
+ */
+void gowl_config_reset_values_to_defaults(GowlConfig *self);
 
 /* --- Keybinds --- */
 

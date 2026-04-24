@@ -21,6 +21,9 @@
 
 #include <glib-object.h>
 
+#include "../gowl-enums.h"
+#include "../boxed/gowl-focus-token.h"
+
 struct wl_event_loop;
 
 G_BEGIN_DECLS
@@ -230,6 +233,47 @@ gboolean  gowl_seat_read_primary_selection_async (
 	struct wl_event_loop           *loop,
 	GowlSeatClipboardReadCallback   callback,
 	gpointer                        user_data);
+
+/**
+ * gowl_seat_push_focus_redirect:
+ * @self: a #GowlSeat
+ * @target: (nullable): the client the caller wants to transfer
+ *   keyboard focus to.  %NULL is valid and clears the focus while
+ *   still recording a token for a later pop.
+ * @reason: why the redirect is being initiated
+ *
+ * Records the currently focused client in a new #GowlFocusToken,
+ * then transfers focus to @target.  The seat holds no ownership
+ * over the returned token beyond what is required for the
+ * corresponding pop — callers are expected to keep the token alive
+ * between push and pop and pass it verbatim to
+ * #gowl_seat_pop_focus_redirect.  Tokens can be freed at any time
+ * if a pop is not desired (the saved focus is lost in that case).
+ *
+ * Emits the `focus-redirected` signal on success.
+ *
+ * Returns: (transfer full) (nullable): a new token to pass to pop,
+ *   or %NULL when the seat is invalid / no-op.
+ */
+GowlFocusToken *
+gowl_seat_push_focus_redirect(GowlSeat         *self,
+                               gpointer          target,
+                               GowlFocusReason   reason);
+
+/**
+ * gowl_seat_pop_focus_redirect:
+ * @self: a #GowlSeat
+ * @token: (transfer full) (nullable): the token returned by
+ *   #gowl_seat_push_focus_redirect.  Ownership transfers to the
+ *   seat — the token is freed before this function returns.
+ *
+ * Restores the focused client recorded in @token.  When @token is
+ * %NULL this is a no-op.  Emits the `focus-restored` signal with
+ * the token's #GowlFocusReason.
+ */
+void
+gowl_seat_pop_focus_redirect(GowlSeat        *self,
+                              GowlFocusToken  *token);
 
 G_END_DECLS
 

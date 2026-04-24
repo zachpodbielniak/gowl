@@ -43,6 +43,8 @@
 #include "core/gowl-bar.h"
 #include "core/gowl-layer-surface.h"
 #include "boxed/gowl-process-info.h"
+#include "interfaces/gowl-prefix-key-policy.h"
+#include "protocols/gowl-ext-workspace.h"
 
 /* wayland */
 #include <wayland-server-core.h>
@@ -186,6 +188,26 @@ struct _GowlCompositor {
 	GowlConfig                   *config;       /* borrowed ref */
 	GowlModuleManager            *module_mgr;   /* borrowed ref */
 	GowlIpc                      *ipc;          /* borrowed ref (may be NULL) */
+
+	/* Runtime-pluggable key policy.  When non-NULL, the compositor
+	 * consults it on each key press to decide whether to redirect
+	 * keyboard focus to an alternate target (typically the Emacs
+	 * client under cmacs `--gowl`).  Always NULL in standalone and
+	 * nested gowl, so the intercept path short-circuits. */
+	GowlPrefixKeyPolicy          *prefix_key_policy; /* owned, nullable */
+
+	/* Runtime-pluggable workspace manager.  When non-NULL the
+	 * compositor becomes authoritative for the workspace-* signals.
+	 * Default for standalone and nested: NULL (no workspaces; the
+	 * global-tag model reigns).  Cmacs `--gowl' installs a
+	 * #GowlFrameWorkspaceManager at startup. */
+	GowlWorkspaceProvider        *workspace_provider; /* owned, nullable */
+
+	/* ext-workspace-v1 server.  Registered during
+	 * gowl_compositor_start() so external bars (waybar / eww) see
+	 * workspace state once a GowlWorkspaceProvider is installed.
+	 * Opaque to the compositor — defined in protocols/gowl-ext-workspace.c. */
+	gpointer                      ext_workspace_manager;
 
 	/* input sub-objects (owned by compositor, created in start) */
 	struct wlr_seat              *wlr_seat;
@@ -391,6 +413,17 @@ struct _GowlClient {
 	struct wl_listener maximize;
 	struct wl_listener set_decoration_mode;
 	struct wl_listener destroy_decoration;
+
+	/* Mirror views: additional scene nodes that duplicate this
+	 * client's root surface buffer.  Populated by
+	 * gowl_client_add_mirror(); each entry is a strong GowlMirror
+	 * ref that stays alive until gowl_client_remove_mirror() or
+	 * client destruction.  next_mirror_id is a monotonic
+	 * per-client allocator.  Both fields stay zero-initialised in
+	 * standalone and nested modes until the cmacs integration
+	 * layer calls the mirror API. */
+	GList   *mirrors;        /* GList of GowlMirror* (owned) */
+	guint64  next_mirror_id;
 };
 
 /**

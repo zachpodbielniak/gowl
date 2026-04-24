@@ -20,6 +20,8 @@
 #define GOWL_COMPOSITOR_H
 
 #include "gowl-types.h"
+#include "../interfaces/gowl-prefix-key-policy.h"
+#include "../interfaces/gowl-workspace-provider.h"
 #include <wayland-server-core.h>
 #include <sys/types.h>
 
@@ -93,6 +95,98 @@ void            gowl_compositor_set_ipc (GowlCompositor *self,
  * Returns: (transfer none) (nullable): the current #GowlIpc
  */
 GowlIpc        *gowl_compositor_get_ipc (GowlCompositor *self);
+
+/**
+ * gowl_compositor_set_prefix_key_policy:
+ * @self: a #GowlCompositor
+ * @policy: (transfer none) (nullable): a #GowlPrefixKeyPolicy, or %NULL
+ *
+ * Installs a runtime-pluggable key policy consulted on every key
+ * press.  When the policy returns %TRUE for a press, the key
+ * intercept path (used by cmacs `--gowl`) redirects keyboard focus
+ * to the Emacs client.  Passing %NULL uninstalls any previous
+ * policy and restores standalone-compositor behavior (no redirect).
+ *
+ * The compositor takes a reference on @policy.  Emits
+ * `notify::prefix-key-policy`.  Standalone gowl never calls this —
+ * the default value is %NULL which makes the intercept a no-op.
+ */
+void
+gowl_compositor_set_prefix_key_policy(GowlCompositor      *self,
+                                       GowlPrefixKeyPolicy *policy);
+
+/**
+ * gowl_compositor_get_prefix_key_policy:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the currently installed
+ *          policy, or %NULL if none is set.
+ */
+GowlPrefixKeyPolicy *
+gowl_compositor_get_prefix_key_policy(GowlCompositor *self);
+
+/**
+ * gowl_compositor_set_workspace_provider:
+ * @self: a #GowlCompositor
+ * @provider: (transfer none) (nullable): a #GowlWorkspaceProvider,
+ *   or %NULL to uninstall.
+ *
+ * Installs the workspace manager.  The compositor takes a
+ * reference on @provider and becomes the authoritative emitter of
+ * the three workspace signals: `workspace-created`,
+ * `workspace-switched`, `workspace-destroyed`.
+ *
+ * Standalone gowl never calls this; workspaces are the
+ * cmacs `--gowl` model (1:1 with Emacs frames).  Passing %NULL
+ * returns the compositor to the no-workspace baseline.
+ */
+void
+gowl_compositor_set_workspace_provider(GowlCompositor        *self,
+                                        GowlWorkspaceProvider *provider);
+
+/**
+ * gowl_compositor_get_workspace_provider:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the installed workspace
+ *          provider, or %NULL.
+ */
+GowlWorkspaceProvider *
+gowl_compositor_get_workspace_provider(GowlCompositor *self);
+
+/**
+ * gowl_compositor_emit_workspace_created:
+ * @self: a #GowlCompositor
+ * @workspace: the new #GowlWorkspace
+ *
+ * Convenience for provider implementations that create a
+ * workspace and want the compositor's signal to fire.  Purely a
+ * wrapper around `g_signal_emit_by_name` so the signal is the
+ * single observable point for listeners.
+ */
+void
+gowl_compositor_emit_workspace_created(GowlCompositor *self,
+                                        GowlWorkspace  *workspace);
+
+/**
+ * gowl_compositor_emit_workspace_switched:
+ * @self: a #GowlCompositor
+ * @from: (nullable): the previously-active workspace
+ * @to: (nullable): the newly-active workspace
+ */
+void
+gowl_compositor_emit_workspace_switched(GowlCompositor *self,
+                                         GowlWorkspace  *from,
+                                         GowlWorkspace  *to);
+
+/**
+ * gowl_compositor_emit_workspace_destroyed:
+ * @self: a #GowlCompositor
+ * @workspace: the workspace that was removed
+ */
+void
+gowl_compositor_emit_workspace_destroyed(GowlCompositor *self,
+                                          GowlWorkspace  *workspace);
 
 /**
  * gowl_compositor_start:

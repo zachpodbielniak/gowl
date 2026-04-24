@@ -56,6 +56,9 @@ enum {
 	SIGNAL_CLIENT_REMOVED,
 	SIGNAL_FOCUS_CHANGED,
 	SIGNAL_FRAME_RENDERED,
+	SIGNAL_WORKSPACE_CREATED,
+	SIGNAL_WORKSPACE_SWITCHED,
+	SIGNAL_WORKSPACE_DESTROYED,
 	N_SIGNALS
 };
 
@@ -241,6 +244,14 @@ gowl_compositor_dispose(GObject *object)
 	g_clear_object(&self->kb_group_obj);
 	g_clear_object(&self->idle_mgr);
 	g_clear_object(&self->bar);
+	g_clear_object(&self->prefix_key_policy);
+	g_clear_object(&self->workspace_provider);
+
+	if (self->ext_workspace_manager != NULL) {
+		gowl_ext_workspace_manager_unregister(
+			self->ext_workspace_manager);
+		self->ext_workspace_manager = NULL;
+	}
 
 	G_OBJECT_CLASS(gowl_compositor_parent_class)->dispose(object);
 }
@@ -294,6 +305,65 @@ gowl_compositor_finalize(GObject *object)
 }
 
 /* -----------------------------------------------------------
+ * properties
+ * ----------------------------------------------------------- */
+
+enum {
+	COMPOSITOR_PROP_0 = 0,
+	COMPOSITOR_PROP_PREFIX_KEY_POLICY,
+	COMPOSITOR_PROP_WORKSPACE_PROVIDER,
+	COMPOSITOR_N_PROPS
+};
+
+static GParamSpec *compositor_props[COMPOSITOR_N_PROPS] = { NULL };
+
+static void
+gowl_compositor_set_property(GObject      *object,
+                              guint         prop_id,
+                              const GValue *value,
+                              GParamSpec   *pspec)
+{
+	GowlCompositor *self = GOWL_COMPOSITOR(object);
+
+	switch (prop_id) {
+	case COMPOSITOR_PROP_PREFIX_KEY_POLICY:
+		gowl_compositor_set_prefix_key_policy(
+			self,
+			(GowlPrefixKeyPolicy *)g_value_get_object(value));
+		break;
+	case COMPOSITOR_PROP_WORKSPACE_PROVIDER:
+		gowl_compositor_set_workspace_provider(
+			self,
+			(GowlWorkspaceProvider *)g_value_get_object(value));
+		break;
+	default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
+		break;
+	}
+}
+
+static void
+gowl_compositor_get_property(GObject    *object,
+                              guint       prop_id,
+                              GValue     *value,
+                              GParamSpec *pspec)
+{
+	GowlCompositor *self = GOWL_COMPOSITOR(object);
+
+	switch (prop_id) {
+	case COMPOSITOR_PROP_PREFIX_KEY_POLICY:
+		g_value_set_object(value, self->prefix_key_policy);
+		break;
+	case COMPOSITOR_PROP_WORKSPACE_PROVIDER:
+		g_value_set_object(value, self->workspace_provider);
+		break;
+	default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
+		break;
+	}
+}
+
+/* -----------------------------------------------------------
  * class / instance init
  * ----------------------------------------------------------- */
 
@@ -304,8 +374,46 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 
 	object_class = G_OBJECT_CLASS(klass);
 
-	object_class->dispose  = gowl_compositor_dispose;
-	object_class->finalize = gowl_compositor_finalize;
+	object_class->dispose      = gowl_compositor_dispose;
+	object_class->finalize     = gowl_compositor_finalize;
+	object_class->set_property = gowl_compositor_set_property;
+	object_class->get_property = gowl_compositor_get_property;
+
+	/**
+	 * GowlCompositor:prefix-key-policy:
+	 *
+	 * A pluggable #GowlPrefixKeyPolicy that the compositor queries on
+	 * every key press.  When set and the policy returns %TRUE for a
+	 * press, the focus-redirect path kicks in and the key is routed
+	 * to the Emacs client (used by cmacs `--gowl`).  %NULL by default
+	 * for standalone/nested gowl — no redirect happens then.
+	 */
+	compositor_props[COMPOSITOR_PROP_PREFIX_KEY_POLICY] =
+		g_param_spec_object("prefix-key-policy",
+		                     "Prefix Key Policy",
+		                     "Policy that decides when key presses "
+		                     "redirect focus to Emacs",
+		                     GOWL_TYPE_PREFIX_KEY_POLICY,
+		                     G_PARAM_READWRITE
+		                     | G_PARAM_EXPLICIT_NOTIFY
+		                     | G_PARAM_STATIC_STRINGS);
+
+	compositor_props[COMPOSITOR_PROP_WORKSPACE_PROVIDER] =
+		g_param_spec_object("workspace-provider",
+		                     "Workspace Provider",
+		                     "Pluggable workspace manager.  When "
+		                     "non-NULL the compositor emits the "
+		                     "workspace-* signals on behalf of the "
+		                     "provider.  Default (NULL) disables "
+		                     "workspaces entirely (standalone behaviour).",
+		                     GOWL_TYPE_WORKSPACE_PROVIDER,
+		                     G_PARAM_READWRITE
+		                     | G_PARAM_EXPLICIT_NOTIFY
+		                     | G_PARAM_STATIC_STRINGS);
+
+	g_object_class_install_properties(object_class,
+	                                   COMPOSITOR_N_PROPS,
+	                                   compositor_props);
 
 	/**
 	 * GowlCompositor::startup:
@@ -455,6 +563,68 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 		             G_TYPE_NONE,
 		             1,
 		             G_TYPE_OBJECT);
+
+	/**
+	 * GowlCompositor::workspace-created:
+	 * @self: the compositor
+	 * @workspace: the new #GowlWorkspace
+	 *
+	 * Emitted after a workspace is allocated by the installed
+	 * #GowlWorkspaceProvider.  Consumers use this to mirror the
+	 * workspace set into their own data structures (Elisp
+	 * frame↔workspace table, external bar protocol, etc.).
+	 */
+	compositor_signals[SIGNAL_WORKSPACE_CREATED] =
+		g_signal_new("workspace-created",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             GOWL_TYPE_WORKSPACE);
+
+	/**
+	 * GowlCompositor::workspace-switched:
+	 * @self: the compositor
+	 * @from: (nullable): the previously-active workspace
+	 * @to: (nullable): the newly-active workspace
+	 *
+	 * Emitted whenever the active workspace changes.  Either side
+	 * may be %NULL (initial activation, final destruction).
+	 */
+	compositor_signals[SIGNAL_WORKSPACE_SWITCHED] =
+		g_signal_new("workspace-switched",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             2,
+		             GOWL_TYPE_WORKSPACE,
+		             GOWL_TYPE_WORKSPACE);
+
+	/**
+	 * GowlCompositor::workspace-destroyed:
+	 * @self: the compositor
+	 * @workspace: the removed #GowlWorkspace
+	 *
+	 * Emitted just before the workspace's reference is dropped by
+	 * the provider.  Listeners that track workspace state by id
+	 * must update their indexes here.
+	 */
+	compositor_signals[SIGNAL_WORKSPACE_DESTROYED] =
+		g_signal_new("workspace-destroyed",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             GOWL_TYPE_WORKSPACE);
 }
 
 static void
@@ -955,6 +1125,122 @@ gowl_compositor_get_seat(GowlCompositor *self)
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
 	return self->seat;
+}
+
+/**
+ * gowl_compositor_set_prefix_key_policy:
+ *
+ * Installs or replaces the runtime prefix-key policy.  Takes a
+ * reference on @policy; releases any previous reference.  Emits
+ * `notify::prefix-key-policy` when the pointer actually changes.
+ * Passing %NULL is valid and removes the policy.
+ */
+void
+gowl_compositor_set_prefix_key_policy(GowlCompositor      *self,
+                                       GowlPrefixKeyPolicy *policy)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->prefix_key_policy == policy)
+		return;
+
+	if (policy != NULL)
+		g_object_ref(policy);
+	g_clear_object(&self->prefix_key_policy);
+	self->prefix_key_policy = policy;
+
+	g_object_notify_by_pspec(
+		G_OBJECT(self),
+		compositor_props[COMPOSITOR_PROP_PREFIX_KEY_POLICY]);
+}
+
+/**
+ * gowl_compositor_get_prefix_key_policy:
+ *
+ * Returns: (transfer none) (nullable): the installed policy, or %NULL
+ */
+GowlPrefixKeyPolicy *
+gowl_compositor_get_prefix_key_policy(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->prefix_key_policy;
+}
+
+/**
+ * gowl_compositor_set_workspace_provider:
+ *
+ * Takes a reference on @provider and releases any previous
+ * reference.  Emits `notify::workspace-provider` when the pointer
+ * actually changes.  %NULL uninstalls workspaces entirely.
+ */
+void
+gowl_compositor_set_workspace_provider(GowlCompositor        *self,
+                                        GowlWorkspaceProvider *provider)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->workspace_provider == provider)
+		return;
+
+	if (provider != NULL)
+		g_object_ref(provider);
+	g_clear_object(&self->workspace_provider);
+	self->workspace_provider = provider;
+
+	g_object_notify_by_pspec(
+		G_OBJECT(self),
+		compositor_props[COMPOSITOR_PROP_WORKSPACE_PROVIDER]);
+}
+
+/**
+ * gowl_compositor_get_workspace_provider:
+ *
+ * Returns: (transfer none) (nullable): the installed provider,
+ *          or %NULL
+ */
+GowlWorkspaceProvider *
+gowl_compositor_get_workspace_provider(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->workspace_provider;
+}
+
+void
+gowl_compositor_emit_workspace_created(GowlCompositor *self,
+                                        GowlWorkspace  *workspace)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_WORKSPACE(workspace));
+
+	g_signal_emit(self,
+	              compositor_signals[SIGNAL_WORKSPACE_CREATED], 0,
+	              workspace);
+}
+
+void
+gowl_compositor_emit_workspace_switched(GowlCompositor *self,
+                                         GowlWorkspace  *from,
+                                         GowlWorkspace  *to)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	g_signal_emit(self,
+	              compositor_signals[SIGNAL_WORKSPACE_SWITCHED], 0,
+	              from, to);
+}
+
+void
+gowl_compositor_emit_workspace_destroyed(GowlCompositor *self,
+                                          GowlWorkspace  *workspace)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_WORKSPACE(workspace));
+
+	g_signal_emit(self,
+	              compositor_signals[SIGNAL_WORKSPACE_DESTROYED], 0,
+	              workspace);
 }
 
 /**
@@ -1958,6 +2244,13 @@ gowl_compositor_start(
 	wlr_cursor_set_xcursor(self->wlr_cursor, self->xcursor_mgr,
 	                       "default");
 
+	/* ext-workspace-v1: register the global unconditionally.  When
+	 * no workspace provider is installed the broadcast set is
+	 * empty; bars still bind cleanly and update when workspaces
+	 * appear later. */
+	self->ext_workspace_manager =
+		gowl_ext_workspace_manager_register(self, self->wl_display);
+
 	self->running = TRUE;
 	g_signal_emit(self, compositor_signals[SIGNAL_STARTUP], 0);
 
@@ -2657,6 +2950,18 @@ gowl_compositor_position_embedded(
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 	g_return_if_fail(GOWL_IS_CLIENT(client));
 
+	/* Defend against "stale client" calls: a client can be
+	 * referenced from outside (e.g. an Emacs buffer-local) after
+	 * its wlroots scene graph has been torn down by an unmap
+	 * dispatch.  The GObject stays alive while the ref exists;
+	 * its scene / scene_surface / xdg_toplevel pointers do NOT.
+	 * Without these guards callers that try to reposition an
+	 * already-unmapped embed NULL-deref inside
+	 * wlr_scene_node_set_position(). */
+	if (client->scene == NULL || client->scene_surface == NULL
+	    || client->xdg_toplevel == NULL)
+		return;
+
 	client->geom.x = x;
 	client->geom.y = y;
 	client->geom.width = width;
@@ -2672,7 +2977,11 @@ gowl_compositor_position_embedded(
 	    width - 2 * (gint)client->bw,
 	    height - 2 * (gint)client->bw);
 
-	/* Clip to content area (exclude CSD shadows) */
+	/* Clip to content area (exclude CSD shadows). xdg_toplevel
+	 * may no longer have a valid base surface if the client is
+	 * in the middle of unmap; bail if so. */
+	if (client->xdg_toplevel->base == NULL)
+		return;
 	clip.x = client->xdg_toplevel->base->geometry.x;
 	clip.y = client->xdg_toplevel->base->geometry.y;
 	clip.width  = width - 2 * (gint)client->bw;
@@ -5066,10 +5375,20 @@ gowl_compositor_arrangelayers(
 			usable_area.height -= bottom;
 	}
 
-	/* If usable area changed, update window area and re-tile */
+	/* If usable area changed, update window area, re-tile, and
+	 * notify listeners via the `usable-area-changed' signal so
+	 * integration layers (cmacs `--gowl` reflowing embedded app
+	 * buffers, external bars tracking their available canvas) can
+	 * react without polling. */
 	if (!wlr_box_equal(&usable_area, &m->w)) {
+		struct wlr_box old_w = m->w;
 		m->w = usable_area;
 		gowl_compositor_arrange(self, m);
+		gowl_monitor_emit_usable_area_changed(
+			m,
+			old_w.x, old_w.y, old_w.width, old_w.height,
+			usable_area.x, usable_area.y,
+			usable_area.width, usable_area.height);
 	}
 
 	/* Check for keyboard-interactive layer surfaces (top, overlay) */

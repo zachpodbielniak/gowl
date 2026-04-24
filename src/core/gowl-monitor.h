@@ -20,6 +20,7 @@
 #define GOWL_MONITOR_H
 
 #include <glib-object.h>
+#include "../boxed/gowl-geometry.h"
 
 struct wlr_output;
 struct wlr_scene_output;
@@ -38,6 +39,33 @@ G_DECLARE_FINAL_TYPE(GowlMonitor, gowl_monitor, GOWL, MONITOR, GObject)
  * Returns: (transfer full): a newly created #GowlMonitor
  */
 GowlMonitor   *gowl_monitor_new              (void);
+
+/**
+ * gowl_monitor_emit_usable_area_changed:
+ * @self: a #GowlMonitor
+ * @old_x: previous usable area x (monitor-local pixels)
+ * @old_y: previous usable area y
+ * @old_w: previous usable area width
+ * @old_h: previous usable area height
+ * @new_x: new usable area x
+ * @new_y: new usable area y
+ * @new_w: new usable area width
+ * @new_h: new usable area height
+ *
+ * Emits the `usable-area-changed` signal with two #GowlGeometry
+ * arguments.  Call this from the compositor after the window-area
+ * computation in `gowl_compositor_arrangelayers` detects a change.
+ *
+ * Listeners (notably cmacs `--gowl` to reflow embedded app
+ * buffers) can connect to the signal; standalone and nested
+ * consumers that don't connect pay nothing.
+ */
+void
+gowl_monitor_emit_usable_area_changed(GowlMonitor *self,
+                                       gint old_x, gint old_y,
+                                       gint old_w, gint old_h,
+                                       gint new_x, gint new_y,
+                                       gint new_w, gint new_h);
 
 /**
  * gowl_monitor_get_tags:

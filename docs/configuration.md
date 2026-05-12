@@ -201,17 +201,16 @@ autostart:
 
 ### Monitor Configuration
 
-Per-output settings keyed by output name:
+Per-output settings keyed by output name. Each field is independently
+optional — set only what you need to override; unset fields stay at the
+compositor's defaults. Output names come from the kernel / DRM (e.g.
+`eDP-1`, `HDMI-A-1`, `DP-2`, `WL-1`, `headless-1`) — discover them via
+`cmacsgi monitor list` or `M-: (cmacs-gowl-list-monitors)`.
 
 ```yaml
 monitors:
   eDP-1:
-    width: 1920
-    height: 1080
-    refresh: 60.0
-    x: 0
-    y: 0
-    scale: 1.0
+    transform: 90        # mobile screen: boot already-rotated
   HDMI-A-1:
     width: 2560
     height: 1440
@@ -219,7 +218,36 @@ monitors:
     x: 1920
     y: 0
     scale: 1.0
+    enabled: true
 ```
+
+| Field       | Type             | Meaning                                                                  |
+|-------------|------------------|--------------------------------------------------------------------------|
+| `width`     | int              | Preferred mode width in pixels (must pair with `height`).                |
+| `height`    | int              | Preferred mode height in pixels.                                          |
+| `refresh`   | float            | Refresh rate in Hz (e.g. `60.0`). Omit / `0` for the output's preferred. |
+| `x`         | int              | Layout X coordinate.                                                      |
+| `y`         | int              | Layout Y coordinate.                                                      |
+| `scale`     | float            | HiDPI scale factor (e.g. `1.0`, `1.5`, `2.0`).                            |
+| `enabled`   | bool             | `true` to power on, `false` to disable.                                   |
+| `transform` | int 0–7 / string | `wl_output_transform` code, or one of the canonical names below.         |
+
+#### `transform` values
+
+| Code | Name           | Effect                |
+|------|----------------|-----------------------|
+| 0    | `normal`       | No rotation           |
+| 1    | `90`           | Rotate 90° CCW        |
+| 2    | `180`          | Upside down           |
+| 3    | `270`          | Rotate 90° CW         |
+| 4    | `flipped`      | Horizontal mirror     |
+| 5    | `flipped-90`   | Mirror + rotate 90°   |
+| 6    | `flipped-180`  | Mirror + rotate 180°  |
+| 7    | `flipped-270`  | Mirror + rotate 270°  |
+
+Changes take effect live on `M-x cmacs-gowl-reload-config`, the
+equivalent `cmacsgi compositor reload`, and the `Mod+R` keybind — no
+compositor restart required.
 
 ### Module Configuration
 

@@ -110,6 +110,46 @@ typedef struct {
 	gboolean  regex_mode;
 } GowlRuleEntry;
 
+/* --- GowlMonitorConfig --- */
+
+/**
+ * GowlMonitorConfig:
+ * @width: preferred width in pixels, or 0 for "unset" (use the
+ *         output's preferred mode).  Only honoured when paired
+ *         with a non-zero @height.
+ * @height: preferred height in pixels, or 0 for "unset".
+ * @refresh: refresh rate in Hz (e.g. 60.0), or 0.0 for "unset" /
+ *           "preferred refresh".  Internally converted to mHz when
+ *           applied via wlroots.
+ * @x: preferred X position in layout coordinates, or %G_MININT
+ *     for "unset".  0 is a valid value (top-left), hence the
+ *     out-of-band sentinel.
+ * @y: preferred Y position, or %G_MININT for "unset".
+ * @scale: HiDPI scale factor (e.g. 1.0, 1.5, 2.0), or 0.0 for
+ *         "unset" (leave the compositor default).
+ * @transform: wl_output transform code, 0..7, or -1 for "unset".
+ *             0=normal, 1=90, 2=180, 3=270, 4=flipped,
+ *             5=flipped-90, 6=flipped-180, 7=flipped-270.
+ * @enabled: tri-state -1=unset, 0=disabled, 1=enabled.
+ *
+ * A per-output configuration parsed from the YAML `monitors:`
+ * mapping.  Every field is independently optional so callers may
+ * cherry-pick what to override (e.g. only `transform:` for a
+ * tablet that boots in the wrong orientation).  The compositor
+ * applies each set field to the corresponding #GowlMonitor when
+ * the output comes online and again on `reload_config`.
+ */
+typedef struct {
+	gint     width;
+	gint     height;
+	gdouble  refresh;
+	gint     x;
+	gint     y;
+	gdouble  scale;
+	gint     transform;
+	gint     enabled;
+} GowlMonitorConfig;
+
 /* --- Property IDs (for GObject property enumeration) --- */
 
 /**
@@ -628,6 +668,38 @@ GHashTable *gowl_config_get_module_config(GowlConfig  *self,
  * Returns: (transfer none) (nullable): a #GHashTable, or %NULL
  */
 GHashTable *gowl_config_get_all_module_configs(GowlConfig *self);
+
+/* --- Monitor Configuration --- */
+
+/**
+ * gowl_config_get_monitor_config:
+ * @self: a #GowlConfig
+ * @name: the output name (e.g. "eDP-1", "HDMI-A-1")
+ *
+ * Returns the per-output configuration parsed from the YAML
+ * `monitors:` section, or %NULL if no entry exists for @name.
+ * The returned pointer is owned by @self and remains valid until
+ * the next YAML load or until @self is destroyed.
+ *
+ * Returns: (transfer none) (nullable): a #GowlMonitorConfig
+ */
+const GowlMonitorConfig *
+gowl_config_get_monitor_config(GowlConfig  *self,
+                                const gchar *name);
+
+/**
+ * gowl_config_get_monitor_names:
+ * @self: a #GowlConfig
+ *
+ * Lists every output name that has an entry in the YAML
+ * `monitors:` mapping.  Useful for reload-config code that
+ * needs to re-apply configs to currently-attached outputs.
+ *
+ * Returns: (transfer container) (element-type utf8): a #GList of
+ *          internal string pointers (owned by @self); the caller
+ *          must g_list_free() the list itself but not the strings
+ */
+GList *gowl_config_get_monitor_names(GowlConfig *self);
 
 G_END_DECLS
 

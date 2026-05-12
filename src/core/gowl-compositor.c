@@ -695,6 +695,32 @@ gowl_compositor_get_config(GowlCompositor *self)
 	return self->config;
 }
 
+/* Forward declaration -- the per-monitor helper lives near the
+ * other output-callback code further down. */
+static void
+apply_monitor_yaml_config(GowlCompositor *self, GowlMonitor *m);
+
+/**
+ * gowl_compositor_apply_monitor_configs:
+ * @self: a #GowlCompositor
+ *
+ * Public wrapper that iterates currently-attached monitors and
+ * applies the YAML `monitors:` overrides to each.  See header
+ * for full semantics.
+ */
+void
+gowl_compositor_apply_monitor_configs(GowlCompositor *self)
+{
+	GList *ml;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	for (ml = self->monitors; ml != NULL; ml = ml->next) {
+		GowlMonitor *m = (GowlMonitor *)ml->data;
+		apply_monitor_yaml_config(self, m);
+	}
+}
+
 /**
  * gowl_compositor_set_module_manager:
  * @self: a #GowlCompositor
@@ -3283,6 +3309,60 @@ monocle(
  * ----------------------------------------------------------- */
 
 /**
+ * apply_monitor_yaml_config:
+ *
+ * Looks up the named output in the YAML `monitors:` mapping and
+ * applies each set field (mode/refresh/position/scale/enabled/
+ * transform) to @m via the corresponding gowl_monitor_set_*
+ * setters.  No-op if @self has no config or no entry exists for
+ * the output.  Called from both #on_new_output (so YAML applies
+ * the moment an output appears) and the reload path (so changes
+ * take effect on `M-x cmacs-gowl-reload-config`).
+ *
+ * Each setter conditionally fires only if the corresponding YAML
+ * field was actually set -- the sentinel-driven design lets users
+ * cherry-pick (e.g. `transform: 90` alone is valid).
+ */
+static void
+apply_monitor_yaml_config(GowlCompositor *self, GowlMonitor *m)
+{
+	const GowlMonitorConfig *mc;
+	const gchar *name;
+
+	if (self == NULL || self->config == NULL || m == NULL
+	    || m->wlr_output == NULL)
+		return;
+
+	name = m->wlr_output->name;
+	if (name == NULL)
+		return;
+
+	mc = gowl_config_get_monitor_config(self->config, name);
+	if (mc == NULL)
+		return;
+
+	g_debug("apply_monitor_yaml_config: '%s' "
+	        "w=%d h=%d refresh=%.1f x=%d y=%d "
+	        "scale=%.2f transform=%d enabled=%d",
+	        name, mc->width, mc->height, mc->refresh,
+	        mc->x, mc->y, mc->scale, mc->transform, mc->enabled);
+
+	if (mc->width > 0 && mc->height > 0) {
+		gint refresh_mhz = (gint)(mc->refresh * 1000.0);
+		gowl_monitor_set_mode(m, mc->width, mc->height,
+		                       refresh_mhz);
+	}
+	if (mc->scale > 0.0)
+		gowl_monitor_set_scale(m, mc->scale);
+	if (mc->transform >= 0 && mc->transform <= 7)
+		gowl_monitor_set_transform(m, mc->transform);
+	if (mc->x != G_MININT && mc->y != G_MININT)
+		gowl_monitor_set_position(m, mc->x, mc->y);
+	if (mc->enabled == 0 || mc->enabled == 1)
+		gowl_monitor_set_enabled(m, mc->enabled != 0);
+}
+
+/**
  * on_new_output:
  *
  * Called when a new output (display/monitor) becomes available.
@@ -3409,6 +3489,11 @@ on_new_output(struct wl_listener *listener, void *data)
 	/* Select this monitor if it's the first one */
 	if (self->selmon == NULL)
 		self->selmon = m;
+
+	/* Apply per-output overrides from YAML `monitors:` section
+	 * (transform, scale, mode, position, enabled).  Fires now so a
+	 * portrait-default mobile display can boot already-rotated. */
+	apply_monitor_yaml_config(self, m);
 
 	g_debug("New output: %s (%dx%d)",
 	        wlr_output->name,
@@ -4138,7 +4223,10 @@ keybinding(
 				gowl_compositor_set_config(self, new_config);
 				g_info("Configuration reloaded");
 
-				/* Re-arrange all monitors with new settings */
+				/* Re-apply per-output YAML overrides first, then
+				 * re-arrange so any transform/scale/position
+				 * changes feed into the new layout. */
+				gowl_compositor_apply_monitor_configs(self);
 				{
 					GList *ml;
 					for (ml = self->monitors; ml != NULL; ml = ml->next) {

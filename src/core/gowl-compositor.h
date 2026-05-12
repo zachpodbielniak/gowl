@@ -66,6 +66,25 @@ void            gowl_compositor_set_config (GowlCompositor *self,
 GowlConfig     *gowl_compositor_get_config (GowlCompositor *self);
 
 /**
+ * gowl_compositor_apply_monitor_configs:
+ * @self: a #GowlCompositor
+ *
+ * Re-applies the YAML `monitors:` overrides (transform / scale /
+ * mode / position / enabled) to every currently-attached monitor.
+ * Each field is applied conditionally on having been set in YAML;
+ * outputs with no entry are left alone.
+ *
+ * Intended for the hot-reload path so that edits to the config
+ * file take effect on live displays without restarting the
+ * compositor.  Called automatically by the in-tree
+ * `GOWL_ACTION_RELOAD_CONFIG` keybind handler; cmacs's reload
+ * dispatch (`cmacs-gowl-reload-config`) also calls it after
+ * reloading the YAML in place.
+ */
+void            gowl_compositor_apply_monitor_configs (
+                                            GowlCompositor *self);
+
+/**
  * gowl_compositor_set_module_manager:
  * @self: a #GowlCompositor
  * @mgr: (transfer none): the #GowlModuleManager to use

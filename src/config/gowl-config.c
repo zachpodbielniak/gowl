@@ -97,6 +97,11 @@ struct _GowlConfig {
 	 * GHashTable<gchar*, gchar*> of key-value settings parsed
 	 * from the YAML modules section. */
 	GHashTable *module_configs;
+
+	/* Monitor configs - maps output name (gchar*) to a heap-allocated
+	 * GowlMonitorConfig* parsed from the YAML monitors: section.
+	 * Each field is independently optional (sentinel-driven). */
+	GHashTable *monitor_configs;
 };
 
 G_DEFINE_FINAL_TYPE(GowlConfig, gowl_config, G_TYPE_OBJECT)
@@ -345,6 +350,7 @@ gowl_config_finalize(GObject *object)
 		g_ptr_array_unref(self->dropdowns);
 
 	g_clear_pointer(&self->module_configs, g_hash_table_unref);
+	g_clear_pointer(&self->monitor_configs, g_hash_table_unref);
 
 	G_OBJECT_CLASS(gowl_config_parent_class)->finalize(object);
 }
@@ -577,6 +583,12 @@ gowl_config_init(GowlConfig *self)
 	self->module_configs = g_hash_table_new_full(
 		g_str_hash, g_str_equal,
 		g_free, (GDestroyNotify)g_hash_table_unref);
+
+	/* Monitor configs: maps output name -> heap-allocated
+	 * GowlMonitorConfig*.  Values are plain structs with no inner
+	 * pointers, so g_free is sufficient as the destroy func. */
+	self->monitor_configs = g_hash_table_new_full(
+		g_str_hash, g_str_equal, g_free, g_free);
 }
 
 /* --- Public API --- */
@@ -595,6 +607,68 @@ gowl_config_new(void)
 }
 
 /* --- YAML loading helpers --- */
+
+/* Transform names indexed by wl_output_transform value.  Matches
+ * the dictionary used by cmacs's eval-dispatch transform_names[],
+ * so the YAML schema, the JSON emitted by cmacs-gowl-list-monitors,
+ * and the symbols accepted by `(gowl-set-monitor-transform)` are all
+ * symmetric. */
+static const gchar *const gowl_monitor_transform_names[] = {
+	"normal",       /* 0 */
+	"90",           /* 1 */
+	"180",          /* 2 */
+	"270",          /* 3 */
+	"flipped",      /* 4 */
+	"flipped-90",   /* 5 */
+	"flipped-180",  /* 6 */
+	"flipped-270"   /* 7 */
+};
+
+/**
+ * gowl_parse_monitor_transform:
+ * @cm: a #YamlMapping describing one monitor's config
+ *
+ * Reads the `transform:` member and returns its
+ * wl_output_transform code (0..7).  Accepts either an integer
+ * 0..7 (`transform: 3`) or one of the canonical names listed
+ * above (`transform: flipped-270`).  Names that happen to look
+ * like integers (e.g. `90`, `180`, `270`) are accepted via the
+ * name table when the numeric parse is out of range.  Returns -1
+ * and warns on miss or unparseable input -- the field is optional.
+ */
+static gint
+gowl_parse_monitor_transform(YamlMapping *cm)
+{
+	const gchar *raw;
+	gchar *end;
+	gint64 num;
+	gsize i;
+
+	raw = yaml_mapping_get_string_member(cm, "transform");
+	if (raw == NULL)
+		return -1;
+
+	/* Try integer 0..7 first -- the most common case for users
+	 * who learn the codes from wl_output_transform docs. */
+	end = NULL;
+	num = g_ascii_strtoll(raw, &end, 10);
+	if (end != raw && *end == '\0' && num >= 0 && num <= 7)
+		return (gint)num;
+
+	/* Fall through to the name table.  This also catches
+	 * "90"/"180"/"270" -- those are canonical *names* (degrees of
+	 * rotation), not transform codes, but users write them
+	 * intuitively and the table maps them to the right codes. */
+	for (i = 0; i < G_N_ELEMENTS(gowl_monitor_transform_names); i++) {
+		if (g_strcmp0(raw, gowl_monitor_transform_names[i]) == 0)
+			return (gint)i;
+	}
+
+	g_warning("gowl_config: invalid transform '%s' (expected 0..7 "
+	          "or one of: normal, 90, 180, 270, flipped, flipped-90, "
+	          "flipped-180, flipped-270)", raw);
+	return -1;
+}
 
 /**
  * gowl_config_apply_mapping:
@@ -1038,6 +1112,91 @@ gowl_config_apply_mapping(
 			}
 		}
 	}
+
+	/* Monitor configs: each child of `monitors:` is keyed by output
+	 * name and maps to a per-output mapping with optional fields
+	 * (width, height, refresh, x, y, scale, enabled, transform).
+	 * Every field is independently optional -- unset fields are
+	 * left at compositor defaults.
+	 *
+	 * Example YAML:
+	 *   monitors:
+	 *     eDP-1:
+	 *       transform: 90       # rotate a portrait-default tablet
+	 *     HDMI-A-1:
+	 *       x: 1080
+	 *       scale: 1.5
+	 */
+	if (yaml_mapping_has_member(mapping, "monitors")) {
+		YamlMapping *mon_mapping;
+
+		mon_mapping = yaml_mapping_get_mapping_member(mapping,
+		                                               "monitors");
+		if (mon_mapping != NULL) {
+			guint mon_count = yaml_mapping_get_size(mon_mapping);
+			guint mi;
+
+			/* Clear any previously-loaded monitor configs on reload */
+			g_hash_table_remove_all(self->monitor_configs);
+
+			for (mi = 0; mi < mon_count; mi++) {
+				const gchar *mon_name;
+				YamlNode *mon_val_node;
+				YamlMapping *mon_cfg_map;
+				GowlMonitorConfig *mc;
+
+				mon_name = yaml_mapping_get_key(mon_mapping, mi);
+				mon_val_node = yaml_mapping_get_value(mon_mapping, mi);
+				if (mon_name == NULL || mon_val_node == NULL)
+					continue;
+
+				mon_cfg_map = yaml_node_get_mapping(mon_val_node);
+				if (mon_cfg_map == NULL)
+					continue;
+
+				mc = g_new0(GowlMonitorConfig, 1);
+				mc->x = G_MININT;
+				mc->y = G_MININT;
+				mc->transform = -1;
+				mc->enabled = -1;
+
+				if (yaml_mapping_has_member(mon_cfg_map, "width"))
+					mc->width = (gint)yaml_mapping_get_int_member(
+						mon_cfg_map, "width");
+				if (yaml_mapping_has_member(mon_cfg_map, "height"))
+					mc->height = (gint)yaml_mapping_get_int_member(
+						mon_cfg_map, "height");
+				if (yaml_mapping_has_member(mon_cfg_map, "refresh"))
+					mc->refresh = yaml_mapping_get_double_member(
+						mon_cfg_map, "refresh");
+				if (yaml_mapping_has_member(mon_cfg_map, "x"))
+					mc->x = (gint)yaml_mapping_get_int_member(
+						mon_cfg_map, "x");
+				if (yaml_mapping_has_member(mon_cfg_map, "y"))
+					mc->y = (gint)yaml_mapping_get_int_member(
+						mon_cfg_map, "y");
+				if (yaml_mapping_has_member(mon_cfg_map, "scale"))
+					mc->scale = yaml_mapping_get_double_member(
+						mon_cfg_map, "scale");
+				if (yaml_mapping_has_member(mon_cfg_map, "enabled"))
+					mc->enabled = yaml_mapping_get_boolean_member(
+						mon_cfg_map, "enabled") ? 1 : 0;
+				if (yaml_mapping_has_member(mon_cfg_map, "transform"))
+					mc->transform = gowl_parse_monitor_transform(
+						mon_cfg_map);
+
+				g_debug("gowl_config: monitor '%s': "
+				        "w=%d h=%d refresh=%.1f x=%d y=%d "
+				        "scale=%.2f transform=%d enabled=%d",
+				        mon_name, mc->width, mc->height,
+				        mc->refresh, mc->x, mc->y,
+				        mc->scale, mc->transform, mc->enabled);
+
+				g_hash_table_insert(self->monitor_configs,
+				                    g_strdup(mon_name), mc);
+			}
+		}
+	}
 }
 
 /**
@@ -1454,6 +1613,8 @@ gowl_config_reset_values_to_defaults(GowlConfig *self)
 		g_ptr_array_set_size(self->dropdowns, 0);
 	if (self->module_configs != NULL)
 		g_hash_table_remove_all(self->module_configs);
+	if (self->monitor_configs != NULL)
+		g_hash_table_remove_all(self->monitor_configs);
 
 	g_object_thaw_notify(G_OBJECT(self));
 
@@ -1767,4 +1928,44 @@ gowl_config_get_all_module_configs(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
 	return self->module_configs;
+}
+
+/**
+ * gowl_config_get_monitor_config:
+ * @self: a #GowlConfig
+ * @name: the output name (e.g. "eDP-1")
+ *
+ * Looks up the per-output config parsed from `monitors:`.
+ *
+ * Returns: (transfer none) (nullable): #GowlMonitorConfig owned by
+ *          @self, or %NULL if no entry exists for @name
+ */
+const GowlMonitorConfig *
+gowl_config_get_monitor_config(
+	GowlConfig  *self,
+	const gchar *name
+){
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	g_return_val_if_fail(name != NULL, NULL);
+
+	return (const GowlMonitorConfig *)g_hash_table_lookup(
+		self->monitor_configs, name);
+}
+
+/**
+ * gowl_config_get_monitor_names:
+ * @self: a #GowlConfig
+ *
+ * Lists every output name that has an entry in the parsed
+ * `monitors:` mapping.  The list itself is owned by the caller
+ * (g_list_free), but the string elements are borrowed from
+ * @self's internal hash and must not be freed.
+ *
+ * Returns: (transfer container) (element-type utf8): a #GList
+ */
+GList *
+gowl_config_get_monitor_names(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return g_hash_table_get_keys(self->monitor_configs);
 }

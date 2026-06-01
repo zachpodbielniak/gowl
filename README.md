@@ -97,7 +97,7 @@ gowl --generate-c-config > ~/.config/gowl/config.c
 
 C config runs after YAML config, so it can override any YAML values.
 
-See [docs/configuration.md](docs/configuration.md) for the full configuration reference.
+See [docs/configuration.org](docs/configuration.org) for the full configuration reference.
 
 ## Module System
 
@@ -107,14 +107,14 @@ Bundled modules include: autostart, vanitygaps, pertag, scratchpad, swallow, mov
 
 Install modules to `~/.local/lib/gowl/modules/` or `$(PREFIX)/lib/gowl/modules/`.
 
-See [docs/modules.md](docs/modules.md) for the module development guide.
+See [docs/modules.org](docs/modules.org) for the module development guide.
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md) -- Type hierarchy, module system, interface dispatch, config system.
-- [docs/building.md](docs/building.md) -- Dependencies, build commands, build options.
-- [docs/configuration.md](docs/configuration.md) -- YAML and C configuration reference.
-- [docs/modules.md](docs/modules.md) -- Module development guide with examples.
+- [docs/architecture.org](docs/architecture.org) -- Type hierarchy, module system, interface dispatch, config system.
+- [docs/building.org](docs/building.org) -- Dependencies, build commands, build options.
+- [docs/configuration.org](docs/configuration.org) -- YAML and C configuration reference.
+- [docs/modules.org](docs/modules.org) -- Module development guide with examples.
 
 ## License
 

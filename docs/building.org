@@ -1,0 +1,258 @@
+* Building Gowl
+:PROPERTIES:
+:CUSTOM_ID: building-gowl
+:END:
+** Dependencies
+:PROPERTIES:
+:CUSTOM_ID: dependencies
+:END:
+*** Required (pkg-config names)
+:PROPERTIES:
+:CUSTOM_ID: required-pkg-config-names
+:END:
+| Package           | pkg-config name     | Description                 |
+|-------------------+---------------------+-----------------------------|
+| GLib 2.0          | =glib-2.0=          | Core utility library        |
+| GObject 2.0       | =gobject-2.0=       | GObject type system         |
+| GIO 2.0           | =gio-2.0=           | GLib I/O library            |
+| GModule 2.0       | =gmodule-2.0=       | Dynamic module loading      |
+| wlroots 0.19      | =wlroots-0.19=      | Wayland compositor library  |
+| wayland-server    | =wayland-server=    | Wayland server protocol     |
+| wayland-protocols | =wayland-protocols= | Wayland protocol XML files  |
+| xkbcommon         | =xkbcommon=         | XKB keyboard handling       |
+| libinput          | =libinput=          | Input device handling       |
+| libyaml           | =yaml-0.1=          | YAML parser (for yaml-glib) |
+| json-glib         | =json-glib-1.0=     | JSON/GLib integration       |
+
+*** Optional
+:PROPERTIES:
+:CUSTOM_ID: optional
+:END:
+| Package               | pkg-config name             | Description            |
+|-----------------------+-----------------------------+------------------------|
+| libxcb                | =xcb=                       | XWayland support       |
+| xcb-icccm             | =xcb-icccm=                 | XWayland ICCCM support |
+| GObject Introspection | =gobject-introspection-1.0= | GIR/typelib generation |
+
+*** Build Tools
+:PROPERTIES:
+:CUSTOM_ID: build-tools
+:END:
+- =gcc= (GNU C Compiler)
+- =make= (GNU Make)
+- =pkg-config=
+- =wayland-scanner= (from wayland-devel)
+
+** Installing Dependencies
+:PROPERTIES:
+:CUSTOM_ID: installing-dependencies
+:END:
+*** Fedora (dnf)
+:PROPERTIES:
+:CUSTOM_ID: fedora-dnf
+:END:
+This is the primary supported platform. If using Fedora Silverblue with a distrobox, run these inside the container.
+
+#+begin_src sh
+sudo dnf install -y \
+    gcc make pkg-config \
+    glib2-devel \
+    gobject-introspection-devel \
+    json-glib-devel \
+    wayland-devel \
+    wayland-protocols-devel \
+    wlroots-devel \
+    libxkbcommon-devel \
+    libinput-devel \
+    libyaml-devel \
+    libxcb-devel \
+    xcb-util-wm-devel
+#+end_src
+
+Or use the built-in Makefile target:
+
+#+begin_src sh
+make install-deps
+#+end_src
+
+*** Verifying Dependencies
+:PROPERTIES:
+:CUSTOM_ID: verifying-dependencies
+:END:
+Check that all required dependencies are available:
+
+#+begin_src sh
+make check-deps
+#+end_src
+
+This will print the version of each found dependency and flag any that are missing.
+
+** Building
+:PROPERTIES:
+:CUSTOM_ID: building
+:END:
+*** Quick Build
+:PROPERTIES:
+:CUSTOM_ID: quick-build
+:END:
+#+begin_src sh
+make
+#+end_src
+
+This builds the shared library, static library, executable, and all bundled modules in release mode. Output goes to =build/release/=.
+
+*** Debug Build
+:PROPERTIES:
+:CUSTOM_ID: debug-build
+:END:
+#+begin_src sh
+make DEBUG=1
+#+end_src
+
+Builds with =-g -O0 -DDEBUG=. Output goes to =build/debug/=.
+
+*** Debug Build with AddressSanitizer
+:PROPERTIES:
+:CUSTOM_ID: debug-build-with-addresssanitizer
+:END:
+#+begin_src sh
+make DEBUG=1 ASAN=1
+#+end_src
+
+Adds =-fsanitize=address -fsanitize=undefined= to both compile and link flags.
+
+*** Without XWayland
+:PROPERTIES:
+:CUSTOM_ID: without-xwayland
+:END:
+#+begin_src sh
+make BUILD_XWAYLAND=0
+#+end_src
+
+Disables XWayland support. This removes the =xcb= and =xcb-icccm= dependencies.
+
+*** GObject Introspection
+:PROPERTIES:
+:CUSTOM_ID: gobject-introspection
+:END:
+#+begin_src sh
+make BUILD_GIR=1
+#+end_src
+
+Generates =Gowl-0.1.gir= and =Gowl-0.1.typelib= for use with language bindings (Python, JavaScript, etc.).
+
+*** Running Tests
+:PROPERTIES:
+:CUSTOM_ID: running-tests
+:END:
+#+begin_src sh
+make test
+#+end_src
+
+Builds the test suite (using GLib's GTest framework) and runs all test binaries. Each test binary exercises a specific subsystem:
+
+- =test-boxed= -- Boxed type copy/free, equality, serialization
+- =test-config= -- Config property defaults, YAML loading, keybind/rule management
+- =test-enums= -- Enum type registration and value validation
+- =test-keybind= -- Keybind string parsing and serialization
+- =test-layout= -- Layout provider interface dispatch
+- =test-module= -- Module lifecycle, registration, activation
+
+*** Viewing Build Configuration
+:PROPERTIES:
+:CUSTOM_ID: viewing-build-configuration
+:END:
+#+begin_src sh
+make show-config
+#+end_src
+
+Prints the current values of all build variables (compiler flags, paths, enabled features).
+
+** Build Options Summary
+:PROPERTIES:
+:CUSTOM_ID: build-options-summary
+:END:
+| Variable         | Default      | Description                                       |
+|------------------+--------------+---------------------------------------------------|
+| =DEBUG=          | =0=          | =1= enables debug symbols and =-O0=               |
+| =ASAN=           | =0=          | =1= enables AddressSanitizer (requires =DEBUG=1=) |
+| =BUILD_XWAYLAND= | =1=          | =0= disables XWayland support                     |
+| =BUILD_GIR=      | =0=          | =1= enables GObject Introspection generation      |
+| =BUILD_TESTS=    | =1=          | =0= disables test building                        |
+| =BUILD_MODULES=  | =1=          | =0= skips module building                         |
+| =PREFIX=         | =/usr/local= | Installation prefix                               |
+| =CC=             | =gcc=        | C compiler                                        |
+
+All options can be set on the command line:
+
+#+begin_src sh
+make DEBUG=1 BUILD_GIR=1 PREFIX=/usr
+#+end_src
+
+** Installation
+:PROPERTIES:
+:CUSTOM_ID: installation
+:END:
+#+begin_src sh
+make install
+#+end_src
+
+Installs to =$PREFIX= (default =/usr/local=):
+
+- =$PREFIX/bin/gowl= -- Compositor executable
+- =$PREFIX/lib/libgowl.so.*= -- Shared library
+- =$PREFIX/lib/libgowl.a= -- Static library
+- =$PREFIX/include/gowl/= -- Header files
+- =$PREFIX/lib/pkgconfig/gowl.pc= -- pkg-config file
+- =$PREFIX/lib/gowl/modules/= -- Module shared objects
+- =$PREFIX/share/gir-1.0/= -- GIR file (if =BUILD_GIR=1=)
+- =$PREFIX/lib/girepository-1.0/= -- Typelib (if =BUILD_GIR=1=)
+
+Use =DESTDIR= for staged installs (packaging):
+
+#+begin_src sh
+make install DESTDIR=/tmp/gowl-pkg
+#+end_src
+
+*** Uninstall
+:PROPERTIES:
+:CUSTOM_ID: uninstall
+:END:
+#+begin_src sh
+make uninstall
+#+end_src
+
+** Cleaning
+:PROPERTIES:
+:CUSTOM_ID: cleaning
+:END:
+#+begin_src sh
+# Clean current build type (release or debug)
+make clean
+
+# Clean everything (both release and debug)
+make clean-all
+#+end_src
+
+** Development Workflow
+:PROPERTIES:
+:CUSTOM_ID: development-workflow
+:END:
+A typical development cycle:
+
+#+begin_src sh
+# Build debug with all modules
+make DEBUG=1
+
+# Run tests
+make test
+
+# Run the compositor (in a nested Wayland session or TTY)
+./build/debug/gowl
+
+# Run with debug logging
+./build/debug/gowl --debug
+
+# Run with a custom config
+./build/debug/gowl --config ./my-config.yaml
+#+end_src

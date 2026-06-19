@@ -76,6 +76,10 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
 
+#ifdef GOWL_HAVE_XWAYLAND
+#include <wlr/xwayland/xwayland.h>
+#endif
+
 /* wlroots - misc protocols */
 #include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_idle_notify_v1.h>
@@ -266,6 +270,12 @@ struct _GowlCompositor {
 	struct wl_listener new_session_lock;
 	struct wl_listener request_activate;
 
+#ifdef GOWL_HAVE_XWAYLAND
+	struct wlr_xwayland *xwayland;
+	struct wl_listener   new_xwayland_surface;
+	struct wl_listener   xwayland_ready;
+#endif
+
 	/* session lock state */
 	struct wlr_session_lock_v1 *cur_lock;
 	struct wl_listener lock_new_surface;
@@ -374,6 +384,9 @@ struct _GowlClient {
 
 	guint   id;             /* unique monotonic client ID */
 	struct wlr_xdg_toplevel *xdg_toplevel;
+#ifdef GOWL_HAVE_XWAYLAND
+	struct wlr_xwayland_surface *xwayland_surface; /* non-NULL => X11 client */
+#endif
 	struct wlr_scene_tree   *scene;          /* client container node */
 	struct wlr_scene_tree   *scene_surface;  /* xdg_surface node */
 	struct wlr_scene_rect   *border[4];      /* top, bottom, left, right */
@@ -424,6 +437,13 @@ struct _GowlClient {
 	struct wl_listener maximize;
 	struct wl_listener set_decoration_mode;
 	struct wl_listener destroy_decoration;
+#ifdef GOWL_HAVE_XWAYLAND
+	/* X11-only listeners (registered when xwayland_surface != NULL) */
+	struct wl_listener associate;
+	struct wl_listener dissociate;
+	struct wl_listener activate;
+	struct wl_listener configure;
+#endif
 
 	/* Mirror views: additional scene nodes that duplicate this
 	 * client's root surface buffer.  Populated by

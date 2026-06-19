@@ -287,3 +287,32 @@ The build system uses GNU Make with two main files:
 | =BUILD_TESTS=    | 1          | Build test suite                           |
 | =BUILD_MODULES=  | 1          | Build bundled modules                      |
 | =PREFIX=         | /usr/local | Installation prefix                        |
+
+** XWayland (X11 Client Support)
+:PROPERTIES:
+:CUSTOM_ID: xwayland
+:END:
+When built with =BUILD_XWAYLAND=1= (the default) and the =Xwayland=
+server binary is installed, gowl runs its own rootless XWayland so
+unmodified X11 applications run inside the session.
+
+- On startup (=gowl_compositor_start=) gowl creates a *lazy*
+  =wlr_xwayland= (the X server process only spawns when the first X11
+  client connects), binds the seat to it, and exports =DISPLAY= to its
+  X display name (e.g. =:1=).  =DISPLAY= is re-asserted after the nested
+  libdecor/GTK setup, which can perturb the environment, so children
+  reliably inherit gowl's own X server rather than a parent session's.
+- X11 windows are represented by the same =GowlClient= type as XDG
+  toplevels.  A client is an X11 surface when =xwayland_surface= is
+  non-=NULL=; the =client_is_x11()= / =client_surface()= accessors and
+  small branches in the shared map / commit / resize / fullscreen /
+  focus / destroy paths handle the two surface types uniformly (the
+  dwl model).  Managed toplevels are tiled like XDG windows;
+  override-redirect surfaces (menus, tooltips) float.
+- =gowl_compositor_get_xwayland_display()= returns the X display name so
+  integrators (e.g. cmacs's =gowl-spawn=) can point spawned X11 clients
+  at it.
+
+Build without it via =make BUILD_XWAYLAND=0= (drops the =xcb= /
+=xcb-icccm= dependencies); the X11 code is then compiled out behind
+=GOWL_HAVE_XWAYLAND= and the compositor is Wayland-only.

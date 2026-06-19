@@ -290,6 +290,9 @@ gowl_client_init(GowlClient *self)
 {
 	self->id            = next_client_id++;
 	self->xdg_toplevel  = NULL;
+#ifdef GOWL_HAVE_XWAYLAND
+	self->xwayland_surface = NULL;
+#endif
 	self->scene         = NULL;
 	self->scene_surface = NULL;
 	memset(self->border, 0, sizeof(self->border));
@@ -674,6 +677,13 @@ gowl_client_close(GowlClient *self)
 {
 	g_return_if_fail(GOWL_IS_CLIENT(self));
 
+#ifdef GOWL_HAVE_XWAYLAND
+	if (self->xwayland_surface != NULL) {
+		wlr_xwayland_surface_close(self->xwayland_surface);
+		return;
+	}
+#endif
+
 	if (self->xdg_toplevel != NULL)
 		wlr_xdg_toplevel_send_close(self->xdg_toplevel);
 }
@@ -695,6 +705,11 @@ gowl_client_get_pid(GowlClient *self)
 	pid_t pid;
 
 	g_return_val_if_fail(GOWL_IS_CLIENT(self), (pid_t)-1);
+
+#ifdef GOWL_HAVE_XWAYLAND
+	if (self->xwayland_surface != NULL)
+		return self->xwayland_surface->pid;
+#endif
 
 	if (self->xdg_toplevel == NULL ||
 	    self->xdg_toplevel->base == NULL ||
@@ -745,6 +760,11 @@ struct wlr_surface *
 gowl_client_get_wlr_surface(GowlClient *self)
 {
 	g_return_val_if_fail(GOWL_IS_CLIENT(self), NULL);
+
+#ifdef GOWL_HAVE_XWAYLAND
+	if (self->xwayland_surface != NULL)
+		return self->xwayland_surface->surface;
+#endif
 
 	if (self->xdg_toplevel == NULL ||
 	    self->xdg_toplevel->base == NULL)

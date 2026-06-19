@@ -284,6 +284,18 @@ struct wlr_backend *gowl_compositor_get_wlr_backend (GowlCompositor *self);
 const gchar    *gowl_compositor_get_socket_name (GowlCompositor *self);
 
 /**
+ * gowl_compositor_get_xwayland_display:
+ * @self: a #GowlCompositor
+ *
+ * Returns the X11 DISPLAY name (e.g. ":1") served by gowl's own
+ * XWayland, for X11 clients launched into the session.  %NULL when gowl
+ * has no XWayland.  Only valid after gowl_compositor_start() succeeds.
+ *
+ * Returns: (transfer none) (nullable): the DISPLAY name
+ */
+const gchar    *gowl_compositor_get_xwayland_display (GowlCompositor *self);
+
+/**
  * gowl_compositor_get_wlr_seat:
  * @self: a #GowlCompositor
  *

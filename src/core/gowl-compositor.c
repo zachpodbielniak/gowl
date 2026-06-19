@@ -197,6 +197,20 @@ static void on_client_fullscreen  (struct wl_listener *listener, void *data);
 static void on_client_maximize    (struct wl_listener *listener, void *data);
 static void on_client_set_title   (struct wl_listener *listener, void *data);
 
+#ifdef GOWL_HAVE_XWAYLAND
+/* XWayland callbacks */
+static void on_new_xwayland_surface       (struct wl_listener *listener, void *data);
+static void on_xwayland_ready             (struct wl_listener *listener, void *data);
+static void on_xwayland_associate         (struct wl_listener *listener, void *data);
+static void on_xwayland_dissociate        (struct wl_listener *listener, void *data);
+static void on_xwayland_request_configure (struct wl_listener *listener, void *data);
+static void on_xwayland_request_activate  (struct wl_listener *listener, void *data);
+#endif
+
+/* client surface-type helpers (X11 vs XDG) */
+static gboolean            client_is_x11   (GowlClient *c);
+static struct wlr_surface *client_surface  (GowlClient *c);
+
 /* decoration callbacks */
 static void on_request_decoration_mode(struct wl_listener *listener, void *data);
 static void on_destroy_decoration     (struct wl_listener *listener, void *data);
@@ -289,6 +303,12 @@ gowl_compositor_finalize(GObject *object)
 	/* Teardown in reverse order of setup, following dwl's cleanup() */
 	if (self->wl_display != NULL) {
 		wl_display_destroy_clients(self->wl_display);
+
+#ifdef GOWL_HAVE_XWAYLAND
+		/* Destroy XWayland before the backend/display so it can tear
+		 * down its X11 clients cleanly. */
+		g_clear_pointer(&self->xwayland, wlr_xwayland_destroy);
+#endif
 
 #ifdef GOWL_HAVE_LIBDECOR
 		gowl_decor_destroy(self->decor);
@@ -875,6 +895,28 @@ gowl_compositor_get_socket_name(GowlCompositor *self)
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
 	return self->socket_name;
+}
+
+/**
+ * gowl_compositor_get_xwayland_display:
+ * @self: a #GowlCompositor
+ *
+ * Returns the X11 DISPLAY name (e.g. ":1") served by gowl's own
+ * XWayland, which X11 children launched into the session should use.
+ *
+ * Returns: (transfer none) (nullable): the DISPLAY name, or %NULL when
+ *   gowl was built or started without XWayland.
+ */
+const gchar *
+gowl_compositor_get_xwayland_display(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+#ifdef GOWL_HAVE_XWAYLAND
+	if (self->xwayland != NULL)
+		return self->xwayland->display_name;
+#endif
+	return NULL;
 }
 
 /**
@@ -2237,8 +2279,30 @@ gowl_compositor_start(
 	/* 18. Output manager */
 	self->output_mgr = wlr_output_manager_v1_create(self->wl_display);
 
-	/* Unset DISPLAY to prevent XWayland confusion */
+	/* Unset any inherited parent DISPLAY before XWayland (if built)
+	 * sets its own.  Without XWayland this leaves X11 unavailable. */
 	unsetenv("DISPLAY");
+
+#ifdef GOWL_HAVE_XWAYLAND
+	/* 18b. XWayland.  Created lazily: the server only spawns when the
+	 * first X11 client connects.  Requires the wlr_compositor and the
+	 * seat, both created above.  Sets DISPLAY so X11 children find it. */
+	self->xwayland = wlr_xwayland_create(self->wl_display,
+	                                     self->wlr_compositor,
+	                                     TRUE /* lazy */);
+	if (self->xwayland != NULL) {
+		LISTEN(&self->xwayland->events.ready,
+		       &self->xwayland_ready, on_xwayland_ready);
+		LISTEN(&self->xwayland->events.new_surface,
+		       &self->new_xwayland_surface, on_new_xwayland_surface);
+		wlr_xwayland_set_seat(self->xwayland, self->wlr_seat);
+		if (self->xwayland->display_name != NULL)
+			setenv("DISPLAY", self->xwayland->display_name, 1);
+	} else {
+		g_warning("gowl: failed to start XWayland; "
+		          "X11 apps unavailable");
+	}
+#endif
 
 	/* 19. Add Wayland socket */
 	self->socket_name = wl_display_add_socket_auto(self->wl_display);
@@ -2296,6 +2360,18 @@ gowl_compositor_start(
 			wlr_wl_output_create(self->nested_wl_backend);
 		}
 	}
+#endif
+
+#ifdef GOWL_HAVE_XWAYLAND
+	/* Re-assert DISPLAY after the libdecor/GTK setup above, which
+	 * connects to the parent compositor and can perturb the process
+	 * environment.  This guarantees X11 children spawned from gowl
+	 * inherit gowl's own XWayland display (not an inherited :0 nor the
+	 * parent session's), so e.g. raylib/GLFW apps find a usable X
+	 * server.  display_name is assigned at create time even in lazy
+	 * mode (the socket is reserved up front). */
+	if (self->xwayland != NULL && self->xwayland->display_name != NULL)
+		setenv("DISPLAY", self->xwayland->display_name, 1);
 #endif
 
 	/* Set default cursor image */
@@ -2428,6 +2504,42 @@ applybounds(
 }
 
 /**
+ * client_is_x11:
+ *
+ * Returns %TRUE if @c is an XWayland (X11) client rather than an XDG
+ * toplevel.  Always %FALSE when gowl is built without XWayland support.
+ */
+static gboolean
+client_is_x11(GowlClient *c)
+{
+#ifdef GOWL_HAVE_XWAYLAND
+	return c->xwayland_surface != NULL;
+#else
+	(void)c;
+	return FALSE;
+#endif
+}
+
+/**
+ * client_surface:
+ *
+ * Returns the wlr_surface backing @c, branching on its surface type.
+ * For X11 clients this may be %NULL before the associate event and
+ * after dissociate.
+ */
+static struct wlr_surface *
+client_surface(GowlClient *c)
+{
+#ifdef GOWL_HAVE_XWAYLAND
+	if (c->xwayland_surface != NULL)
+		return c->xwayland_surface->surface;
+#endif
+	if (c->xdg_toplevel == NULL || c->xdg_toplevel->base == NULL)
+		return NULL;
+	return c->xdg_toplevel->base->surface;
+}
+
+/**
  * resize_client:
  *
  * Positions and sizes a client in the scene graph, updates borders,
@@ -2512,10 +2624,27 @@ resize_client(
 		}
 	}
 
-	/* Send configure to the XDG toplevel */
-	c->resize = wlr_xdg_toplevel_set_size(c->xdg_toplevel,
-	                                       c->geom.width - 2 * (gint)c->bw,
-	                                       c->geom.height - 2 * (gint)c->bw);
+	/* Send configure to the underlying surface */
+#ifdef GOWL_HAVE_XWAYLAND
+	if (client_is_x11(c)) {
+		/* X11 has no client-side configure serial; position the
+		 * surface in absolute layout coordinates (X11 windows are
+		 * absolutely positioned) and clear the pending resize. */
+		wlr_xwayland_surface_configure(
+			c->xwayland_surface,
+			c->geom.x + (gint16)c->bw,
+			c->geom.y + (gint16)c->bw,
+			c->geom.width  - 2 * (guint16)c->bw,
+			c->geom.height - 2 * (guint16)c->bw);
+		c->resize = 0;
+	} else
+#endif
+	{
+		c->resize = wlr_xdg_toplevel_set_size(
+			c->xdg_toplevel,
+			c->geom.width - 2 * (gint)c->bw,
+			c->geom.height - 2 * (gint)c->bw);
+	}
 
 	/*
 	 * Clip the surface to the geometry minus border.
@@ -2523,9 +2652,15 @@ resize_client(
 	 * offset so CSD shadow areas are excluded but content is not
 	 * cut off.  GTK apps (Firefox, Ptyxis) have non-zero geometry.x/y
 	 * due to invisible resize-grab shadows around the content.
+	 * X11 surfaces have no CSD geometry offset, so the origin is 0,0.
 	 */
-	clip.x = c->xdg_toplevel->base->geometry.x;
-	clip.y = c->xdg_toplevel->base->geometry.y;
+	if (client_is_x11(c)) {
+		clip.x = 0;
+		clip.y = 0;
+	} else {
+		clip.x = c->xdg_toplevel->base->geometry.x;
+		clip.y = c->xdg_toplevel->base->geometry.y;
+	}
 	clip.width  = c->geom.width - (gint)c->bw;
 	clip.height = c->geom.height - (gint)c->bw;
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
@@ -2582,7 +2717,13 @@ setfullscreen(
 		g_object_get(self->config, "border-width", &border_width, NULL);
 
 	c->bw = fullscreen ? 0 : (guint)border_width;
-	wlr_xdg_toplevel_set_fullscreen(c->xdg_toplevel, fullscreen);
+#ifdef GOWL_HAVE_XWAYLAND
+	if (client_is_x11(c))
+		wlr_xwayland_surface_set_fullscreen(c->xwayland_surface,
+		                                    fullscreen);
+	else
+#endif
+		wlr_xdg_toplevel_set_fullscreen(c->xdg_toplevel, fullscreen);
 
 	/* Re-parent to appropriate layer */
 	wlr_scene_node_reparent(&c->scene->node,
@@ -3211,8 +3352,8 @@ gowl_compositor_focus_client(
 	old = self->wlr_seat->keyboard_state.focused_surface;
 
 	/* Already focused */
-	if (c != NULL && c->xdg_toplevel != NULL &&
-	    c->xdg_toplevel->base->surface == old)
+	if (c != NULL && client_surface(c) != NULL &&
+	    client_surface(c) == old)
 		return;
 
 	/* Put the new client atop the focus stack and select its monitor */
@@ -3230,6 +3371,9 @@ gowl_compositor_focus_client(
 	/* Deactivate old client */
 	if (old != NULL) {
 		struct wlr_xdg_toplevel *old_toplevel;
+#ifdef GOWL_HAVE_XWAYLAND
+		struct wlr_xwayland_surface *old_xsurface;
+#endif
 
 		old_toplevel = wlr_xdg_toplevel_try_from_wlr_surface(old);
 		if (old_toplevel != NULL) {
@@ -3240,7 +3384,7 @@ gowl_compositor_focus_client(
 				wlr_xdg_popup_destroy(popup);
 
 			/* Set unfocused border colour */
-			if (c == NULL || c->xdg_toplevel->base->surface != old) {
+			if (c == NULL || client_surface(c) != old) {
 				GowlClient *old_c;
 
 				old_c = (GowlClient *)old_toplevel->base->data;
@@ -3249,6 +3393,19 @@ gowl_compositor_focus_client(
 				wlr_xdg_toplevel_set_activated(old_toplevel, FALSE);
 			}
 		}
+#ifdef GOWL_HAVE_XWAYLAND
+		old_xsurface = wlr_xwayland_surface_try_from_wlr_surface(old);
+		if (old_xsurface != NULL &&
+		    (c == NULL || client_surface(c) != old)) {
+			GowlClient *old_c;
+
+			old_c = (GowlClient *)old_xsurface->data;
+			if (old_c != NULL)
+				client_set_border_color(self, old_c,
+				                        self->unfocus_color);
+			wlr_xwayland_surface_activate(old_xsurface, FALSE);
+		}
+#endif
 	}
 
 	if (c == NULL) {
@@ -3273,16 +3430,21 @@ gowl_compositor_focus_client(
 	kb = wlr_seat_get_keyboard(self->wlr_seat);
 	if (kb != NULL)
 		wlr_seat_keyboard_notify_enter(self->wlr_seat,
-		                               c->xdg_toplevel->base->surface,
+		                               client_surface(c),
 		                               kb->keycodes, kb->num_keycodes,
 		                               &kb->modifiers);
 	else
 		wlr_seat_keyboard_notify_enter(self->wlr_seat,
-		                               c->xdg_toplevel->base->surface,
+		                               client_surface(c),
 		                               NULL, 0, NULL);
 
 	/* Activate the surface */
-	wlr_xdg_toplevel_set_activated(c->xdg_toplevel, TRUE);
+#ifdef GOWL_HAVE_XWAYLAND
+	if (client_is_x11(c))
+		wlr_xwayland_surface_activate(c->xwayland_surface, TRUE);
+	else
+#endif
+		wlr_xdg_toplevel_set_activated(c->xdg_toplevel, TRUE);
 
 	/* Sync GowlSeat focused client (emits seat "focus-changed" signal) */
 	if (self->seat != NULL)
@@ -5308,6 +5470,12 @@ on_client_commit(struct wl_listener *listener, void *data)
 	c = wl_container_of(listener, c, commit);
 	self = c->compositor;
 
+	/* X11 clients do not use the XDG commit flow; their geometry is
+	 * driven by the configure handler.  on_client_commit is never
+	 * registered for them, but guard defensively. */
+	if (client_is_x11(c))
+		return;
+
 	if (c->xdg_toplevel->base->initial_commit) {
 		/* Initial commit: set WM capabilities, apply decoration, configure */
 		wlr_xdg_toplevel_set_wm_capabilities(c->xdg_toplevel,
@@ -5361,25 +5529,43 @@ on_client_map(struct wl_listener *listener, void *data)
 
 	/* Create scene tree in the tiling layer */
 	c->scene = wlr_scene_tree_create(self->layers[GOWL_SCENE_LAYER_TILE]);
-	c->xdg_toplevel->base->surface->data = c->scene;
+	client_surface(c)->data = c->scene;
 	/* Disabled until arrange() turns it on */
 	wlr_scene_node_set_enabled(&c->scene->node, FALSE);
 
-	/* Create the XDG surface scene tree within the client container.
-	 * wlr_scene_xdg_surface_create adds an internal commit listener
-	 * that resets scene buffer opacity to 1.0 on every frame.
-	 * Re-register our commit listener AFTER this so gowl's handler
-	 * fires last and can re-apply per-client alpha. */
-	c->scene_surface = wlr_scene_xdg_surface_create(c->scene,
-	                                                  c->xdg_toplevel->base);
-	wl_list_remove(&c->commit.link);
-	wl_signal_add(&c->xdg_toplevel->base->surface->events.commit,
-	              &c->commit);
+	/* Create the surface scene tree within the client container.
+	 * For XDG, wlr_scene_xdg_surface_create adds an internal commit
+	 * listener that resets scene buffer opacity to 1.0 on every frame,
+	 * so we re-register our commit listener AFTER this so gowl's
+	 * handler fires last and can re-apply per-client alpha.  X11
+	 * surfaces have no XDG surface; use a plain subsurface tree and do
+	 * not touch the commit listener (X11 clients have none). */
+#ifdef GOWL_HAVE_XWAYLAND
+	if (client_is_x11(c)) {
+		c->scene_surface = wlr_scene_subsurface_tree_create(
+			c->scene, client_surface(c));
+	} else
+#endif
+	{
+		c->scene_surface = wlr_scene_xdg_surface_create(
+			c->scene, c->xdg_toplevel->base);
+		wl_list_remove(&c->commit.link);
+		wl_signal_add(&c->xdg_toplevel->base->surface->events.commit,
+		              &c->commit);
+	}
 	c->scene->node.data = c;
 	c->scene_surface->node.data = c;
 
-	/* Get initial geometry from XDG surface */
-	c->geom = c->xdg_toplevel->base->geometry;
+	/* Get initial geometry from the surface */
+#ifdef GOWL_HAVE_XWAYLAND
+	if (client_is_x11(c)) {
+		c->geom.x = 0;
+		c->geom.y = 0;
+		c->geom.width  = c->xwayland_surface->width;
+		c->geom.height = c->xwayland_surface->height;
+	} else
+#endif
+		c->geom = c->xdg_toplevel->base->geometry;
 
 	/* Create border rects */
 	for (i = 0; i < 4; i++) {
@@ -5388,9 +5574,11 @@ on_client_map(struct wl_listener *listener, void *data)
 		c->border[i]->node.data = c;
 	}
 
-	/* Tell the surface it's tiled on all edges */
-	wlr_xdg_toplevel_set_tiled(c->xdg_toplevel,
-		WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
+	/* Tell the surface it's tiled on all edges (XDG-only protocol) */
+	if (!client_is_x11(c))
+		wlr_xdg_toplevel_set_tiled(c->xdg_toplevel,
+			WLR_EDGE_TOP | WLR_EDGE_BOTTOM |
+			WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
 
 	/* Account for borders in geometry */
 	c->geom.width  += 2 * (gint)c->bw;
@@ -5399,11 +5587,22 @@ on_client_map(struct wl_listener *listener, void *data)
 	/* Copy app_id/title onto the client for handler visibility.
 	 * These fields are normally populated by on_client_set_title /
 	 * the initial xdg configure, but we refresh them here so that
-	 * client-pre-map handlers see a consistent view. */
-	if (c->xdg_toplevel->app_id != NULL && c->app_id == NULL)
-		c->app_id = g_strdup(c->xdg_toplevel->app_id);
-	if (c->xdg_toplevel->title != NULL && c->title == NULL)
-		c->title = g_strdup(c->xdg_toplevel->title);
+	 * client-pre-map handlers see a consistent view.  X11 surfaces
+	 * expose `class` (as app_id) and `title`. */
+#ifdef GOWL_HAVE_XWAYLAND
+	if (client_is_x11(c)) {
+		if (c->xwayland_surface->class != NULL && c->app_id == NULL)
+			c->app_id = g_strdup(c->xwayland_surface->class);
+		if (c->xwayland_surface->title != NULL && c->title == NULL)
+			c->title = g_strdup(c->xwayland_surface->title);
+	} else
+#endif
+	{
+		if (c->xdg_toplevel->app_id != NULL && c->app_id == NULL)
+			c->app_id = g_strdup(c->xdg_toplevel->app_id);
+		if (c->xdg_toplevel->title != NULL && c->title == NULL)
+			c->title = g_strdup(c->xdg_toplevel->title);
+	}
 
 	/* Insert into client lists */
 	self->clients = g_list_prepend(self->clients, c);
@@ -5585,8 +5784,8 @@ on_client_map(struct wl_listener *listener, void *data)
 	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_ADDED], 0, c);
 
 	g_debug("Client mapped: %s (%s)",
-	        c->xdg_toplevel->title ? c->xdg_toplevel->title : "(untitled)",
-	        c->xdg_toplevel->app_id ? c->xdg_toplevel->app_id : "(no app_id)");
+	        c->title  != NULL ? c->title  : "(untitled)",
+	        c->app_id != NULL ? c->app_id : "(no app_id)");
 }
 
 /**
@@ -5646,14 +5845,31 @@ on_client_destroy(struct wl_listener *listener, void *data)
 	c = wl_container_of(listener, c, destroy_surface);
 	(void)data;
 
-	/* Remove all listeners */
-	wl_list_remove(&c->destroy_surface.link);
-	wl_list_remove(&c->set_title.link);
-	wl_list_remove(&c->fullscreen.link);
-	wl_list_remove(&c->maximize.link);
-	wl_list_remove(&c->commit.link);
-	wl_list_remove(&c->map.link);
-	wl_list_remove(&c->unmap.link);
+	/* Remove all listeners.  The registered set differs between XDG
+	 * and X11 clients (see on_new_xdg_toplevel / on_new_xwayland_surface),
+	 * so only remove what was actually added for this surface type. */
+#ifdef GOWL_HAVE_XWAYLAND
+	if (client_is_x11(c)) {
+		wl_list_remove(&c->destroy_surface.link);
+		wl_list_remove(&c->set_title.link);
+		wl_list_remove(&c->fullscreen.link);
+		wl_list_remove(&c->associate.link);
+		wl_list_remove(&c->dissociate.link);
+		wl_list_remove(&c->activate.link);
+		wl_list_remove(&c->configure.link);
+		/* map/unmap are added in associate and removed in
+		 * dissociate, which wlroots emits before destroy. */
+	} else
+#endif
+	{
+		wl_list_remove(&c->destroy_surface.link);
+		wl_list_remove(&c->set_title.link);
+		wl_list_remove(&c->fullscreen.link);
+		wl_list_remove(&c->maximize.link);
+		wl_list_remove(&c->commit.link);
+		wl_list_remove(&c->map.link);
+		wl_list_remove(&c->unmap.link);
+	}
 
 	g_debug("Client destroyed");
 	g_object_unref(c);
@@ -5710,11 +5926,22 @@ on_client_set_title(struct wl_listener *listener, void *data)
 	self = c->compositor;
 	(void)data;
 
-	g_free(c->title);
-	c->title = g_strdup(c->xdg_toplevel->title);
+#ifdef GOWL_HAVE_XWAYLAND
+	if (client_is_x11(c)) {
+		g_free(c->title);
+		c->title = g_strdup(c->xwayland_surface->title);
 
-	g_free(c->app_id);
-	c->app_id = g_strdup(c->xdg_toplevel->app_id);
+		g_free(c->app_id);
+		c->app_id = g_strdup(c->xwayland_surface->class);
+	} else
+#endif
+	{
+		g_free(c->title);
+		c->title = g_strdup(c->xdg_toplevel->title);
+
+		g_free(c->app_id);
+		c->app_id = g_strdup(c->xdg_toplevel->app_id);
+	}
 
 	/* Push title to IPC if this is the focused client */
 	focused = focustop(self, self->selmon);
@@ -5722,6 +5949,178 @@ on_client_set_title(struct wl_listener *listener, void *data)
 		gowl_ipc_push_event(self->ipc, "EVENT title %s",
 		                     c->title != NULL ? c->title : "");
 }
+
+#ifdef GOWL_HAVE_XWAYLAND
+/**
+ * on_xwayland_associate:
+ *
+ * Emitted when the X11 surface gains its inner wlr_surface.  At this
+ * point the real map/unmap signals become available, so we hook them
+ * (reusing the shared on_client_map / on_client_unmap handlers).
+ * Ported from dwl's associatex11().
+ */
+static void
+on_xwayland_associate(struct wl_listener *listener, void *data)
+{
+	GowlClient *c;
+
+	c = wl_container_of(listener, c, associate);
+	(void)data;
+
+	LISTEN(&c->xwayland_surface->surface->events.map,
+	       &c->map,   on_client_map);
+	LISTEN(&c->xwayland_surface->surface->events.unmap,
+	       &c->unmap, on_client_unmap);
+}
+
+/**
+ * on_xwayland_dissociate:
+ *
+ * Emitted when the X11 surface loses its inner wlr_surface.  Remove
+ * the map/unmap listeners added in on_xwayland_associate.
+ * Ported from dwl's dissociatex11().
+ */
+static void
+on_xwayland_dissociate(struct wl_listener *listener, void *data)
+{
+	GowlClient *c;
+
+	c = wl_container_of(listener, c, dissociate);
+	(void)data;
+
+	wl_list_remove(&c->map.link);
+	wl_list_remove(&c->unmap.link);
+}
+
+/**
+ * on_xwayland_request_configure:
+ *
+ * An X11 client asked to move/resize itself.  Unmanaged or floating
+ * clients are honoured directly; tiled clients have their managed
+ * geometry re-asserted.
+ * Ported from dwl's configurex11().
+ */
+static void
+on_xwayland_request_configure(struct wl_listener *listener, void *data)
+{
+	GowlClient *c;
+	GowlCompositor *self;
+	struct wlr_xwayland_surface_configure_event *ev;
+
+	c = wl_container_of(listener, c, configure);
+	self = c->compositor;
+	ev = (struct wlr_xwayland_surface_configure_event *)data;
+
+	/* Not yet mapped, or a floating client: honour the request
+	 * verbatim.  Otherwise re-assert the managed tiled geometry. */
+	if (c->scene == NULL || c->isfloating || c->isfullscreen) {
+		wlr_xwayland_surface_configure(c->xwayland_surface,
+		                               ev->x, ev->y, ev->width,
+		                               ev->height);
+		return;
+	}
+
+	resize_client(self, c, c->geom, FALSE);
+}
+
+/**
+ * on_xwayland_request_activate:
+ *
+ * An X11 client asked to be focused.
+ * Ported from dwl's activatex11().
+ */
+static void
+on_xwayland_request_activate(struct wl_listener *listener, void *data)
+{
+	GowlClient *c;
+
+	c = wl_container_of(listener, c, activate);
+	(void)data;
+
+	if (c->scene != NULL && c->compositor != NULL)
+		gowl_compositor_focus_client(c->compositor, c, TRUE);
+}
+
+/**
+ * on_new_xwayland_surface:
+ *
+ * Emitted when a new X11 window appears.  Creates a GowlClient backed
+ * by the wlr_xwayland_surface and wires its lifecycle listeners.  The
+ * inner wlr_surface and real map/unmap are not available until the
+ * associate event.
+ * Ported from dwl's createnotifyx11().
+ */
+static void
+on_new_xwayland_surface(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+	struct wlr_xwayland_surface *xsurface;
+	GowlClient *c;
+	gint border_width;
+
+	self = wl_container_of(listener, self, new_xwayland_surface);
+	xsurface = (struct wlr_xwayland_surface *)data;
+
+	c = (GowlClient *)g_object_new(GOWL_TYPE_CLIENT, NULL);
+	c->xwayland_surface = xsurface;
+	c->compositor       = self;
+	c->decoration       = NULL;
+	xsurface->data      = c;
+
+	/* Override-redirect surfaces (menus, tooltips, DND) are never
+	 * tiled; map them as floating clients through the shared map
+	 * path. */
+	if (xsurface->override_redirect)
+		c->isfloating = TRUE;
+
+	/* Set border width from config */
+	border_width = 1;
+	if (self->config != NULL)
+		g_object_get(self->config, "border-width", &border_width, NULL);
+	c->bw = (guint)border_width;
+
+	/* Register X11 surface lifecycle listeners.  map/unmap are added
+	 * later in on_xwayland_associate once the inner surface exists. */
+	LISTEN(&xsurface->events.associate,         &c->associate,
+	       on_xwayland_associate);
+	LISTEN(&xsurface->events.dissociate,        &c->dissociate,
+	       on_xwayland_dissociate);
+	LISTEN(&xsurface->events.destroy,           &c->destroy_surface,
+	       on_client_destroy);
+	LISTEN(&xsurface->events.request_configure, &c->configure,
+	       on_xwayland_request_configure);
+	LISTEN(&xsurface->events.request_activate,  &c->activate,
+	       on_xwayland_request_activate);
+	LISTEN(&xsurface->events.request_fullscreen, &c->fullscreen,
+	       on_client_fullscreen);
+	LISTEN(&xsurface->events.set_title,         &c->set_title,
+	       on_client_set_title);
+
+	g_debug("New XWayland surface created (%s)",
+	        xsurface->override_redirect ? "override-redirect" : "managed");
+}
+
+/**
+ * on_xwayland_ready:
+ *
+ * Emitted once the XWayland server is up and its display name is
+ * final.  Publish DISPLAY so X11 children launched from gowl find it.
+ */
+static void
+on_xwayland_ready(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+
+	self = wl_container_of(listener, self, xwayland_ready);
+	(void)data;
+
+	if (self->xwayland != NULL && self->xwayland->display_name != NULL) {
+		setenv("DISPLAY", self->xwayland->display_name, 1);
+		g_message("XWayland ready on DISPLAY=%s",
+		          self->xwayland->display_name);
+	}
+}
+#endif /* GOWL_HAVE_XWAYLAND */
 
 /**
  * on_new_xdg_popup:

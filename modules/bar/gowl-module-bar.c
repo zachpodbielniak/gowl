@@ -2356,6 +2356,18 @@ bar_redraw_all(GowlModuleBar *self)
 			   the bar toggled between TOP and BOTTOM. */
 			gowl_monitor_get_geometry(mon, &mon_x, &mon_y,
 			                          &mon_w, &mon_h);
+
+			/* Monitor resized: the cached surface buffer is the
+			   wrong width (signature and render below both use the
+			   stale surface->width).  Rebuild it at the new
+			   geometry -- bar_create_surface() destroys the old
+			   surface and renders a fresh buffer sized to mon_w. */
+			if (surface->width != mon_w ||
+			    surface->height != bar->bar_height) {
+				bar_create_surface(self, bar, mon);
+				continue;
+			}
+
 			surf_y = bar_surface_y(bar, mon_y, mon_h);
 			if (surface->mon_x != mon_x || surface->mon_y != surf_y) {
 				wlr_scene_node_set_position(

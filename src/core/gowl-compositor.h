@@ -27,6 +27,7 @@
 
 struct wlr_seat;
 struct wlr_renderer;
+struct wlr_output;
 
 G_BEGIN_DECLS
 
@@ -926,6 +927,22 @@ gboolean gowl_compositor_save_png (GBytes       *rgba_data,
  */
 void gowl_compositor_arrangelayers (GowlCompositor *self,
                                      GowlMonitor    *m);
+
+/**
+ * gowl_compositor_notify_output_resized:
+ * @self: a #GowlCompositor
+ * @output: the #wlr_output whose effective size just changed
+ *
+ * Re-reads @output's committed width/height into its #GowlMonitor and,
+ * when the geometry changed, resizes the root background, re-dispatches
+ * wallpaper and bar, and re-arranges layer-shell surfaces so external
+ * clients (e.g. the gowlbar status bar) are reconfigured to the new
+ * width.  Used by the output @request_state handler and by the nested
+ * libdecor resize path, which both change the output size outside the
+ * output-layout's own change notification.
+ */
+void gowl_compositor_notify_output_resized (GowlCompositor    *self,
+                                            struct wlr_output *output);
 
 G_END_DECLS
 

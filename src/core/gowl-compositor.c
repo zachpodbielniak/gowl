@@ -3915,6 +3915,60 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 }
 
 /**
+ * gowl_compositor_notify_output_resized:
+ *
+ * Re-read @output's committed size into its monitor and, when it
+ * changed, resize the root background, re-dispatch wallpaper/bar and
+ * re-arrange layer-shell surfaces so external clients (gowlbar) are
+ * reconfigured to the new width.  See the header for details.
+ */
+void
+gowl_compositor_notify_output_resized(GowlCompositor    *self,
+                                      struct wlr_output *output)
+{
+	GowlMonitor *m;
+	struct wlr_box new_box;
+
+	if (self == NULL || output == NULL)
+		return;
+
+	m = (GowlMonitor *)output->data;
+	if (m == NULL)
+		return;
+
+	new_box.x      = m->m.x;
+	new_box.y      = m->m.y;
+	new_box.width  = output->width;
+	new_box.height = output->height;
+
+	/* Heavy work (geometry, root bg, wallpaper rescale, bar render) only
+	 * when the size actually changed. */
+	if (!wlr_box_equal(&new_box, &m->m)) {
+		g_debug("output %s resized to %dx%d; re-arranging layers/bar",
+		        output->name, new_box.width, new_box.height);
+
+		m->m = new_box;
+		m->w = m->m;
+
+		if (self->root_bg != NULL)
+			wlr_scene_rect_set_size(self->root_bg,
+			                        new_box.width, new_box.height);
+
+		if (self->module_mgr != NULL) {
+			gowl_module_manager_dispatch_wallpaper_output(
+				self->module_mgr, self, m);
+			gowl_module_manager_dispatch_bar_render(
+				self->module_mgr, self, m);
+		}
+	}
+
+	/* Always re-arrange so layer-shell clients (gowlbar) are reconfigured
+	 * to the current width, even if m->m was already updated by the
+	 * output-layout change listener. */
+	gowl_compositor_arrangelayers(self, m);
+}
+
+/**
  * on_monitor_request_state:
  *
  * Handles output state change requests (e.g. mode change, DPMS).
@@ -3925,7 +3979,6 @@ on_monitor_request_state(struct wl_listener *listener, void *data)
 	GowlMonitor *m;
 	GowlCompositor *self;
 	struct wlr_output_event_request_state *ev;
-	struct wlr_box new_box;
 
 	m = wl_container_of(listener, m, request_state);
 	self = m->compositor;
@@ -3933,27 +3986,9 @@ on_monitor_request_state(struct wl_listener *listener, void *data)
 	wlr_output_commit_state(ev->output, ev->state);
 
 	/* After committing a state change (e.g. nested window resize),
-	 * read the effective dimensions directly from the output —
-	 * the layout's commit listener may not have fired yet. */
-	new_box.x = m->m.x;
-	new_box.y = m->m.y;
-	new_box.width  = ev->output->width;
-	new_box.height = ev->output->height;
-
-	if (!wlr_box_equal(&new_box, &m->m)) {
-		m->m = new_box;
-		m->w = m->m;
-		if (self->root_bg != NULL)
-			wlr_scene_rect_set_size(self->root_bg,
-			                        new_box.width, new_box.height);
-		if (self->module_mgr != NULL) {
-			gowl_module_manager_dispatch_wallpaper_output(
-				self->module_mgr, self, m);
-			gowl_module_manager_dispatch_bar_render(
-				self->module_mgr, self, m);
-		}
-		gowl_compositor_arrangelayers(self, m);
-	}
+	 * propagate the new size to the monitor, layers, wallpaper and bar.
+	 * The output-layout's own change listener may not have fired yet. */
+	gowl_compositor_notify_output_resized(self, ev->output);
 }
 
 /**

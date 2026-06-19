@@ -617,6 +617,8 @@ Gowl ships with several modules in the =modules/= directory:
 :END:
 The bar module renders a compositor-level status bar on the TOP scene layer. It shows the focused client title (left) and 25 configurable system widgets (right). The background is semi-transparent so the wallpaper shows through.
 
+The bar tracks each monitor's geometry: when an output is resized (a monitor mode change, or the host window of a nested =--gowl= session) its surface is rebuilt at the new width, so right-aligned widgets stay flush with the right edge.
+
 *Interfaces:* =GowlBarProvider=, =GowlStartupHandler=, =GowlShutdownHandler=
 
 *Configuration keys:*

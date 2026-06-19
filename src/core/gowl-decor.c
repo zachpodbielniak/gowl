@@ -140,6 +140,15 @@ frame_configure_cb(struct libdecor_frame *frame,
 			wlr_output_state_finish(&ostate);
 			g_debug("gowl-decor: output mode set to %dx%d",
 			        width, height);
+
+			/* The output-layout change listener does not fire for
+			 * this surface-backed nested output, so propagate the
+			 * new size explicitly: update the monitor geometry and
+			 * re-arrange layer-shell surfaces (the gowlbar status
+			 * bar) + wallpaper/bar to the new width.  Without this
+			 * the bar keeps its old size after a host resize. */
+			gowl_compositor_notify_output_resized(decor->compositor,
+			                                      decor->output);
 		}
 	}
 

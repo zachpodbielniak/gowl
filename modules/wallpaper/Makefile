@@ -12,7 +12,7 @@ OUT = $(OUTDIR)/$(MODULE_NAME).so
 
 all: $(OUT)
 
-$(OUT):
+$(OUT): $(SRC)
 	$(CC) $(CFLAGS) $(PKG_CFLAGS) -o $@ $(SRC) $(LDFLAGS) -L$(LIBDIR) -lgowl $(PKG_LIBS)
 
 clean:

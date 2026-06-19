@@ -372,6 +372,7 @@ install-deps:
 		gobject-introspection-devel \
 		libxcb-devel \
 		xcb-util-wm-devel \
+		xorg-x11-server-Xwayland \
 		libdrm-devel \
 		pixman-devel \
 		pango-devel \

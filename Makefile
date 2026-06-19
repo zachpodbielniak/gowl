@@ -81,6 +81,7 @@ LIB_SRCS := \
 	src/util/gowl-log.c \
 	src/util/gowl-wallpaper-scale.c \
 	src/core/gowl-compositor.c \
+	src/core/gowl-frame-sink.c \
 	src/core/gowl-lid-policy.c \
 	src/core/gowl-monitor.c \
 	src/core/gowl-client.c \
@@ -299,6 +300,8 @@ modules: lib $(OUTDIR)/modules
 
 # Build and run tests
 test: lib $(TEST_BINS)
+	@echo "Guard: gowl must not depend on libregnum/graylib/raylib..."
+	@sh tests/test-no-libregnum.sh
 	@echo "Running tests..."
 	@failed=0; \
 	for test in $(TEST_BINS); do \

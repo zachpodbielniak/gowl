@@ -300,10 +300,18 @@ render_lock_surface(
 
 	cr = cairo_create(cs);
 
-	/* Background */
-	cairo_set_source_rgba(cr, self->bg_color[0], self->bg_color[1],
-	                      self->bg_color[2], self->bg_color[3]);
-	cairo_paint(cr);
+	/* Background.  When the compositor is showing an externally-pushed
+	 * animated lock frame (e.g. a cmacs screensaver), leave this surface
+	 * transparent so the frame shows through behind the password box; the
+	 * box/dots/status text below are drawn opaque on top.  Otherwise paint
+	 * the configured solid background (default static-lock behaviour). */
+	if (self->compositor == NULL
+	    || !gowl_compositor_has_lock_frame(
+	            (GowlCompositor *)self->compositor)) {
+		cairo_set_source_rgba(cr, self->bg_color[0], self->bg_color[1],
+		                      self->bg_color[2], self->bg_color[3]);
+		cairo_paint(cr);
+	}
 
 	/* Center of screen */
 	cx = (gdouble)width / 2.0;
@@ -775,6 +783,10 @@ screenlock_on_lock(
 
 	if (self->is_locked)
 		return;
+
+	/* Remember the compositor so render_lock_surface() can consult its
+	 * animated-lock-frame state (set transparently when present). */
+	self->compositor = compositor;
 
 	self->is_locked = TRUE;
 	self->auth_failed = FALSE;

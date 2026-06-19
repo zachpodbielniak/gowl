@@ -332,6 +332,94 @@ struct wlr_scene_tree *gowl_compositor_get_scene_layer (GowlCompositor *self,
                                                          gint            layer);
 
 /**
+ * gowl_compositor_push_wallpaper_frame:
+ * @self: a #GowlCompositor
+ * @monitor: (nullable): the target monitor name, or %NULL for every enabled
+ *   monitor (the same frame is placed on each)
+ * @pixels: (array): raw ARGB8888 pixels (DRM_FORMAT_ARGB8888 byte order;
+ *   equivalently the bytes glReadPixels(GL_BGRA) yields)
+ * @width: frame width in pixels
+ * @height: frame height in pixels
+ * @stride: bytes per row (>= @width * 4)
+ *
+ * Displays an externally-produced frame as the wallpaper, on a per-monitor
+ * scene buffer drawn ABOVE the static wallpaper image (so clearing it reveals
+ * the original wallpaper).  Pixels are copied; the caller's buffer may be
+ * reused immediately.  gowl does NOT render the frame and gains no rendering
+ * dependency — only the pixels cross the boundary.  A no-op on invalid dims,
+ * %NULL pixels, or an unknown monitor.
+ */
+void gowl_compositor_push_wallpaper_frame (GowlCompositor *self,
+                                           const char     *monitor,
+                                           const guint8   *pixels,
+                                           gint            width,
+                                           gint            height,
+                                           gint            stride);
+
+/**
+ * gowl_compositor_clear_wallpaper_frame:
+ * @self: a #GowlCompositor
+ * @monitor: (nullable): the monitor name to clear, or %NULL for all
+ *
+ * Removes the animated wallpaper frame(s), revealing the static wallpaper.
+ */
+void gowl_compositor_clear_wallpaper_frame (GowlCompositor *self,
+                                            const char     *monitor);
+
+/**
+ * gowl_compositor_push_lock_frame:
+ * @self: a #GowlCompositor
+ * @monitor: the target monitor name
+ * @pixels: (array): raw ARGB8888 pixels (see push_wallpaper_frame)
+ * @width: frame width in pixels
+ * @height: frame height in pixels
+ * @stride: bytes per row (>= @width * 4)
+ *
+ * Displays an externally-produced frame as the lock-screen background, on the
+ * session-lock (BLOCK) layer, kept beneath the password UI.  While a lock
+ * frame is present the compositor's solid lock backdrop is hidden so the frame
+ * shows through.  A no-op on invalid dims, %NULL pixels, or an unknown monitor.
+ */
+void gowl_compositor_push_lock_frame (GowlCompositor *self,
+                                      const char     *monitor,
+                                      const guint8   *pixels,
+                                      gint            width,
+                                      gint            height,
+                                      gint            stride);
+
+/**
+ * gowl_compositor_clear_lock_frame:
+ * @self: a #GowlCompositor
+ * @monitor: (nullable): the monitor name to clear, or %NULL for all
+ *
+ * Removes the animated lock background frame(s) and restores the solid lock
+ * backdrop when none remain.
+ */
+void gowl_compositor_clear_lock_frame (GowlCompositor *self,
+                                       const char     *monitor);
+
+/**
+ * gowl_compositor_has_lock_frame:
+ * @self: a #GowlCompositor
+ *
+ * Returns: %TRUE if an animated lock background frame is currently set on any
+ *   monitor.  The screenlock module consults this to render its password
+ *   surface transparently so the frame shows behind it.
+ */
+gboolean gowl_compositor_has_lock_frame (GowlCompositor *self);
+
+/**
+ * gowl_compositor_monitor_bg_covered:
+ * @self: a #GowlCompositor
+ * @monitor: the monitor name to test
+ *
+ * Returns: %TRUE if @monitor's wallpaper is fully occluded by a visible
+ *   fullscreen client (so an animated wallpaper can pause rendering it).
+ */
+gboolean gowl_compositor_monitor_bg_covered (GowlCompositor *self,
+                                             const char     *monitor);
+
+/**
  * gowl_compositor_get_clients:
  * @self: a #GowlCompositor
  *

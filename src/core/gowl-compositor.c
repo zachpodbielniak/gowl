@@ -21,6 +21,7 @@
 #include "module/gowl-module-manager.h"
 #include "interfaces/gowl-client-decorator.h"
 #include "core/gowl-lid-policy.h"
+#include "core/gowl-frame-sink.h"
 
 #ifdef GOWL_HAVE_LIBDECOR
 #include "gowl-decor.h"
@@ -299,6 +300,11 @@ gowl_compositor_finalize(GObject *object)
 	GowlCompositor *self;
 
 	self = GOWL_COMPOSITOR(object);
+
+	/* Drop external raw-frame sinks while their scene nodes are still valid
+	 * (before the scene/display teardown below). */
+	g_clear_pointer(&self->wallpaper_sink, gowl_frame_sink_free);
+	g_clear_pointer(&self->lock_sink, gowl_frame_sink_free);
 
 	/* Teardown in reverse order of setup, following dwl's cleanup() */
 	if (self->wl_display != NULL) {
@@ -970,6 +976,166 @@ gowl_compositor_get_scene_layer(
 	g_return_val_if_fail(layer >= 0 && layer < GOWL_SCENE_LAYER_COUNT, NULL);
 
 	return self->layers[layer];
+}
+
+/* ---------------------------------------------------------------------------
+ * External raw-frame sinks (animated wallpaper / lock background).
+ *
+ * gowl renders none of this: an outside producer (cmacs, rendering libregnum
+ * screensavers) pushes finished ARGB8888 pixels and gowl just wraps them in a
+ * per-monitor scene buffer.  See gowl-frame-sink.h.
+ * ------------------------------------------------------------------------- */
+
+static GowlMonitor *
+compositor_monitor_by_name(GowlCompositor *self, const char *name)
+{
+	GList *l;
+
+	if (name == NULL)
+		return NULL;
+	for (l = self->monitors; l != NULL; l = l->next) {
+		GowlMonitor *m = (GowlMonitor *)l->data;
+		if (g_strcmp0(gowl_monitor_get_name(m), name) == 0)
+			return m;
+	}
+	return NULL;
+}
+
+void
+gowl_compositor_push_wallpaper_frame(
+	GowlCompositor *self,
+	const char     *monitor,
+	const guint8   *pixels,
+	gint            width,
+	gint            height,
+	gint            stride
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wallpaper_sink == NULL)
+		self->wallpaper_sink = gowl_frame_sink_new(
+			self->layers[GOWL_SCENE_LAYER_BG], FALSE);
+
+	if (monitor != NULL) {
+		GowlMonitor *m = compositor_monitor_by_name(self, monitor);
+		gint x, y, mw, mh;
+		if (m == NULL)
+			return;
+		gowl_monitor_get_geometry(m, &x, &y, &mw, &mh);
+		(void)mw; (void)mh;
+		gowl_frame_sink_push(self->wallpaper_sink, monitor,
+		                     x, y, pixels, width, height, stride);
+	} else {
+		GList *l;
+		for (l = self->monitors; l != NULL; l = l->next) {
+			GowlMonitor *m = (GowlMonitor *)l->data;
+			gint x, y, mw, mh;
+			if (!gowl_monitor_get_enabled(m))
+				continue;
+			gowl_monitor_get_geometry(m, &x, &y, &mw, &mh);
+			(void)mw; (void)mh;
+			gowl_frame_sink_push(self->wallpaper_sink,
+			                     gowl_monitor_get_name(m),
+			                     x, y, pixels, width, height, stride);
+		}
+	}
+}
+
+void
+gowl_compositor_clear_wallpaper_frame(GowlCompositor *self, const char *monitor)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wallpaper_sink == NULL)
+		return;
+	if (monitor != NULL)
+		gowl_frame_sink_clear(self->wallpaper_sink, monitor);
+	else
+		gowl_frame_sink_clear_all(self->wallpaper_sink);
+	if (gowl_frame_sink_is_empty(self->wallpaper_sink))
+		g_clear_pointer(&self->wallpaper_sink, gowl_frame_sink_free);
+}
+
+void
+gowl_compositor_push_lock_frame(
+	GowlCompositor *self,
+	const char     *monitor,
+	const guint8   *pixels,
+	gint            width,
+	gint            height,
+	gint            stride
+){
+	GowlMonitor *m;
+	gint x, y, mw, mh;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (monitor == NULL)
+		return;
+	m = compositor_monitor_by_name(self, monitor);
+	if (m == NULL)
+		return;
+
+	if (self->lock_sink == NULL) {
+		self->lock_sink = gowl_frame_sink_new(
+			self->layers[GOWL_SCENE_LAYER_BLOCK], TRUE);
+		/* The animated frame now provides the lock backdrop, so hide the
+		 * solid lock rect (it would otherwise sit above the frame and
+		 * occlude it).  Restored when the last lock frame is cleared. */
+		if (self->locked_bg != NULL)
+			wlr_scene_node_set_enabled(&self->locked_bg->node, FALSE);
+	}
+
+	gowl_monitor_get_geometry(m, &x, &y, &mw, &mh);
+	(void)mw; (void)mh;
+	gowl_frame_sink_push(self->lock_sink, monitor,
+	                     x, y, pixels, width, height, stride);
+}
+
+void
+gowl_compositor_clear_lock_frame(GowlCompositor *self, const char *monitor)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->lock_sink == NULL)
+		return;
+	if (monitor != NULL)
+		gowl_frame_sink_clear(self->lock_sink, monitor);
+	else
+		gowl_frame_sink_clear_all(self->lock_sink);
+	if (gowl_frame_sink_is_empty(self->lock_sink)) {
+		g_clear_pointer(&self->lock_sink, gowl_frame_sink_free);
+		/* Restore the solid lock backdrop while still locked. */
+		if (self->locked && self->locked_bg != NULL)
+			wlr_scene_node_set_enabled(&self->locked_bg->node, TRUE);
+	}
+}
+
+gboolean
+gowl_compositor_has_lock_frame(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	return self->lock_sink != NULL
+	       && !gowl_frame_sink_is_empty(self->lock_sink);
+}
+
+gboolean
+gowl_compositor_monitor_bg_covered(GowlCompositor *self, const char *monitor)
+{
+	GowlMonitor *m;
+	GList *l;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	m = compositor_monitor_by_name(self, monitor);
+	if (m == NULL)
+		return FALSE;
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+		if (c->mon == m && c->isfullscreen && VISIBLEON(c, m))
+			return TRUE;
+	}
+	return FALSE;
 }
 
 /**
@@ -3826,6 +3992,28 @@ on_lid_switch_destroy(struct wl_listener *listener, void *data)
 	self->lid_switch = NULL;
 }
 
+/* Parse a "WxH" output-size string (e.g. "1920x1080") into pixels.  Returns
+ * TRUE and fills *W and *H on a valid, positive parse; FALSE otherwise.  Used
+ * for the GOWL_OUTPUT_SIZE override of the nested/headless default mode. */
+static gboolean
+gowl_parse_output_size(const char *s, int *w, int *h)
+{
+	long lw, lh;
+	char *end = NULL;
+
+	if (s == NULL || *s == '\0')
+		return FALSE;
+	lw = strtol(s, &end, 10);
+	if (end == s || (*end != 'x' && *end != 'X'))
+		return FALSE;
+	lh = strtol(end + 1, &end, 10);
+	if (*end != '\0' || lw <= 0 || lh <= 0 || lw > 30000 || lh > 30000)
+		return FALSE;
+	*w = (int)lw;
+	*h = (int)lh;
+	return TRUE;
+}
+
 /**
  * on_new_output:
  *
@@ -3913,10 +4101,18 @@ on_new_output(struct wl_listener *listener, void *data)
 	 * list — their size comes from the first configure event. */
 	{
 		struct wlr_output_mode *pref;
+		int env_w = 0, env_h = 0;
 
 		pref = wlr_output_preferred_mode(wlr_output);
 		if (pref != NULL)
+			/* Real monitor with a mode list: use its native mode. */
 			wlr_output_state_set_mode(&state, pref);
+		else if (gowl_parse_output_size(getenv("GOWL_OUTPUT_SIZE"),
+		                                &env_w, &env_h))
+			/* Nested/headless: user-configured size overrides the
+			 * default (set GOWL_OUTPUT_SIZE=WxH, e.g. 1920x1080). */
+			wlr_output_state_set_custom_mode(&state,
+				env_w, env_h, 0);
 		else if (wlr_output->width > 0 && wlr_output->height > 0)
 			wlr_output_state_set_custom_mode(&state,
 				wlr_output->width, wlr_output->height, 0);
@@ -4036,6 +4232,10 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 	if (self->module_mgr != NULL)
 		gowl_module_manager_dispatch_wallpaper_output_destroy(
 			self->module_mgr, m);
+
+	/* Drop any external raw frames keyed to this monitor. */
+	gowl_compositor_clear_wallpaper_frame(self, gowl_monitor_get_name(m));
+	gowl_compositor_clear_lock_frame(self, gowl_monitor_get_name(m));
 
 	/* Remove from output layout */
 	wlr_output_layout_remove(self->output_layout, m->wlr_output);

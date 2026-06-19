@@ -100,6 +100,13 @@ docs/                       # Documentation (architecture, building, configurati
 - `gobject-introspection-1.0` (GIR generation, controlled by `BUILD_GIR`)
 - `libdecor-0` (window decorations for nested Wayland sessions, auto-detected)
 
+> **Do not add a rendering-engine dependency.** The raw-frame sink
+> (`src/core/gowl-frame-sink.{c,h}`, see *Raw Frame Sink* in
+> `docs/architecture.org`) lets external producers (e.g. cmacs screensavers)
+> hand gowl finished ARGB8888 pixels — gowl must stay free of `libregnum` /
+> `graylib` / `raylib` / GL. `tests/test-no-libregnum.sh` (run by `make test`)
+> enforces this and will fail the build if those symbols/headers leak in.
+
 ## Architecture Notes
 
 ### Type Hierarchy

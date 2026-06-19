@@ -250,6 +250,13 @@ struct _GowlCompositor {
 	struct wl_listener  lid_toggle;          /* wlr_switch->events.toggle */
 	struct wl_listener  lid_switch_destroy;  /* lid device destroy */
 
+	/* Externally-pushed raw-frame sinks (see gowl-frame-sink.h).  gowl does
+	 * NOT render these — an outside producer (e.g. cmacs rendering libregnum
+	 * screensavers) hands in finished ARGB8888 frames, so gowl gains no
+	 * libregnum/GL dependency.  Owned, created lazily, nullable. */
+	GowlFrameSink      *wallpaper_sink;      /* BG layer, above static wallpaper */
+	GowlFrameSink      *lock_sink;           /* BLOCK layer, kept at bottom */
+
 	/* border colours parsed from config (RGBA floats) */
 	float focus_color[4];
 	float unfocus_color[4];

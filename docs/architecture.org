@@ -316,3 +316,50 @@ unmodified X11 applications run inside the session.
 Build without it via =make BUILD_XWAYLAND=0= (drops the =xcb= /
 =xcb-icccm= dependencies); the X11 code is then compiled out behind
 =GOWL_HAVE_XWAYLAND= and the compositor is Wayland-only.
+
+** Raw Frame Sink (External Animated Backgrounds)
+
+Gowl can display *externally produced* frames as the wallpaper or the
+lock-screen background without rendering them itself and *without depending on
+any rendering engine*.  Only a plain pixel span crosses the boundary, so an
+outside producer (e.g. a cmacs build rendering libregnum screensavers) keeps
+all of the GL / engine code on its side.
+
+- =GowlRawBuffer= (=src/core/gowl-frame-sink.{c,h}=) wraps a caller-supplied
+  =ARGB8888= buffer =(pixels, width, height, stride)= in a =struct
+  wlr_buffer=.  The byte order is =DRM_FORMAT_ARGB8888= — little-endian
+  =B,G,R,A=, exactly what =glReadPixels(GL_BGRA)= yields, so no channel
+  swizzle is needed.  Pixels are *copied*, so the caller may reuse its buffer
+  immediately.
+- =GowlFrameSink= owns one =wlr_scene_buffer= per monitor on a chosen scene
+  layer.  =gowl_frame_sink_push()= creates-or-swaps the per-monitor buffer
+  (cheap =wlr_scene_buffer_set_buffer= on re-push); =clear= / =clear_all= tear
+  the nodes down.  A =keep_at_bottom= flag lowers each pushed node to the
+  bottom of its layer (used for the lock background so the password UI on the
+  same layer stays above it).
+
+The compositor exposes this as:
+
+#+BEGIN_SRC c
+void     gowl_compositor_push_wallpaper_frame (self, monitor, px, w, h, stride);
+void     gowl_compositor_clear_wallpaper_frame(self, monitor);   /* NULL = all */
+void     gowl_compositor_push_lock_frame      (self, monitor, px, w, h, stride);
+void     gowl_compositor_clear_lock_frame     (self, monitor);
+gboolean gowl_compositor_has_lock_frame       (self);
+gboolean gowl_compositor_monitor_bg_covered   (self, monitor);
+#+END_SRC
+
+- *Wallpaper frames* go on the =BG= layer, drawn *above* the static wallpaper
+  image, so clearing them reveals the original wallpaper.
+  =monitor_bg_covered= reports whether a monitor's wallpaper is fully occluded
+  by a visible fullscreen client, letting an animated producer pause it.
+- *Lock frames* go on the =BLOCK= (session-lock) layer, kept beneath the
+  password UI; while a lock frame is present the solid lock backdrop
+  (=locked_bg=) is hidden so the frame shows through, and the screenlock
+  module renders its password surface transparently (so the box, dots, and
+  status text composite on top).  =has_lock_frame= is how screenlock knows.
+
+*Invariant:* none of this links =libregnum=, =graylib=, =raylib=, or GL — the
+sink sources only wlroots / glib / pixman.  =tests/test-no-libregnum.sh=
+(run by =make test=) fails the build if any =lrg_*= / =grl_*= symbol or engine
+header ever leaks into =libgowl= or a module.

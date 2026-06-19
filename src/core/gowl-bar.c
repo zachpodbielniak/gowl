@@ -200,3 +200,41 @@ gowl_bar_set_visible(
 
 	self->visible = visible;
 }
+
+gint
+gowl_bar_tag_hit(
+	gint x,
+	gint y,
+	gint monitor_height,
+	gint top_height,
+	gint bottom_height,
+	gint pad,
+	gint tag_count
+){
+	gint box_w, idx;
+
+	/* Which slot's vertical band (if any) does @y fall in?  A height
+	   of 0 means that slot draws no tag row, so it is skipped. */
+	if (top_height > 0 && y >= 0 && y < top_height) {
+		box_w = top_height;
+	} else if (bottom_height > 0 &&
+	           y >= monitor_height - bottom_height &&
+	           y < monitor_height) {
+		box_w = bottom_height;
+	} else {
+		return -1;
+	}
+
+	if (tag_count <= 0 || box_w <= 0)
+		return -1;
+
+	/* Boxes run left to right from @pad, each @box_w wide. */
+	if (x < pad || x >= pad + tag_count * box_w)
+		return -1;
+
+	idx = (x - pad) / box_w;
+	if (idx < 0 || idx >= tag_count)
+		return -1;
+
+	return idx;
+}

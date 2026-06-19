@@ -1249,6 +1249,35 @@ gowl_module_manager_get_bar_insets(
 	if (bottom != NULL) *bottom = b_acc;
 }
 
+gint
+gowl_module_manager_bar_tag_at(
+	GowlModuleManager *self,
+	gpointer           monitor,
+	gint               x,
+	gint               y
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), -1);
+
+	for (i = 0; i < self->bar_providers->len; i++) {
+		GowlBarProvider *provider;
+		gint tag;
+
+		provider = (GowlBarProvider *)g_ptr_array_index(
+			self->bar_providers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(provider)))
+			continue;
+
+		tag = gowl_bar_provider_tag_at(provider, monitor, x, y);
+		if (tag >= 0)
+			return tag;
+	}
+
+	return -1;
+}
+
 /**
  * gowl_module_manager_dispatch_bar_render:
  * @self: a #GowlModuleManager

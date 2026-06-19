@@ -142,6 +142,14 @@ void                gowl_module_manager_dispatch_bar_render
                                                            gpointer           compositor,
                                                            gpointer           monitor);
 
+/* Hit-test monitor-local (@x, @y) to a 0-based tag index across the
+   active bar providers, or -1 if not over a tag.  Powers clickable
+   tags. */
+gint                gowl_module_manager_bar_tag_at        (GowlModuleManager *self,
+                                                           gpointer           monitor,
+                                                           gint               x,
+                                                           gint               y);
+
 /**
  * gowl_module_manager_get_decorator:
  * @self: a #GowlModuleManager

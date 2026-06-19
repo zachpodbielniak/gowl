@@ -37,6 +37,28 @@ gboolean    gowl_bar_is_visible   (GowlBar  *self);
 void        gowl_bar_set_visible  (GowlBar  *self,
                                    gboolean  visible);
 
+/**
+ * gowl_bar_tag_hit:
+ * @x: x coordinate relative to the monitor's left edge
+ * @y: y coordinate relative to the monitor's top edge
+ * @monitor_height: the monitor's height in pixels
+ * @top_height: height of the top tag bar, or 0 if it has no tag row
+ * @bottom_height: height of the bottom tag bar, or 0 if none
+ * @pad: left padding before the first tag box
+ * @tag_count: number of tag boxes (each @top_height/@bottom_height wide)
+ *
+ * Pure geometry hit-test for the left-edge tag indicator.  Returns the
+ * 0-based tag index whose box contains (@x, @y), or -1 when the point
+ * is outside every tag box (wrong vertical band, in the left padding,
+ * or past the last box).  Stateless so it can be unit-tested directly;
+ * the bar module supplies the per-slot heights.
+ *
+ * Returns: the 0-based tag index, or -1
+ */
+gint        gowl_bar_tag_hit      (gint x, gint y, gint monitor_height,
+                                   gint top_height, gint bottom_height,
+                                   gint pad, gint tag_count);
+
 G_END_DECLS
 
 #endif /* GOWL_BAR_H */

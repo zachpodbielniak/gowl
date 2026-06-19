@@ -46,6 +46,8 @@
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"
 #include "core/gowl-monitor.h"
+#include "core/gowl-bar.h"
+#include "config/gowl-config.h"
 #include "boxed/gowl-process-info.h"
 
 /* ----------------------------------------------------------------
@@ -232,6 +234,17 @@ typedef struct {
 	gdouble  title_delimiter_color[4];    /* color for delimiter chars */
 	gdouble  title_palette[8][4];         /* segment color cycle */
 	gint     title_palette_size;          /* 0 = disabled, use fg_color */
+
+	/* dwm-style tag indicator (left edge, before the title).  States:
+	   active = selected on this output, urgent = has urgent client,
+	   occupied = has clients, empty = none. */
+	gboolean show_tags;                   /* draw the tag row */
+	gdouble  tag_active_bg[4];            /* selected tag fill */
+	gdouble  tag_active_fg[4];            /* selected tag number */
+	gdouble  tag_occupied_fg[4];          /* occupied, non-selected */
+	gdouble  tag_urgent_bg[4];            /* urgent tag fill */
+	gdouble  tag_urgent_fg[4];            /* urgent tag number */
+	gdouble  tag_empty_fg[4];             /* empty tag number */
 
 	/* Widgets */
 	BarWidget widgets[BAR_MAX_WIDGETS];
@@ -1796,9 +1809,133 @@ render_ansi_text(const gchar *input, const gdouble base_color[4],
  * Rendering
  * ---------------------------------------------------------------- */
 
+/* Number of tags to display, from the compositor config (9 when
+   unavailable). */
+static gint
+bar_tag_count(GowlModuleBar *self)
+{
+	GowlConfig *config;
+
+	if (self->compositor == NULL)
+		return 9;
+	config = gowl_compositor_get_config(GOWL_COMPOSITOR(self->compositor));
+	if (config == NULL)
+		return 9;
+	return gowl_config_get_tag_count(config);
+}
+
+/* Compute the selected / occupied / urgent tag bitmasks for @monitor.
+   @selected is the monitor's viewed tag set; @occupied / @urgent are
+   the union of tags across that monitor's clients.  Shared by the
+   renderer and the redraw-signature so the two never drift. */
+static void
+bar_compute_tag_masks(GowlModuleBar *self, GowlMonitor *monitor,
+                      guint32 *selected, guint32 *occupied,
+                      guint32 *urgent)
+{
+	GowlCompositor *comp;
+	GList *clients, *l;
+
+	*selected = 0;
+	*occupied = 0;
+	*urgent   = 0;
+
+	if (monitor == NULL || self->compositor == NULL)
+		return;
+
+	comp = GOWL_COMPOSITOR(self->compositor);
+	*selected = gowl_monitor_get_tags(monitor);
+
+	clients = gowl_compositor_get_clients(comp);
+	for (l = clients; l != NULL; l = l->next) {
+		GowlClient *c = GOWL_CLIENT(l->data);
+		guint32 ct;
+
+		if (gowl_client_get_monitor(c) != monitor)
+			continue;
+		ct = gowl_client_get_tags(c);
+		*occupied |= ct;
+		if (gowl_client_get_urgent(c))
+			*urgent |= ct;
+	}
+}
+
+/* Draw the dwm-style tag indicator at the left edge of @bar for
+   @monitor.  Returns the x coordinate just past the row, where the
+   title should start.  Reads the selected tag set from @monitor and
+   scans the compositor's clients for occupied / urgent tags. */
+static gint
+bar_render_tags(GowlModuleBar *self, GowlBarInstance *bar,
+                GowlMonitor *monitor, cairo_t *cr,
+                PangoLayout *layout, gint height,
+                gint start_x, gint text_y)
+{
+	guint32 sel_mask, occ_mask, urg_mask;
+	gint tag_count, box_w, x, i;
+
+	if (!bar->show_tags || monitor == NULL || self->compositor == NULL)
+		return start_x;
+
+	bar_compute_tag_masks(self, monitor, &sel_mask, &occ_mask, &urg_mask);
+
+	tag_count = bar_tag_count(self);
+	box_w = height;          /* square boxes matching the bar height */
+	x = start_x;
+
+	for (i = 0; i < tag_count; i++) {
+		guint32 bit = (guint32)1u << i;
+		gboolean is_sel = (sel_mask & bit) != 0;
+		gboolean is_urg = (urg_mask & bit) != 0;
+		gboolean is_occ = (occ_mask & bit) != 0;
+		const gdouble *fg;
+		char label[8];
+		PangoRectangle lg;
+
+		if (is_urg) {
+			cairo_set_source_rgba(cr, bar->tag_urgent_bg[0],
+				bar->tag_urgent_bg[1], bar->tag_urgent_bg[2],
+				bar->tag_urgent_bg[3]);
+			cairo_rectangle(cr, x, 0, box_w, height);
+			cairo_fill(cr);
+			fg = bar->tag_urgent_fg;
+		} else if (is_sel) {
+			cairo_set_source_rgba(cr, bar->tag_active_bg[0],
+				bar->tag_active_bg[1], bar->tag_active_bg[2],
+				bar->tag_active_bg[3]);
+			cairo_rectangle(cr, x, 0, box_w, height);
+			cairo_fill(cr);
+			fg = bar->tag_active_fg;
+		} else if (is_occ) {
+			fg = bar->tag_occupied_fg;
+		} else {
+			fg = bar->tag_empty_fg;
+		}
+
+		g_snprintf(label, sizeof(label), "%d", i + 1);
+		pango_layout_set_width(layout, -1);
+		pango_layout_set_text(layout, label, -1);
+		pango_layout_get_pixel_extents(layout, NULL, &lg);
+		cairo_set_source_rgba(cr, fg[0], fg[1], fg[2], fg[3]);
+		cairo_move_to(cr, x + (box_w - lg.width) / 2, text_y);
+		pango_cairo_show_layout(cr, layout);
+
+		/* Small corner marker for occupied, non-selected tags
+		   (dwm convention). */
+		if (is_occ && !is_sel && !is_urg) {
+			cairo_set_source_rgba(cr, fg[0], fg[1], fg[2], fg[3]);
+			cairo_rectangle(cr, x + 2.0, 2.0, 3.0, 3.0);
+			cairo_fill(cr);
+		}
+
+		x += box_w;
+	}
+
+	return x + 8;            /* gap before the title */
+}
+
 static BarBuffer *
 bar_render(GowlModuleBar *self, GowlBarInstance *bar,
-           gint width, gint height)
+           GowlMonitor *monitor, gint width, gint height)
 {
 	cairo_surface_t *cs;
 	cairo_t *cr;
@@ -1813,6 +1950,8 @@ bar_render(GowlModuleBar *self, GowlBarInstance *bar,
 	GowlClient *focused;
 	const gchar *title;
 	gint right_x;
+	gint left_x;
+	gint title_w;
 	gint i;
 	char wtext[128];
 	gint separator_w;
@@ -1841,6 +1980,10 @@ bar_render(GowlModuleBar *self, GowlBarInstance *bar,
 	pango_layout_get_pixel_extents(layout, &ink, &logical);
 	separator_w = logical.width;
 
+	/* Left edge: dwm-style tag indicator, then the title. */
+	left_x = bar_render_tags(self, bar, monitor, cr, layout, height,
+	                         padding, text_y);
+
 	/* Left: title */
 	if (bar->custom_title != NULL && bar->custom_title[0] != '\0') {
 		title = bar->custom_title;
@@ -1854,7 +1997,11 @@ bar_render(GowlModuleBar *self, GowlBarInstance *bar,
 	}
 
 	pango_layout_set_text(layout, title, -1);
-	pango_layout_set_width(layout, (width / 2 - padding * 2) * PANGO_SCALE);
+	/* Title occupies from the tag row's right edge to mid-bar. */
+	title_w = width / 2 - left_x - padding;
+	if (title_w < 0)
+		title_w = 0;
+	pango_layout_set_width(layout, title_w * PANGO_SCALE);
 	pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
 
 	/* Colorize title: split on delimiters, cycle palette colors */
@@ -1909,7 +2056,7 @@ bar_render(GowlModuleBar *self, GowlBarInstance *bar,
 		                      bar->fg_color[2], bar->fg_color[3]);
 	}
 
-	cairo_move_to(cr, padding, text_y);
+	cairo_move_to(cr, left_x, text_y);
 	/* When using pango attributes, set cairo source to white so
 	 * the attribute colors are used directly. */
 	if (bar->title_palette_size > 0)
@@ -2039,7 +2186,7 @@ bar_create_surface(GowlModuleBar *self, GowlBarInstance *bar,
 	if (top_layer == NULL)
 		return;
 
-	buf = bar_render(self, bar, mon_w, bar->bar_height);
+	buf = bar_render(self, bar, monitor, mon_w, bar->bar_height);
 
 	surf_y = bar_surface_y(bar, mon_y, mon_h);
 
@@ -2075,7 +2222,7 @@ bar_create_surface(GowlModuleBar *self, GowlBarInstance *bar,
    previous tick. */
 static gchar *
 bar_build_signature(GowlModuleBar *self, GowlBarInstance *bar,
-                    gint width, gint height)
+                    GowlMonitor *monitor, gint width, gint height)
 {
 	GString *s;
 	GowlClient *focused;
@@ -2086,6 +2233,17 @@ bar_build_signature(GowlModuleBar *self, GowlBarInstance *bar,
 	s = g_string_sized_new(256);
 
 	g_string_append_printf(s, "g:%dx%d;", width, height);
+
+	/* Tag indicator state: a change to selected / occupied / urgent
+	   tags must force a repaint even when nothing else changed. */
+	if (bar->show_tags) {
+		guint32 sel_mask, occ_mask, urg_mask;
+
+		bar_compute_tag_masks(self, monitor, &sel_mask, &occ_mask,
+		                      &urg_mask);
+		g_string_append_printf(s, "tg:%u,%u,%u;",
+		                       sel_mask, occ_mask, urg_mask);
+	}
 	g_string_append_printf(s, "bg:%.3f,%.3f,%.3f,%.3f;",
 	                       bar->bg_color[0], bar->bg_color[1],
 	                       bar->bg_color[2], bar->bg_color[3]);
@@ -2208,7 +2366,7 @@ bar_redraw_all(GowlModuleBar *self)
 
 			/* Skip the cairo/pango render + scene buffer swap when
 			   nothing visible has changed. */
-			sig = bar_build_signature(self, bar,
+			sig = bar_build_signature(self, bar, mon,
 			                          surface->width, surface->height);
 			if (surface->last_signature != NULL &&
 			    strcmp(sig, surface->last_signature) == 0) {
@@ -2218,7 +2376,7 @@ bar_redraw_all(GowlModuleBar *self)
 			g_free(surface->last_signature);
 			surface->last_signature = sig;
 
-			buf = bar_render(self, bar,
+			buf = bar_render(self, bar, mon,
 			                  surface->width, surface->height);
 			wlr_scene_buffer_set_buffer(surface->scene_buf, &buf->base);
 			wlr_buffer_drop(&buf->base);
@@ -2441,6 +2599,33 @@ bar_configure(GowlModule *mod, gpointer config)
 	if (val != NULL)
 		parse_hex_color(val, bar->fg_color);
 
+	/* Tag indicator: visibility toggle + per-state colours. */
+	val = (const gchar *)g_hash_table_lookup(settings, "show-tags");
+	if (val != NULL)
+		bar->show_tags = (g_ascii_strcasecmp(val, "true") == 0
+		    || g_ascii_strcasecmp(val, "t")   == 0
+		    || g_ascii_strcasecmp(val, "1")   == 0
+		    || g_ascii_strcasecmp(val, "yes") == 0);
+
+	val = (const gchar *)g_hash_table_lookup(settings, "tag-active-bg");
+	if (val != NULL)
+		parse_hex_color(val, bar->tag_active_bg);
+	val = (const gchar *)g_hash_table_lookup(settings, "tag-active-fg");
+	if (val != NULL)
+		parse_hex_color(val, bar->tag_active_fg);
+	val = (const gchar *)g_hash_table_lookup(settings, "tag-occupied-fg");
+	if (val != NULL)
+		parse_hex_color(val, bar->tag_occupied_fg);
+	val = (const gchar *)g_hash_table_lookup(settings, "tag-urgent-bg");
+	if (val != NULL)
+		parse_hex_color(val, bar->tag_urgent_bg);
+	val = (const gchar *)g_hash_table_lookup(settings, "tag-urgent-fg");
+	if (val != NULL)
+		parse_hex_color(val, bar->tag_urgent_fg);
+	val = (const gchar *)g_hash_table_lookup(settings, "tag-empty-fg");
+	if (val != NULL)
+		parse_hex_color(val, bar->tag_empty_fg);
+
 	val = (const gchar *)g_hash_table_lookup(settings, "font");
 	if (val != NULL) {
 		g_free(bar->font_desc);
@@ -2600,12 +2785,44 @@ bar_render_bar(GowlBarProvider *provider, gpointer monitor)
 	bar_redraw_all(self);
 }
 
+/* Hit-test monitor-local (@x, @y) to the 0-based tag index whose
+   indicator box contains it, or -1.  Computes the per-slot tag-bar
+   heights (a slot contributes only when enabled, visible and drawing
+   tags) and defers the geometry to gowl_bar_tag_hit(), which the unit
+   tests exercise directly.  The padding (10) MUST match bar_render. */
+static gint
+bar_tag_at(GowlBarProvider *provider, gpointer monitor, gint x, gint y)
+{
+	GowlModuleBar *self = GOWL_MODULE_BAR(provider);
+	GowlMonitor *mon = (GowlMonitor *)monitor;
+	GowlBarInstance *top = &self->bars[GOWL_BAR_POSITION_TOP];
+	GowlBarInstance *bot = &self->bars[GOWL_BAR_POSITION_BOTTOM];
+	gint mx, my, mw, mh;
+	gint top_h = 0, bot_h = 0;
+
+	if (mon == NULL)
+		return -1;
+
+	gowl_monitor_get_geometry(mon, &mx, &my, &mw, &mh);
+
+	if (top->enabled && top->visible && top->show_tags &&
+	    top->bar_height > 0)
+		top_h = top->bar_height;
+	if (bot->enabled && bot->visible && bot->show_tags &&
+	    bot->bar_height > 0)
+		bot_h = bot->bar_height;
+
+	return gowl_bar_tag_hit(x, y, mh, top_h, bot_h, 10,
+	                        bar_tag_count(self));
+}
+
 static void
 bar_provider_iface_init(GowlBarProviderInterface *iface)
 {
 	iface->get_bar_height = bar_get_bar_height;
 	iface->get_bar_insets = bar_get_bar_insets_impl;
 	iface->render_bar     = bar_render_bar;
+	iface->tag_at         = bar_tag_at;
 }
 
 /* ----------------------------------------------------------------
@@ -2797,6 +3014,27 @@ bar_instance_init_defaults(GowlBarInstance *bar, GowlBarPosition pos)
 	bar->title_delimiter_color[1] = 0.46;
 	bar->title_delimiter_color[2] = 0.50;
 	bar->title_delimiter_color[3] = 1.0;
+
+	/* Tag indicator: on by default, Catppuccin-ish palette. */
+	bar->show_tags = TRUE;
+	/* active fill: blue (#89b4fa) */
+	bar->tag_active_bg[0] = 0.537; bar->tag_active_bg[1] = 0.706;
+	bar->tag_active_bg[2] = 0.980; bar->tag_active_bg[3] = 1.0;
+	/* active number: base/dark (#1e1e2e) */
+	bar->tag_active_fg[0] = 0.118; bar->tag_active_fg[1] = 0.118;
+	bar->tag_active_fg[2] = 0.180; bar->tag_active_fg[3] = 1.0;
+	/* occupied (non-selected) number: text (#cdd6f4) */
+	bar->tag_occupied_fg[0] = 0.804; bar->tag_occupied_fg[1] = 0.839;
+	bar->tag_occupied_fg[2] = 0.957; bar->tag_occupied_fg[3] = 1.0;
+	/* urgent fill: red (#f38ba8) */
+	bar->tag_urgent_bg[0] = 0.953; bar->tag_urgent_bg[1] = 0.545;
+	bar->tag_urgent_bg[2] = 0.659; bar->tag_urgent_bg[3] = 1.0;
+	/* urgent number: base/dark */
+	bar->tag_urgent_fg[0] = 0.118; bar->tag_urgent_fg[1] = 0.118;
+	bar->tag_urgent_fg[2] = 0.180; bar->tag_urgent_fg[3] = 1.0;
+	/* empty number: dim/overlay (#6c7086) */
+	bar->tag_empty_fg[0] = 0.424; bar->tag_empty_fg[1] = 0.439;
+	bar->tag_empty_fg[2] = 0.525; bar->tag_empty_fg[3] = 1.0;
 
 	bar->surfaces  = g_hash_table_new_full(g_str_hash, g_str_equal,
 	                                        g_free, NULL);

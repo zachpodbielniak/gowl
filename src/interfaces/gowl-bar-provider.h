@@ -37,11 +37,32 @@ struct _GowlBarProviderInterface {
 	   and returns it as the top inset, bottom = 0. */
 	void (*get_bar_insets) (GowlBarProvider *self, gpointer monitor,
 	                        gint *top, gint *bottom);
+	/* Optional: hit-test monitor-local (@x, @y) to a 0-based tag
+	   index, or -1 if the point is not over a tag box.  Powers
+	   clickable tags. */
+	gint (*tag_at)         (GowlBarProvider *self, gpointer monitor,
+	                        gint x, gint y);
 };
 
 /* Public dispatch functions */
 gint gowl_bar_provider_get_bar_height (GowlBarProvider *self, gpointer monitor);
 void gowl_bar_provider_render_bar     (GowlBarProvider *self, gpointer monitor);
+
+/**
+ * gowl_bar_provider_tag_at:
+ * @self: a #GowlBarProvider
+ * @monitor: (nullable): the monitor whose bar to hit-test
+ * @x: x coordinate relative to the monitor's left edge
+ * @y: y coordinate relative to the monitor's top edge
+ *
+ * Maps a point in monitor-local coordinates to the 0-based tag index
+ * whose indicator box contains it, or -1 if the point is not over a
+ * tag box (or the provider does not implement the optional method).
+ *
+ * Returns: the 0-based tag index, or -1
+ */
+gint gowl_bar_provider_tag_at         (GowlBarProvider *self, gpointer monitor,
+                                        gint x, gint y);
 
 /**
  * gowl_bar_provider_get_bar_insets:

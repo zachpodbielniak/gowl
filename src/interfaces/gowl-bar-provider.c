@@ -96,3 +96,21 @@ gowl_bar_provider_get_bar_insets(
 	if (top    != NULL) *top    = t;
 	if (bottom != NULL) *bottom = b;
 }
+
+gint
+gowl_bar_provider_tag_at(
+	GowlBarProvider *self,
+	gpointer         monitor,
+	gint             x,
+	gint             y
+){
+	GowlBarProviderInterface *iface;
+
+	g_return_val_if_fail(GOWL_IS_BAR_PROVIDER(self), -1);
+
+	iface = GOWL_BAR_PROVIDER_GET_IFACE(self);
+	if (iface->tag_at == NULL)
+		return -1;
+
+	return iface->tag_at(self, monitor, x, y);
+}

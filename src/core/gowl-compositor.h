@@ -555,6 +555,50 @@ void gowl_compositor_prefloat_pid (GowlCompositor *self,
                                     pid_t           pid);
 
 /**
+ * gowl_compositor_pretag_pid:
+ * @self: a #GowlCompositor
+ * @pid: the process ID whose first mapped client to retag
+ * @tags: the tag bitmask the client should adopt on map
+ * @monitor: target monitor index, or -1 to leave on the focused monitor
+ *
+ * Registers @pid so that when a client owned by that process maps it
+ * is placed on @tags (and, when @monitor >= 0, on that monitor)
+ * instead of the currently-viewed tag set / focused monitor.  The
+ * entry is consumed (removed) on first match.  Used to launch an
+ * application directly into a tag (workspace) on its monitor without
+ * it flashing on the active tag/monitor first.
+ */
+void gowl_compositor_pretag_pid (GowlCompositor *self,
+                                  pid_t           pid,
+                                  guint32         tags,
+                                  gint            monitor);
+
+/**
+ * gowl_compositor_view_tags:
+ * @self: a #GowlCompositor
+ * @monitor: the monitor whose view to switch
+ * @tags: the tag bitmask to view
+ *
+ * Canonical dwm view(): shows @tags on @monitor, selects it, focuses
+ * its top client, and re-tiles — the full effect of the TAG_VIEW
+ * keybind, for use by non-keyboard callers.
+ */
+void gowl_compositor_view_tags  (GowlCompositor *self,
+                                  GowlMonitor    *monitor,
+                                  guint32         tags);
+
+/**
+ * gowl_compositor_show_client:
+ * @self: a #GowlCompositor
+ * @client: the client to reveal and focus
+ *
+ * Reveals @client's tag on its monitor, selects that monitor, focuses
+ * the client, and re-tiles — jumps to a window wherever it lives.
+ */
+void gowl_compositor_show_client (GowlCompositor *self,
+                                  GowlClient     *client);
+
+/**
  * GowlPrefloatMappedFunc:
  * @compositor: the #GowlCompositor
  * @client: the newly mapped #GowlClient that matched the hint

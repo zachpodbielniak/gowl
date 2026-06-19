@@ -300,6 +300,10 @@ struct _GowlCompositor {
 	 * and a caller-owned on_mapped callback.  Orthogonal to the
 	 * legacy prefloat_pids embedder path. */
 	GArray  *prefloat_hints;
+	/* PIDs whose client should adopt a specific tag bitmask on map
+	 * (for "launch into tag N").  GArray of GowlPretagEntry,
+	 * consumed on first match.  Orthogonal to prefloat. */
+	GArray  *pretag_pids;
 
 	/* Key intercept callback (embedder hook) */
 	GowlKeyInterceptFunc key_intercept_func;

@@ -81,6 +81,22 @@ typedef struct {
 	gpointer               user_data;
 } GowlPrefloatHintEntry;
 
+/**
+ * GowlPretagEntry:
+ *
+ * Per-entry storage for pretag_pids.  Captures the pid to watch, the
+ * tag bitmask its client should adopt when it maps, and an optional
+ * target monitor index (-1 = leave on the focused monitor).  Consumed
+ * on first match.  Powers "launch application into tag N (on the
+ * monitor showing it)" so the client never flashes on the
+ * currently-viewed tag/monitor.
+ */
+typedef struct {
+	pid_t   pid;
+	guint32 tags;
+	gint    monitor;
+} GowlPretagEntry;
+
 /* -----------------------------------------------------------
  * Colour parsing helper
  * ----------------------------------------------------------- */
@@ -300,6 +316,8 @@ gowl_compositor_finalize(GObject *object)
 		g_array_unref(self->prefloat_pids);
 	if (self->prefloat_hints != NULL)
 		g_array_unref(self->prefloat_hints);
+	if (self->pretag_pids != NULL)
+		g_array_unref(self->pretag_pids);
 
 	G_OBJECT_CLASS(gowl_compositor_parent_class)->finalize(object);
 }
@@ -645,6 +663,8 @@ gowl_compositor_init(GowlCompositor *self)
 	self->prefloat_pids = g_array_new(FALSE, FALSE, sizeof(pid_t));
 	self->prefloat_hints = g_array_new(FALSE, FALSE,
 	                                    sizeof(GowlPrefloatHintEntry));
+	self->pretag_pids = g_array_new(FALSE, FALSE,
+	                                 sizeof(GowlPretagEntry));
 }
 
 /* -----------------------------------------------------------
@@ -2831,6 +2851,99 @@ gowl_compositor_prefloat_pid(
 }
 
 /**
+ * gowl_compositor_pretag_pid:
+ * @self: the #GowlCompositor
+ * @pid: the process id whose first mapped client to retag
+ * @tags: the tag bitmask the client should adopt on map
+ * @monitor: target monitor index, or -1 to leave on the focused monitor
+ *
+ * Registers @pid so that when a client owned by that process maps it
+ * is placed on @tags (and, when @monitor >= 0, on that monitor)
+ * instead of the currently-viewed tag set / focused monitor.  The
+ * entry is consumed on first match.  Used to launch an application
+ * directly into a tag (workspace) on its monitor without it flashing
+ * on the active tag/monitor first.
+ */
+void
+gowl_compositor_pretag_pid(
+	GowlCompositor *self,
+	pid_t           pid,
+	guint32         tags,
+	gint            monitor
+){
+	GowlPretagEntry entry;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	entry.pid     = pid;
+	entry.tags    = tags;
+	entry.monitor = monitor;
+	g_array_append_val(self->pretag_pids, entry);
+}
+
+/**
+ * gowl_compositor_view_tags:
+ * @self: the #GowlCompositor
+ * @monitor: the monitor whose view to switch (%NULL is a no-op)
+ * @tags: the tag bitmask to view (0 is a no-op)
+ *
+ * Canonical dwm view(): switches @monitor to show @tags, makes it the
+ * selected monitor, focuses its top visible client, and re-tiles.
+ * Unlike a bare gowl_monitor_set_tags(), this actually shows/hides
+ * clients and moves keyboard focus — the same effect as the TAG_VIEW
+ * keybind, so Elisp/IPC callers behave identically to the keyboard.
+ */
+void
+gowl_compositor_view_tags(
+	GowlCompositor *self,
+	GowlMonitor    *monitor,
+	guint32         tags
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (monitor == NULL || tags == 0)
+		return;
+
+	gowl_monitor_set_tags(monitor, tags);
+	self->selmon = monitor;
+	gowl_compositor_focus_client(self, focustop(self, monitor), TRUE);
+	gowl_compositor_arrange(self, monitor);
+}
+
+/**
+ * gowl_compositor_show_client:
+ * @self: the #GowlCompositor
+ * @client: the client to reveal and focus (%NULL is a no-op)
+ *
+ * Jumps to @client wherever it lives: switches its monitor to show
+ * the client's tags, selects that monitor, gives the client keyboard
+ * focus, and re-tiles.  Lets a caller focus a window that is on a tag
+ * (workspace) or monitor not currently viewed.  Embedded clients only
+ * have their tag revealed (focus stays with the embedder).
+ */
+void
+gowl_compositor_show_client(
+	GowlCompositor *self,
+	GowlClient     *client
+){
+	GowlMonitor *mon;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (client == NULL)
+		return;
+
+	mon = (GowlMonitor *)gowl_client_get_monitor(client);
+	if (mon != NULL)
+		gowl_monitor_set_tags(mon, gowl_client_get_tags(client));
+	gowl_compositor_focus_client(self, client, TRUE);
+	if (mon != NULL) {
+		self->selmon = mon;
+		gowl_compositor_arrange(self, mon);
+	}
+}
+
+/**
  * gowl_compositor_prefloat_pid_with_hint:
  *
  * Registers a pid+geometry+layer hint and optional on_mapped
@@ -4646,6 +4759,40 @@ on_cursor_button(struct wl_listener *listener, void *data)
 		if (self->locked)
 			break;
 
+		/* Tag-bar clicks: a left/right click on a bar tag box
+		 * views (left) or toggles (right) that tag on the monitor
+		 * under the cursor, then focuses that monitor.  Consumed
+		 * here so it is not treated as a client interaction. */
+		if (event->button == BTN_LEFT || event->button == BTN_RIGHT) {
+			GowlMonitor *bm;
+
+			bm = xytomon(self, self->wlr_cursor->x,
+			             self->wlr_cursor->y);
+			if (bm != NULL && self->module_mgr != NULL) {
+				gint lx, ly, gx, gy, gw, gh, tag;
+
+				gowl_monitor_get_geometry(bm, &gx, &gy,
+				                          &gw, &gh);
+				lx = (gint)(self->wlr_cursor->x - gx);
+				ly = (gint)(self->wlr_cursor->y - gy);
+				tag = gowl_module_manager_bar_tag_at(
+					self->module_mgr, bm, lx, ly);
+				if (tag >= 0) {
+					guint32 mask = (guint32)1u << tag;
+
+					self->selmon = bm;
+					if (event->button == BTN_RIGHT)
+						gowl_monitor_toggle_tag(bm, mask);
+					else
+						gowl_monitor_set_tags(bm, mask);
+					gowl_compositor_focus_client(self,
+						focustop(self, bm), TRUE);
+					gowl_compositor_arrange(self, bm);
+					return;
+				}
+			}
+		}
+
 		/* Focus client under cursor on click.
 		 * Embedded clients receive pointer events but do not
 		 * steal keyboard focus — Emacs keybinds take priority.
@@ -5039,6 +5186,39 @@ on_client_map(struct wl_listener *listener, void *data)
 		}
 		if (c->pending_rule_tags != 0)
 			target_tags = c->pending_rule_tags;
+
+		/* Per-launch tag override: a pid registered via
+		 * gowl_compositor_pretag_pid() places its client on a
+		 * specific tag set ("launch into tag N"), and optionally
+		 * on a specific monitor (so tag N lands on the monitor
+		 * showing it).  Highest precedence; consumed on first
+		 * match. */
+		if (self->pretag_pids != NULL && self->pretag_pids->len > 0) {
+			pid_t cpid;
+			guint ti;
+
+			cpid = gowl_client_get_pid(c);
+			for (ti = 0; ti < self->pretag_pids->len; ti++) {
+				GowlPretagEntry *pe;
+
+				pe = &g_array_index(self->pretag_pids,
+				                    GowlPretagEntry, ti);
+				if (pe->pid == cpid) {
+					target_tags = pe->tags;
+					if (pe->monitor >= 0) {
+						GList *ml = g_list_nth(
+							self->monitors,
+							(guint)pe->monitor);
+						if (ml != NULL)
+							target_mon =
+								(GowlMonitor *)ml->data;
+					}
+					g_array_remove_index_fast(
+						self->pretag_pids, ti);
+					break;
+				}
+			}
+		}
 
 		/* Consume the overrides; never read again. */
 		c->pending_rule_monitor = -1;

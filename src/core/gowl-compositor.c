@@ -20,6 +20,7 @@
 #include "config/gowl-keybind.h"
 #include "module/gowl-module-manager.h"
 #include "interfaces/gowl-client-decorator.h"
+#include "core/gowl-lid-policy.h"
 
 #ifdef GOWL_HAVE_LIBDECOR
 #include "gowl-decor.h"
@@ -202,6 +203,12 @@ static void on_destroy_decoration     (struct wl_listener *listener, void *data)
 
 /* popup callbacks */
 static void on_popup_commit           (struct wl_listener *listener, void *data);
+
+/* laptop-lid output management */
+static gboolean read_initial_lid_closed(void);
+static void on_lid_toggle             (struct wl_listener *listener, void *data);
+static void on_lid_switch_destroy     (struct wl_listener *listener, void *data);
+static void gowl_compositor_update_lid_outputs(GowlCompositor *self);
 
 /* internal helpers */
 static void create_keyboard       (GowlCompositor *self,
@@ -2249,6 +2256,11 @@ gowl_compositor_start(
 #endif
 	setenv("WAYLAND_DISPLAY", self->socket_name, 1);
 
+	/* Determine the lid state before the backend enumerates outputs,
+	 * so a boot-with-lid-shut leaves the internal panel off from the
+	 * first frame.  libinput sends no toggle for a resting switch. */
+	self->lid_closed = read_initial_lid_closed();
+
 	/* 20. Start the backend (enumerates outputs and inputs) */
 	if (!wlr_backend_start(self->backend)) {
 		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
@@ -3476,6 +3488,183 @@ apply_monitor_yaml_config(GowlCompositor *self, GowlMonitor *m)
 }
 
 /**
+ * read_initial_lid_closed:
+ *
+ * Determine the laptop lid state at startup by reading the ACPI
+ * /proc/acpi/button/lid/<dev>/state file.  libinput delivers no toggle
+ * event for a switch that is already at rest, so this is the only
+ * ordering-independent way to know the lid is shut when the compositor
+ * launches.  Returns %FALSE (assume open) on any machine without an
+ * ACPI lid button, which is the safe default.
+ */
+static gboolean
+read_initial_lid_closed(void)
+{
+	const gchar *base = "/proc/acpi/button/lid";
+	GDir        *dir;
+	const gchar *name;
+	gboolean     closed = FALSE;
+
+	dir = g_dir_open(base, 0, NULL);
+	if (dir == NULL)
+		return FALSE;
+
+	while ((name = g_dir_read_name(dir)) != NULL) {
+		gchar *path;
+		gchar *contents = NULL;
+
+		path = g_build_filename(base, name, "state", NULL);
+		if (g_file_get_contents(path, &contents, NULL, NULL)) {
+			if (gowl_lid_parse_proc_state(contents))
+				closed = TRUE;
+			g_free(contents);
+		}
+		g_free(path);
+		if (closed)
+			break;
+	}
+
+	g_dir_close(dir);
+	return closed;
+}
+
+/**
+ * gowl_compositor_update_lid_outputs:
+ *
+ * Reconcile every internal laptop panel (eDP/LVDS/DSI) with the current
+ * lid state.  An internal panel is powered off while the lid is shut and
+ * at least one external display remains lit; otherwise it stays on (the
+ * single-display safety net never blacks out the only screen).  Called
+ * whenever an output or the lid switch appears, and on every lid toggle.
+ *
+ * Disabling an internal output removes it from the layout (so the cursor
+ * and new windows cannot land on it) and migrates its clients / the
+ * selected monitor to an enabled output.  Re-enabling re-adds it; the
+ * layout change re-dispatches wallpaper and bar via #on_layout_change.
+ */
+static void
+gowl_compositor_update_lid_outputs(GowlCompositor *self)
+{
+	GList *l;
+	gint   ext_enabled = 0;
+
+	if (self == NULL)
+		return;
+
+	/* Feature gate (default on).  A NULL config means built-in
+	 * defaults, i.e. enabled. */
+	if (self->config != NULL && !gowl_config_get_manage_lid(self->config))
+		return;
+
+	/* Count enabled external (non-internal) outputs. */
+	for (l = self->monitors; l != NULL; l = l->next) {
+		GowlMonitor *m = (GowlMonitor *)l->data;
+		if (!gowl_name_is_internal_panel(gowl_monitor_get_name(m))
+		    && gowl_monitor_get_enabled(m))
+			ext_enabled++;
+	}
+
+	for (l = self->monitors; l != NULL; l = l->next) {
+		GowlMonitor *m = (GowlMonitor *)l->data;
+		gboolean want, have;
+
+		if (!gowl_name_is_internal_panel(gowl_monitor_get_name(m)))
+			continue;
+
+		want = gowl_lid_internal_should_enable(self->lid_closed,
+		                                       ext_enabled);
+		have = gowl_monitor_get_enabled(m);
+		if (want == have)
+			continue;
+
+		if (!want) {
+			/* Disable: drop the wallpaper, power off, leave the
+			 * layout, and migrate selmon / clients elsewhere. */
+			if (self->module_mgr != NULL)
+				gowl_module_manager_dispatch_wallpaper_output_destroy(
+					self->module_mgr, m);
+			gowl_monitor_set_enabled(m, FALSE);
+			wlr_output_layout_remove(self->output_layout,
+			                         m->wlr_output);
+
+			if (self->selmon == m) {
+				GList *k;
+				self->selmon = NULL;
+				for (k = self->monitors; k != NULL; k = k->next) {
+					GowlMonitor *cand = (GowlMonitor *)k->data;
+					if (cand != m
+					    && gowl_monitor_get_enabled(cand)) {
+						self->selmon = cand;
+						break;
+					}
+				}
+			}
+
+			{
+				GList *c, *next;
+				for (c = self->clients; c != NULL; c = next) {
+					GowlClient *cl = (GowlClient *)c->data;
+					next = c->next;
+					if (cl->mon == m)
+						setmon(self, cl, self->selmon,
+						       cl->tags);
+				}
+			}
+		} else {
+			/* Re-enable: power on and re-add to the layout.  The
+			 * resulting layout change re-dispatches wallpaper/bar. */
+			gowl_monitor_set_enabled(m, TRUE);
+			wlr_output_layout_add_auto(self->output_layout,
+			                           m->wlr_output);
+			if (self->selmon == NULL)
+				self->selmon = m;
+		}
+	}
+}
+
+/**
+ * on_lid_toggle:
+ *
+ * wlr_switch toggle handler.  Tracks the lid open/closed state and
+ * reconciles the internal panels.
+ */
+static void
+on_lid_toggle(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+	struct wlr_switch_toggle_event *ev;
+
+	self = wl_container_of(listener, self, lid_toggle);
+	ev = (struct wlr_switch_toggle_event *)data;
+
+	if (ev->switch_type != WLR_SWITCH_TYPE_LID)
+		return;
+
+	self->lid_closed = (ev->switch_state == WLR_SWITCH_STATE_ON);
+	g_debug("lid %s", self->lid_closed ? "closed" : "opened");
+	gowl_compositor_update_lid_outputs(self);
+}
+
+/**
+ * on_lid_switch_destroy:
+ *
+ * Drops the tracked lid switch if its input device disappears (e.g. a
+ * dock re-enumerates the seat), so the dangling listeners are removed.
+ */
+static void
+on_lid_switch_destroy(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+
+	self = wl_container_of(listener, self, lid_switch_destroy);
+	(void)data;
+
+	wl_list_remove(&self->lid_toggle.link);
+	wl_list_remove(&self->lid_switch_destroy.link);
+	self->lid_switch = NULL;
+}
+
+/**
  * on_new_output:
  *
  * Called when a new output (display/monitor) becomes available.
@@ -3608,6 +3797,11 @@ on_new_output(struct wl_listener *listener, void *data)
 	 * portrait-default mobile display can boot already-rotated. */
 	apply_monitor_yaml_config(self, m);
 
+	/* Reconcile internal panels against the lid state now that this
+	 * output (possibly the external that lets us shut the lid panel)
+	 * has appeared. */
+	gowl_compositor_update_lid_outputs(self);
+
 	g_debug("New output: %s (%dx%d)",
 	        wlr_output->name,
 	        wlr_output->width, wlr_output->height);
@@ -3714,6 +3908,10 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 	m->layer_surfaces = NULL;
 
 	g_object_unref(m);
+
+	/* If unplugging this output left only a closed-lid internal panel,
+	 * bring that panel back so the machine is not left blank. */
+	gowl_compositor_update_lid_outputs(self);
 }
 
 /**
@@ -3858,6 +4056,20 @@ on_new_input(struct wl_listener *listener, void *data)
 		create_pointer(self,
 		               wlr_pointer_from_input_device(device));
 		break;
+	case WLR_INPUT_DEVICE_SWITCH: {
+		/* Track the first lid switch so we can power the internal
+		 * panel off/on as the lid is shut and opened. */
+		struct wlr_switch *sw = wlr_switch_from_input_device(device);
+		if (self->lid_switch == NULL) {
+			self->lid_switch = sw;
+			LISTEN(&sw->events.toggle,
+			       &self->lid_toggle, on_lid_toggle);
+			LISTEN(&device->events.destroy,
+			       &self->lid_switch_destroy, on_lid_switch_destroy);
+			gowl_compositor_update_lid_outputs(self);
+		}
+		break;
+	}
 	default:
 		break;
 	}

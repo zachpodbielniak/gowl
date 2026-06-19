@@ -732,6 +732,20 @@ gowl_monitor_set_enabled(
 
 	wlr_output_state_init(&state);
 	wlr_output_state_set_enabled(&state, enabled);
+
+	/* Powering an output back on needs a mode: the DRM backend rejects
+	 * an enable commit on a connector with no active mode (the case
+	 * after it was disabled, e.g. for a closed laptop lid).  Re-apply
+	 * the preferred mode; outputs with no mode list (nested Wayland)
+	 * keep the size from their first configure. */
+	if (enabled) {
+		struct wlr_output_mode *mode;
+
+		mode = wlr_output_preferred_mode(self->wlr_output);
+		if (mode != NULL)
+			wlr_output_state_set_mode(&state, mode);
+	}
+
 	ok = wlr_output_commit_state(self->wlr_output, &state);
 	wlr_output_state_finish(&state);
 

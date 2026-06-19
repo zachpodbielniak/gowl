@@ -69,6 +69,7 @@
 #include <wlr/types/wlr_keyboard_group.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_switch.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 
 /* wlroots - shell protocols */
@@ -238,6 +239,12 @@ struct _GowlCompositor {
 	gboolean   running;
 	gboolean   locked;
 	const char *socket_name;
+
+	/* laptop-lid output management (see gowl-lid-policy.h) */
+	gboolean            lid_closed;          /* TRUE = lid shut */
+	struct wlr_switch  *lid_switch;          /* first LID switch, or NULL */
+	struct wl_listener  lid_toggle;          /* wlr_switch->events.toggle */
+	struct wl_listener  lid_switch_destroy;  /* lid device destroy */
 
 	/* border colours parsed from config (RGBA floats) */
 	float focus_color[4];

@@ -41,6 +41,7 @@
 #define GOWL_CONFIG_DEFAULT_TERMINAL            "gst"
 #define GOWL_CONFIG_DEFAULT_MENU                "bemenu-run"
 #define GOWL_CONFIG_DEFAULT_SLOPPYFOCUS         (TRUE)
+#define GOWL_CONFIG_DEFAULT_MANAGE_LID          (TRUE)
 #define GOWL_CONFIG_DEFAULT_LOG_LEVEL           "warning"
 #define GOWL_CONFIG_DEFAULT_LOG_FILE            "~/.config/gowl/gowl.log"
 #define GOWL_CONFIG_DEFAULT_EVALUATE_GOWL_CONFIG_WITH_CMACS  (TRUE)
@@ -69,6 +70,7 @@ struct _GowlConfig {
 	gint     repeat_rate;
 	gint     repeat_delay;
 	gboolean sloppyfocus;
+	gboolean manage_lid;
 
 	/* Programs */
 	gchar   *terminal;
@@ -232,6 +234,9 @@ gowl_config_set_property(
 	case GOWL_CONFIG_PROP_SLOPPYFOCUS:
 		self->sloppyfocus = g_value_get_boolean(value);
 		break;
+	case GOWL_CONFIG_PROP_MANAGE_LID:
+		self->manage_lid = g_value_get_boolean(value);
+		break;
 	case GOWL_CONFIG_PROP_LOG_LEVEL:
 		g_free(self->log_level);
 		self->log_level = g_value_dup_string(value);
@@ -305,6 +310,9 @@ gowl_config_get_property(
 		break;
 	case GOWL_CONFIG_PROP_SLOPPYFOCUS:
 		g_value_set_boolean(value, self->sloppyfocus);
+		break;
+	case GOWL_CONFIG_PROP_MANAGE_LID:
+		g_value_set_boolean(value, self->manage_lid);
 		break;
 	case GOWL_CONFIG_PROP_LOG_LEVEL:
 		g_value_set_string(value, self->log_level);
@@ -464,6 +472,14 @@ gowl_config_class_init(GowlConfigClass *klass)
 		                      GOWL_CONFIG_DEFAULT_SLOPPYFOCUS,
 		                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
+	properties[GOWL_CONFIG_PROP_MANAGE_LID] =
+		g_param_spec_boolean("manage-lid",
+		                      "Manage Lid",
+		                      "Power off internal panels when the laptop "
+		                      "lid is shut and an external display is present",
+		                      GOWL_CONFIG_DEFAULT_MANAGE_LID,
+		                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
 	properties[GOWL_CONFIG_PROP_LOG_LEVEL] =
 		g_param_spec_string("log-level",
 		                     "Log Level",
@@ -561,6 +577,7 @@ gowl_config_init(GowlConfig *self)
 	self->repeat_rate         = GOWL_CONFIG_DEFAULT_REPEAT_RATE;
 	self->repeat_delay        = GOWL_CONFIG_DEFAULT_REPEAT_DELAY;
 	self->sloppyfocus         = GOWL_CONFIG_DEFAULT_SLOPPYFOCUS;
+	self->manage_lid          = GOWL_CONFIG_DEFAULT_MANAGE_LID;
 	self->terminal            = g_strdup(GOWL_CONFIG_DEFAULT_TERMINAL);
 	self->menu                = g_strdup(GOWL_CONFIG_DEFAULT_MENU);
 	self->log_level           = g_strdup(GOWL_CONFIG_DEFAULT_LOG_LEVEL);
@@ -737,6 +754,10 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "sloppyfocus")) {
 		gboolean val = yaml_mapping_get_boolean_member(mapping, "sloppyfocus");
 		g_object_set(self, "sloppyfocus", val, NULL);
+	}
+	if (yaml_mapping_has_member(mapping, "manage_lid")) {
+		gboolean val = yaml_mapping_get_boolean_member(mapping, "manage_lid");
+		g_object_set(self, "manage-lid", val, NULL);
 	}
 	if (yaml_mapping_has_member(mapping, "log-level")) {
 		const gchar *val = yaml_mapping_get_string_member(mapping, "log-level");
@@ -1345,6 +1366,7 @@ gowl_config_generate_yaml(GowlConfig *self)
 	g_string_append_printf(yaml, "repeat-rate: %d\n", self->repeat_rate);
 	g_string_append_printf(yaml, "repeat-delay: %d\n", self->repeat_delay);
 	g_string_append_printf(yaml, "sloppyfocus: %s\n", self->sloppyfocus ? "true" : "false");
+	g_string_append_printf(yaml, "manage_lid: %s\n", self->manage_lid ? "true" : "false");
 
 	/* Programs */
 	g_string_append_printf(yaml, "terminal: \"%s\"\n", self->terminal);
@@ -1500,6 +1522,13 @@ gowl_config_get_sloppyfocus(GowlConfig *self)
 	return self->sloppyfocus;
 }
 
+gboolean
+gowl_config_get_manage_lid(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_MANAGE_LID);
+	return self->manage_lid;
+}
+
 const gchar *
 gowl_config_get_log_level(GowlConfig *self)
 {
@@ -1601,6 +1630,7 @@ gowl_config_reset_values_to_defaults(GowlConfig *self)
 	             "terminal",            GOWL_CONFIG_DEFAULT_TERMINAL,
 	             "menu",                GOWL_CONFIG_DEFAULT_MENU,
 	             "sloppyfocus",         GOWL_CONFIG_DEFAULT_SLOPPYFOCUS,
+	             "manage-lid",          GOWL_CONFIG_DEFAULT_MANAGE_LID,
 	             "log-level",           GOWL_CONFIG_DEFAULT_LOG_LEVEL,
 	             "log-file",            GOWL_CONFIG_DEFAULT_LOG_FILE,
 	             NULL);

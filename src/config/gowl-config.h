@@ -166,6 +166,7 @@ typedef struct {
  * @GOWL_CONFIG_PROP_TERMINAL: "terminal" property.
  * @GOWL_CONFIG_PROP_MENU: "menu" property.
  * @GOWL_CONFIG_PROP_SLOPPYFOCUS: "sloppyfocus" property.
+ * @GOWL_CONFIG_PROP_MANAGE_LID: "manage-lid" property.
  * @GOWL_CONFIG_PROP_LOG_LEVEL: "log-level" property.
  * @GOWL_CONFIG_PROP_LOG_FILE: "log-file" property.
  * @GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS:
@@ -195,6 +196,7 @@ typedef enum {
 	GOWL_CONFIG_PROP_TERMINAL,
 	GOWL_CONFIG_PROP_MENU,
 	GOWL_CONFIG_PROP_SLOPPYFOCUS,
+	GOWL_CONFIG_PROP_MANAGE_LID,
 	GOWL_CONFIG_PROP_LOG_LEVEL,
 	GOWL_CONFIG_PROP_LOG_FILE,
 	GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS,
@@ -381,6 +383,16 @@ const gchar *gowl_config_get_menu(GowlConfig *self);
  * Returns: %TRUE if sloppy (mouse-follows-focus) is enabled
  */
 gboolean gowl_config_get_sloppyfocus(GowlConfig *self);
+
+/**
+ * gowl_config_get_manage_lid:
+ * @self: a #GowlConfig
+ *
+ * Returns: %TRUE if laptop-lid output management is enabled.  When on,
+ *   an internal panel (eDP/LVDS/DSI) is powered off while the lid is
+ *   shut and at least one external display is connected.
+ */
+gboolean gowl_config_get_manage_lid(GowlConfig *self);
 
 /**
  * gowl_config_get_log_level:

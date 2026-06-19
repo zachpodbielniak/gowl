@@ -59,6 +59,7 @@
 #include "interfaces/gowl-wallpaper-provider.h"
 #include "core/gowl-compositor.h"
 #include "core/gowl-monitor.h"
+#include "util/gowl-wallpaper-scale.h"
 
 /* ----------------------------------------------------------------
  * Custom wlr_buffer backed by gdk-pixbuf pixel data
@@ -150,16 +151,10 @@ struct _GowlModuleWallpaper {
 	gpointer    compositor;   /* borrowed GowlCompositor* */
 
 	/* Decode cache.  The image is decoded once and reused on every
-	 * resize, so dragging the (nested) output no longer re-reads and
-	 * re-scales the file dozens of times a second.  native_buf is the
-	 * source converted to ARGB at its native size and is GPU-scaled at
-	 * composite time (source-box + dest-size) for the fill/fit/stretch/
-	 * center modes; source_pixbuf is kept for the CPU tile path. */
-	GdkPixbuf         *source_pixbuf;
-	struct wlr_buffer *native_buf;   /* module-owned; not dropped per use */
-	gint               native_w;
-	gint               native_h;
-	gchar             *loaded_path;  /* path native_buf/source were loaded from */
+	 * resize, so a geometry change re-scales it in memory (on the CPU,
+	 * via scale_pixbuf()) but never re-reads the file. */
+	GdkPixbuf *source_pixbuf;
+	gchar     *loaded_path;  /* path source_pixbuf was loaded from */
 };
 
 /* Forward declarations for interface init functions */
@@ -256,7 +251,6 @@ scale_pixbuf(
 	gint         mon_h
 ){
 	gint img_w, img_h;
-	gdouble scale_x, scale_y, scale;
 
 	img_w = gdk_pixbuf_get_width(source);
 	img_h = gdk_pixbuf_get_height(source);
@@ -274,20 +268,14 @@ scale_pixbuf(
 		gint scaled_w, scaled_h;
 		gint crop_x, crop_y;
 
-		scale_x = (gdouble)mon_w / (gdouble)img_w;
-		scale_y = (gdouble)mon_h / (gdouble)img_h;
-		scale = (scale_x > scale_y) ? scale_x : scale_y;
-
-		scaled_w = (gint)(img_w * scale + 0.5);
-		scaled_h = (gint)(img_h * scale + 0.5);
+		gowl_wallpaper_cover_rect(img_w, img_h, mon_w, mon_h,
+		                          &scaled_w, &scaled_h,
+		                          &crop_x, &crop_y);
 
 		scaled = gdk_pixbuf_scale_simple(source, scaled_w, scaled_h,
 		                                 GDK_INTERP_BILINEAR);
 		if (scaled == NULL)
 			return NULL;
-
-		crop_x = (scaled_w - mon_w) / 2;
-		crop_y = (scaled_h - mon_h) / 2;
 
 		cropped = gdk_pixbuf_new_subpixbuf(scaled, crop_x, crop_y,
 		                                   mon_w, mon_h);
@@ -314,12 +302,9 @@ scale_pixbuf(
 		gint scaled_w, scaled_h;
 		gint offset_x, offset_y;
 
-		scale_x = (gdouble)mon_w / (gdouble)img_w;
-		scale_y = (gdouble)mon_h / (gdouble)img_h;
-		scale = (scale_x < scale_y) ? scale_x : scale_y;
-
-		scaled_w = (gint)(img_w * scale + 0.5);
-		scaled_h = (gint)(img_h * scale + 0.5);
+		gowl_wallpaper_fit_rect(img_w, img_h, mon_w, mon_h,
+		                        &scaled_w, &scaled_h,
+		                        &offset_x, &offset_y);
 
 		scaled = gdk_pixbuf_scale_simple(source, scaled_w, scaled_h,
 		                                 GDK_INTERP_BILINEAR);
@@ -334,10 +319,6 @@ scale_pixbuf(
 			return NULL;
 		}
 		gdk_pixbuf_fill(canvas, 0x000000FF);
-
-		/* Center the scaled image on the canvas */
-		offset_x = (mon_w - scaled_w) / 2;
-		offset_y = (mon_h - scaled_h) / 2;
 
 		gdk_pixbuf_composite(scaled, canvas,
 		                     offset_x, offset_y,
@@ -362,26 +343,9 @@ scale_pixbuf(
 			return NULL;
 		gdk_pixbuf_fill(canvas, 0x000000FF);
 
-		/* Calculate source and destination offsets */
-		if (img_w > mon_w) {
-			src_x  = (img_w - mon_w) / 2;
-			dst_x  = 0;
-			copy_w = mon_w;
-		} else {
-			src_x  = 0;
-			dst_x  = (mon_w - img_w) / 2;
-			copy_w = img_w;
-		}
-
-		if (img_h > mon_h) {
-			src_y  = (img_h - mon_h) / 2;
-			dst_y  = 0;
-			copy_h = mon_h;
-		} else {
-			src_y  = 0;
-			dst_y  = (mon_h - img_h) / 2;
-			copy_h = img_h;
-		}
+		gowl_wallpaper_center_rect(img_w, img_h, mon_w, mon_h,
+		                           &src_x, &src_y, &dst_x, &dst_y,
+		                           &copy_w, &copy_h);
 
 		gdk_pixbuf_copy_area(source, src_x, src_y, copy_w, copy_h,
 		                     canvas, dst_x, dst_y);
@@ -457,29 +421,23 @@ expand_path(const gchar *path)
 }
 
 /* ----------------------------------------------------------------
- * Decode cache + GPU scaling layout
+ * Decode cache
  * ---------------------------------------------------------------- */
 
-/* Decode self->path once and cache it.  source_pixbuf is kept for the
- * CPU tile path; native_buf is the source converted to ARGB at its
- * native size, used by the GPU-scaled modes.  Returns FALSE when there
- * is no loadable image.  native_buf is module-owned and never dropped
- * per-use, so it survives across resizes; it is dropped on reload and
- * in finalize, and freed once the scene releases its references. */
+/* Decode self->path once and cache the source pixbuf.  Every scaling
+ * mode is rendered on the CPU from this cached pixbuf (see
+ * scale_pixbuf()), so a resize re-scales in memory but never re-reads
+ * the file.  Returns FALSE when there is no loadable image. */
 static gboolean
 wallpaper_ensure_loaded(GowlModuleWallpaper *self)
 {
 	g_autoptr(GError) err = NULL;
 	GdkPixbuf *pixbuf;
-	GowlPixbufBuffer *buf;
-	guchar *pixels;
-	gint w, h, stride;
-	gsize size;
 
 	if (self->path == NULL || self->path[0] == '\0')
 		return FALSE;
 
-	if (self->native_buf != NULL && self->source_pixbuf != NULL &&
+	if (self->source_pixbuf != NULL &&
 	    g_strcmp0(self->loaded_path, self->path) == 0)
 		return TRUE;   /* already cached for this path */
 
@@ -490,105 +448,13 @@ wallpaper_ensure_loaded(GowlModuleWallpaper *self)
 		return FALSE;
 	}
 
-	w      = gdk_pixbuf_get_width(pixbuf);
-	h      = gdk_pixbuf_get_height(pixbuf);
-	stride = w * 4;
-	size   = (gsize)h * stride;
-	pixels = (guchar *)g_malloc(size);
-	convert_pixbuf_to_argb8888(pixbuf, pixels, w, h, stride);
-
-	buf = (GowlPixbufBuffer *)g_new0(GowlPixbufBuffer, 1);
-	buf->pixels = pixels;
-	buf->size   = size;
-	buf->stride = stride;
-	wlr_buffer_init(&buf->base, &pixbuf_buffer_impl, w, h);
-
-	/* Replace any previous cache.  Dropping the old native buffer lets
-	 * it be freed once existing scene nodes release their refs. */
-	if (self->native_buf != NULL)
-		wlr_buffer_drop(self->native_buf);
 	if (self->source_pixbuf != NULL)
 		g_object_unref(self->source_pixbuf);
 
-	self->native_buf    = &buf->base;
-	self->native_w      = w;
-	self->native_h      = h;
 	self->source_pixbuf = pixbuf;
 	g_free(self->loaded_path);
 	self->loaded_path   = g_strdup(self->path);
 	return TRUE;
-}
-
-/* Compute the GPU scaling for a non-tile mode: which sub-rectangle of
- * the @iw x @ih native buffer to sample (@src_box), the on-screen size
- * to scale it to (@dest_w x @dest_h), and the offset within the @mw x
- * @mh monitor (@off_x, @off_y).  Mirrors scale_pixbuf()'s fill / fit /
- * stretch / center maths, but expressed as scene-buffer geometry so the
- * GPU does the work at composite time. */
-static void
-wallpaper_layout(const gchar *mode, gint iw, gint ih, gint mw, gint mh,
-                 struct wlr_fbox *src_box, gint *dest_w, gint *dest_h,
-                 gint *off_x, gint *off_y)
-{
-	gdouble sx, sy, s;
-
-	/* Defaults: whole source stretched to fill the monitor. */
-	src_box->x = 0; src_box->y = 0;
-	src_box->width = iw; src_box->height = ih;
-	*dest_w = mw; *dest_h = mh;
-	*off_x = 0; *off_y = 0;
-
-	if (iw <= 0 || ih <= 0)
-		return;
-
-	if (g_strcmp0(mode, "stretch") == 0) {
-		/* Whole source -> whole monitor (the defaults above). */
-	} else if (g_strcmp0(mode, "fit") == 0) {
-		gint dw, dh;
-		sx = (gdouble)mw / iw;
-		sy = (gdouble)mh / ih;
-		s  = (sx < sy) ? sx : sy;
-		dw = (gint)(iw * s + 0.5);
-		dh = (gint)(ih * s + 0.5);
-		*dest_w = dw; *dest_h = dh;
-		*off_x = (mw - dw) / 2;
-		*off_y = (mh - dh) / 2;
-	} else if (g_strcmp0(mode, "center") == 0) {
-		gint vw = (iw < mw) ? iw : mw;   /* native-size visible region */
-		gint vh = (ih < mh) ? ih : mh;
-		src_box->x = (iw - vw) / 2.0;
-		src_box->y = (ih - vh) / 2.0;
-		src_box->width = vw; src_box->height = vh;
-		*dest_w = vw; *dest_h = vh;       /* 1:1, no scaling */
-		*off_x = (mw - vw) / 2;
-		*off_y = (mh - vh) / 2;
-	} else {
-		/* fill (and any unknown mode): cover the monitor, centre-crop. */
-		sx = (gdouble)mw / iw;
-		sy = (gdouble)mh / ih;
-		s  = (sx > sy) ? sx : sy;
-		src_box->width  = mw / s;        /* source rect mapped to monitor */
-		src_box->height = mh / s;
-		src_box->x = (iw - src_box->width) / 2.0;
-		src_box->y = (ih - src_box->height) / 2.0;
-		*dest_w = mw; *dest_h = mh;
-		*off_x = 0; *off_y = 0;
-	}
-
-	/* Clamp the source box to the buffer.  wlr_scene_buffer_set_source_box
-	 * ASSERTS 0 <= x, 0 <= y, x+w <= iw, y+h <= ih and abort()s the whole
-	 * compositor otherwise.  The cover maths above is exact in real
-	 * arithmetic, but floating-point rounding of mw/(mw/iw) can leave x a
-	 * hair below 0 or x+w a hair past iw -- which crashed --gowl on resize.
-	 * The sub-pixel clamp is invisible.  */
-	if (src_box->x < 0.0)
-		src_box->x = 0.0;
-	if (src_box->y < 0.0)
-		src_box->y = 0.0;
-	if (src_box->x + src_box->width > (gdouble) iw)
-		src_box->width = (gdouble) iw - src_box->x;
-	if (src_box->y + src_box->height > (gdouble) ih)
-		src_box->height = (gdouble) ih - src_box->y;
 }
 
 /* ----------------------------------------------------------------
@@ -656,17 +522,22 @@ wallpaper_on_output(
 	state->width  = mon_w;
 	state->height = mon_h;
 
-	if (g_strcmp0(self->mode, "tile") == 0) {
-		/* Tile cannot be expressed as a single scaled buffer, so it
-		 * is still regenerated on the CPU -- but from the cached
-		 * source pixbuf, so there is no disk decode. */
+	{
+		/* Scale (and crop/letterbox) on the CPU from the cached source
+		 * pixbuf into an exact mon_w x mon_h buffer, then give the scene
+		 * a single monitor-sized buffer.  One proven path for every mode
+		 * -- fill/fit/center/stretch/tile (see scale_pixbuf()).  We do
+		 * NOT hand the GPU the full-resolution source plus a source-box:
+		 * a wallpaper larger than the GPU's max texture size tiled into a
+		 * grid on some drivers.  source_pixbuf is cached, so a resize
+		 * re-scales in memory but never re-reads the file. */
 		GdkPixbuf *scaled;
 		GowlPixbufBuffer *wlr_buf;
 		guchar *dst_pixels;
 		gint dst_stride;
 		gsize dst_size;
 
-		scaled = scale_pixbuf(self->source_pixbuf, "tile",
+		scaled = scale_pixbuf(self->source_pixbuf, self->mode,
 		                      mon_w, mon_h);
 		if (scaled == NULL) {
 			g_free(state);
@@ -691,28 +562,8 @@ wallpaper_on_output(
 		                                           &wlr_buf->base);
 		wlr_scene_node_set_position(&state->scene_buf->node,
 		                            mon_x, mon_y);
-		/* The scene now holds the only ref to this per-tile buffer. */
+		/* The scene now holds the only ref to this per-monitor buffer. */
 		wlr_buffer_drop(&wlr_buf->base);
-	} else {
-		/* fill / fit / stretch / center: reference the shared native
-		 * buffer and let the GPU scale it at composite time.  A resize
-		 * only updates these O(1) scene properties -- no pixel work,
-		 * no decode -- which is what makes dragging instant. */
-		struct wlr_fbox src_box;
-		gint dest_w, dest_h, off_x, off_y;
-
-		wallpaper_layout(self->mode, self->native_w, self->native_h,
-		                 mon_w, mon_h, &src_box,
-		                 &dest_w, &dest_h, &off_x, &off_y);
-
-		state->scene_buf = wlr_scene_buffer_create(bg_layer,
-		                                           self->native_buf);
-		wlr_scene_buffer_set_source_box(state->scene_buf, &src_box);
-		wlr_scene_buffer_set_dest_size(state->scene_buf,
-		                               dest_w, dest_h);
-		wlr_scene_node_set_position(&state->scene_buf->node,
-		                            mon_x + off_x, mon_y + off_y);
-		/* native_buf is module-owned and shared; do NOT drop it. */
 	}
 
 	g_hash_table_insert(self->per_monitor,
@@ -882,10 +733,7 @@ gowl_module_wallpaper_finalize(GObject *object)
 		g_hash_table_destroy(self->per_monitor);
 	}
 
-	/* Release the decode cache.  Scene nodes were destroyed above, so
-	 * dropping the native buffer frees it. */
-	if (self->native_buf != NULL)
-		wlr_buffer_drop(self->native_buf);
+	/* Release the decode cache. */
 	if (self->source_pixbuf != NULL)
 		g_object_unref(self->source_pixbuf);
 	g_free(self->loaded_path);

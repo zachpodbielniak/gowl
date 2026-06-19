@@ -25,6 +25,10 @@ repeat-delay: 600
 terminal: "gst"
 menu: "bemenu-run"
 sloppyfocus: true
+# Power off the internal laptop panel (eDP/LVDS/DSI) while the lid is
+# shut and an external display is connected.  Set false to keep driving
+# a closed-lid panel.
+manage_lid: true
 
 # Appearance
 border-width: 2

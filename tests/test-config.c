@@ -45,8 +45,38 @@ test_config_defaults(void)
 	g_assert_cmpint(gowl_config_get_repeat_rate(config), ==, 25);
 	g_assert_cmpint(gowl_config_get_repeat_delay(config), ==, 600);
 	g_assert_true(gowl_config_get_sloppyfocus(config));
+	g_assert_true(gowl_config_get_manage_lid(config));
 	g_assert_cmpstr(gowl_config_get_terminal(config), ==, "gst");
 	g_assert_cmpstr(gowl_config_get_menu(config), ==, "bemenu-run");
+
+	g_object_unref(config);
+}
+
+static void
+test_config_manage_lid(void)
+{
+	GowlConfig *config;
+	gboolean    val;
+	gchar      *yaml;
+
+	config = gowl_config_new();
+
+	/* Default on, readable via the getter and the property. */
+	g_assert_true(gowl_config_get_manage_lid(config));
+	g_object_get(G_OBJECT(config), "manage-lid", &val, NULL);
+	g_assert_true(val);
+
+	/* Round-trips through the property. */
+	g_object_set(G_OBJECT(config), "manage-lid", FALSE, NULL);
+	g_assert_false(gowl_config_get_manage_lid(config));
+	g_object_set(G_OBJECT(config), "manage-lid", TRUE, NULL);
+	g_assert_true(gowl_config_get_manage_lid(config));
+
+	/* Serialized into the generated YAML. */
+	yaml = gowl_config_generate_yaml(config);
+	g_assert_nonnull(yaml);
+	g_assert_true(strstr(yaml, "manage_lid") != NULL);
+	g_free(yaml);
 
 	g_object_unref(config);
 }
@@ -353,6 +383,7 @@ main(int argc, char *argv[])
 
 	g_test_add_func("/config/new", test_config_new);
 	g_test_add_func("/config/defaults", test_config_defaults);
+	g_test_add_func("/config/manage-lid", test_config_manage_lid);
 	g_test_add_func("/config/set-properties", test_config_set_properties);
 	g_test_add_func("/config/generate-yaml", test_config_generate_yaml);
 	g_test_add_func("/config/add-rule", test_config_add_rule);

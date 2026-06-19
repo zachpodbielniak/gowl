@@ -71,6 +71,15 @@ General compositor settings.
 | =terminal=     | string | ="gst"=        | Terminal emulator command                                               |
 | =menu=         | string | ="bemenu-run"= | Application launcher command                                            |
 | =sloppyfocus=  | bool   | =true=         | Enable sloppy (focus-follows-mouse) focus                               |
+| =manage_lid=   | bool   | =true=         | Power off the internal panel (eDP/LVDS/DSI) when the laptop lid is shut and an external display is connected |
+
+When =manage_lid= is enabled (the default), gowl turns the laptop's
+built-in panel off while the lid is closed and at least one external
+display is present, moving the selected monitor and any clients to the
+external output.  If no external display is connected, the internal
+panel stays on so the machine is never left blank.  Closing or opening
+the lid at runtime, and hotplugging the external display, are all
+handled live.
 
 **** appearance
 :PROPERTIES:
@@ -308,7 +317,22 @@ modules:
     enabled: true
   autostart:
     enabled: true
+  wallpaper:
+    enabled: true
+    path: "~/Pictures/wallpaper.png"
+    # Scaling mode: fill | fit | center | stretch | tile
+    mode: fill
 #+end_src
+
+The wallpaper =mode= controls how the image is mapped onto each
+monitor.  The default =fill= is GNOME-style "zoom": the image is scaled
+(up or down) to fully cover the monitor while preserving its aspect
+ratio and is centre-cropped — it is never stretched, and never tiled
+into a grid.  =fit= letterboxes the whole image inside the monitor,
+=center= places it 1:1, =stretch= distorts it to the exact monitor
+size, and =tile= repeats it at native size.  Each monitor is scaled
+independently, so a large panoramic image is correctly zoomed to fit
+each display rather than tiled.
 
 ** C Configuration
 :PROPERTIES:

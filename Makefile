@@ -79,7 +79,9 @@ LIB_SRCS := \
 	src/layout/gowl-layout-float.c \
 	src/ipc/gowl-ipc.c \
 	src/util/gowl-log.c \
+	src/util/gowl-wallpaper-scale.c \
 	src/core/gowl-compositor.c \
+	src/core/gowl-lid-policy.c \
 	src/core/gowl-monitor.c \
 	src/core/gowl-client.c \
 	src/core/gowl-seat.c \

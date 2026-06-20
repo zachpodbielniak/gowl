@@ -322,8 +322,9 @@ Build without it via =make BUILD_XWAYLAND=0= (drops the =xcb= /
 Gowl can display *externally produced* frames as the wallpaper or the
 lock-screen background without rendering them itself and *without depending on
 any rendering engine*.  Only a plain pixel span crosses the boundary, so an
-outside producer (e.g. a cmacs build rendering libregnum screensavers) keeps
-all of the GL / engine code on its side.
+outside producer (e.g. a cmacs build rendering libregnum screensavers --- in
+cmacs's case from a *separate render process*, streamed in over shared memory)
+keeps all of the GL / engine code on its side.
 
 - =GowlRawBuffer= (=src/core/gowl-frame-sink.{c,h}=) wraps a caller-supplied
   =ARGB8888= buffer =(pixels, width, height, stride)= in a =struct

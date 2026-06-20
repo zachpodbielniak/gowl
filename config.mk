@@ -93,7 +93,7 @@ ifeq ($(DEBUG),1)
         LDFLAGS_ASAN := -fsanitize=address -fsanitize=undefined
     endif
 else
-    CFLAGS_BUILD := -Og -g -DNDEBUG
+    CFLAGS_BUILD := -O2 -DNDEBUG
 endif
 
 # Required dependencies

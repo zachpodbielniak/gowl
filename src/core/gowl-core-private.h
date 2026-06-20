@@ -306,6 +306,18 @@ struct _GowlCompositor {
 	struct wl_listener cursor_axis;
 	struct wl_listener cursor_frame;
 
+	/* touchpad gestures (swipe/pinch/hold), relayed to clients via the
+	 * pointer-gestures protocol */
+	struct wlr_pointer_gestures_v1 *pointer_gestures;
+	struct wl_listener cursor_swipe_begin;
+	struct wl_listener cursor_swipe_update;
+	struct wl_listener cursor_swipe_end;
+	struct wl_listener cursor_pinch_begin;
+	struct wl_listener cursor_pinch_update;
+	struct wl_listener cursor_pinch_end;
+	struct wl_listener cursor_hold_begin;
+	struct wl_listener cursor_hold_end;
+
 	/* keyboard listeners */
 	struct wl_listener kb_key;
 	struct wl_listener kb_modifiers;

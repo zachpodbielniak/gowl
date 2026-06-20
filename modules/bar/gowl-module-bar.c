@@ -2312,6 +2312,27 @@ bar_build_signature(GowlModuleBar *self, GowlBarInstance *bar,
 	return g_string_free(s, FALSE);
 }
 
+/* Destroy the bar surface for monitor @name (if any) and drop its hash
+   entry.  Mirrors the inline teardown in bar_create_surface(); used to
+   reclaim surfaces for disabled or unplugged monitors so their bars do
+   not linger in the shared TOP layer over the surviving outputs. */
+static void
+bar_destroy_surface_for(GowlBarInstance *bar, const gchar *name)
+{
+	BarSurface *surface;
+
+	if (bar->surfaces == NULL || name == NULL)
+		return;
+	surface = (BarSurface *)g_hash_table_lookup(bar->surfaces, name);
+	if (surface == NULL)
+		return;
+	if (surface->scene_buf != NULL)
+		wlr_scene_node_destroy(&surface->scene_buf->node);
+	g_free(surface->last_signature);
+	g_hash_table_remove(bar->surfaces, name);
+	g_free(surface);
+}
+
 static void
 bar_redraw_all(GowlModuleBar *self)
 {
@@ -2344,6 +2365,15 @@ bar_redraw_all(GowlModuleBar *self)
 			gchar *sig;
 			gint mon_x, mon_y, mon_w, mon_h;
 			gint surf_y;
+
+			/* A disabled monitor (e.g. a lid-shut internal panel)
+			   keeps its GowlMonitor; drop any bar surface it still
+			   owns and never create one, so its bar does not linger
+			   stacked over the surviving output. */
+			if (!gowl_monitor_get_enabled(mon)) {
+				bar_destroy_surface_for(bar, name);
+				continue;
+			}
 
 			surface = (BarSurface *)g_hash_table_lookup(bar->surfaces,
 			                                             name);
@@ -2865,6 +2895,11 @@ bar_on_startup(GowlStartupHandler *handler, gpointer compositor)
 	for (l = monitors; l != NULL; l = l->next) {
 		GowlMonitor *mon = GOWL_MONITOR(l->data);
 		gint bi;
+		/* Skip disabled monitors (e.g. a lid-shut internal panel) so
+		   their bars are not created off-screen / stacked over the
+		   surviving output. */
+		if (!gowl_monitor_get_enabled(mon))
+			continue;
 		for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++)
 			bar_create_surface(self, &self->bars[bi], mon);
 	}

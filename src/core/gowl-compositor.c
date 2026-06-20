@@ -38,6 +38,10 @@
 #include <linux/input-event-codes.h>
 #include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_damage_ring.h>
+#include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_pointer_gestures_v1.h>
+#include <wlr/backend/libinput.h>
+#include <libinput.h>
 
 /**
  * GowlCompositor:
@@ -169,6 +173,14 @@ static void on_cursor_motion_abs  (struct wl_listener *listener, void *data);
 static void on_cursor_button      (struct wl_listener *listener, void *data);
 static void on_cursor_axis        (struct wl_listener *listener, void *data);
 static void on_cursor_frame       (struct wl_listener *listener, void *data);
+static void on_cursor_swipe_begin (struct wl_listener *listener, void *data);
+static void on_cursor_swipe_update(struct wl_listener *listener, void *data);
+static void on_cursor_swipe_end   (struct wl_listener *listener, void *data);
+static void on_cursor_pinch_begin (struct wl_listener *listener, void *data);
+static void on_cursor_pinch_update(struct wl_listener *listener, void *data);
+static void on_cursor_pinch_end   (struct wl_listener *listener, void *data);
+static void on_cursor_hold_begin  (struct wl_listener *listener, void *data);
+static void on_cursor_hold_end    (struct wl_listener *listener, void *data);
 static void on_kb_key             (struct wl_listener *listener, void *data);
 static void on_kb_modifiers       (struct wl_listener *listener, void *data);
 static void on_monitor_frame      (struct wl_listener *listener, void *data);
@@ -2355,6 +2367,28 @@ gowl_compositor_start(
 	LISTEN(&self->wlr_cursor->events.frame,
 	       &self->cursor_frame, on_cursor_frame);
 
+	/* Touchpad gestures: wlr_cursor aggregates swipe/pinch/hold events
+	 * from every attached pointer; relay them to clients through the
+	 * pointer-gestures protocol so apps get 3-finger swipe, pinch-zoom,
+	 * etc. */
+	self->pointer_gestures = wlr_pointer_gestures_v1_create(self->wl_display);
+	LISTEN(&self->wlr_cursor->events.swipe_begin,
+	       &self->cursor_swipe_begin, on_cursor_swipe_begin);
+	LISTEN(&self->wlr_cursor->events.swipe_update,
+	       &self->cursor_swipe_update, on_cursor_swipe_update);
+	LISTEN(&self->wlr_cursor->events.swipe_end,
+	       &self->cursor_swipe_end, on_cursor_swipe_end);
+	LISTEN(&self->wlr_cursor->events.pinch_begin,
+	       &self->cursor_pinch_begin, on_cursor_pinch_begin);
+	LISTEN(&self->wlr_cursor->events.pinch_update,
+	       &self->cursor_pinch_update, on_cursor_pinch_update);
+	LISTEN(&self->wlr_cursor->events.pinch_end,
+	       &self->cursor_pinch_end, on_cursor_pinch_end);
+	LISTEN(&self->wlr_cursor->events.hold_begin,
+	       &self->cursor_hold_begin, on_cursor_hold_begin);
+	LISTEN(&self->wlr_cursor->events.hold_end,
+	       &self->cursor_hold_end, on_cursor_hold_end);
+
 	/* Cursor shape manager */
 	wlr_cursor_shape_manager_v1_create(self->wl_display, 1);
 
@@ -3902,12 +3936,36 @@ gowl_compositor_update_lid_outputs(GowlCompositor *self)
 		want = gowl_lid_internal_should_enable(self->lid_closed,
 		                                       ext_enabled);
 		have = gowl_monitor_get_enabled(m);
-		if (want == have)
-			continue;
 
 		if (!want) {
-			/* Disable: drop the wallpaper, power off, leave the
-			 * layout, and migrate selmon / clients elsewhere. */
+			/* The internal panel must be fully off: powered down,
+			 * removed from the output layout, and its scene output
+			 * torn down.  Run the teardown even when the panel is
+			 * already marked disabled — on a clamshell boot the DRM
+			 * driver can leave a shut panel enabled=FALSE yet still
+			 * mapped (its enable commit fails), and a plain
+			 * `want == have` early-out then skipped removal: the
+			 * half-disabled panel lingered in the layout, stealing the
+			 * cursor and newly launched windows and keeping client
+			 * surfaces throttled on its never-committing scene output
+			 * (the external monitor then shows only the wallpaper).
+			 * Skip only once it is genuinely gone. */
+			if (!have
+			    && wlr_output_layout_get(self->output_layout,
+			                             m->wlr_output) == NULL)
+				continue;
+			/* Drop the wallpaper, power off, and leave the layout, then
+			 * migrate selmon / clients to a live monitor.
+			 *
+			 * NB: we deliberately do NOT destroy m->scene_output here.
+			 * The GowlMonitor stays in self->monitors (so it can be
+			 * re-enabled when the lid reopens) and its module/bar scene
+			 * nodes are torn down asynchronously on the next bar tick;
+			 * destroying the scene_output out from under that left a
+			 * dangling reference and crashed in wlr_scene_output_commit
+			 * (use-after-free → heap corruption).  A disabled output
+			 * stops emitting frame events, so its scene_output simply
+			 * never commits again — which is harmless. */
 			if (self->module_mgr != NULL)
 				gowl_module_manager_dispatch_wallpaper_output_destroy(
 					self->module_mgr, m);
@@ -3938,14 +3996,34 @@ gowl_compositor_update_lid_outputs(GowlCompositor *self)
 						       cl->tags);
 				}
 			}
+
+			/* Re-tile the survivor and re-focus its top client so
+			 * the migrated surfaces get a fresh configure and a
+			 * valid output-enter on the live scene output, and so
+			 * resume rendering. */
+			if (self->selmon != NULL) {
+				gowl_compositor_arrange(self, self->selmon);
+				gowl_compositor_focus_client(self,
+					focustop(self, self->selmon), TRUE);
+			}
 		} else {
+			/* The internal panel must be on and in the layout. */
+			if (have
+			    && wlr_output_layout_get(self->output_layout,
+			                             m->wlr_output) != NULL)
+				continue;
 			/* Re-enable: power on and re-add to the layout.  The
-			 * resulting layout change re-dispatches wallpaper/bar. */
+			 * resulting layout change re-dispatches wallpaper/bar.
+			 * The scene_output was never destroyed (see the disable
+			 * branch above), so it is reused as-is. */
 			gowl_monitor_set_enabled(m, TRUE);
 			wlr_output_layout_add_auto(self->output_layout,
 			                           m->wlr_output);
 			if (self->selmon == NULL)
 				self->selmon = m;
+			gowl_compositor_arrange(self, m);
+			gowl_compositor_focus_client(self,
+				focustop(self, self->selmon), TRUE);
 		}
 	}
 }
@@ -4181,6 +4259,11 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 	m = wl_container_of(listener, m, frame);
 	(void)data;
 
+	/* A lid-disabled panel keeps its GowlMonitor but no scene output;
+	 * ignore any late frame event so we never commit a NULL output. */
+	if (m->scene_output == NULL)
+		return;
+
 	/* Commit the scene graph to this output */
 	wlr_scene_output_commit(m->scene_output, NULL);
 
@@ -4239,7 +4322,11 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 
 	/* Remove from output layout */
 	wlr_output_layout_remove(self->output_layout, m->wlr_output);
-	wlr_scene_output_destroy(m->scene_output);
+	/* May already be NULL if this panel was lid-disabled first. */
+	if (m->scene_output != NULL) {
+		wlr_scene_output_destroy(m->scene_output);
+		m->scene_output = NULL;
+	}
 
 	/* Select a new monitor if this was the selected one */
 	if (m == self->selmon) {
@@ -4516,8 +4603,126 @@ create_pointer(
 	GowlCompositor     *self,
 	struct wlr_pointer  *pointer
 ){
+	struct wlr_input_device *dev = &pointer->base;
+
+	/* Apply GNOME-like touchpad defaults: tap-to-click, tap-and-drag,
+	 * natural (reverse) scrolling, two-finger scroll, and
+	 * disable-while-typing.  A touchpad is told apart from a mouse by
+	 * reporting a tap finger count, so a plain mouse keeps its
+	 * traditional wheel direction and gains nothing it cannot do. */
+	if (wlr_input_device_is_libinput(dev)) {
+		struct libinput_device *li =
+			wlr_libinput_get_device_handle(dev);
+
+		if (li != NULL
+		    && libinput_device_config_tap_get_finger_count(li) > 0) {
+			libinput_device_config_tap_set_enabled(li,
+				LIBINPUT_CONFIG_TAP_ENABLED);
+			libinput_device_config_tap_set_drag_enabled(li,
+				LIBINPUT_CONFIG_DRAG_ENABLED);
+			if (libinput_device_config_scroll_has_natural_scroll(li))
+				libinput_device_config_scroll_set_natural_scroll_enabled(
+					li, 1);
+			if (libinput_device_config_scroll_get_methods(li)
+			    & LIBINPUT_CONFIG_SCROLL_2FG)
+				libinput_device_config_scroll_set_method(li,
+					LIBINPUT_CONFIG_SCROLL_2FG);
+			if (libinput_device_config_dwt_is_available(li))
+				libinput_device_config_dwt_set_enabled(li,
+					LIBINPUT_CONFIG_DWT_ENABLED);
+		}
+	}
+
 	wlr_cursor_attach_input_device(self->wlr_cursor,
 	                               &pointer->base);
+}
+
+/* -----------------------------------------------------------
+ * Touchpad gesture relays
+ *
+ * wlr_cursor aggregates libinput swipe/pinch/hold gesture events from
+ * every attached pointer; forward them to the focused client through
+ * the pointer-gestures protocol (zwp_pointer_gestures_v1).
+ * ----------------------------------------------------------- */
+static void
+on_cursor_swipe_begin(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self =
+		wl_container_of(listener, self, cursor_swipe_begin);
+	struct wlr_pointer_swipe_begin_event *ev = data;
+	wlr_pointer_gestures_v1_send_swipe_begin(self->pointer_gestures,
+		self->wlr_seat, ev->time_msec, ev->fingers);
+}
+
+static void
+on_cursor_swipe_update(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self =
+		wl_container_of(listener, self, cursor_swipe_update);
+	struct wlr_pointer_swipe_update_event *ev = data;
+	wlr_pointer_gestures_v1_send_swipe_update(self->pointer_gestures,
+		self->wlr_seat, ev->time_msec, ev->dx, ev->dy);
+}
+
+static void
+on_cursor_swipe_end(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self =
+		wl_container_of(listener, self, cursor_swipe_end);
+	struct wlr_pointer_swipe_end_event *ev = data;
+	wlr_pointer_gestures_v1_send_swipe_end(self->pointer_gestures,
+		self->wlr_seat, ev->time_msec, ev->cancelled);
+}
+
+static void
+on_cursor_pinch_begin(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self =
+		wl_container_of(listener, self, cursor_pinch_begin);
+	struct wlr_pointer_pinch_begin_event *ev = data;
+	wlr_pointer_gestures_v1_send_pinch_begin(self->pointer_gestures,
+		self->wlr_seat, ev->time_msec, ev->fingers);
+}
+
+static void
+on_cursor_pinch_update(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self =
+		wl_container_of(listener, self, cursor_pinch_update);
+	struct wlr_pointer_pinch_update_event *ev = data;
+	wlr_pointer_gestures_v1_send_pinch_update(self->pointer_gestures,
+		self->wlr_seat, ev->time_msec, ev->dx, ev->dy,
+		ev->scale, ev->rotation);
+}
+
+static void
+on_cursor_pinch_end(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self =
+		wl_container_of(listener, self, cursor_pinch_end);
+	struct wlr_pointer_pinch_end_event *ev = data;
+	wlr_pointer_gestures_v1_send_pinch_end(self->pointer_gestures,
+		self->wlr_seat, ev->time_msec, ev->cancelled);
+}
+
+static void
+on_cursor_hold_begin(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self =
+		wl_container_of(listener, self, cursor_hold_begin);
+	struct wlr_pointer_hold_begin_event *ev = data;
+	wlr_pointer_gestures_v1_send_hold_begin(self->pointer_gestures,
+		self->wlr_seat, ev->time_msec, ev->fingers);
+}
+
+static void
+on_cursor_hold_end(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self =
+		wl_container_of(listener, self, cursor_hold_end);
+	struct wlr_pointer_hold_end_event *ev = data;
+	wlr_pointer_gestures_v1_send_hold_end(self->pointer_gestures,
+		self->wlr_seat, ev->time_msec, ev->cancelled);
 }
 
 /* -----------------------------------------------------------

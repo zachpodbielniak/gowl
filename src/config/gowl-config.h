@@ -511,6 +511,27 @@ gowl_config_add_keybind(
  */
 GArray *gowl_config_get_keybinds(GowlConfig *self);
 
+/**
+ * gowl_config_remove_keybind:
+ * @self: a #GowlConfig
+ * @modifiers: bitmask of #GowlKeyMod flags
+ * @keysym: XKB keysym value
+ *
+ * Removes every keybind entry matching @modifiers + @keysym (action
+ * and arg are not compared).  Returns the number removed.
+ */
+guint gowl_config_remove_keybind(GowlConfig *self,
+                                  guint       modifiers,
+                                  guint       keysym);
+
+/**
+ * gowl_config_clear_keybinds:
+ * @self: a #GowlConfig
+ *
+ * Removes every keybind from the config.
+ */
+void gowl_config_clear_keybinds(GowlConfig *self);
+
 /* --- Rules --- */
 
 /**

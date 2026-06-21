@@ -1696,6 +1696,64 @@ gowl_config_get_keybinds(GowlConfig *self)
 	return self->keybinds;
 }
 
+/**
+ * gowl_config_remove_keybind:
+ * @self: a #GowlConfig
+ * @modifiers: bitmask of #GowlKeyMod flags
+ * @keysym: XKB keysym value
+ *
+ * Removes every keybind entry whose @modifiers and @keysym match the
+ * arguments.  The @action and @arg fields are not compared, so all
+ * binds registered for the same key combo are removed -- this is the
+ * shape callers need to replace a stale bind with an authoritative one
+ * (gowl's dispatch takes the first matching entry, so an older
+ * duplicate would otherwise shadow a freshly-added one).  Returns the
+ * number of entries removed.
+ */
+guint
+gowl_config_remove_keybind(
+	GowlConfig  *self,
+	guint        modifiers,
+	guint        keysym
+){
+	guint i;
+	guint removed = 0;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0);
+
+	for (i = 0; i < self->keybinds->len; ) {
+		GowlKeybindEntry *kb;
+
+		kb = &g_array_index(self->keybinds, GowlKeybindEntry, i);
+		if (kb->modifiers == modifiers && kb->keysym == keysym) {
+			/* Order-preserving remove: shifts the tail down so the
+			 * next candidate slides into slot i -- do not advance. */
+			g_array_remove_index(self->keybinds, i);
+			removed++;
+			continue;
+		}
+		i++;
+	}
+
+	return removed;
+}
+
+/**
+ * gowl_config_clear_keybinds:
+ * @self: a #GowlConfig
+ *
+ * Removes every keybind from the config.  The per-entry clear func
+ * frees each entry's arg string.
+ */
+void
+gowl_config_clear_keybinds(GowlConfig *self)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (self->keybinds != NULL)
+		g_array_set_size(self->keybinds, 0);
+}
+
 /* --- Rule management --- */
 
 /**

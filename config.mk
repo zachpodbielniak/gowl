@@ -189,7 +189,17 @@ endif
 CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src -Ideps/crispy/src
 
 # Combine all CFLAGS
-CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(CFLAGS_INC) $(CFLAGS_DEPS)
+# Header dependency tracking.  -MMD writes a .d file next to each .o
+# listing the headers it included; -MP adds phantom targets so a deleted
+# header doesn't wedge the build.  The Makefile already does
+# `-include $(LIB_OBJS:.o=.d)`, so editing a shared header (e.g.
+# gowl-core-private.h) now correctly recompiles every dependent TU --
+# without this, gowl-client.o could keep a stale sizeof(GowlClient) while
+# gowl-compositor.o saw the new one, corrupting the heap (see the
+# CLAUDE.md "make may not relink" hazard).
+DEPFLAGS := -MMD -MP
+
+CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(CFLAGS_INC) $(CFLAGS_DEPS) $(DEPFLAGS)
 
 # Linker flags
 LDFLAGS := $(LDFLAGS_DEPS) $(LDFLAGS_ASAN)

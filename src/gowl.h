@@ -36,6 +36,7 @@
 #include "boxed/gowl-rule.h"
 #include "boxed/gowl-output-mode.h"
 #include "boxed/gowl-process-info.h"
+#include "boxed/gowl-capture-source.h"
 
 /* Module system */
 #include "module/gowl-module.h"
@@ -70,6 +71,7 @@
 #include "interfaces/gowl-session-provider.h"
 #include "interfaces/gowl-embed-renderer.h"
 #include "interfaces/gowl-workspace-provider.h"
+#include "interfaces/gowl-capture-provider.h"
 
 /* Boxed types */
 #include "boxed/gowl-capture-result.h"

@@ -328,6 +328,12 @@ rc_destroy_decoration(GowlClientDecorator *decorator,
 		wlr_scene_node_destroy(&decor->frame_buf->node);
 
 	g_hash_table_remove(self->decorations, client);
+	/* Release the extra reference taken when the decoration was
+	 * inserted (see g_object_ref in rc_render_decoration).  Without
+	 * this the GowlClient leaks one ref per decoration, since
+	 * on_client_destroy's g_object_unref(c) only drops the
+	 * compositor's ownership ref -- the decorator's ref would pin it. */
+	g_object_unref(client);
 	g_free(decor);
 }
 
@@ -389,11 +395,12 @@ rc_destroy_decor_entry(gpointer key, gpointer value, gpointer user_data)
 {
 	RoundDecor *decor = (RoundDecor *)value;
 
-	(void)key;
 	(void)user_data;
 
 	if (decor->frame_buf != NULL)
 		wlr_scene_node_destroy(&decor->frame_buf->node);
+	/* Match the g_object_ref taken at insert (key is the GowlClient). */
+	g_object_unref(GOWL_CLIENT(key));
 	g_free(decor);
 }
 

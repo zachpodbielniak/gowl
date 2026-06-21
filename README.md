@@ -4,7 +4,7 @@
   <img src="data/logo.png" alt="gowl logo" width="200">
 </p>
 
-A GObject-based Wayland compositor built on wlroots 0.19. Gowl takes inspiration from dwl and dwm, reimagining their tiling window management philosophy with a full GObject architecture. Rather than a direct port, gowl provides a modular, introspectable compositor with a plugin architecture based on GModule and GObject interfaces.
+A GObject-based Wayland compositor built on wlroots (0.19 or 0.20). Gowl takes inspiration from dwl and dwm, reimagining their tiling window management philosophy with a full GObject architecture. Rather than a direct port, gowl provides a modular, introspectable compositor with a plugin architecture based on GModule and GObject interfaces.
 
 ## Features
 

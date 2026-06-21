@@ -6,7 +6,7 @@
 :PROPERTIES:
 :CUSTOM_ID: overview
 :END:
-Gowl is a GObject-based Wayland compositor built on wlroots 0.19. Inspired by dwl and dwm, it reimagines their tiling window management philosophy with a full GObject type system, providing a modular, introspectable compositor with a plugin architecture based on GModule and GObject interfaces.
+Gowl is a GObject-based Wayland compositor built on wlroots (0.19 or 0.20; see [[#wlroots-version-abstraction]]). Inspired by dwl and dwm, it reimagines their tiling window management philosophy with a full GObject type system, providing a modular, introspectable compositor with a plugin architecture based on GModule and GObject interfaces.
 
 The design philosophy is to expose every compositor subsystem as a well-typed GObject, making it possible for modules to hook into any part of the compositor lifecycle through a set of clearly defined interfaces.
 

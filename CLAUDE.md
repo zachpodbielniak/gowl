@@ -91,7 +91,9 @@ docs/                       # Documentation (architecture, building, configurati
 
 ### Required
 - `glib-2.0`, `gobject-2.0`, `gio-2.0`, `gmodule-2.0`
-- `wlroots-0.19`, `wayland-server`, `wayland-protocols`
+- `wlroots-0.19` **or** `wlroots-0.20` (newest present wins; `make WLROOTS=0.19`
+  to pin — 0.20 adds per-window screencast capture, see `gowl-wlroots-compat.h`),
+  `wayland-server`, `wayland-protocols`
 - `xkbcommon`, `libinput`
 - `yaml-0.1`, `json-glib-1.0`
 

@@ -336,6 +336,70 @@ depend on (without it, flatpaks get no Settings portal and mis-theme).
 =gowl_compositor_quit= stops the target.  Best-effort: no-op where
 =systemctl= is absent, and =GOWL_DISABLE_SYSTEMD=1= opts out.
 
+In a real seat session (not nested =just gowl=) it additionally
+=try-restart='s =xdg-desktop-portal= after importing the environment.  A
+portal frontend left running by a *previous* login keeps that login's
+=XDG_CURRENT_DESKTOP= -- read once at startup to choose portal backends
+-- so screen-sharing's =ScreenCast= request keeps routing to a backend
+that doesn't work under gowl (the GNOME backend needs Mutter) and
+silently fails.  Restarting the frontend makes it re-read the live
+=XDG_CURRENT_DESKTOP= (which must list a wlroots-class name, e.g.
+=...:wlroots=, to match =xdg-desktop-portal-wlr='s =UseIn=).  The
+seat-only guard is =nested_wl_backend == NULL=; a nested gowl never
+touches the host session's portal.
+
+** Screen Sharing (xdg-desktop-portal-wlr)
+
+Screen capture for apps (Zoom, OBS, browsers) goes through
+=xdg-desktop-portal-wlr=, which talks to gowl over wlroots protocols.
+Gowl advertises the globals the portal needs:
+
+- =zwlr_screencopy_manager_v1= -- the actual frame capture path.
+- =zwlr_output_manager_v1= (=wlr-output-management=) -- so the portal can
+  *enumerate outputs* for the "what to share" picker.  Gowl creates the
+  manager (=output_mgr=), publishes the current configuration on startup
+  and on every layout change
+  (=gowl_compositor_publish_output_config=), and answers the manager's
+  =apply= / =test= requests by driving the =gowl_monitor_set_*= mutators.
+  Without a published configuration the picker has no outputs to list and
+  never appears.
+- =xdg_activation_v1= -- lets clients request focus for a surface
+  (=request_activate=); gowl focuses the requesting toplevel if it is a
+  non-embedded client, else marks it urgent.
+
+Selection of the wlroots portal backend is environment-driven (see the
+=XDG_CURRENT_DESKTOP=/=:wlroots= note above), not a gowl protocol matter.
+
+** XWayland Override-Redirect (Unmanaged) Surfaces
+
+X11 *override-redirect* surfaces -- popup menus, combo dropdowns,
+tooltips, DND icons, and app confirmation dialogs (e.g. Zoom's "End
+meeting / Leave") -- are positioned by the client and must not be tiled,
+bordered, or reparented into the managed hierarchy.  Gowl handles them on
+a dedicated *unmanaged* path (ported from dwl), distinct from managed
+toplevels:
+
+- =client_is_unmanaged()= = X11 surface with =override_redirect=;
+  =client_wants_focus()= wraps
+  =wlr_xwayland_surface_override_redirect_wants_focus()=.
+- On map (=on_client_map=): use the surface's own x/y, float in the
+  =FLOAT= scene layer, no border, and -- if it wants focus -- set
+  =GowlCompositor.exclusive_focus= and focus it.  The surface is *not*
+  added to the client/focus lists and is never arranged.
+- =gowl_compositor_focus_client= refuses to focus anything else while
+  =exclusive_focus= still wants focus (so the popup keeps its grab), and
+  crucially does *not* deactivate the popup's parent toplevel when the
+  incoming client wants focus.  Deactivating the parent makes Qt / wine
+  treat the popup as dismissed and close it in ~0.5s -- the guard
+  (=!client_wants_focus(c)= plus "never deactivate an override-redirect
+  old surface") is what keeps the dialog on screen.
+- On unmap/destroy: =exclusive_focus= is cleared and focus returns to the
+  top managed client.
+
+Set =GOWL_DEBUG_XWAYLAND=1= to log each X11 surface's type
+(override-redirect vs managed, with class/title) at =message= level --
+the quickest way to confirm which path a given window takes.
+
 ** Raw Frame Sink (External Animated Backgrounds)
 
 Gowl can display *externally produced* frames as the wallpaper or the

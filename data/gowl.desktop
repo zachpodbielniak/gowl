@@ -4,4 +4,8 @@ Comment=A GObject-based Wayland compositor inspired by dwl and dwm
 Exec=gowl
 Type=Application
 Icon=gowl
-DesktopNames=gowl
+# Trailing :wlroots makes XDG_CURRENT_DESKTOP match xdg-desktop-portal-wlr's
+# UseIn (wlroots;sway;Wayfire;river;phosh;Hyprland), so screen-share apps get
+# the wlroots ScreenCast portal.  Without it the portal frontend finds no
+# ScreenCast backend under gowl and the share picker does nothing.
+DesktopNames=gowl:wlroots

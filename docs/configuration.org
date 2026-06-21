@@ -597,3 +597,17 @@ gowl_config_init(void)
 | =--startup CMD=, =-s CMD= | Run a command after startup               |
 | =--generate-yaml-config=  | Print default YAML config to stdout       |
 | =--generate-c-config=     | Print default C config template to stdout |
+
+** Environment Variables
+:PROPERTIES:
+:CUSTOM_ID: environment-variables
+:END:
+| Variable                | Effect                                                                                       |
+|-------------------------+----------------------------------------------------------------------------------------------|
+| =GOWL_DISABLE_SYSTEMD=  | Skip the systemd user-session bootstrap (=import-environment=, =gowl-session.target=, portal restart). |
+| =GOWL_DEBUG_XWAYLAND=   | Log every XWayland surface's type (=OVERRIDE-REDIRECT (unmanaged)= vs =MANAGED=, with class/title) at =message= level, so it appears even at the default =warning= log-level.  Use to confirm which focus path an X11 window takes. |
+| =GOWL_OUTPUT_SIZE=      | =WxH= mode for nested/headless outputs that advertise no mode list (e.g. =1920x1080=).         |
+
+The standard wlroots variable =WLR_BACKENDS= (e.g. =libinput,drm=) is also
+honoured: gowl only =setenv='s it with no-overwrite, so a value set in the
+environment wins over gowl's nested/seat backend heuristics.

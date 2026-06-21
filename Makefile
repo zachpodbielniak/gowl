@@ -41,6 +41,7 @@ LIB_SRCS := \
 	src/boxed/gowl-capture-result.c \
 	src/boxed/gowl-focus-token.c \
 	src/boxed/gowl-workspace-id.c \
+	src/boxed/gowl-capture-source.c \
 	src/module/gowl-module.c \
 	src/module/gowl-module-manager.c \
 	src/module/gowl-module-info.c \
@@ -71,6 +72,7 @@ LIB_SRCS := \
 	src/interfaces/gowl-session-provider.c \
 	src/interfaces/gowl-embed-renderer.c \
 	src/interfaces/gowl-workspace-provider.c \
+	src/interfaces/gowl-capture-provider.c \
 	src/config/gowl-config.c \
 	src/config/gowl-config-compiler.c \
 	src/config/gowl-keybind.c \
@@ -82,6 +84,7 @@ LIB_SRCS := \
 	src/util/gowl-systemd.c \
 	src/util/gowl-wallpaper-scale.c \
 	src/core/gowl-compositor.c \
+	src/core/gowl-capture-wlroots.c \
 	src/core/gowl-frame-sink.c \
 	src/core/gowl-lid-policy.c \
 	src/core/gowl-monitor.c \

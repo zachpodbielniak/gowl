@@ -234,6 +234,7 @@ struct _GowlCompositor {
 	GowlKeyboardGroup           *kb_group_obj;
 	GowlIdleManager             *idle_mgr;
 	GowlBar                     *bar;           /* NULL unless bar module active */
+	gpointer                     capture_provider; /* GowlCaptureProvider* (screencast) */
 
 	/* keybind state for key-repeat */
 	gint                          kb_nsyms;

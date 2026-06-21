@@ -20,7 +20,9 @@
 #include "config/gowl-keybind.h"
 #include "module/gowl-module-manager.h"
 #include "interfaces/gowl-client-decorator.h"
+#include "interfaces/gowl-capture-provider.h"
 #include "core/gowl-lid-policy.h"
+#include "core/gowl-capture-wlroots.h"
 #include "core/gowl-frame-sink.h"
 #include "util/gowl-systemd.h"
 
@@ -303,6 +305,10 @@ gowl_compositor_dispose(GObject *object)
 	g_clear_object(&self->bar);
 	g_clear_object(&self->prefix_key_policy);
 	g_clear_object(&self->workspace_provider);
+	if (self->capture_provider != NULL) {
+		g_object_unref(self->capture_provider);
+		self->capture_provider = NULL;
+	}
 
 	if (self->ext_workspace_manager != NULL) {
 		gowl_ext_workspace_manager_unregister(
@@ -2303,7 +2309,13 @@ gowl_compositor_start(
 	wlr_subcompositor_create(self->wl_display);
 	wlr_data_device_manager_create(self->wl_display);
 	wlr_export_dmabuf_manager_v1_create(self->wl_display);
-	wlr_screencopy_manager_v1_create(self->wl_display);
+	/* Screencast capture (monitor always; windows on wlroots >= 0.20)
+	 * goes through the GowlCaptureProvider seam, which creates the
+	 * wlr-screencopy / ext-image-copy-capture / foreign-toplevel globals
+	 * appropriate to the compiled wlroots version. */
+	self->capture_provider = gowl_capture_wlroots_new(self);
+	gowl_capture_provider_create_globals(
+		(GowlCaptureProvider *)self->capture_provider, self->wl_display);
 	wlr_data_control_manager_v1_create(self->wl_display);
 	wlr_primary_selection_v1_device_manager_create(self->wl_display);
 	wlr_viewporter_create(self->wl_display);
@@ -6713,6 +6725,14 @@ on_client_map(struct wl_listener *listener, void *data)
 
 	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_ADDED], 0, c);
 
+	/* Register as a screencast-capturable window (no-op on monitor-only
+	 * wlroots).  Embedded clients are Emacs-managed and not shareable as
+	 * standalone windows; unmanaged override-redirect popups already
+	 * returned early above and never reach here. */
+	if (self->capture_provider != NULL && !c->isembedded)
+		gowl_capture_provider_add_window(
+			(GowlCaptureProvider *)self->capture_provider, c);
+
 	g_debug("Client mapped: %s (%s)",
 	        c->title  != NULL ? c->title  : "(untitled)",
 	        c->app_id != NULL ? c->app_id : "(no app_id)");
@@ -6768,6 +6788,12 @@ on_client_unmap(struct wl_listener *listener, void *data)
 		return;
 	}
 #endif
+
+	/* Drop the screencast capture handle for this window (no-op on
+	 * monitor-only wlroots or if it was never registered). */
+	if (self->capture_provider != NULL)
+		gowl_capture_provider_remove_window(
+			(GowlCaptureProvider *)self->capture_provider, c);
 
 	/* Cancel any interactive grab */
 	if (c == self->grabbed_client) {
@@ -6950,6 +6976,12 @@ on_client_set_title(struct wl_listener *listener, void *data)
 	if (self->ipc != NULL && focused == c)
 		gowl_ipc_push_event(self->ipc, "EVENT title %s",
 		                     c->title != NULL ? c->title : "");
+
+	/* Refresh the screencast window list's title/app_id (no-op on
+	 * monitor-only wlroots or for untracked clients). */
+	if (self->capture_provider != NULL)
+		gowl_capture_provider_update_window(
+			(GowlCaptureProvider *)self->capture_provider, c);
 }
 
 #ifdef GOWL_HAVE_XWAYLAND

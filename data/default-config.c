@@ -91,7 +91,7 @@ gowl_config_init(void)
 	g_object_set(gowl_config,
 		"tag-count",   9,
 		"terminal",    "gst",
-		"menu",        "bemenu-run",
+		"menu",        "wofi --show drun",
 		"sloppyfocus", TRUE,
 		"log-level",   "warning",
 		NULL);
@@ -103,10 +103,15 @@ gowl_config_init(void)
 		MODKEY, XKB_KEY_Return,
 		GOWL_ACTION_SPAWN, "gst");
 
-	/* Launch menu */
+	/* Launch menu (drun) */
 	gowl_config_add_keybind(gowl_config,
 		MODKEY, XKB_KEY_p,
-		GOWL_ACTION_SPAWN, "bemenu-run");
+		GOWL_ACTION_SPAWN, "wofi --show drun");
+
+	/* Launch run dialog */
+	gowl_config_add_keybind(gowl_config,
+		MODKEY | GOWL_KEY_MOD_SHIFT, XKB_KEY_p,
+		GOWL_ACTION_SPAWN, "wofi --show run");
 
 	/* Kill focused client */
 	gowl_config_add_keybind(gowl_config,

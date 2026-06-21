@@ -174,6 +174,14 @@ struct _GowlCompositor {
 	struct wlr_compositor        *wlr_compositor;
 	struct wlr_output_layout     *output_layout;
 
+	/* Links each scene_output to its output_layout_output so wlroots
+	 * auto-positions scene_outputs at the layout's coords.  Without this
+	 * every scene_output sits at (0,0) and any monitor the layout places
+	 * off-origin renders offscreen (and migrated clients never get a
+	 * frame_done -> freeze).  Created by wlr_scene_attach_output_layout()
+	 * and auto-destroyed with the scene/layout. */
+	struct wlr_scene_output_layout *scene_output_layout;
+
 	/* scene graph layers (indexed by GowlSceneLayer) */
 	struct wlr_scene_tree        *layers[GOWL_SCENE_LAYER_COUNT];
 	struct wlr_scene_tree        *drag_icon;

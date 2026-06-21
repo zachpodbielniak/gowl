@@ -2311,6 +2311,14 @@ gowl_compositor_start(
 	wlr_xdg_output_manager_v1_create(self->wl_display,
 	                                  self->output_layout);
 
+	/* Bind the scene graph to the output layout so each scene_output we
+	 * create (on_new_output / lid re-enable) auto-tracks its
+	 * output_layout_output's position.  Without this scene_outputs default
+	 * to (0,0) and any off-origin monitor renders offscreen.  Auto-freed
+	 * with the scene/layout, so no manual cleanup. */
+	self->scene_output_layout =
+		wlr_scene_attach_output_layout(self->scene, self->output_layout);
+
 	/* 8. Listen for new outputs */
 	LISTEN(&self->backend->events.new_output,
 	       &self->new_output, on_new_output);
@@ -4019,6 +4027,22 @@ gowl_compositor_update_lid_outputs(GowlCompositor *self)
 			gowl_monitor_set_enabled(m, TRUE);
 			wlr_output_layout_add_auto(self->output_layout,
 			                           m->wlr_output);
+			/* The disable branch's wlr_output_layout_remove() freed
+			 * the old layout_output and dropped the scene_output
+			 * association.  add_auto above made a fresh one; re-link
+			 * the kept-alive scene_output so it tracks the layout
+			 * again (otherwise it would be stuck at its last
+			 * position, or (0,0) if it never had one). */
+			{
+				struct wlr_output_layout_output *lo =
+					wlr_output_layout_get(self->output_layout,
+					                       m->wlr_output);
+				if (lo != NULL && self->scene_output_layout != NULL) {
+					wlr_scene_output_layout_add_output(
+						self->scene_output_layout,
+						lo, m->scene_output);
+				}
+			}
 			if (self->selmon == NULL)
 				self->selmon = m;
 			gowl_compositor_arrange(self, m);
@@ -4223,6 +4247,19 @@ on_new_output(struct wl_listener *listener, void *data)
 	/* Create scene output and add to layout */
 	m->scene_output = wlr_scene_output_create(self->scene, wlr_output);
 	wlr_output_layout_add_auto(self->output_layout, wlr_output);
+
+	/* Link the scene_output to its (just-added) layout_output so wlroots
+	 * positions it at the layout's coords instead of the (0,0) default.
+	 * add_auto returns the layout_output, but re-fetching it here keeps
+	 * the re-enable path in update_lid_outputs identical. */
+	{
+		struct wlr_output_layout_output *lo =
+			wlr_output_layout_get(self->output_layout, wlr_output);
+		if (lo != NULL && self->scene_output_layout != NULL) {
+			wlr_scene_output_layout_add_output(self->scene_output_layout,
+			                                   lo, m->scene_output);
+		}
+	}
 
 	/* Select this monitor if it's the first one */
 	if (self->selmon == NULL)

@@ -242,6 +242,7 @@ $(OUTDIR)/gowl.pc: gowl.pc.in | $(OUTDIR)
 		-e 's|@LIBDIR@|$(LIBDIR)|g' \
 		-e 's|@INCLUDEDIR@|$(INCLUDEDIR)|g' \
 		-e 's|@VERSION@|$(VERSION)|g' \
+		-e 's|@WLROOTS_PC@|$(WLROOTS_PC)|g' \
 		$< > $@
 
 # Version header generation

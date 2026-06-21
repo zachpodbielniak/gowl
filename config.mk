@@ -8,7 +8,7 @@
 
 # Version
 VERSION_MAJOR := 0
-VERSION_MINOR := 4
+VERSION_MINOR := 5
 VERSION_MICRO := 0
 VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 
@@ -101,9 +101,41 @@ else
     CFLAGS_BUILD := -O2 -DNDEBUG
 endif
 
+# wlroots version selection.
+#
+# gowl supports wlroots 0.19 and 0.20.  They ship as parallel, ABI-
+# incompatible pkg-config modules (wlroots-0.19 / wlroots-0.20), so a
+# build links exactly one -- chosen here at build time.  The newest one
+# present on the system wins by default (0.20 unlocks per-window
+# screencast capture; 0.19 is monitor-only).  Override explicitly with
+#   make WLROOTS=0.19
+# e.g. on Fedora 42/43 where only 0.19 exists, or to force 0.19 on a
+# host that also has 0.20.  See docs/building.org.
+#
+# WLROOTS holds the chosen minor series ("0.19" or "0.20").  The code
+# sees it as GOWL_WLROOTS_VERSION_{MAJOR,MINOR} plus the convenience
+# macro GOWL_HAVE_WLROOTS_0_20 (1 when >= 0.20); see gowl-wlroots-compat.h.
+WLROOTS ?= $(strip \
+    $(if $(shell $(PKG_CONFIG) --exists wlroots-0.20 && echo y),0.20,\
+    $(if $(shell $(PKG_CONFIG) --exists wlroots-0.19 && echo y),0.19,\
+    none)))
+
+ifeq ($(WLROOTS),none)
+$(error No supported wlroots found (need wlroots-0.20 or wlroots-0.19 \
+pkg-config module).  On Fedora install wlroots0.19-devel or wlroots-devel; \
+on Ubuntu 24.04 build wlroots from source -- see docs/building.org)
+endif
+
+WLROOTS_PC      := wlroots-$(WLROOTS)
+WLROOTS_MAJOR   := $(word 1,$(subst ., ,$(WLROOTS)))
+WLROOTS_MINOR   := $(word 2,$(subst ., ,$(WLROOTS)))
+
+CFLAGS_BASE += -DGOWL_WLROOTS_VERSION_MAJOR=$(WLROOTS_MAJOR)
+CFLAGS_BASE += -DGOWL_WLROOTS_VERSION_MINOR=$(WLROOTS_MINOR)
+
 # Required dependencies
 DEPS_REQUIRED := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
-DEPS_REQUIRED += wlroots-0.19 wayland-server wayland-protocols
+DEPS_REQUIRED += $(WLROOTS_PC) wayland-server wayland-protocols
 DEPS_REQUIRED += xkbcommon libinput
 DEPS_REQUIRED += yaml-0.1 json-glib-1.0 cairo egl gl
 

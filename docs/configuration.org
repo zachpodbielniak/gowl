@@ -69,7 +69,7 @@ General compositor settings.
 | =repeat-rate=  | int    | =25=           | Keyboard repeat rate (keys per second)                                  |
 | =repeat-delay= | int    | =600=          | Keyboard repeat delay (milliseconds before repeat starts)               |
 | =terminal=     | string | ="gst"=        | Terminal emulator command                                               |
-| =menu=         | string | ="bemenu-run"= | Application launcher command                                            |
+| =menu=         | string | ="wofi --show drun"= | Application launcher command (bound to =Super+p=)               |
 | =sloppyfocus=  | bool   | =true=         | Enable sloppy (focus-follows-mouse) focus                               |
 | =manage_lid=   | bool   | =true=         | Power off the internal panel (eDP/LVDS/DSI) when the laptop lid is shut and an external display is connected |
 
@@ -195,7 +195,8 @@ The last token in the =+=-separated string is the key name, resolved via =xkb_ke
 #+begin_src yaml
 keybinds:
   "Super+Return": { action: spawn, arg: "gst" }
-  "Super+p": { action: spawn, arg: "bemenu-run" }
+  "Super+p": { action: spawn, arg: "wofi --show drun" }
+  "Super+Shift+p": { action: spawn, arg: "wofi --show run" }
   "Super+Shift+c": { action: kill_client }
   "Super+j": { action: focus_stack, arg: "+1" }
   "Super+k": { action: focus_stack, arg: "-1" }

@@ -63,7 +63,8 @@ add_keybinds(void)
 
 	/* Launch applications */
 	KEYBIND(SUPER, XKB_KEY_Return, GOWL_ACTION_SPAWN, "gst");
-	KEYBIND(SUPER, XKB_KEY_p,     GOWL_ACTION_SPAWN, "bemenu-run");
+	KEYBIND(SUPER, XKB_KEY_p,     GOWL_ACTION_SPAWN, "wofi --show drun");
+	KEYBIND(SUPER_SHIFT, XKB_KEY_p, GOWL_ACTION_SPAWN, "wofi --show run");
 
 	/* Client management */
 	KEYBIND(SUPER_SHIFT, XKB_KEY_c,      GOWL_ACTION_KILL_CLIENT, NULL);
@@ -150,7 +151,7 @@ gowl_config_init(void)
 		"repeat-rate",  25,
 		"repeat-delay", 600,
 		"terminal",     "gst",
-		"menu",         "bemenu-run",
+		"menu",         "wofi --show drun",
 		"sloppyfocus",  TRUE,
 		NULL);
 

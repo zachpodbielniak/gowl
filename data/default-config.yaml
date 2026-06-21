@@ -23,7 +23,7 @@ log-file: "~/.config/gowl/gowl.log"
 repeat-rate: 25
 repeat-delay: 600
 terminal: "gst"
-menu: "bemenu-run"
+menu: "wofi --show drun"
 sloppyfocus: true
 # Power off the internal laptop panel (eDP/LVDS/DSI) while the lid is
 # shut and an external display is connected.  Set false to keep driving
@@ -53,7 +53,8 @@ tag-count: 9
 keybinds:
   # Launch applications
   "Super+Return": { action: spawn, arg: "gst" }
-  "Super+p": { action: spawn, arg: "bemenu-run" }
+  "Super+p": { action: spawn, arg: "wofi --show drun" }
+  "Super+Shift+p": { action: spawn, arg: "wofi --show run" }
 
   # Client management
   "Super+Shift+c": { action: kill_client }

@@ -473,6 +473,8 @@ struct _GowlClient {
 	struct wl_listener set_title;
 	struct wl_listener fullscreen;
 	struct wl_listener maximize;
+	struct wl_listener request_move;    /* client-initiated move drag */
+	struct wl_listener request_resize;  /* client-initiated edge resize */
 	struct wl_listener set_decoration_mode;
 	struct wl_listener destroy_decoration;
 #ifdef GOWL_HAVE_XWAYLAND

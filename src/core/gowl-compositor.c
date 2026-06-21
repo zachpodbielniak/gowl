@@ -215,7 +215,11 @@ static void on_client_unmap       (struct wl_listener *listener, void *data);
 static void on_client_destroy     (struct wl_listener *listener, void *data);
 static void on_client_fullscreen  (struct wl_listener *listener, void *data);
 static void on_client_maximize    (struct wl_listener *listener, void *data);
+static void on_client_request_move  (struct wl_listener *listener, void *data);
+static void on_client_request_resize(struct wl_listener *listener, void *data);
 static void on_client_set_title   (struct wl_listener *listener, void *data);
+static void begin_interactive(GowlCompositor *self, GowlClient *c,
+                              gint mode, guint32 edges);
 
 #ifdef GOWL_HAVE_XWAYLAND
 /* XWayland callbacks */
@@ -225,6 +229,8 @@ static void on_xwayland_associate         (struct wl_listener *listener, void *d
 static void on_xwayland_dissociate        (struct wl_listener *listener, void *data);
 static void on_xwayland_request_configure (struct wl_listener *listener, void *data);
 static void on_xwayland_request_activate  (struct wl_listener *listener, void *data);
+static void on_xwayland_request_move      (struct wl_listener *listener, void *data);
+static void on_xwayland_request_resize    (struct wl_listener *listener, void *data);
 #endif
 
 /* client surface-type helpers (X11 vs XDG) */
@@ -5950,14 +5956,39 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 		return;
 	}
 
-	/* Handle interactive resize */
+	/* Handle interactive resize.  Edge-aware: only the edges captured
+	 * in resize_edges move; the opposite edges stay anchored at their
+	 * grab_geobox positions.  This makes dragging any edge or corner
+	 * work (not just the bottom-right).  A minimum size keeps the
+	 * window from collapsing or inverting. */
 	if (self->cursor_mode == GOWL_CURSOR_MODE_RESIZE) {
-		struct wlr_box geo;
+		struct wlr_box geo = self->grab_geobox;
+		gint cx, cy;
+		gint left, top, right, bottom;
+		const gint min_w = 48, min_h = 32;
 
-		geo.x = self->grabbed_client->geom.x;
-		geo.y = self->grabbed_client->geom.y;
-		geo.width = (gint)round(self->wlr_cursor->x) - geo.x;
-		geo.height = (gint)round(self->wlr_cursor->y) - geo.y;
+		cx = (gint)round(self->wlr_cursor->x - self->grab_x);
+		cy = (gint)round(self->wlr_cursor->y - self->grab_y);
+
+		left   = geo.x;
+		top    = geo.y;
+		right  = geo.x + geo.width;
+		bottom = geo.y + geo.height;
+
+		if (self->resize_edges & WLR_EDGE_LEFT)
+			left = (cx > right - min_w) ? right - min_w : cx;
+		else if (self->resize_edges & WLR_EDGE_RIGHT)
+			right = (cx < left + min_w) ? left + min_w : cx;
+
+		if (self->resize_edges & WLR_EDGE_TOP)
+			top = (cy > bottom - min_h) ? bottom - min_h : cy;
+		else if (self->resize_edges & WLR_EDGE_BOTTOM)
+			bottom = (cy < top + min_h) ? top + min_h : cy;
+
+		geo.x = left;
+		geo.y = top;
+		geo.width  = right - left;
+		geo.height = bottom - top;
 		resize_client(self, self->grabbed_client, geo, TRUE);
 		return;
 	}
@@ -6097,31 +6128,25 @@ on_cursor_button(struct wl_listener *listener, void *data)
 			break;
 
 		if (event->button == BTN_LEFT) {
-			if (!c->isfloating)
-				setfloating(self, c, TRUE);
-			self->cursor_mode    = GOWL_CURSOR_MODE_MOVE;
-			self->grabbed_client = c;
-			self->grab_x = self->wlr_cursor->x - (gdouble)c->geom.x;
-			self->grab_y = self->wlr_cursor->y - (gdouble)c->geom.y;
-			wlr_cursor_set_xcursor(self->wlr_cursor,
-			                        self->xcursor_mgr, "grabbing");
+			begin_interactive(self, c, GOWL_CURSOR_MODE_MOVE, 0);
 			return;
 		}
 
 		if (event->button == BTN_RIGHT) {
-			if (!c->isfloating)
-				setfloating(self, c, TRUE);
-			self->cursor_mode    = GOWL_CURSOR_MODE_RESIZE;
-			self->grabbed_client = c;
-			/* Warp cursor to the client's bottom-right corner so
-			 * the motion handler's (cursor - geom) arithmetic
-			 * produces the right width/height delta. */
-			wlr_cursor_warp(self->wlr_cursor, NULL,
-			                 (gdouble)(c->geom.x + c->geom.width),
-			                 (gdouble)(c->geom.y + c->geom.height));
-			wlr_cursor_set_xcursor(self->wlr_cursor,
-			                        self->xcursor_mgr,
-			                        "se-resize");
+			/* Super+RMB resizes from whichever quadrant of the
+			 * window the cursor is in, so the nearest corner
+			 * follows the pointer (dwl behaviour) instead of always
+			 * the bottom-right. */
+			guint32 edges = 0;
+			gint midx = c->geom.x + c->geom.width / 2;
+			gint midy = c->geom.y + c->geom.height / 2;
+
+			edges |= (self->wlr_cursor->x < midx)
+				? WLR_EDGE_LEFT : WLR_EDGE_RIGHT;
+			edges |= (self->wlr_cursor->y < midy)
+				? WLR_EDGE_TOP : WLR_EDGE_BOTTOM;
+			begin_interactive(self, c, GOWL_CURSOR_MODE_RESIZE,
+			                  edges);
 			return;
 		}
 		break;
@@ -6283,6 +6308,112 @@ on_start_drag(struct wl_listener *listener, void *data)
  * ----------------------------------------------------------- */
 
 /**
+ * begin_interactive:
+ *
+ * Start an interactive move or edge-resize grab on @c.  Captures the
+ * client's current geometry in grab_geobox and the cursor offset, so
+ * the motion handler can compute the new geometry from the live cursor
+ * position.  For a resize, @edges is the WLR_EDGE_* bitmask of which
+ * edge(s) the cursor is dragging.  Tiled clients are promoted to
+ * floating first so the drag does not fight the tile layout.  Embedded
+ * clients are never grabbed (Emacs manages them).
+ * Ported from dwl's begin_interactive().
+ */
+static void
+begin_interactive(GowlCompositor *self, GowlClient *c, gint mode,
+                  guint32 edges)
+{
+	if (c == NULL || gowl_client_get_embedded(c) || c->isfullscreen)
+		return;
+	/* Only one grab at a time. */
+	if (self->cursor_mode != GOWL_CURSOR_MODE_NORMAL
+	    && self->cursor_mode != GOWL_CURSOR_MODE_PRESSED)
+		return;
+
+	if (!c->isfloating)
+		setfloating(self, c, TRUE);
+
+	self->grabbed_client = c;
+	self->cursor_mode    = mode;
+	self->grab_geobox    = c->geom;
+
+	if (mode == GOWL_CURSOR_MODE_MOVE) {
+		self->grab_x = self->wlr_cursor->x - (gdouble)c->geom.x;
+		self->grab_y = self->wlr_cursor->y - (gdouble)c->geom.y;
+		wlr_cursor_set_xcursor(self->wlr_cursor, self->xcursor_mgr,
+		                       "grabbing");
+	} else {
+		const char *shape;
+
+		self->resize_edges = edges;
+		/* Anchor the cursor offset to the dragged corner/edge so the
+		 * motion math tracks the pointer exactly.  grab_x/grab_y hold
+		 * the offset from the moving edges. */
+		self->grab_x = self->wlr_cursor->x
+			- (gdouble)((edges & WLR_EDGE_RIGHT)
+			            ? c->geom.x + c->geom.width : c->geom.x);
+		self->grab_y = self->wlr_cursor->y
+			- (gdouble)((edges & WLR_EDGE_BOTTOM)
+			            ? c->geom.y + c->geom.height : c->geom.y);
+
+		/* Pick an xcursor matching the dragged edges. */
+		if (edges == (WLR_EDGE_TOP | WLR_EDGE_LEFT))      shape = "nw-resize";
+		else if (edges == (WLR_EDGE_TOP | WLR_EDGE_RIGHT)) shape = "ne-resize";
+		else if (edges == (WLR_EDGE_BOTTOM | WLR_EDGE_LEFT)) shape = "sw-resize";
+		else if (edges == (WLR_EDGE_BOTTOM | WLR_EDGE_RIGHT)) shape = "se-resize";
+		else if (edges & WLR_EDGE_TOP)    shape = "n-resize";
+		else if (edges & WLR_EDGE_BOTTOM) shape = "s-resize";
+		else if (edges & WLR_EDGE_LEFT)   shape = "w-resize";
+		else if (edges & WLR_EDGE_RIGHT)  shape = "e-resize";
+		else                              shape = "se-resize";
+		wlr_cursor_set_xcursor(self->wlr_cursor, self->xcursor_mgr,
+		                       shape);
+	}
+}
+
+/*
+ * on_client_request_move:
+ *
+ * A client asked to be moved (a drag on its CSD title bar / a
+ * client-initiated _NET_WM_MOVERESIZE).  Honour it as an interactive
+ * move grab.
+ */
+static void
+on_client_request_move(struct wl_listener *listener, void *data)
+{
+	GowlClient *c;
+
+	c = wl_container_of(listener, c, request_move);
+	(void)data;
+
+	if (c->compositor != NULL)
+		begin_interactive(c->compositor, c, GOWL_CURSOR_MODE_MOVE, 0);
+}
+
+/*
+ * on_client_request_resize:
+ *
+ * A client asked to be resized -- this fires when the user drags a
+ * window edge and the toolkit (GTK/Qt/Electron) sends
+ * xdg_toplevel.resize with the edge bitmask.  Previously gowl ignored
+ * it, so the resize cursor showed but dragging did nothing; now we
+ * start an edge-aware interactive resize grab.
+ */
+static void
+on_client_request_resize(struct wl_listener *listener, void *data)
+{
+	GowlClient *c;
+	struct wlr_xdg_toplevel_resize_event *event;
+
+	c = wl_container_of(listener, c, request_resize);
+	event = (struct wlr_xdg_toplevel_resize_event *)data;
+
+	if (c->compositor != NULL)
+		begin_interactive(c->compositor, c,
+		                  GOWL_CURSOR_MODE_RESIZE, event->edges);
+}
+
+/**
  * on_new_xdg_toplevel:
  *
  * Called when a new XDG toplevel surface is created.
@@ -6320,6 +6451,8 @@ on_new_xdg_toplevel(struct wl_listener *listener, void *data)
 	LISTEN(&toplevel->events.destroy,                &c->destroy_surface, on_client_destroy);
 	LISTEN(&toplevel->events.request_fullscreen,     &c->fullscreen, on_client_fullscreen);
 	LISTEN(&toplevel->events.request_maximize,       &c->maximize,  on_client_maximize);
+	LISTEN(&toplevel->events.request_move,           &c->request_move,   on_client_request_move);
+	LISTEN(&toplevel->events.request_resize,         &c->request_resize, on_client_request_resize);
 	LISTEN(&toplevel->events.set_title,              &c->set_title, on_client_set_title);
 
 	g_debug("New XDG toplevel surface created");
@@ -6862,6 +6995,8 @@ on_client_destroy(struct wl_listener *listener, void *data)
 		wl_list_remove(&c->dissociate.link);
 		wl_list_remove(&c->activate.link);
 		wl_list_remove(&c->configure.link);
+		wl_list_remove(&c->request_move.link);
+		wl_list_remove(&c->request_resize.link);
 		/* map/unmap are added in associate and removed in
 		 * dissociate, which wlroots emits before destroy. */
 	} else
@@ -6871,6 +7006,8 @@ on_client_destroy(struct wl_listener *listener, void *data)
 		wl_list_remove(&c->set_title.link);
 		wl_list_remove(&c->fullscreen.link);
 		wl_list_remove(&c->maximize.link);
+		wl_list_remove(&c->request_move.link);
+		wl_list_remove(&c->request_resize.link);
 		wl_list_remove(&c->commit.link);
 		wl_list_remove(&c->map.link);
 		wl_list_remove(&c->unmap.link);
@@ -7075,6 +7212,45 @@ on_xwayland_request_activate(struct wl_listener *listener, void *data)
 		gowl_compositor_focus_client(c->compositor, c, TRUE);
 }
 
+/*
+ * on_xwayland_request_move:
+ *
+ * An X11 client asked to be moved (_NET_WM_MOVERESIZE move).  Start an
+ * interactive move grab, mirroring the XDG path.
+ */
+static void
+on_xwayland_request_move(struct wl_listener *listener, void *data)
+{
+	GowlClient *c;
+
+	c = wl_container_of(listener, c, request_move);
+	(void)data;
+
+	if (c->compositor != NULL && c->scene != NULL)
+		begin_interactive(c->compositor, c, GOWL_CURSOR_MODE_MOVE, 0);
+}
+
+/*
+ * on_xwayland_request_resize:
+ *
+ * An X11 client asked to be resized (_NET_WM_MOVERESIZE edge drag, e.g.
+ * grabbing the edge of Zoom's main window).  The event carries the
+ * dragged edges; start an edge-aware interactive resize grab.
+ */
+static void
+on_xwayland_request_resize(struct wl_listener *listener, void *data)
+{
+	GowlClient *c;
+	struct wlr_xwayland_resize_event *event;
+
+	c = wl_container_of(listener, c, request_resize);
+	event = (struct wlr_xwayland_resize_event *)data;
+
+	if (c->compositor != NULL && c->scene != NULL)
+		begin_interactive(c->compositor, c,
+		                  GOWL_CURSOR_MODE_RESIZE, event->edges);
+}
+
 /**
  * on_new_xwayland_surface:
  *
@@ -7128,6 +7304,10 @@ on_new_xwayland_surface(struct wl_listener *listener, void *data)
 	       on_xwayland_request_activate);
 	LISTEN(&xsurface->events.request_fullscreen, &c->fullscreen,
 	       on_client_fullscreen);
+	LISTEN(&xsurface->events.request_move,      &c->request_move,
+	       on_xwayland_request_move);
+	LISTEN(&xsurface->events.request_resize,    &c->request_resize,
+	       on_xwayland_request_resize);
 	LISTEN(&xsurface->events.set_title,         &c->set_title,
 	       on_client_set_title);
 

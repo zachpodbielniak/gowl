@@ -115,29 +115,46 @@ gowl_systemd_start (gboolean seat_session)
 	}
 	g_ptr_array_free (args, TRUE);
 
-	/* 1b. Seat session only: restart xdg-desktop-portal so it re-reads
-	 *     the environment we just imported.  A frontend left running by a
-	 *     previous login keeps the prior XDG_CURRENT_DESKTOP -- read once
-	 *     at startup to pick portal backends -- so e.g. ScreenCast keeps
-	 *     routing to a backend that does not work under gowl (the GNOME
-	 *     backend needs Mutter), and screen-sharing silently fails even
-	 *     after the desktop file is corrected.  `try-restart` is a no-op
-	 *     when the unit is not already running, so we never start the
-	 *     portal prematurely (its own units pull it in via
-	 *     graphical-session.target below).  Nested gowl skips this: the
-	 *     portal is the host session's and must not be disturbed. */
+	/* 1b. Seat session only: fix up the screen-sharing portal.  Two
+	 *     steps, both relying on the WAYLAND_DISPLAY/XDG_CURRENT_DESKTOP
+	 *     we just imported.  Nested gowl skips this entirely: the portal
+	 *     is the host session's and must not be disturbed. */
 	if (seat_session)
 	{
-		gchar	*portal_argv[6];
+		gchar	*svc_argv[5];
 
-		portal_argv[0] = g_strdup ("systemctl");
-		portal_argv[1] = g_strdup ("--user");
-		portal_argv[2] = g_strdup ("try-restart");
-		portal_argv[3] = g_strdup ("xdg-desktop-portal.service");
-		portal_argv[4] = NULL;
-		gowl_systemd_run_async (portal_argv);
-		for (i = 0; portal_argv[i] != NULL; i++)
-			g_free (portal_argv[i]);
+		/* (i) Explicitly START the wlroots portal backend.  Its unit
+		 *     carries ConditionEnvironment=WAYLAND_DISPLAY, evaluated by
+		 *     systemd at activation time.  When a client (Zoom) first
+		 *     asks for ScreenCast, D-Bus auto-activation races our
+		 *     import-environment: if WAYLAND_DISPLAY is not yet visible
+		 *     to the user manager the condition fails, the unit is
+		 *     marked "not activatable", and the ScreenCast portal comes
+		 *     up with no backend (AvailableSourceTypes = 0 -> the app's
+		 *     follow-up "pick a screen/window" chooser never appears).
+		 *     import-environment above is synchronous, so by now the
+		 *     condition passes; starting the unit explicitly makes it
+		 *     run up front instead of via the racy on-demand path.  A
+		 *     no-op if already running, or if no wlroots portal backend
+		 *     is installed (the unit's condition simply stays unmet). */
+		svc_argv[0] = "systemctl";
+		svc_argv[1] = "--user";
+		svc_argv[2] = "start";
+		svc_argv[3] = "xdg-desktop-portal-wlr.service";
+		svc_argv[4] = NULL;
+		gowl_systemd_run_async (svc_argv);
+
+		/* (ii) Restart the portal frontend so it re-reads the imported
+		 *      environment.  A frontend left running by a previous login
+		 *      keeps that login's XDG_CURRENT_DESKTOP -- read once at
+		 *      startup to choose backends -- so ScreenCast could still
+		 *      route to a backend that does not work under gowl (the
+		 *      GNOME backend needs Mutter).  try-restart is a no-op when
+		 *      the frontend is not already running (its units pull it in
+		 *      via graphical-session.target below). */
+		svc_argv[2] = "try-restart";
+		svc_argv[3] = "xdg-desktop-portal.service";
+		gowl_systemd_run_async (svc_argv);
 	}
 
 	/* 2. Start gowl-session.target, which Wants=graphical-session.target.

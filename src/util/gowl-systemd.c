@@ -73,7 +73,7 @@ gowl_systemd_run_async (gchar **argv)
 /* ------------------------------------------------------------------ */
 
 void
-gowl_systemd_start (void)
+gowl_systemd_start (gboolean seat_session)
 {
 	static const gchar *const	vars[] = {
 		"WAYLAND_DISPLAY",
@@ -114,6 +114,31 @@ gowl_systemd_start (void)
 		           "services may inherit a stale environment");
 	}
 	g_ptr_array_free (args, TRUE);
+
+	/* 1b. Seat session only: restart xdg-desktop-portal so it re-reads
+	 *     the environment we just imported.  A frontend left running by a
+	 *     previous login keeps the prior XDG_CURRENT_DESKTOP -- read once
+	 *     at startup to pick portal backends -- so e.g. ScreenCast keeps
+	 *     routing to a backend that does not work under gowl (the GNOME
+	 *     backend needs Mutter), and screen-sharing silently fails even
+	 *     after the desktop file is corrected.  `try-restart` is a no-op
+	 *     when the unit is not already running, so we never start the
+	 *     portal prematurely (its own units pull it in via
+	 *     graphical-session.target below).  Nested gowl skips this: the
+	 *     portal is the host session's and must not be disturbed. */
+	if (seat_session)
+	{
+		gchar	*portal_argv[6];
+
+		portal_argv[0] = g_strdup ("systemctl");
+		portal_argv[1] = g_strdup ("--user");
+		portal_argv[2] = g_strdup ("try-restart");
+		portal_argv[3] = g_strdup ("xdg-desktop-portal.service");
+		portal_argv[4] = NULL;
+		gowl_systemd_run_async (portal_argv);
+		for (i = 0; portal_argv[i] != NULL; i++)
+			g_free (portal_argv[i]);
+	}
 
 	/* 2. Start gowl-session.target, which Wants=graphical-session.target.
 	 *    The target itself refuses manual start, so it can only be pulled

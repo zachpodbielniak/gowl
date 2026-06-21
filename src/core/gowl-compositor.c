@@ -6006,9 +6006,24 @@ on_client_commit(struct wl_listener *listener, void *data)
 	if (c->scene == NULL)
 		return;
 
-	/* Subsequent commits: update geometry */
-	resize_client(self, c, c->geom,
-	              c->isfloating && !c->isfullscreen);
+	/* Subsequent commits: only re-configure if the layout geometry
+	 * differs from the client's current geometry.  resize_client()
+	 * schedules an xdg_toplevel.configure unconditionally (it calls
+	 * wlr_xdg_toplevel_set_size), so calling it on every commit would
+	 * re-send an identical configure on each ack/commit and ping-pong
+	 * with the client at full CPU -- the loop Electron/Chromium apps
+	 * fall into under gowl but not under Mutter (which only
+	 * configures on a real size/state change).  Borders and clip were
+	 * already applied at arrange time, so skipping here when the
+	 * geometry is unchanged leaves the scene correct; genuine layout
+	 * changes and client-initiated floating resizes still configure
+	 * because c->geom then differs from the client's current size. */
+	if (c->geom.width  - 2 * (gint)c->bw
+	        != (gint)c->xdg_toplevel->current.width ||
+	    c->geom.height - 2 * (gint)c->bw
+	        != (gint)c->xdg_toplevel->current.height)
+		resize_client(self, c, c->geom,
+		              c->isfloating && !c->isfullscreen);
 
 	/* Mark pending resize as completed */
 	if (c->resize != 0 &&

@@ -251,6 +251,7 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  * @GOWL_ACTION_INC_NMASTER: Increment the number of master windows.
  * @GOWL_ACTION_SET_LAYOUT: Set a specific layout.
  * @GOWL_ACTION_CYCLE_LAYOUT: Cycle through available layouts.
+ * @GOWL_ACTION_SET_SPLIT: Set the tile split orientation (arg "vsplit" or "normal").
  * @GOWL_ACTION_ZOOM: Promote the focused client to master.
  * @GOWL_ACTION_QUIT: Quit the compositor.
  * @GOWL_ACTION_RELOAD_CONFIG: Reload the configuration.
@@ -277,6 +278,7 @@ typedef enum {
 	GOWL_ACTION_INC_NMASTER,
 	GOWL_ACTION_SET_LAYOUT,
 	GOWL_ACTION_CYCLE_LAYOUT,
+	GOWL_ACTION_SET_SPLIT,
 	GOWL_ACTION_ZOOM,
 	GOWL_ACTION_QUIT,
 	GOWL_ACTION_RELOAD_CONFIG,

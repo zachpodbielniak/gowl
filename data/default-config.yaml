@@ -49,7 +49,7 @@ tag-count: 9
 # Action values:  spawn, kill_client, toggle_float, toggle_fullscreen, focus_stack,
 #                 focus_monitor, tag_view, tag_set, tag_toggle_view, tag_toggle,
 #                 move_to_monitor, set_mfact, inc_nmaster, set_layout, cycle_layout,
-#                 zoom, quit, reload_config, ipc_command, lock, custom
+#                 set_split, zoom, quit, reload_config, ipc_command, lock, custom
 keybinds:
   # Launch applications
   "Super+Return": { action: spawn, arg: "gst" }
@@ -75,6 +75,8 @@ keybinds:
   "Super+t": { action: set_layout, arg: "tile" }
   "Super+f": { action: set_layout, arg: "float" }
   "Super+m": { action: set_layout, arg: "monocle" }
+  "Super+v": { action: set_split, arg: "vsplit" }
+  "Super+Shift+v": { action: set_split, arg: "normal" }
 
   # Multi-monitor
   "Super+comma": { action: focus_monitor, arg: "-1" }

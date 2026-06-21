@@ -16,7 +16,7 @@ A GObject-based Wayland compositor built on wlroots 0.19. Gowl takes inspiration
 - **wlroots 0.19** -- Built on the latest stable wlroots for full Wayland protocol support.
 - **XWayland support** -- Optional X11 client compatibility (compile-time toggle).
 - **GObject Introspection** -- Optional GIR/typelib generation for language bindings.
-- **dwm-style tiling** -- Master-stack tile, monocle, and float layouts with tag-based workspaces.
+- **dwm-style tiling** -- Master-stack tile (with optional vsplit orientation), monocle, and float layouts with tag-based workspaces.
 - **Session lock** -- ext-session-lock-v1 support.
 - **Layer shell** -- wlr-layer-shell for panels, bars, and overlays.
 - **Built-in config compiler** -- Auto-compiles C config files at startup.

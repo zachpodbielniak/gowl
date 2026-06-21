@@ -228,6 +228,7 @@ gowl_monitor_init(GowlMonitor *self)
 	self->sellt         = 0;
 	self->nmaster       = 1;
 	self->mfact         = 0.55;
+	self->vsplit        = FALSE;
 	self->layout_symbol = g_strdup("[]=");
 	self->compositor    = NULL;
 }
@@ -389,6 +390,41 @@ gowl_monitor_set_nmaster(
 		nmaster = 0;
 
 	self->nmaster = nmaster;
+}
+
+/**
+ * gowl_monitor_get_vsplit:
+ * @self: a #GowlMonitor
+ *
+ * Returns whether the tile layout uses the vsplit (master row on top,
+ * stack row on bottom) orientation on this monitor.
+ *
+ * Returns: TRUE if vsplit is enabled
+ */
+gboolean
+gowl_monitor_get_vsplit(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+
+	return self->vsplit;
+}
+
+/**
+ * gowl_monitor_set_vsplit:
+ * @self: a #GowlMonitor
+ * @vsplit: TRUE for vsplit (master on top), FALSE for normal (master left)
+ *
+ * Sets the tile layout split orientation.  Does not re-arrange; the caller
+ * is responsible for calling gowl_compositor_arrange() afterwards.
+ */
+void
+gowl_monitor_set_vsplit(
+	GowlMonitor *self,
+	gboolean     vsplit
+){
+	g_return_if_fail(GOWL_IS_MONITOR(self));
+
+	self->vsplit = vsplit;
 }
 
 /**

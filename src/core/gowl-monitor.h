@@ -138,6 +138,26 @@ void           gowl_monitor_set_nmaster       (GowlMonitor *self,
                                                gint         nmaster);
 
 /**
+ * gowl_monitor_get_vsplit:
+ * @self: a #GowlMonitor
+ *
+ * Returns whether the tile layout uses the vsplit orientation.
+ *
+ * Returns: TRUE if vsplit (master on top) is enabled
+ */
+gboolean       gowl_monitor_get_vsplit        (GowlMonitor *self);
+
+/**
+ * gowl_monitor_set_vsplit:
+ * @self: a #GowlMonitor
+ * @vsplit: TRUE for vsplit (master on top), FALSE for normal (master left)
+ *
+ * Sets the tile split orientation.  Caller must arrange afterwards.
+ */
+void           gowl_monitor_set_vsplit        (GowlMonitor *self,
+                                               gboolean     vsplit);
+
+/**
  * gowl_monitor_get_layout_symbol:
  * @self: a #GowlMonitor
  *

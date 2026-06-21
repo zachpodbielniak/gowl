@@ -200,6 +200,8 @@ static const gchar *default_yaml_config =
 	"  \"Super+t\": { action: set_layout, arg: \"tile\" }\n"
 	"  \"Super+f\": { action: set_layout, arg: \"float\" }\n"
 	"  \"Super+m\": { action: set_layout, arg: \"monocle\" }\n"
+	"  \"Super+v\": { action: set_split, arg: \"vsplit\" }\n"
+	"  \"Super+Shift+v\": { action: set_split, arg: \"normal\" }\n"
 	"\n"
 	"  # Multi-monitor\n"
 	"  \"Super+comma\": { action: focus_monitor, arg: \"-1\" }\n"

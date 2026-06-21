@@ -3712,6 +3712,55 @@ tile(
 	if (aw <= 0 || ah <= 0)
 		return;
 
+	if (m->vsplit) {
+		/* vsplit: master row on top, stack row on bottom, both
+		 * subdivided along X.  Transpose of the normal layout:
+		 * width and height swap roles, and the inner-gap roles
+		 * swap with them (iv -> gap between master/stack rows,
+		 * ih -> gap between side-by-side windows in a row).
+		 * mfact now sizes the master HEIGHT. */
+		guint mh, mx, tx;
+		if (n > m->nmaster)
+			mh = m->nmaster ? (guint)roundf((float)ah * (float)m->mfact) : 0;
+		else
+			mh = (guint)ah;
+		i = 0;
+		mx = tx = 0;
+		for (l = self->clients; l != NULL; l = l->next) {
+			GowlClient *c = (GowlClient *)l->data;
+			struct wlr_box geo;
+			gint remaining;
+			gint nmaster_count;
+
+			if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
+				continue;
+
+			nmaster_count = m->nmaster < n ? m->nmaster : n;
+
+			if (i < nmaster_count) {
+				/* master row (top) */
+				remaining = nmaster_count - i;
+				geo.x = ax + (gint)mx;
+				geo.y = ay;
+				geo.width = (aw - (gint)mx - (remaining - 1) * ih) / remaining;
+				geo.height = (gint)mh - (n > nmaster_count ? iv / 2 : 0);
+				resize_client(self, c, geo, FALSE);
+				mx += (guint)c->geom.width + (guint)ih;
+			} else {
+				/* stack row (bottom) */
+				remaining = n - i;
+				geo.x = ax + (gint)tx;
+				geo.y = ay + (gint)mh + (nmaster_count > 0 ? iv / 2 : 0);
+				geo.width = (aw - (gint)tx - (remaining - 1) * ih) / remaining;
+				geo.height = ah - (gint)mh - (nmaster_count > 0 ? iv / 2 : 0);
+				resize_client(self, c, geo, FALSE);
+				tx += (guint)c->geom.width + (guint)ih;
+			}
+			i++;
+		}
+		return;
+	}
+
 	if (n > m->nmaster)
 		mw = m->nmaster ? (guint)roundf((float)aw * (float)m->mfact) : 0;
 	else
@@ -4976,6 +5025,17 @@ keybinding(
 							? self->selmon->layout_symbol
 							: "tile");
 				}
+				return TRUE;
+			}
+			case GOWL_ACTION_SET_SPLIT: {
+				if (self->selmon == NULL)
+					return TRUE;
+				/* arg "vsplit" -> master row on top; anything else
+				 * (e.g. "normal") -> left/right split. */
+				self->selmon->vsplit =
+					(kb->arg != NULL &&
+					 g_strcmp0(kb->arg, "vsplit") == 0);
+				gowl_compositor_arrange(self, self->selmon);
 				return TRUE;
 			}
 			case GOWL_ACTION_ZOOM: {

@@ -387,6 +387,7 @@ struct _GowlMonitor {
 	guint    sellt;      /* selected layout index */
 	gint     nmaster;
 	gdouble  mfact;
+	gboolean vsplit;     /* TRUE: master row on top, stack row below (vsplit) */
 	gchar   *layout_symbol;
 
 	GowlCompositor *compositor;  /* back-reference (unowned) */

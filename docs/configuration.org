@@ -106,6 +106,11 @@ Layout engine settings.
 | =mfact=   | float  | =0.55=   | Master area factor (0.05 - 0.95)                 |
 | =nmaster= | int    | =1=      | Number of windows in the master area             |
 
+The =tile= layout also has a /vsplit/ orientation — master row on top, stack row on
+the bottom — toggled at runtime via the =set_split= action or the =gowl-set-vsplit=
+Elisp primitive (it is not a config property).  In vsplit mode =mfact= sizes the
+master area /height/ instead of its width.
+
 **** tags
 :PROPERTIES:
 :CUSTOM_ID: tags
@@ -175,6 +180,7 @@ The last token in the =+=-separated string is the key name, resolved via =xkb_ke
 | =set_mfact=         | ="+0.05"= or ="-0.05"=           | Adjust the master area factor               |
 | =inc_nmaster=       | ="+1"= or ="-1"=                 | Increment/decrement the master count        |
 | =set_layout=        | ="tile"=, ="float"=, ="monocle"= | Set the layout                              |
+| =set_split=         | ="vsplit"= or ="normal"=         | Set tile split orientation (vsplit on/off) |
 | =cycle_layout=      | --                               | Cycle through available layouts             |
 | =zoom=              | --                               | Promote focused client to master            |
 | =quit=              | --                               | Quit the compositor                         |
@@ -195,6 +201,8 @@ keybinds:
   "Super+k": { action: focus_stack, arg: "-1" }
   "Super+h": { action: set_mfact, arg: "-0.05" }
   "Super+l": { action: set_mfact, arg: "+0.05" }
+  "Super+v": { action: set_split, arg: "vsplit" }
+  "Super+Shift+v": { action: set_split, arg: "normal" }
   "Super+1": { action: tag_view, arg: "1" }
   "Super+Shift+1": { action: tag_set, arg: "1" }
   "Super+Shift+q": { action: quit }

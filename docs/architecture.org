@@ -86,7 +86,7 @@ All enums are registered as GLib enum types for introspection:
 | =GowlLayerShellLayer= | Background, Bottom, Top, Overlay.                                                 |
 | =GowlKeyMod=          | Bitmask flags for modifier keys (Shift, Ctrl, Alt, Logo, etc.).                   |
 | =GowlClientState=     | Tiled, Floating, Fullscreen.                                                      |
-| =GowlAction=          | 21 compositor actions (spawn, kill_client, focus_stack, tag_view, quit, etc.).    |
+| =GowlAction=          | 23 compositor actions (spawn, kill_client, focus_stack, tag_view, quit, etc.).    |
 | =GowlConfigSource=    | Builtin, YAML, C Module, Merged.                                                  |
 | =GowlIdleState=       | Active, Idle, Locked.                                                             |
 
@@ -99,6 +99,11 @@ All enums are registered as GLib enum types for introspection:
 | =GowlLayoutTile=    | Master-stack tiling layout (implements =GowlLayoutProvider=). |
 | =GowlLayoutMonocle= | Monocle (fullscreen stacking) layout.                         |
 | =GowlLayoutFloat=   | Floating layout (no automatic arrangement).                   |
+
+The =GowlLayoutTile= layout supports a /vsplit/ orientation — master row on top,
+stack row on the bottom — toggled at runtime via the =set_split= action (arg
+="vsplit"= / ="normal"=) or the =gowl-set-vsplit= Elisp primitive.  In vsplit mode
+=mfact= sizes the master area height instead of its width.
 
 ** Module / Plugin System
 :PROPERTIES:

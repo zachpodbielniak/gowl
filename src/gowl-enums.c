@@ -273,6 +273,7 @@ gowl_action_get_type(void)
 			{ GOWL_ACTION_INC_NMASTER,       "GOWL_ACTION_INC_NMASTER",       "inc-nmaster" },
 			{ GOWL_ACTION_SET_LAYOUT,        "GOWL_ACTION_SET_LAYOUT",        "set-layout" },
 			{ GOWL_ACTION_CYCLE_LAYOUT,      "GOWL_ACTION_CYCLE_LAYOUT",      "cycle-layout" },
+			{ GOWL_ACTION_SET_SPLIT,         "GOWL_ACTION_SET_SPLIT",         "set-split" },
 			{ GOWL_ACTION_ZOOM,              "GOWL_ACTION_ZOOM",              "zoom" },
 			{ GOWL_ACTION_QUIT,              "GOWL_ACTION_QUIT",              "quit" },
 			{ GOWL_ACTION_RELOAD_CONFIG,     "GOWL_ACTION_RELOAD_CONFIG",     "reload-config" },

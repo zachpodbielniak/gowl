@@ -27,6 +27,11 @@ TYPELIBDIR ?= $(LIBDIR)/girepository-1.0
 MODULEDIR ?= $(LIBDIR)/gowl/modules
 BAR_MODULEDIR ?= $(LIBDIR)/gowlbar/modules
 SYSCONFDIR ?= /etc
+# systemd user unit dir.  The user manager scans /usr/lib/systemd/user
+# and /usr/local/lib/systemd/user (plus ~/.config/systemd/user and
+# /etc/systemd/user), so honouring PREFIX lands gowl-session.target in a
+# scanned dir for both PREFIX=/usr and PREFIX=/usr/local installs.
+SYSTEMD_USERUNITDIR ?= $(PREFIX)/lib/systemd/user
 
 # Build directories
 BUILDDIR := build

@@ -276,9 +276,9 @@ clean-all:
 	rm -f xdg-shell-protocol.c
 
 # Installation rules
-.PHONY: install install-lib install-bin install-bar install-bar-configs install-headers install-pc install-gir install-modules install-mcp install-desktop
+.PHONY: install install-lib install-bin install-bar install-bar-configs install-headers install-pc install-gir install-modules install-mcp install-desktop install-systemd
 
-install: install-lib install-bin install-bar install-bar-configs install-headers install-pc install-desktop
+install: install-lib install-bin install-bar install-bar-configs install-headers install-pc install-desktop install-systemd
 ifeq ($(BUILD_GIR),1)
 install: install-gir
 endif
@@ -351,6 +351,10 @@ install-desktop:
 	@if [ ! -f $(DESTDIR)$(SYSCONFDIR)/gowl/config.yaml ]; then \
 		$(INSTALL_DATA) data/default-config.yaml $(DESTDIR)$(SYSCONFDIR)/gowl/config.yaml; \
 	fi
+
+install-systemd:
+	$(MKDIR_P) $(DESTDIR)$(SYSTEMD_USERUNITDIR)
+	$(INSTALL_DATA) data/gowl-session.target $(DESTDIR)$(SYSTEMD_USERUNITDIR)/
 
 install-modules:
 	$(MKDIR_P) $(DESTDIR)$(MODULEDIR)

@@ -322,6 +322,20 @@ Build without it via =make BUILD_XWAYLAND=0= (drops the =xcb= /
 =xcb-icccm= dependencies); the X11 code is then compiled out behind
 =GOWL_HAVE_XWAYLAND= and the compositor is Wayland-only.
 
+** Systemd user-session bootstrap
+
+=gowl_compositor_start= also bootstraps the systemd user session
+(=src/util/gowl-systemd.c=), which =gnome-session= does for GNOME but a
+bare compositor launch does not.  It runs
+=systemctl --user import-environment= for the live compositor env and
+starts the shipped =gowl-session.target= (=Wants==graphical-session.target=,
+which itself refuses manual start).  This brings up the
+graphical-session-bound user services -- =xdg-desktop-portal=,
+=flatpak-session-helper=, =gvfs= -- that flatpak and other graphical apps
+depend on (without it, flatpaks get no Settings portal and mis-theme).
+=gowl_compositor_quit= stops the target.  Best-effort: no-op where
+=systemctl= is absent, and =GOWL_DISABLE_SYSTEMD=1= opts out.
+
 ** Raw Frame Sink (External Animated Backgrounds)
 
 Gowl can display *externally produced* frames as the wallpaper or the

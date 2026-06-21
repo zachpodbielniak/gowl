@@ -79,6 +79,7 @@ LIB_SRCS := \
 	src/layout/gowl-layout-float.c \
 	src/ipc/gowl-ipc.c \
 	src/util/gowl-log.c \
+	src/util/gowl-systemd.c \
 	src/util/gowl-wallpaper-scale.c \
 	src/core/gowl-compositor.c \
 	src/core/gowl-frame-sink.c \
@@ -155,6 +156,7 @@ LIB_HDRS := \
 	src/layout/gowl-layout-float.h \
 	src/ipc/gowl-ipc.h \
 	src/util/gowl-log.h \
+	src/util/gowl-systemd.h \
 	src/core/gowl-compositor.h \
 	src/core/gowl-monitor.h \
 	src/core/gowl-client.h \

@@ -1,0 +1,15 @@
+# gowl-session.target -- pulls graphical-session.target into the
+# systemd user session for a bare wlroots compositor launch.
+#
+# graphical-session.target has RefuseManualStart=yes, so it can only be
+# activated by a unit that Wants= it.  gnome-session does this for GNOME
+# automatically; a compositor started straight from the display manager
+# (gowl, cmacs --gowl) does not, so every graphical-session-bound user
+# service -- xdg-desktop-portal, flatpak-session-helper, gvfs, ... -- has
+# no target to bind to and stays dead.  gowl starts this target from
+# gowl_compositor_start() (src/util/gowl-systemd.c) to bridge that gap.
+
+[Unit]
+Description=gowl compositor session
+Wants=graphical-session.target
+After=graphical-session-pre.target

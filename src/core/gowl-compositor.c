@@ -22,6 +22,7 @@
 #include "interfaces/gowl-client-decorator.h"
 #include "core/gowl-lid-policy.h"
 #include "core/gowl-frame-sink.h"
+#include "util/gowl-systemd.h"
 
 #ifdef GOWL_HAVE_LIBDECOR
 #include "gowl-decor.h"
@@ -2599,6 +2600,14 @@ gowl_compositor_start(
 	g_message("Compositor started on WAYLAND_DISPLAY=%s",
 	          self->socket_name);
 
+	/* Bootstrap the systemd user session: import the live environment
+	 * into the user manager and pull in graphical-session.target (via
+	 * the shipped gowl-session.target) so DBus-activated graphical
+	 * services -- xdg-desktop-portal, flatpak helpers, gvfs -- bind to
+	 * the right session instead of a stale prior one.  Best-effort; a
+	 * non-systemd host is a silent no-op. */
+	gowl_systemd_start();
+
 	return TRUE;
 }
 
@@ -2630,6 +2639,10 @@ gowl_compositor_quit(GowlCompositor *self)
 
 	g_signal_emit(self, compositor_signals[SIGNAL_SHUTDOWN], 0);
 	self->running = FALSE;
+
+	/* Tear down the session target we pulled in at start; best-effort
+	 * and non-blocking so a wedged user manager can't hang quit. */
+	gowl_systemd_stop();
 
 	if (self->wl_display != NULL)
 		wl_display_terminate(self->wl_display);

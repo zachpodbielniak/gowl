@@ -207,6 +207,35 @@ Installs to =$PREFIX= (default =/usr/local=):
 - =$PREFIX/lib/gowl/modules/= -- Module shared objects
 - =$PREFIX/share/gir-1.0/= -- GIR file (if =BUILD_GIR=1=)
 - =$PREFIX/lib/girepository-1.0/= -- Typelib (if =BUILD_GIR=1=)
+- =$PREFIX/lib/systemd/user/gowl-session.target= -- systemd user unit
+
+**** Systemd user-session integration
+:PROPERTIES:
+:CUSTOM_ID: systemd-session
+:END:
+
+A compositor launched straight from the display manager -- gowl, or
+=cmacs --gowl= -- does not bootstrap the systemd user session the way
+=gnome-session= does.  Without that, =graphical-session.target= is never
+pulled in (it has =RefuseManualStart=yes=, so it can only be activated
+by a unit that =Wants== it) and the user manager keeps a stale prior
+session's environment.  The result: =xdg-desktop-portal= can't satisfy
+its =Requisite=graphical-session.target= and stays dead, so flatpak and
+other graphical apps get no =org.freedesktop.portal.Settings= and fall
+back to a light theme / no file portal / no screencast.
+
+gowl bridges this from =gowl_compositor_start= (=src/util/gowl-systemd.c=):
+on startup it runs =systemctl --user import-environment= for the live
+=compositor env (=WAYLAND_DISPLAY=, =XDG_CURRENT_DESKTOP=, ...) and starts
+the shipped =gowl-session.target= (which =Wants==graphical-session.target=);
+on quit it stops the target.  Everything is best-effort -- a host
+without =systemctl= is a silent no-op, and =GOWL_DISABLE_SYSTEMD=1= opts
+out entirely.
+
+=make install= places =gowl-session.target= in =$PREFIX/lib/systemd/user=,
+which the user manager scans for both =$PREFIX=/usr= and =$PREFIX=/usr/local=.
+After installing, =systemctl --user daemon-reload= picks it up; the unit is
+started automatically the next time gowl starts.
 
 Use =DESTDIR= for staged installs (packaging):
 

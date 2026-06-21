@@ -247,6 +247,14 @@ struct _GowlCompositor {
 	GList                        *fstack;     /* GList of GowlClient* (focus) */
 	GowlMonitor                  *selmon;     /* selected monitor */
 
+	/* X11 override-redirect surface that currently holds an exclusive
+	 * keyboard grab (e.g. a Zoom/GIMP/Java popup menu).  While set, the
+	 * compositor must not steal focus from it (sloppy focus, refocus on
+	 * arrange), or the menu loses its grab and self-dismisses.  Ported
+	 * from dwl's exclusive_focus.  Unowned; cleared on the surface's
+	 * unmap.  See on_client_map / gowl_compositor_focus_client. */
+	GowlClient                   *exclusive_focus;
+
 	/* state */
 	gboolean   running;
 	gboolean   locked;
@@ -298,6 +306,7 @@ struct _GowlCompositor {
 	struct wl_listener lock_unlock;
 	struct wl_listener output_mgr_apply;
 	struct wl_listener output_mgr_test;
+	struct wl_listener xdg_activation_request;
 
 	/* seat listeners */
 	struct wl_listener request_cursor;

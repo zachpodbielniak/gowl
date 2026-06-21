@@ -163,6 +163,10 @@ static void on_new_xdg_popup      (struct wl_listener *listener, void *data);
 static void on_new_layer_surface   (struct wl_listener *listener, void *data);
 static void on_new_xdg_decoration (struct wl_listener *listener, void *data);
 static void on_layout_change      (struct wl_listener *listener, void *data);
+static void on_output_mgr_apply   (struct wl_listener *listener, void *data);
+static void on_output_mgr_test    (struct wl_listener *listener, void *data);
+static void on_xdg_activation_request(struct wl_listener *listener, void *data);
+static void gowl_compositor_publish_output_config(GowlCompositor *self);
 static void on_gpu_reset          (struct wl_listener *listener, void *data);
 static void on_request_cursor     (struct wl_listener *listener, void *data);
 static void on_request_set_sel    (struct wl_listener *listener, void *data);
@@ -223,6 +227,8 @@ static void on_xwayland_request_activate  (struct wl_listener *listener, void *d
 
 /* client surface-type helpers (X11 vs XDG) */
 static gboolean            client_is_x11   (GowlClient *c);
+static gboolean            client_is_unmanaged(GowlClient *c);
+static gboolean            client_wants_focus (GowlClient *c);
 static struct wlr_surface *client_surface  (GowlClient *c);
 
 /* decoration callbacks */
@@ -2487,6 +2493,31 @@ gowl_compositor_start(
 
 	/* 18. Output manager */
 	self->output_mgr = wlr_output_manager_v1_create(self->wl_display);
+	/* Wire apply/test so output-management clients (wlr-randr,
+	 * xdg-desktop-portal-wlr display config) get feedback instead of
+	 * hanging.  gowl_compositor_publish_output_config() (called from
+	 * on_layout_change) supplies the current configuration the portal
+	 * needs to enumerate outputs for ScreenCast. */
+	if (self->output_mgr != NULL) {
+		LISTEN(&self->output_mgr->events.apply,
+		       &self->output_mgr_apply, on_output_mgr_apply);
+		LISTEN(&self->output_mgr->events.test,
+		       &self->output_mgr_test, on_output_mgr_test);
+	}
+
+	/* 18c. XDG activation.  Lets clients request focus for transient
+	 * surfaces (e.g. dialog/modal popups) so they actually receive
+	 * keyboard focus instead of being silently dismissed. */
+	{
+		struct wlr_xdg_activation_v1 *act;
+
+		act = wlr_xdg_activation_v1_create(self->wl_display);
+		if (act != NULL) {
+			LISTEN(&act->events.request_activate,
+			       &self->xdg_activation_request,
+			       on_xdg_activation_request);
+		}
+	}
 
 	/* Unset any inherited parent DISPLAY before XWayland (if built)
 	 * sets its own.  Without XWayland this leaves X11 unavailable. */
@@ -2605,8 +2636,15 @@ gowl_compositor_start(
 	 * the shipped gowl-session.target) so DBus-activated graphical
 	 * services -- xdg-desktop-portal, flatpak helpers, gvfs -- bind to
 	 * the right session instead of a stale prior one.  Best-effort; a
-	 * non-systemd host is a silent no-op. */
-	gowl_systemd_start();
+	 * non-systemd host is a silent no-op.
+	 *
+	 * Pass seat_session = (not nested): nested_wl_backend is non-NULL
+	 * only when gowl runs inside another compositor (just gowl), where
+	 * the portal belongs to the host session.  In a real seat session
+	 * it is NULL, and gowl_systemd_start() additionally restarts a
+	 * stale xdg-desktop-portal frontend so screen-sharing backend
+	 * selection uses the current XDG_CURRENT_DESKTOP. */
+	gowl_systemd_start(self->nested_wl_backend == NULL);
 
 	return TRUE;
 }
@@ -2735,6 +2773,50 @@ client_is_x11(GowlClient *c)
 {
 #ifdef GOWL_HAVE_XWAYLAND
 	return c->xwayland_surface != NULL;
+#else
+	(void)c;
+	return FALSE;
+#endif
+}
+
+/**
+ * client_is_unmanaged:
+ *
+ * Returns %TRUE if @c is an X11 override-redirect surface.  These are
+ * popup menus, tooltips, combo-box dropdowns and drag icons that the
+ * client positions itself and that the window manager must not tile,
+ * reparent into the managed hierarchy, or move.  Always %FALSE for
+ * Wayland (xdg) clients and when built without XWayland.
+ * Ported from dwl's client_is_unmanaged().
+ */
+static gboolean
+client_is_unmanaged(GowlClient *c)
+{
+#ifdef GOWL_HAVE_XWAYLAND
+	return c->xwayland_surface != NULL
+	       && c->xwayland_surface->override_redirect;
+#else
+	(void)c;
+	return FALSE;
+#endif
+}
+
+/**
+ * client_wants_focus:
+ *
+ * Returns %TRUE if an X11 override-redirect surface wants keyboard
+ * focus (e.g. an active popup menu doing a grab), as opposed to a
+ * passive tooltip or drag icon that must never take focus.  Wraps
+ * wlr_xwayland_surface_override_redirect_wants_focus().
+ * Ported from dwl's client_wants_focus().
+ */
+static gboolean
+client_wants_focus(GowlClient *c)
+{
+#ifdef GOWL_HAVE_XWAYLAND
+	return client_is_unmanaged(c)
+	       && wlr_xwayland_surface_override_redirect_wants_focus(
+	              c->xwayland_surface);
 #else
 	(void)c;
 	return FALSE;
@@ -3566,6 +3648,16 @@ gowl_compositor_focus_client(
 	if (c != NULL && gowl_client_get_embedded(c))
 		return;
 
+	/* An X11 override-redirect surface holding an exclusive grab (a
+	 * popup menu) must keep focus until it unmaps -- refuse to focus
+	 * anything else while it still wants focus, or the menu loses its
+	 * grab and self-dismisses.  Focusing the exclusive surface itself
+	 * is allowed (it just re-asserts).  Ported from dwl's focusclient
+	 * exclusive_focus guard. */
+	if (self->exclusive_focus != NULL && c != self->exclusive_focus
+	    && client_wants_focus(self->exclusive_focus))
+		return;
+
 	/* Raise client in stacking order if requested */
 	if (c != NULL && lift)
 		wlr_scene_node_raise_to_top(&c->scene->node);
@@ -3577,8 +3669,12 @@ gowl_compositor_focus_client(
 	    client_surface(c) == old)
 		return;
 
-	/* Put the new client atop the focus stack and select its monitor */
-	if (c != NULL) {
+	/* Put the new client atop the focus stack and select its monitor.
+	 * Unmanaged X11 surfaces (override-redirect popups) are not in the
+	 * focus stack and have no monitor assignment -- skip the bookkeeping
+	 * so we neither corrupt fstack nor clobber selmon with NULL, but
+	 * still grant them keyboard focus below. */
+	if (c != NULL && !client_is_unmanaged(c)) {
 		self->fstack = g_list_remove(self->fstack, c);
 		self->fstack = g_list_prepend(self->fstack, c);
 		self->selmon = c->mon;
@@ -3604,8 +3700,15 @@ gowl_compositor_focus_client(
 			                      &old_toplevel->base->popups, link)
 				wlr_xdg_popup_destroy(popup);
 
-			/* Set unfocused border colour */
-			if (c == NULL || client_surface(c) != old) {
+			/* Deactivate + unfocus-colour the old client -- but NOT
+			 * when the incoming client is a popup that wants focus.
+			 * Deactivating the parent of a just-opened menu makes Qt
+			 * (Zoom's "Leave meeting" dialog) and wine (winecfg) treat
+			 * it as "clicked away" and dismiss their own popup in
+			 * ~0.5s.  Ported from dwl's focusclient guard
+			 * `(!c || !client_wants_focus(c))`. */
+			if ((c == NULL || client_surface(c) != old)
+			    && (c == NULL || !client_wants_focus(c))) {
 				GowlClient *old_c;
 
 				old_c = (GowlClient *)old_toplevel->base->data;
@@ -3616,8 +3719,14 @@ gowl_compositor_focus_client(
 		}
 #ifdef GOWL_HAVE_XWAYLAND
 		old_xsurface = wlr_xwayland_surface_try_from_wlr_surface(old);
-		if (old_xsurface != NULL &&
-		    (c == NULL || client_surface(c) != old)) {
+		/* Same guard as the xdg path: skip deactivation when the new
+		 * client wants focus (else Zoom/winecfg dismiss their popup),
+		 * and never deactivate an already-unmanaged old surface
+		 * (dwl's `!client_is_unmanaged(old_c)`). */
+		if (old_xsurface != NULL
+		    && !old_xsurface->override_redirect
+		    && (c == NULL || client_surface(c) != old)
+		    && (c == NULL || !client_wants_focus(c))) {
 			GowlClient *old_c;
 
 			old_c = (GowlClient *)old_xsurface->data;
@@ -4540,6 +4649,236 @@ on_monitor_request_state(struct wl_listener *listener, void *data)
 }
 
 /**
+ * gowl_compositor_publish_output_config:
+ *
+ * Build a wlr_output_configuration_v1 from the current monitor state
+ * and hand it to the output manager.  This is what lets
+ * xdg-desktop-portal-wlr (and wlr-randr) enumerate outputs -- without
+ * it the ScreenCast "select what to share" picker has no outputs to
+ * list and never appears (the #1 "screen share never pops a picker"
+ * symptom under gowl).
+ *
+ * Call on startup and whenever the layout changes (add/remove/move/
+ * mode/scale/transform); on_layout_change covers all of those since
+ * the output layout auto-tracks output state and emits its change
+ * event.  set_configuration takes ownership of @config.
+ */
+static void
+gowl_compositor_publish_output_config(GowlCompositor *self)
+{
+	struct wlr_output_configuration_v1 *config;
+	GList *l;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	if (self->output_mgr == NULL)
+		return;
+
+	config = wlr_output_configuration_v1_create();
+	if (config == NULL)
+		return;
+
+	for (l = self->monitors; l != NULL; l = l->next) {
+		GowlMonitor *m = (GowlMonitor *)l->data;
+		struct wlr_output_configuration_head_v1 *head;
+
+		if (m->wlr_output == NULL)
+			continue;
+
+		head = wlr_output_configuration_head_v1_create(
+			config, m->wlr_output);
+		if (head == NULL)
+			continue;
+
+		/* The head state is pre-filled from the output; fix up the
+		 * layout position from our monitor geometry (create leaves
+		 * x/y at 0 since the output itself does not store them). */
+		head->state.x = m->m.x;
+		head->state.y = m->m.y;
+	}
+
+	wlr_output_manager_v1_set_configuration(self->output_mgr, config);
+}
+
+/*
+ * on_output_mgr_apply:
+ *
+ * A client (wlr-randr, portal display config) asked us to apply an
+ * output configuration.  Translate each head into the matching
+ * GowlMonitor and drive it through the existing gowl_monitor_set_*
+ * mutators (which commit and re-arrange), then report success/failure
+ * and destroy the request config.  Finally re-publish so all
+ * output-management clients see the new state.
+ */
+static void
+on_output_mgr_apply(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+	struct wlr_output_configuration_v1 *config;
+	struct wlr_output_configuration_head_v1 *head;
+	gboolean ok = TRUE;
+
+	self = wl_container_of(listener, self, output_mgr_apply);
+	config = (struct wlr_output_configuration_v1 *)data;
+
+	wl_list_for_each(head, &config->heads, link) {
+		GList *l;
+		GowlMonitor *m = NULL;
+
+		for (l = self->monitors; l != NULL; l = l->next) {
+			GowlMonitor *mm = (GowlMonitor *)l->data;
+			if (mm->wlr_output == head->state.output) {
+				m = mm;
+				break;
+			}
+		}
+		if (m == NULL) {
+			ok = FALSE;
+			continue;
+		}
+
+		if (!head->state.enabled) {
+			if (!gowl_monitor_set_enabled(m, FALSE))
+				ok = FALSE;
+			continue;
+		}
+
+		if (!gowl_monitor_get_enabled(m))
+			gowl_monitor_set_enabled(m, TRUE);
+
+		if (head->state.mode != NULL) {
+			if (!gowl_monitor_set_mode(m,
+			        head->state.mode->width,
+			        head->state.mode->height,
+			        head->state.mode->refresh))
+				ok = FALSE;
+		} else if (head->state.custom_mode.width > 0
+		           || head->state.custom_mode.height > 0) {
+			if (!gowl_monitor_set_mode(m,
+			        head->state.custom_mode.width,
+			        head->state.custom_mode.height,
+			        head->state.custom_mode.refresh))
+				ok = FALSE;
+		}
+		if (!gowl_monitor_set_transform(m,
+		        (gint)head->state.transform))
+			ok = FALSE;
+		if (!gowl_monitor_set_scale(m, (gdouble)head->state.scale))
+			ok = FALSE;
+		if (!gowl_monitor_set_position(m,
+		        head->state.x, head->state.y))
+			ok = FALSE;
+	}
+
+	if (ok)
+		wlr_output_configuration_v1_send_succeeded(config);
+	else
+		wlr_output_configuration_v1_send_failed(config);
+	wlr_output_configuration_v1_destroy(config);
+
+	gowl_compositor_publish_output_config(self);
+}
+
+/*
+ * on_output_mgr_test:
+ *
+ * A client asked us to validate a configuration without applying it.
+ * We accept any configuration that only references outputs we know
+ * about; the real validation happens on apply (the
+ * gowl_monitor_set_* mutators commit and report).  Always reply so
+ * the client never hangs waiting for feedback.
+ */
+static void
+on_output_mgr_test(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+	struct wlr_output_configuration_v1 *config;
+	struct wlr_output_configuration_head_v1 *head;
+	gboolean ok = TRUE;
+
+	self = wl_container_of(listener, self, output_mgr_test);
+	config = (struct wlr_output_configuration_v1 *)data;
+
+	wl_list_for_each(head, &config->heads, link) {
+		GList *l;
+		gboolean found = FALSE;
+
+		for (l = self->monitors; l != NULL; l = l->next) {
+			GowlMonitor *m = (GowlMonitor *)l->data;
+			if (m->wlr_output == head->state.output) {
+				found = TRUE;
+				break;
+			}
+		}
+		if (!found)
+			ok = FALSE;
+	}
+
+	if (ok)
+		wlr_output_configuration_v1_send_succeeded(config);
+	else
+		wlr_output_configuration_v1_send_failed(config);
+	wlr_output_configuration_v1_destroy(config);
+}
+
+/*
+ * on_xdg_activation_request:
+ *
+ * A client requested activation/focus for a surface (e.g. a transient
+ * dialog or modal popup that wants keyboard focus).  Resolve the
+ * owning toplevel (walking up through popup parents if the request
+ * came from a popup) and, if it is a non-embedded client on the
+ * selected monitor, focus it.  Otherwise mark it urgent so the bar
+ * can hint it.  Embedded clients are skipped (Emacs manages them).
+ */
+static void
+on_xdg_activation_request(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+	struct wlr_xdg_activation_v1_request_activate_event *event;
+	GowlClient *c = NULL;
+	struct wlr_surface *s;
+
+	self = wl_container_of(listener, self, xdg_activation_request);
+	event = (struct wlr_xdg_activation_v1_request_activate_event *)data;
+
+	if (event->surface == NULL)
+		return;
+
+	/* Walk up through popup parents to the owning toplevel, whose
+	 * base->data is the GowlClient (set in on_new_xdg_toplevel). */
+	for (s = event->surface; s != NULL; ) {
+		struct wlr_xdg_surface *xdg;
+		struct wlr_xdg_popup *p;
+
+		xdg = wlr_xdg_surface_try_from_wlr_surface(s);
+		if (xdg == NULL)
+			break;
+
+		if (xdg->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+			c = (GowlClient *)xdg->data;
+			break;
+		}
+
+		p = wlr_xdg_popup_try_from_wlr_surface(s);
+		if (p != NULL)
+			s = p->parent;
+		else
+			break;
+	}
+
+	if (c == NULL || gowl_client_get_embedded(c))
+		return;
+
+	/* Focus if the client is visible on the selected monitor; mark
+	 * urgent otherwise so the user is made aware. */
+	if (c->mon != NULL && c->mon == self->selmon
+	    && (c->tags & c->mon->tagset[c->mon->seltags]) != 0)
+		gowl_compositor_focus_client(self, c, TRUE);
+	else
+		c->isurgent = TRUE;
+}
+
+/**
  * on_layout_change:
  *
  * Called when the output layout changes (output added/removed/moved).
@@ -4595,6 +4934,12 @@ on_layout_change(struct wl_listener *listener, void *data)
 	 * arrangelayers calls arrange() internally if m->w changed. */
 	for (l = self->monitors; l != NULL; l = l->next)
 		gowl_compositor_arrangelayers(self, (GowlMonitor *)l->data);
+
+	/* Re-publish the output-management configuration so portal
+	 * backends (xdg-desktop-portal-wlr) and wlr-randr see the new
+	 * output layout -- without this the ScreenCast picker has no
+	 * outputs to enumerate. */
+	gowl_compositor_publish_output_config(self);
 }
 
 static void
@@ -6097,6 +6442,61 @@ on_client_map(struct wl_listener *listener, void *data)
 #endif
 		c->geom = c->xdg_toplevel->base->geometry;
 
+#ifdef GOWL_HAVE_XWAYLAND
+	/* X11 override-redirect surfaces (popup menus, tooltips, combo
+	 * dropdowns, DND icons) position themselves and must never be
+	 * tiled, bordered, or reparented into the managed hierarchy.
+	 * Handle them like dwl's unmanaged path: honour their own
+	 * geometry, float them in the FLOAT layer, focus them if they
+	 * want a keyboard grab, and return before any managed setup.
+	 *
+	 * This is what makes the Zoom "End meeting for all / Leave"
+	 * confirmation (a Qt X11 popup) stay on screen: previously it was
+	 * pushed through the managed path, the compositor immediately
+	 * refocused the main window, the popup lost its grab and
+	 * self-dismissed in ~0.5s.  Setting exclusive_focus stops the
+	 * compositor from stealing focus back. */
+	if (client_is_unmanaged(c)) {
+		c->geom.x = c->xwayland_surface->x;
+		c->geom.y = c->xwayland_surface->y;
+
+		/* Float in the FLOAT layer (the scene tree was created in
+		 * the TILE layer above) and enable it -- unmanaged clients
+		 * never go through arrange(), which is what enables managed
+		 * client scene nodes. */
+		wlr_scene_node_reparent(&c->scene->node,
+			self->layers[GOWL_SCENE_LAYER_FLOAT]);
+		wlr_scene_node_set_position(&c->scene->node,
+			c->geom.x, c->geom.y);
+		wlr_scene_node_set_enabled(&c->scene->node, TRUE);
+		wlr_scene_node_raise_to_top(&c->scene->node);
+
+		if (client_wants_focus(c)) {
+			/* Set exclusive_focus BEFORE focusing: gowl's
+			 * focus_client calls motionnotify -> pointerfocus
+			 * internally, which could otherwise steal focus back
+			 * mid-call.  With it set, the focus_client guard
+			 * blocks that re-entrant steal. */
+			self->exclusive_focus = c;
+			gowl_compositor_focus_client(self, c, TRUE);
+		}
+
+		if (g_getenv("GOWL_DEBUG_XWAYLAND") != NULL)
+			g_message("Mapped UNMANAGED X11 at %d,%d (%dx%d) "
+			          "wants_focus=%d class=%s title=%s",
+			          c->geom.x, c->geom.y,
+			          c->geom.width, c->geom.height,
+			          client_wants_focus(c),
+			          c->app_id != NULL ? c->app_id : "?",
+			          c->title != NULL ? c->title : "?");
+		else
+			g_debug("Mapped unmanaged X11 surface at %d,%d (%dx%d)",
+			        c->geom.x, c->geom.y,
+			        c->geom.width, c->geom.height);
+		return;
+	}
+#endif
+
 	/* Create border rects */
 	for (i = 0; i < 4; i++) {
 		c->border[i] = wlr_scene_rect_create(c->scene, 0, 0,
@@ -6337,6 +6737,38 @@ on_client_unmap(struct wl_listener *listener, void *data)
 
 	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_REMOVED], 0, c);
 
+#ifdef GOWL_HAVE_XWAYLAND
+	/* Unmanaged X11 surfaces (override-redirect popups) never entered
+	 * the managed lists, got no decoration, and were not arranged.
+	 * Tear down only what on_client_map's unmanaged path created:
+	 * release the exclusive grab, restore focus to the top managed
+	 * client if this popup held keyboard focus, then destroy the scene
+	 * tree.  Mirrors dwl's unmapnotify() unmanaged branch. */
+	if (client_is_unmanaged(c)) {
+		gboolean had_kbd;
+
+		had_kbd = client_surface(c) != NULL
+		    && client_surface(c)
+		       == self->wlr_seat->keyboard_state.focused_surface;
+
+		if (c == self->exclusive_focus)
+			self->exclusive_focus = NULL;
+
+		if (c->scene != NULL) {
+			wlr_scene_node_destroy(&c->scene->node);
+			c->scene = NULL;
+			c->scene_surface = NULL;
+		}
+
+		if (had_kbd)
+			gowl_compositor_focus_client(self,
+				focustop(self, self->selmon), TRUE);
+
+		g_debug("Unmanaged X11 surface unmapped");
+		return;
+	}
+#endif
+
 	/* Cancel any interactive grab */
 	if (c == self->grabbed_client) {
 		self->cursor_mode = GOWL_CURSOR_MODE_NORMAL;
@@ -6347,6 +6779,23 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	self->clients = g_list_remove(self->clients, c);
 	setmon(self, c, NULL, 0);
 	self->fstack = g_list_remove(self->fstack, c);
+
+	/* Tear down any decorator-module state (e.g. roundcorners'
+	 * wlr_scene_buffer frame) BEFORE destroying the scene tree.
+	 * The decorator's frame buffer is a child of c->scene; if the
+	 * tree is destroyed first, the decorator's cached pointer goes
+	 * dangling and the next render (on re-map) dereferences freed
+	 * memory -- the SIGSEGV in roundcorners.c wlr_scene_buffer_set_buffer
+	 * seen when Zoom's transient "Leave meeting" panel unmaps then
+	 * re-maps on Share Screen.  Mirrors the embed path's bw==0 call. */
+	{
+		GowlClientDecorator *dec;
+
+		dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
+		          self->module_mgr);
+		if (dec != NULL)
+			gowl_client_decorator_destroy_decoration(dec, c);
+	}
 
 	/* Destroy the scene tree (including borders) */
 	wlr_scene_node_destroy(&c->scene->node);
@@ -6399,6 +6848,29 @@ on_client_destroy(struct wl_listener *listener, void *data)
 		wl_list_remove(&c->commit.link);
 		wl_list_remove(&c->map.link);
 		wl_list_remove(&c->unmap.link);
+	}
+
+	/* Safety belt: if this X11 surface was the exclusive-focus popup
+	 * and is being destroyed without a preceding unmap, clear the
+	 * pointer so the focus_client guard never dereferences a freed
+	 * client via client_wants_focus(). */
+	if (c->compositor != NULL && c == c->compositor->exclusive_focus)
+		c->compositor->exclusive_focus = NULL;
+
+	/* Drop any decorator-module state for this client (e.g. the
+	 * roundcorners frame buffer and the extra client reference it
+	 * holds) before releasing our ownership ref.  Idempotent with the
+	 * on_client_unmap dispatch: if the client unmapped first the hash
+	 * entry is already gone and this is a no-op.  This covers the
+	 * destroy-without-unmap path so the decorator's extra ref can't
+	 * pin the GowlClient and leak. */
+	if (c->compositor != NULL && c->compositor->module_mgr != NULL) {
+		GowlClientDecorator *dec;
+
+		dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
+		          c->compositor->module_mgr);
+		if (dec != NULL)
+			gowl_client_decorator_destroy_decoration(dec, c);
 	}
 
 	g_debug("Client destroyed");
@@ -6598,16 +7070,17 @@ on_new_xwayland_surface(struct wl_listener *listener, void *data)
 	xsurface->data      = c;
 
 	/* Override-redirect surfaces (menus, tooltips, DND) are never
-	 * tiled; map them as floating clients through the shared map
-	 * path. */
+	 * tiled; they take the unmanaged map path (see client_is_unmanaged
+	 * in on_client_map), float, and carry no border. */
 	if (xsurface->override_redirect)
 		c->isfloating = TRUE;
 
-	/* Set border width from config */
+	/* Set border width from config; unmanaged (override-redirect)
+	 * surfaces get no border, matching dwl. */
 	border_width = 1;
 	if (self->config != NULL)
 		g_object_get(self->config, "border-width", &border_width, NULL);
-	c->bw = (guint)border_width;
+	c->bw = xsurface->override_redirect ? 0 : (guint)border_width;
 
 	/* Register X11 surface lifecycle listeners.  map/unmap are added
 	 * later in on_xwayland_associate once the inner surface exists. */
@@ -6626,8 +7099,22 @@ on_new_xwayland_surface(struct wl_listener *listener, void *data)
 	LISTEN(&xsurface->events.set_title,         &c->set_title,
 	       on_client_set_title);
 
-	g_debug("New XWayland surface created (%s)",
-	        xsurface->override_redirect ? "override-redirect" : "managed");
+	/* Per-surface type log.  Default level is g_debug (quiet); set
+	 * GOWL_DEBUG_XWAYLAND=1 to promote to g_message so the line lands
+	 * in the session log even at the default warning log-level.  This
+	 * is the diagnostic for "is app X's transient window override-
+	 * redirect (unmanaged) or a managed toplevel?" -- e.g. whether a
+	 * Zoom dialog takes the client_is_unmanaged path. */
+	if (g_getenv("GOWL_DEBUG_XWAYLAND") != NULL)
+		g_message("XWayland surface: %s  class=%s title=%s",
+		          xsurface->override_redirect
+		              ? "OVERRIDE-REDIRECT (unmanaged)" : "MANAGED",
+		          xsurface->class != NULL ? xsurface->class : "?",
+		          xsurface->title != NULL ? xsurface->title : "?");
+	else
+		g_debug("New XWayland surface created (%s)",
+		        xsurface->override_redirect
+		            ? "override-redirect" : "managed");
 }
 
 /**

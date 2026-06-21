@@ -348,11 +348,45 @@ silently fails.  Restarting the frontend makes it re-read the live
 seat-only guard is =nested_wl_backend == NULL=; a nested gowl never
 touches the host session's portal.
 
+** wlroots Version Abstraction
+:PROPERTIES:
+:CUSTOM_ID: wlroots-version-abstraction
+:END:
+gowl builds against wlroots 0.19 or 0.20, selected at build time (newest
+present by default; =make WLROOTS=0.19= to pin -- see the build guide).
+Because the two are ABI-incompatible, a build links exactly one; runtime
+"both at once" is impossible (every wlroots compositor pins one version
+per build).  What gowl provides instead is a clean *capability* seam:
+
+- =src/gowl-wlroots-compat.h= turns the build-time version
+  (=GOWL_WLROOTS_VERSION_{MAJOR,MINOR}=, defined by config.mk) into
+  feature flags -- =GOWL_HAVE_WLROOTS_0_20=, =GOWL_HAVE_CAPTURE_WINDOW= --
+  so no other file hard-codes a version number.
+- Version-specific behaviour lives behind GObject interfaces, not
+  =#ifdef= scattered through the compositor.  Screencast capture is the
+  first such seam (=GowlCaptureProvider=): the monitor path compiles on
+  both versions, the window path is =#if GOWL_HAVE_CAPTURE_WINDOW= inside
+  the single provider implementation, and the compositor only ever calls
+  the interface.
+
+This keeps Fedora 42/43 (0.19) and Fedora 44+/Ubuntu-from-source (0.20)
+on one codebase, with capabilities adapting to whatever is compiled in.
+
 ** Screen Sharing (xdg-desktop-portal-wlr)
+
+Screen capture is abstracted behind the =GowlCaptureProvider= GObject
+interface (=src/interfaces/gowl-capture-provider.h=), so the compositor
+wires capture without naming any wlroots type or version.  The concrete
+provider, =GowlCaptureWlroots= (=src/core/gowl-capture-wlroots.c=), is
+selected by the compiled wlroots (see [[#wlroots-version-abstraction]]):
+it always provides monitor capture, and adds window capture on 0.20+.
+It reports a =GowlCaptureCapability= bitmask, surfaces sources as the
+=GowlCaptureSource= boxed type (kind/id/title/app_id), and emits
+=source-added= / =source-removed= as windows map and unmap.
 
 Screen capture for apps (Zoom, OBS, browsers) goes through
 =xdg-desktop-portal-wlr=, which talks to gowl over wlroots protocols.
-Gowl advertises the globals the portal needs:
+The provider advertises the globals the portal needs:
 
 - =zwlr_screencopy_manager_v1= -- the actual frame capture path.
 - =zwlr_output_manager_v1= (=wlr-output-management=) -- so the portal can

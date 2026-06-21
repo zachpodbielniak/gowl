@@ -16,13 +16,39 @@
 | GObject 2.0       | =gobject-2.0=       | GObject type system         |
 | GIO 2.0           | =gio-2.0=           | GLib I/O library            |
 | GModule 2.0       | =gmodule-2.0=       | Dynamic module loading      |
-| wlroots 0.19      | =wlroots-0.19=      | Wayland compositor library  |
+| wlroots 0.19/0.20 | =wlroots-0.19/0.20= | Wayland compositor library (see [[#wlroots-version]]) |
 | wayland-server    | =wayland-server=    | Wayland server protocol     |
 | wayland-protocols | =wayland-protocols= | Wayland protocol XML files  |
 | xkbcommon         | =xkbcommon=         | XKB keyboard handling       |
 | libinput          | =libinput=          | Input device handling       |
 | libyaml           | =yaml-0.1=          | YAML parser (for yaml-glib) |
 | json-glib         | =json-glib-1.0=     | JSON/GLib integration       |
+
+*** wlroots version (0.19 or 0.20)
+:PROPERTIES:
+:CUSTOM_ID: wlroots-version
+:END:
+gowl builds against *either* wlroots 0.19 or 0.20.  They ship as
+parallel, ABI-incompatible pkg-config modules (=wlroots-0.19= /
+=wlroots-0.20=), so a build links exactly one, chosen at build time:
+
+- *Default:* the newest installed wins.  =make= picks =wlroots-0.20= if
+  present, otherwise =wlroots-0.19=.
+- *Override:* =make WLROOTS=0.19= forces 0.19 (e.g. on Fedora 42/43,
+  where 0.20 is not yet packaged), or pins 0.19 on a host that also has
+  0.20.
+
+The choice is reported by =make show-config= and surfaced to the code as
+=GOWL_WLROOTS_VERSION_{MAJOR,MINOR}= plus the capability macro
+=GOWL_HAVE_WLROOTS_0_20= (see =src/gowl-wlroots-compat.h=).
+
+*Why it matters:* per-window *screencast capture* (sharing a single
+window via =xdg-desktop-portal-wlr=, e.g. Zoom's "use system window
+capture") needs the =ext-image-copy-capture= + =ext-foreign-toplevel=
+protocol stack, which exists only in *wlroots 0.20+*.  Built against
+0.19, gowl provides monitor (whole-output) capture only; built against
+0.20 it provides monitor *and* window capture.  Everything else is
+identical between the two.
 
 *** Optional
 :PROPERTIES:
@@ -69,11 +95,57 @@ sudo dnf install -y \
     xcb-util-wm-devel
 #+end_src
 
+On Fedora 44+, =wlroots-devel= is 0.20 (window capture).  Fedora 42/43
+ship 0.19 only; install =wlroots0.19-devel= there and build with
+=make WLROOTS=0.19= (monitor capture only).  Where both are installed,
+=wlroots-devel= (0.20) wins by default.
+
 Or use the built-in Makefile target:
 
 #+begin_src sh
 make install-deps
 #+end_src
+
+*** Ubuntu 24.04 (apt + wlroots from source)
+:PROPERTIES:
+:CUSTOM_ID: ubuntu-2404
+:END:
+Ubuntu 24.04 (noble) packages wlroots 0.17 -- too old for gowl, which
+needs 0.19 or 0.20.  Build wlroots from source to a local prefix and
+point pkg-config at it.  0.20 is recommended (it unlocks window capture);
+substitute =0.19= in the =git checkout= for a monitor-only build.
+
+#+begin_src sh
+# Build deps (meson/ninja + wayland/drm/pixman/etc.)
+sudo apt install -y \
+    build-essential meson ninja-build pkg-config cmake \
+    libwayland-dev wayland-protocols libwayland-egl-backend-dev \
+    libdrm-dev libgbm-dev libgles2-mesa-dev libegl1-mesa-dev \
+    libpixman-1-dev libinput-dev libxkbcommon-dev \
+    libudev-dev libseat-dev libdisplay-info-dev hwdata \
+    libliftoff-dev libxcb1-dev libxcb-composite0-dev \
+    libxcb-icccm4-dev libxcb-res0-dev xwayland \
+    glib2.0-dev libgirepository1.0-dev libjson-glib-dev libyaml-dev
+
+# wlroots to /opt/wlroots (keeps it off the system; reversible)
+git clone https://gitlab.freedesktop.org/wlroots/wlroots.git
+cd wlroots
+git checkout 0.20            # or 0.19
+meson setup build --prefix=/opt/wlroots -Dexamples=false
+ninja -C build
+sudo ninja -C build install
+
+# Make pkg-config find it, then build gowl
+export PKG_CONFIG_PATH=/opt/wlroots/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
+export LD_LIBRARY_PATH=/opt/wlroots/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+pkg-config --modversion wlroots-0.20   # confirm it resolves
+cd /path/to/gowl && make                # auto-detects 0.20
+#+end_src
+
+Note the multiarch pkgconfig path (=lib/x86_64-linux-gnu/pkgconfig=);
+on other arches adjust accordingly.  The same =PKG_CONFIG_PATH= /
+=LD_LIBRARY_PATH= must be exported when building cmacs against this
+wlroots (its =configure= detects the version the same way).
 
 *** Verifying Dependencies
 :PROPERTIES:

@@ -13,10 +13,11 @@ A GObject-based Wayland compositor built on wlroots 0.19. Gowl takes inspiration
 - **Module/plugin system** -- Extend the compositor via shared object plugins that subclass `GowlModule` and implement any combination of 18 GObject interfaces.
 - **18 hook interfaces** -- Layout, keybind, mouse, client decorator, focus policy, IPC, tag management, gap provider, bar provider, scratchpad, swallow, sticky, cursor, startup/shutdown, and more.
 - **Priority-based dispatch** -- Module events are dispatched in priority order with both consumable and broadcast semantics.
-- **wlroots 0.19** -- Built on the latest stable wlroots for full Wayland protocol support.
+- **wlroots 0.19 / 0.20** -- Builds against either; newest present wins, override with `make WLROOTS=0.19`. 0.20 adds per-window screencast capture.
 - **XWayland support** -- Optional X11 client compatibility (compile-time toggle).
 - **GObject Introspection** -- Optional GIR/typelib generation for language bindings.
 - **dwm-style tiling** -- Master-stack tile (with optional vsplit orientation), monocle, and float layouts with tag-based workspaces.
+- **Screencast capture** -- Monitor capture (all versions) and per-window capture (wlroots 0.20+) for `xdg-desktop-portal-wlr`, behind the `GowlCaptureProvider` interface.
 - **Session lock** -- ext-session-lock-v1 support.
 - **Layer shell** -- wlr-layer-shell for panels, bars, and overlays.
 - **Built-in config compiler** -- Auto-compiles C config files at startup.

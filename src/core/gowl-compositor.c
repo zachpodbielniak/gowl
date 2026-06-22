@@ -6191,11 +6191,18 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 	 * local pointer.  Guarded so a session that is not active leaves the
 	 * normal path below byte-for-byte unchanged. */
 	if (self->input_capture != NULL) {
-		gowl_input_capture_check_crossing(self->input_capture,
-		                                  self->prev_cursor_x,
-		                                  self->prev_cursor_y,
-		                                  self->wlr_cursor->x,
-		                                  self->wlr_cursor->y);
+		/* Test prev -> (prev + raw delta), NOT prev -> clamped cursor.
+		 * wlr_cursor_move clamps to the layout, so at a screen-edge
+		 * barrier the cursor pins AT the edge and prev->cursor never
+		 * straddles the barrier line.  The desired (unclamped) target
+		 * prev + delta does straddle it, so the push past the edge
+		 * registers as a crossing and capture activates. */
+		gowl_input_capture_check_crossing(
+			self->input_capture,
+			self->prev_cursor_x,
+			self->prev_cursor_y,
+			self->prev_cursor_x + self->cap_motion_dx,
+			self->prev_cursor_y + self->cap_motion_dy);
 		if (gowl_input_capture_is_active(self->input_capture)) {
 			/* Re-warp the cursor back to the frozen point; the
 			 * relative delta has already been pushed to the sink by
@@ -6229,6 +6236,12 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 	/* Remember the cursor position for the next barrier-crossing test. */
 	self->prev_cursor_x = self->wlr_cursor->x;
 	self->prev_cursor_y = self->wlr_cursor->y;
+
+	/* Consume the raw delta: only the real motion handlers set it (right
+	 * before calling here).  Other motionnotify callers (inject, resize,
+	 * warp) must not reuse a stale delta for crossing detection. */
+	self->cap_motion_dx = 0.0;
+	self->cap_motion_dy = 0.0;
 }
 
 /* Push a relative pointer-motion event to the InputCapture sink.  A no-op
@@ -6260,6 +6273,12 @@ on_cursor_motion(struct wl_listener *listener, void *data)
 	self = wl_container_of(listener, self, cursor_motion);
 	event = (struct wlr_pointer_motion_event *)data;
 
+	/* Record the RAW delta before wlr_cursor_move clamps the cursor to
+	 * the layout; motionnotify tests prev + this delta against barriers so
+	 * a push past a screen edge still registers as a crossing. */
+	self->cap_motion_dx = event->delta_x;
+	self->cap_motion_dy = event->delta_y;
+
 	wlr_cursor_move(self->wlr_cursor, &event->pointer->base,
 	                event->delta_x, event->delta_y);
 	gowl_compositor_motionnotify(self, event->time_msec);
@@ -6283,10 +6302,13 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 	before_y = self->wlr_cursor->y;
 	wlr_cursor_warp_absolute(self->wlr_cursor, &event->pointer->base,
 	                         event->x, event->y);
-	/* The relative delta the absolute warp produced, for capture egress. */
+	/* The relative delta the absolute warp produced (post-clamp); used
+	 * both for capture egress and barrier-crossing.  Absolute devices
+	 * rarely drive deskflow's egress, but keep it consistent. */
+	self->cap_motion_dx = self->wlr_cursor->x - before_x;
+	self->cap_motion_dy = self->wlr_cursor->y - before_y;
 	input_capture_emit_motion(self, event->time_msec,
-	                          self->wlr_cursor->x - before_x,
-	                          self->wlr_cursor->y - before_y);
+	                          self->cap_motion_dx, self->cap_motion_dy);
 	gowl_compositor_motionnotify(self, event->time_msec);
 }
 

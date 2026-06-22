@@ -370,10 +370,16 @@ struct _GowlCompositor {
 	 * xdg-desktop-portal-gowl backend over the gowl-input-capture
 	 * protocol.  NULL when no capture session exists.  prev_cursor_x/y
 	 * hold the last cursor position so motionnotify can test the motion
-	 * segment against installed barriers. */
+	 * segment against installed barriers.  cap_motion_dx/dy hold the RAW
+	 * (pre-clamp) motion delta of the in-flight event: wlr_cursor_move
+	 * clamps the cursor to the layout, so the cursor position alone never
+	 * crosses an edge barrier (it pins at the edge); barrier-crossing must
+	 * test prev + raw-delta (the DESIRED, unclamped target) instead. */
 	GowlInputCapture *input_capture;
 	gdouble           prev_cursor_x;
 	gdouble           prev_cursor_y;
+	gdouble           cap_motion_dx;
+	gdouble           cap_motion_dy;
 
 	/* Client map callback (embedder hook) */
 	GowlClientMapFunc client_map_func;

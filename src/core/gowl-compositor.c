@@ -5991,10 +5991,30 @@ on_kb_key(struct wl_listener *listener, void *data)
 		}
 	}
 
+	/* InputCapture escape hatch: Super+Escape force-deactivates capture
+	 * unconditionally, even while active.  This is the user's guaranteed
+	 * way out -- if a misbehaving KVM client (or a bug) wedges capture
+	 * active, every other key is diverted to the capture sink and the
+	 * keyboard is otherwise unusable.  Checked BEFORE the diversion below
+	 * and consumed (not forwarded anywhere) so it can always break out. */
+	if (self->input_capture != NULL
+	    && gowl_input_capture_is_active(self->input_capture)
+	    && event->state == WL_KEYBOARD_KEY_STATE_PRESSED
+	    && (mods & WLR_MODIFIER_LOGO)) {
+		for (i = 0; i < nsyms; i++) {
+			if (syms[i] == XKB_KEY_Escape) {
+				gowl_input_capture_deactivate(
+					self->input_capture);
+				handled = TRUE;
+				break;
+			}
+		}
+	}
+
 	/* InputCapture: while active, divert the key to the sink and consume
 	 * it (so it is not forwarded to a client).  Runs AFTER compositor and
-	 * module keybinds + the embedder intercept, so a release keybind can
-	 * still break capture. */
+	 * module keybinds + the embedder intercept + the escape hatch above,
+	 * so Super+Escape can always break capture. */
 	if (!handled && self->input_capture != NULL
 	    && gowl_input_capture_is_active(self->input_capture)) {
 		GowlInputEvent ev;

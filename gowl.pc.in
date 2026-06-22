@@ -1,6 +1,7 @@
 prefix=@PREFIX@
 libdir=@LIBDIR@
 includedir=@INCLUDEDIR@
+moduledir=${libdir}/gowl/modules
 
 Name: gowl
 Description: GObject Wayland Compositor - A modular Wayland compositor library

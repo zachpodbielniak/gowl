@@ -60,14 +60,18 @@ struct _PortalDbus {
 	guint            owner_id;
 	guint            ic_reg_id;     /* InputCapture object */
 	guint            rd_reg_id;     /* RemoteDesktop object */
-	guint            session_sub;   /* Session vtable subtree, if used */
 
-	/* The single active capture session handle (object path), or NULL. */
+	/* The single active session.  @session_handle is the object path the
+	 * frontend supplied to CreateSession; @session_reg_id is the
+	 * registration of the org.freedesktop.impl.portal.Session object we
+	 * export at that path (0 when no session is active). */
 	gchar           *session_handle;
+	guint            session_reg_id;
 	guint            zone_set;      /* last zones reported */
 };
 
 static GDBusNodeInfo *node_info;
+static GDBusNodeInfo *session_node_info;
 
 /* ---------------------------------------------------------------
  * Introspection XML
@@ -79,6 +83,21 @@ static const gchar introspection_xml[] =
 "    <property name='version' type='u' access='read'/>"
 "    <property name='SupportedCapabilities' type='u' access='read'/>"
 "    <method name='CreateSession'>"
+"      <arg type='o' name='handle' direction='in'/>"
+"      <arg type='o' name='session_handle' direction='in'/>"
+"      <arg type='s' name='app_id' direction='in'/>"
+"      <arg type='s' name='parent_window' direction='in'/>"
+"      <arg type='a{sv}' name='options' direction='in'/>"
+"      <arg type='u' name='response' direction='out'/>"
+"      <arg type='a{sv}' name='results' direction='out'/>"
+"    </method>"
+"    <method name='CreateSession2'>"
+"      <arg type='o' name='session_handle' direction='in'/>"
+"      <arg type='s' name='app_id' direction='in'/>"
+"      <arg type='a{sv}' name='options' direction='in'/>"
+"      <arg type='a{sv}' name='results' direction='out'/>"
+"    </method>"
+"    <method name='Start'>"
 "      <arg type='o' name='handle' direction='in'/>"
 "      <arg type='o' name='session_handle' direction='in'/>"
 "      <arg type='s' name='app_id' direction='in'/>"
@@ -211,6 +230,24 @@ static const gchar introspection_xml[] =
 "  </interface>"
 "</node>";
 
+/*
+ * The shared session object interface.  CreateSession (on both portals)
+ * must register an object implementing this at the caller-supplied
+ * session_handle object path; the xdg-desktop-portal frontend drives the
+ * session through it and calls Close() to end it.  Without this object the
+ * frontend's "input capture session created ... closed" immediately tears
+ * the session down (Failed to close session implementation: ... Object
+ * does not exist), and the public CreateSession fails.
+ */
+static const gchar session_introspection_xml[] =
+"<node>"
+"  <interface name='org.freedesktop.impl.portal.Session'>"
+"    <method name='Close'/>"
+"    <signal name='Closed'/>"
+"    <property name='version' type='u' access='read'/>"
+"  </interface>"
+"</node>";
+
 /* ---------------------------------------------------------------
  * Helpers
  * --------------------------------------------------------------- */
@@ -242,6 +279,110 @@ reject_if_no_session(PortalDbus *self, GDBusMethodInvocation *invocation,
 		return TRUE;
 	}
 	return FALSE;
+}
+
+/* ---------------------------------------------------------------
+ * Session object (org.freedesktop.impl.portal.Session)
+ *
+ * Exported at the caller's session_handle path during CreateSession.  The
+ * frontend calls Close() on it to end the session; we also unexport it
+ * (and emit Closed) when the session tears down on our side.
+ * --------------------------------------------------------------- */
+
+static void portal_dbus_end_session(PortalDbus *self, gboolean emit_closed);
+
+static void
+session_method(GDBusConnection *conn, const gchar *sender, const gchar *path,
+               const gchar *iface, const gchar *method, GVariant *params,
+               GDBusMethodInvocation *invocation, gpointer user_data)
+{
+	PortalDbus *self = user_data;
+
+	(void)conn;
+	(void)sender;
+	(void)path;
+	(void)iface;
+	(void)params;
+
+	if (g_strcmp0(method, "Close") == 0) {
+		/* The frontend is closing the session: tear down our state and
+		 * unexport the object, then ack.  Do not emit Closed (the peer
+		 * initiated the close). */
+		portal_dbus_end_session(self, FALSE);
+		g_dbus_method_invocation_return_value(invocation, NULL);
+		return;
+	}
+
+	g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR,
+		G_DBUS_ERROR_UNKNOWN_METHOD, "unknown method %s", method);
+}
+
+static GVariant *
+session_get_property(GDBusConnection *conn, const gchar *sender,
+                     const gchar *path, const gchar *iface, const gchar *prop,
+                     GError **error, gpointer user_data)
+{
+	(void)conn; (void)sender; (void)path; (void)iface;
+	(void)error; (void)user_data;
+
+	if (g_strcmp0(prop, "version") == 0)
+		return g_variant_new_uint32(1);
+	return NULL;
+}
+
+static const GDBusInterfaceVTable session_vtable = {
+	session_method, session_get_property, NULL, { 0 }
+};
+
+/*
+ * Register the Session object at @session_handle and record it as the
+ * single active session.  Any previously-active session is torn down
+ * first (deskflow only runs one at a time).  Returns TRUE on success.
+ */
+static gboolean
+portal_dbus_begin_session(PortalDbus *self, const gchar *session_handle)
+{
+	GError *error = NULL;
+	guint   reg_id;
+
+	if (self->session_reg_id != 0)
+		portal_dbus_end_session(self, TRUE);
+
+	reg_id = g_dbus_connection_register_object(self->conn, session_handle,
+		session_node_info->interfaces[0], &session_vtable,
+		self, NULL, &error);
+	if (reg_id == 0) {
+		g_warning("portal: failed to export Session at %s: %s",
+			session_handle, error ? error->message : "?");
+		g_clear_error(&error);
+		return FALSE;
+	}
+
+	g_free(self->session_handle);
+	self->session_handle = g_strdup(session_handle);
+	self->session_reg_id = reg_id;
+	return TRUE;
+}
+
+/*
+ * Tear down the active session: stop capture, optionally emit Closed (when
+ * we initiate the teardown), unexport the Session object, and clear state.
+ */
+static void
+portal_dbus_end_session(PortalDbus *self, gboolean emit_closed)
+{
+	if (self->session_reg_id == 0)
+		return;
+
+	if (emit_closed && self->conn != NULL && self->session_handle != NULL)
+		g_dbus_connection_emit_signal(self->conn, NULL,
+			self->session_handle,
+			"org.freedesktop.impl.portal.Session", "Closed",
+			NULL, NULL);
+
+	g_dbus_connection_unregister_object(self->conn, self->session_reg_id);
+	self->session_reg_id = 0;
+	g_clear_pointer(&self->session_handle, g_free);
 }
 
 /* Return an empty a{sv} results dict. */
@@ -368,8 +509,69 @@ ic_method(GDBusConnection *conn, const gchar *sender, const gchar *path,
 			&session_handle, &app_id, &parent, &opts);
 		g_variant_unref(opts);
 
-		g_free(self->session_handle);
-		self->session_handle = g_strdup(session_handle);
+		/* Export the Session object at session_handle; the frontend
+		 * drives and Close()s the session through it.  Without this the
+		 * frontend tears the session down immediately and the public
+		 * CreateSession fails. */
+		if (!portal_dbus_begin_session(self, session_handle)) {
+			g_variant_builder_init(&results,
+				G_VARIANT_TYPE("a{sv}"));
+			g_dbus_method_invocation_return_value(invocation,
+				g_variant_new("(ua{sv})", PORTAL_RESPONSE_OTHER,
+					&results));
+			return;
+		}
+
+		g_variant_builder_init(&results, G_VARIANT_TYPE("a{sv}"));
+		g_variant_builder_add(&results, "{sv}", "capabilities",
+			g_variant_new_uint32(PORTAL_CAPS));
+		g_dbus_method_invocation_return_value(invocation,
+			g_variant_new("(ua{sv})", PORTAL_RESPONSE_SUCCESS,
+				&results));
+		return;
+	}
+
+	if (g_strcmp0(method, "CreateSession2") == 0) {
+		const gchar *session_handle, *app_id;
+		GVariant *opts;
+		GVariantBuilder results;
+
+		/* The form xdg-desktop-portal >= 1.20 prefers: no handle and no
+		 * response code, just results.  Export the Session object at
+		 * session_handle (without it the frontend tears the session down
+		 * immediately and the public CreateSession fails). */
+		g_variant_get(params, "(&o&s@a{sv})", &session_handle, &app_id,
+			&opts);
+		g_variant_unref(opts);
+
+		g_variant_builder_init(&results, G_VARIANT_TYPE("a{sv}"));
+		if (!portal_dbus_begin_session(self, session_handle)) {
+			/* Signal failure via an empty result with no
+			 * capabilities; the frontend treats a missing Session
+			 * object as failure regardless. */
+			g_dbus_method_invocation_return_value(invocation,
+				g_variant_new("(a{sv})", &results));
+			return;
+		}
+		g_variant_builder_add(&results, "{sv}", "capabilities",
+			g_variant_new_uint32(PORTAL_CAPS));
+		g_dbus_method_invocation_return_value(invocation,
+			g_variant_new("(a{sv})", &results));
+		return;
+	}
+
+	if (g_strcmp0(method, "Start") == 0) {
+		const gchar *handle, *session_handle, *app_id, *parent;
+		GVariant *opts;
+		GVariantBuilder results;
+
+		/* Start confirms the session is ready to capture.  Validate the
+		 * handle, then return success with the negotiated capabilities. */
+		g_variant_get(params, "(&o&o&s&s@a{sv})", &handle,
+			&session_handle, &app_id, &parent, &opts);
+		g_variant_unref(opts);
+		if (reject_if_no_session(self, invocation, session_handle))
+			return;
 
 		g_variant_builder_init(&results, G_VARIANT_TYPE("a{sv}"));
 		g_variant_builder_add(&results, "{sv}", "capabilities",
@@ -381,17 +583,18 @@ ic_method(GDBusConnection *conn, const gchar *sender, const gchar *path,
 	}
 
 	if (g_strcmp0(method, "GetZones") == 0) {
-		const gchar *handle, *session_handle, *app_id, *parent;
+		const gchar *handle, *session_handle, *app_id;
 		GVariant *opts;
 		PortalZone *zones = NULL;
 		guint n = 0, i;
 		guint32 zone_set = 0;
 		GVariantBuilder results, zarr;
 
-		/* Fix: CWE-862 — validate session_handle before exposing zone
-		 * layout or forwarding any request to the Wayland compositor. */
-		g_variant_get(params, "(&o&o&s&s@a{sv})", &handle,
-			&session_handle, &app_id, &parent, &opts);
+		/* GetZones has NO parent_window arg: (o handle, o session_handle,
+		 * s app_id, a{sv} options).  Fix: CWE-862 — validate
+		 * session_handle before exposing zone layout. */
+		g_variant_get(params, "(&o&o&s@a{sv})", &handle,
+			&session_handle, &app_id, &opts);
 		g_variant_unref(opts);
 		if (reject_if_no_session(self, invocation, session_handle))
 			return;
@@ -599,8 +802,17 @@ rd_method(GDBusConnection *conn, const gchar *sender, const gchar *path,
 		g_variant_get(params, "(&o&o&s@a{sv})", &handle,
 			&session_handle, &app_id, &opts);
 		g_variant_unref(opts);
-		g_free(self->session_handle);
-		self->session_handle = g_strdup(session_handle);
+
+		/* Export the Session object at session_handle (see the
+		 * InputCapture CreateSession above). */
+		if (!portal_dbus_begin_session(self, session_handle)) {
+			g_variant_builder_init(&results,
+				G_VARIANT_TYPE("a{sv}"));
+			g_dbus_method_invocation_return_value(invocation,
+				g_variant_new("(ua{sv})", PORTAL_RESPONSE_OTHER,
+					&results));
+			return;
+		}
 
 		g_variant_builder_init(&results, G_VARIANT_TYPE("a{sv}"));
 		g_dbus_method_invocation_return_value(invocation,
@@ -836,6 +1048,17 @@ portal_dbus_new(PortalWayland *wl, PortalEis *eis)
 		}
 	}
 
+	if (session_node_info == NULL) {
+		session_node_info = g_dbus_node_info_new_for_xml(
+			session_introspection_xml, &error);
+		if (session_node_info == NULL) {
+			g_warning("portal: bad Session introspection XML: %s",
+				error ? error->message : "?");
+			g_clear_error(&error);
+			return NULL;
+		}
+	}
+
 	self = g_new0(PortalDbus, 1);
 	self->wl = wl;
 	self->eis = eis;
@@ -857,6 +1080,7 @@ portal_dbus_free(PortalDbus *self)
 		return;
 
 	if (self->conn != NULL) {
+		portal_dbus_end_session(self, FALSE);
 		if (self->ic_reg_id)
 			g_dbus_connection_unregister_object(self->conn,
 				self->ic_reg_id);

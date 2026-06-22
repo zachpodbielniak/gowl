@@ -193,12 +193,21 @@ gowl_systemd_stop (void)
 	if (gowl_systemd_disabled ())
 		return;
 
-	stop_argv = g_new (gchar *, 5);
+	/* Stop BOTH targets.  gowl-session.target only Wants=
+	 * graphical-session.target (a weak dep), so stopping gowl-session
+	 * alone leaves graphical-session.target active -- and a lingering
+	 * active graphical-session.target makes the next login abort in
+	 * gnome-session-init-worker ("A graphical session is already
+	 * running!"), wedging all logins until reboot.  Stop them together.
+	 * The session launcher repeats this on compositor exit so a crash
+	 * (which never reaches gowl_compositor_quit) is also cleaned up. */
+	stop_argv = g_new (gchar *, 6);
 	stop_argv[0] = g_strdup ("systemctl");
 	stop_argv[1] = g_strdup ("--user");
 	stop_argv[2] = g_strdup ("stop");
 	stop_argv[3] = g_strdup ("gowl-session.target");
-	stop_argv[4] = NULL;
+	stop_argv[4] = g_strdup ("graphical-session.target");
+	stop_argv[5] = NULL;
 	gowl_systemd_run_async (stop_argv);
 	g_strfreev (stop_argv);
 }

@@ -1,7 +1,13 @@
 [Desktop Entry]
 Name=Gowl
 Comment=A GObject-based Wayland compositor inspired by dwl and dwm
-Exec=gowl
+# Do NOT `exec' gowl: when the compositor exits -- cleanly OR by crash --
+# the surviving shell stops the session target gowl pulled in
+# (gowl-session.target -> graphical-session.target).  Otherwise the
+# persistent user@ manager keeps graphical-session.target active and the
+# next login (even GNOME) aborts with "A graphical session is already
+# running!", wedging all logins until reboot.  Best-effort (|| true).
+Exec=/bin/sh -c 'gowl; systemctl --user stop gowl-session.target graphical-session.target 2>/dev/null || true'
 Type=Application
 Icon=gowl
 # Trailing :wlroots makes XDG_CURRENT_DESKTOP match xdg-desktop-portal-wlr's

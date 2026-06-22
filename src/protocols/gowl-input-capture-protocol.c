@@ -137,6 +137,12 @@ build_zones(GowlInputCaptureProtocol *proto)
 {
 	GList *mons, *l, *zones = NULL;
 
+	/* gowl_compositor_get_monitors() is (transfer none): the returned
+	 * GList IS the compositor's internal monitor list, owned by the
+	 * compositor.  We must NOT free or modify it -- doing so frees the
+	 * live list out from under the compositor (and the bar, which walks
+	 * it every tick), causing a use-after-free crash on the dispatch
+	 * thread.  Only iterate. */
 	mons = gowl_compositor_get_monitors((GowlCompositor *)proto->compositor);
 	for (l = mons; l != NULL; l = l->next) {
 		GowlMonitor *mon = (GowlMonitor *)l->data;
@@ -149,7 +155,6 @@ build_zones(GowlInputCaptureProtocol *proto)
 			gowl_input_zone_new((guint)w, (guint)h, x, y,
 			                    gowl_monitor_get_name(mon)));
 	}
-	g_list_free(mons);
 	return zones;
 }
 

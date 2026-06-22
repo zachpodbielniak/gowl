@@ -6,7 +6,8 @@ PROTO_HDRS := \
 	xdg-shell-protocol.h \
 	wlr-layer-shell-unstable-v1-protocol.h \
 	cursor-shape-v1-protocol.h \
-	ext-workspace-v1-protocol.h
+	ext-workspace-v1-protocol.h \
+	gowl-input-capture-v1-protocol.h
 
 # All source objects depend on generated version header and protocol headers
 $(LIB_OBJS) $(MAIN_OBJ): src/gowl-version.h $(PROTO_HDRS)
@@ -57,6 +58,10 @@ $(OBJDIR)/protocols/%.o: src/protocols/%.c | $(OBJDIR)
 # is `ext-workspace-v1-protocol.c' (no src/ prefix), so route it to
 # a dedicated pattern rule at the root.
 $(OBJDIR)/ext-workspace-v1-protocol.o: ext-workspace-v1-protocol.c | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJDIR)/gowl-input-capture-v1-protocol.o: gowl-input-capture-v1-protocol.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -179,6 +184,18 @@ ext-workspace-v1-protocol.c: ext-workspace-v1-protocol.h
 	$(WAYLAND_SCANNER) private-code \
 		$(WAYLAND_PROTOCOLS_DIR)/staging/ext-workspace/ext-workspace-v1.xml $@
 
+# gowl-input-capture-v1: gowl-private protocol for the InputCapture /
+# RemoteDesktop portal backend.  Generates BOTH a server header and the
+# private-code dispatcher from the in-tree XML; consumed by
+# gowl-input-capture-protocol.c.
+gowl-input-capture-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		protocols/gowl-input-capture-unstable-v1.xml $@
+
+gowl-input-capture-v1-protocol.c: gowl-input-capture-v1-protocol.h
+	$(WAYLAND_SCANNER) private-code \
+		protocols/gowl-input-capture-unstable-v1.xml $@
+
 # GIR generation
 $(OUTDIR)/$(GIR_FILE): $(LIB_SRCS) $(LIB_HDRS) | $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(GIR_SCANNER) \
@@ -277,7 +294,7 @@ clean-all:
 	rm -f xdg-shell-protocol.c
 
 # Installation rules
-.PHONY: install install-lib install-bin install-bar install-bar-configs install-headers install-pc install-gir install-modules install-mcp install-desktop install-systemd
+.PHONY: install install-lib install-bin install-bar install-bar-configs install-headers install-pc install-gir install-modules install-mcp install-portal install-desktop install-systemd
 
 install: install-lib install-bin install-bar install-bar-configs install-headers install-pc install-desktop install-systemd
 ifeq ($(BUILD_GIR),1)
@@ -288,6 +305,9 @@ install: install-modules
 endif
 ifeq ($(MCP_AVAILABLE),1)
 install: install-mcp
+endif
+ifeq ($(LIBEIS_AVAILABLE),1)
+install: install-portal
 endif
 
 install-bin: $(OBJDIR)/main.o $(OUTDIR)/$(LIB_SHARED_FULL)
@@ -374,6 +394,25 @@ install-mcp: $(OUTDIR)/gowl-mcp
 	$(MKDIR_P) $(DESTDIR)$(BINDIR)
 	$(INSTALL_PROGRAM) $(OUTDIR)/gowl-mcp $(DESTDIR)$(BINDIR)/gowl-mcp
 
+# InputCapture/RemoteDesktop portal backend: the binary, its .portal
+# registration, the routing portals.conf, and the D-Bus .service so
+# xdg-desktop-portal can activate it.  The .service @BINDIR@ is expanded
+# at install time.
+install-portal: $(OUTDIR)/xdg-desktop-portal-gowl
+	$(MKDIR_P) $(DESTDIR)$(BINDIR)
+	$(INSTALL_PROGRAM) $(OUTDIR)/xdg-desktop-portal-gowl \
+		$(DESTDIR)$(BINDIR)/xdg-desktop-portal-gowl
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/xdg-desktop-portal/portals
+	$(INSTALL_DATA) data/gowl.portal \
+		$(DESTDIR)$(DATADIR)/xdg-desktop-portal/portals/gowl.portal
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/xdg-desktop-portal
+	$(INSTALL_DATA) data/gowl-portals.conf \
+		$(DESTDIR)$(DATADIR)/xdg-desktop-portal/gowl-portals.conf
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/dbus-1/services
+	sed 's|@BINDIR@|$(BINDIR)|g' \
+		data/org.freedesktop.impl.portal.desktop.gowl.service.in \
+		> $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.impl.portal.desktop.gowl.service
+
 install-bar-configs:
 	$(MKDIR_P) $(DESTDIR)$(DATADIR)/gowl
 	$(INSTALL_DATA) data/default-bar.yaml $(DESTDIR)$(DATADIR)/gowl/default-bar.yaml
@@ -385,6 +424,10 @@ uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/gowl
 	rm -f $(DESTDIR)$(BINDIR)/gowlbar
 	rm -f $(DESTDIR)$(BINDIR)/gowl-mcp
+	rm -f $(DESTDIR)$(BINDIR)/xdg-desktop-portal-gowl
+	rm -f $(DESTDIR)$(DATADIR)/xdg-desktop-portal/portals/gowl.portal
+	rm -f $(DESTDIR)$(DATADIR)/xdg-desktop-portal/gowl-portals.conf
+	rm -f $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.impl.portal.desktop.gowl.service
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_STATIC)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_SHARED_FULL)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_SHARED_MAJOR)

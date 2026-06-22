@@ -159,6 +159,13 @@ endif
 DEPS_LIBDECOR := libdecor-0
 LIBDECOR_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_LIBDECOR) 2>/dev/null && echo 1 || echo 0)
 
+# Optional libeis dependency (EIS server for the InputCapture/RemoteDesktop
+# portal backend).  Only gates the standalone xdg-desktop-portal-gowl tool;
+# libgowl itself never links libeis (the compositor stays D-Bus/EIS-free and
+# speaks the gowl-input-capture Wayland protocol to the portal binary).
+DEPS_LIBEIS := libeis-1.0
+LIBEIS_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_LIBEIS) 2>/dev/null && echo 1 || echo 0)
+
 # Wayland protocols directory
 WAYLAND_PROTOCOLS_DIR := $(shell $(PKG_CONFIG) --variable=pkgdatadir wayland-protocols 2>/dev/null)
 

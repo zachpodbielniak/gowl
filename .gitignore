@@ -11,6 +11,11 @@ src/gowl-version.h
 src/protocols/*-protocol.h
 *-protocol.h
 *-protocol.c
+# The above patterns target wayland-scanner OUTPUT (e.g.
+# gowl-input-capture-v1-protocol.{c,h}).  The hand-written server-glue
+# source files are NOT generated -- keep them tracked.
+!src/protocols/gowl-input-capture-protocol.c
+!src/protocols/gowl-input-capture-protocol.h
 .mcp.json
 .cache/
 compile_commands.json

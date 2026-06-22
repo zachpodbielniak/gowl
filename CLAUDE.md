@@ -116,8 +116,12 @@ docs/                       # Documentation (architecture, building, configurati
 - All core types (`GowlCompositor`, `GowlMonitor`, `GowlClient`, etc.) are `G_DECLARE_FINAL_TYPE`.
 - `GowlModule` is `G_DECLARE_DERIVABLE_TYPE` -- all modules subclass it.
 - 18 interfaces (`GowlLayoutProvider`, `GowlKeybindHandler`, etc.) are `G_DECLARE_INTERFACE`.
-- 8 boxed types for value types (`GowlGeometry`, `GowlColor`, etc.).
+- Boxed value types (`GowlGeometry`, `GowlColor`, `GowlInputZone`, `GowlInputBarrier`, etc.).
 - 9 registered enum types (`GowlAction`, `GowlKeyMod`, `GowlHookPoint`, etc.).
+- A gowl-private Wayland protocol `gowl-input-capture-unstable-v1` (alongside
+  `ext-workspace`) backs the InputCapture/RemoteDesktop portals; the
+  `GowlInputCapture` state machine + the `xdg-desktop-portal-gowl` binary
+  implement them. See `docs/input-capture.org`.
 
 ### Module System
 

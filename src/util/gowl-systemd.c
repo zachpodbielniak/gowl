@@ -155,6 +155,19 @@ gowl_systemd_start (gboolean seat_session)
 		svc_argv[2] = "try-restart";
 		svc_argv[3] = "xdg-desktop-portal.service";
 		gowl_systemd_run_async (svc_argv);
+
+		/* (iii) Launch the gowl InputCapture/RemoteDesktop portal
+		 *       backend (xdg-desktop-portal-gowl) directly.  It is also
+		 *       D-Bus-activatable via its .service file, but it must
+		 *       connect to THIS compositor's WAYLAND_DISPLAY as a client,
+		 *       which is only valid once we are up -- launching it here,
+		 *       after the environment import, avoids the same activation
+		 *       race as the wlroots backend above.  A no-op (fails to
+		 *       connect, exits) if the binary is not installed or libeis
+		 *       was unavailable at build time. */
+		svc_argv[0] = "xdg-desktop-portal-gowl";
+		svc_argv[1] = NULL;
+		gowl_systemd_run_async (svc_argv);
 	}
 
 	/* 2. Start gowl-session.target, which Wants=graphical-session.target.

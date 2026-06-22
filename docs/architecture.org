@@ -71,6 +71,8 @@ Small value types registered with =g_boxed_type_register_static()=:
 | =GowlBorderSpec= | Border width + color triplet (focus, unfocus, urgent). |
 | =GowlRule=       | Window rule: app_id, title, tags, floating, monitor.   |
 | =GowlOutputMode= | Monitor mode: width, height, refresh rate.             |
+| =GowlInputZone=  | InputCapture zone: width, height, x, y, output name.   |
+| =GowlInputBarrier= | InputCapture pointer barrier: id + (x1,y1,x2,y2).    |
 
 *** Enumerations
 :PROPERTIES:
@@ -403,6 +405,35 @@ The provider advertises the globals the portal needs:
 
 Selection of the wlroots portal backend is environment-driven (see the
 =XDG_CURRENT_DESKTOP=/=:wlroots= note above), not a gowl protocol matter.
+
+** Input Capture & Injection (deskflow / KVM)
+:PROPERTIES:
+:CUSTOM_ID: input-capture-arch
+:END:
+Gowl implements the freedesktop *InputCapture* and *RemoteDesktop* portals
+natively (the generic =xdg-desktop-portal-wlr= backend does not provide them).
+The split keeps gowl core free of D-Bus and libeis:
+
+- *gowl core* carries a D-Bus-free state machine, =GowlInputCapture=
+  (=src/core/gowl-input-capture.c=), with two boxed value types
+  =GowlInputZone= / =GowlInputBarrier=. It enumerates capture zones from
+  monitor geometry, validates/stores pointer barriers, detects barrier
+  crossings in =motionnotify=, and diverts pointer/keyboard input to a sink
+  while active. The five input hooks (=motionnotify=, =on_cursor_button=,
+  =on_cursor_axis=, =on_kb_key=, =on_kb_modifiers=) are guarded by the active
+  flag, so a non-capturing session is unchanged.
+- A gowl-private Wayland protocol, =gowl-input-capture-unstable-v1=
+  (=protocols/gowl-input-capture-unstable-v1.xml=, server glue in
+  =src/protocols/gowl-input-capture-protocol.c=), exposes zones/barriers,
+  the captured-input event stream, and an inject sub-object (driving the
+  =wlr_virtual_pointer= / =wlr_virtual_keyboard= globals) to a single trusted
+  client.
+- =xdg-desktop-portal-gowl= (=tools/xdg-desktop-portal-gowl/=) is a standalone
+  binary (links no libgowl) that binds the private protocol as a Wayland
+  client, runs a *libeis* EIS server, and owns
+  =org.freedesktop.impl.portal.desktop.gowl=. It is built only when
+  =libeis-1.0= is present. Full reference: [[file:input-capture.org][Input
+  Capture & Injection]].
 
 ** XWayland Override-Redirect (Unmanaged) Surfaces
 

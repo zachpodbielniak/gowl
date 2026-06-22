@@ -42,6 +42,8 @@ LIB_SRCS := \
 	src/boxed/gowl-focus-token.c \
 	src/boxed/gowl-workspace-id.c \
 	src/boxed/gowl-capture-source.c \
+	src/boxed/gowl-input-zone.c \
+	src/boxed/gowl-input-barrier.c \
 	src/module/gowl-module.c \
 	src/module/gowl-module-manager.c \
 	src/module/gowl-module-info.c \
@@ -85,6 +87,7 @@ LIB_SRCS := \
 	src/util/gowl-wallpaper-scale.c \
 	src/core/gowl-compositor.c \
 	src/core/gowl-capture-wlroots.c \
+	src/core/gowl-input-capture.c \
 	src/core/gowl-frame-sink.c \
 	src/core/gowl-lid-policy.c \
 	src/core/gowl-monitor.c \
@@ -104,7 +107,8 @@ LIB_SRCS := \
 	src/core/gowl-cairo-embed-renderer.c \
 	src/core/gowl-gl-embed-renderer.c \
 	src/core/gowl-mirror.c \
-	src/protocols/gowl-ext-workspace.c
+	src/protocols/gowl-ext-workspace.c \
+	src/protocols/gowl-input-capture-protocol.c
 
 # Header files (for GIR scanner and installation)
 LIB_HDRS := \
@@ -243,6 +247,7 @@ LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
 # dependency on the matching `-protocol.h' is already declared via
 # the $(PROTO_HDRS) rule above.
 LIB_OBJS += $(OBJDIR)/ext-workspace-v1-protocol.o
+LIB_OBJS += $(OBJDIR)/gowl-input-capture-v1-protocol.o
 
 YAMLGLIB_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(YAMLGLIB_SRCS))
 CRISPY_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(CRISPY_SRCS))
@@ -268,6 +273,9 @@ endif
 ifeq ($(MCP_AVAILABLE),1)
 all: gowl-mcp
 endif
+ifeq ($(LIBEIS_AVAILABLE),1)
+all: xdg-desktop-portal-gowl
+endif
 
 # Build dependencies (yaml-glib, crispy)
 deps: $(YAMLGLIB_OBJS) $(CRISPY_OBJS)
@@ -288,6 +296,20 @@ gowl-mcp: $(OUTDIR)/gowl-mcp
 
 $(OUTDIR)/gowl-mcp: tools/gowl-mcp/gowl-mcp.c | $(OUTDIR)
 	$(MAKE) -C tools/gowl-mcp OUTDIR=$(abspath $(OUTDIR))
+endif
+
+# xdg-desktop-portal-gowl: InputCapture + RemoteDesktop portal backend.
+# Standalone binary (links no libgowl); built only when libeis is present.
+ifeq ($(LIBEIS_AVAILABLE),1)
+.PHONY: xdg-desktop-portal-gowl
+xdg-desktop-portal-gowl: $(OUTDIR)/xdg-desktop-portal-gowl
+
+$(OUTDIR)/xdg-desktop-portal-gowl: tools/xdg-desktop-portal-gowl/main.c \
+                                   tools/xdg-desktop-portal-gowl/portal-eis.c \
+                                   tools/xdg-desktop-portal-gowl/portal-wayland.c \
+                                   tools/xdg-desktop-portal-gowl/portal-dbus.c \
+                                   | $(OUTDIR)
+	$(MAKE) -C tools/xdg-desktop-portal-gowl OUTDIR=$(abspath $(OUTDIR))
 endif
 
 # Build all modules
@@ -390,6 +412,7 @@ install-deps:
 		gdk-pixbuf2-devel \
 		libasan libubsan \
 		libdecor-devel \
+		libeis-devel \
 		$(if $(filter 1,$(MCP)),$(FEDORA_DEPS_MCP))
 
 # Install a debug .desktop session file pointing at the local debug build

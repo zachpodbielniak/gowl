@@ -54,11 +54,18 @@ identical between the two.
 :PROPERTIES:
 :CUSTOM_ID: optional
 :END:
-| Package               | pkg-config name             | Description            |
-|-----------------------+-----------------------------+------------------------|
-| libxcb                | =xcb=                       | XWayland support       |
-| xcb-icccm             | =xcb-icccm=                 | XWayland ICCCM support |
-| GObject Introspection | =gobject-introspection-1.0= | GIR/typelib generation |
+| Package               | pkg-config name             | Description                       |
+|-----------------------+-----------------------------+-----------------------------------|
+| libxcb                | =xcb=                       | XWayland support                  |
+| xcb-icccm             | =xcb-icccm=                 | XWayland ICCCM support            |
+| GObject Introspection | =gobject-introspection-1.0= | GIR/typelib generation            |
+| libeis                | =libeis-1.0=                | EIS server for the =xdg-desktop-portal-gowl= InputCapture/RemoteDesktop backend (deskflow KVM) |
+
+When =libeis-1.0= is present, =make= additionally builds the standalone
+=xdg-desktop-portal-gowl= binary and =make install= installs it along with its
+=.portal= / =portals.conf= / D-Bus =.service=. Without libeis, the compositor
+still builds fully; only the portal backend is skipped. =make install-deps=
+pulls =libeis-devel=.
 
 *** Build Tools
 :PROPERTIES:

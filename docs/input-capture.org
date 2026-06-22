@@ -1,0 +1,179 @@
+* Input Capture & Injection (deskflow / KVM)
+:PROPERTIES:
+:CUSTOM_ID: input-capture
+:END:
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: input-capture-overview
+:END:
+Gowl implements the freedesktop *InputCapture* and *RemoteDesktop* desktop
+portals so software-KVM tools such as [[https://deskflow.org][deskflow]] (and
+input-leap / Synergy) work natively under gowl and =cmacs --gowl=, just as they
+do under GNOME.
+
+- *InputCapture* (egress): the local machine is the KVM *server*. When the
+  pointer crosses a screen-edge barrier, gowl captures all local input and
+  streams it to the remote machine over the EI protocol.
+- *RemoteDesktop* (ingress): the local machine is the KVM *client*. Input from
+  a remote server is injected into gowl through its virtual pointer/keyboard.
+
+Both portals are unavailable from the generic =xdg-desktop-portal-wlr= backend
+(only GNOME's Mutter-backed portal implements InputCapture for the wlroots
+world, and only for GNOME). Gowl owns its input pipeline directly, so it
+implements them itself -- without the invisible-layer-shell-surface hack the
+unmerged =xdg-desktop-portal-wlr= InputCapture patch relies on.
+
+** Architecture
+:PROPERTIES:
+:CUSTOM_ID: input-capture-architecture
+:END:
+Three pieces, split to keep gowl core free of D-Bus and libeis:
+
+#+begin_example
+ deskflow ──libei──┐                          ┌─ gowl core (compositor)
+                   ▼                          │   • input pipeline hooks
+ xdg-desktop-portal (frontend, system)        │   • GowlInputCapture machine
+   │ InputCapture / RemoteDesktop              │   • gowl-input-capture protocol
+   ▼ (routed by portals.conf → "gowl")        │
+ xdg-desktop-portal-gowl  ◄──wayland client──►┘
+   (standalone binary, links libeis + GDBus)
+   • owns org.freedesktop.impl.portal.desktop.gowl
+   • runs the libeis EIS server; ConnectToEIS hands deskflow the client fd
+#+end_example
+
+1. *gowl core* -- a D-Bus-free, libeis-free mechanism:
+   - =GowlInputCapture= (=src/core/gowl-input-capture.c=): the state machine.
+     It enumerates capture *zones* from the monitor layout, validates and
+     stores pointer *barriers*, detects when a motion segment crosses a
+     barrier (activation), and -- while active -- diverts pointer/keyboard
+     events to a sink instead of the focused client. Boxed value types
+     =GowlInputZone= and =GowlInputBarrier= carry the geometry.
+   - Input-pipeline hooks in =gowl-compositor.c= (=motionnotify=,
+     =on_cursor_button=, =on_cursor_axis=, =on_kb_key=, =on_kb_modifiers=)
+     consult the machine. They are guarded by the *active* flag: a session
+     that is not actively capturing leaves the normal input path unchanged.
+   - The =gowl-input-capture-unstable-v1= private Wayland protocol
+     (=protocols/gowl-input-capture-unstable-v1.xml=) exposes all of this to a
+     single trusted client -- the portal binary. =get_zones=, =add_barrier= /
+     =set_barriers=, =enable= / =disable= / =release=, the =activated= /
+     =deactivated= events, and the captured-input event stream
+     (=rel_motion= / =button= / =axis= / =key= / =modifiers=). A separate
+     =zgowl_input_inject_v1= object drives the compositor's virtual devices
+     for RemoteDesktop.
+2. *xdg-desktop-portal-gowl* (=tools/xdg-desktop-portal-gowl/=) -- a standalone
+   binary that links libgowl-free. It binds the private protocol as a Wayland
+   client, runs a *libeis* EIS server, and owns the
+   =org.freedesktop.impl.portal.desktop.gowl= D-Bus name implementing the
+   InputCapture and RemoteDesktop impl-portal interfaces. Captured input
+   received over the protocol is forwarded onto an EIS device; =ConnectToEIS=
+   mints the client fd handed to deskflow.
+
+The same binary serves both standalone =gowl= and =cmacs --gowl= -- the
+compositor implements the same protocol in both cases.
+
+** Capture flow (server / egress)
+:PROPERTIES:
+:CUSTOM_ID: input-capture-flow
+:END:
+1. deskflow asks the portal frontend for an InputCapture session; the frontend
+   routes to =xdg-desktop-portal-gowl= (see [[#input-capture-routing]]).
+2. The backend =CreateSession= → =GetZones= (one zone per monitor) →
+   =SetPointerBarriers= (a barrier on the screen edge facing the remote) →
+   =Enable=. Each maps to a request on the private protocol.
+3. =ConnectToEIS= returns an fd; deskflow connects a libei *receiver* context
+   to it.
+4. When the cursor crosses the barrier, gowl's =motionnotify= fires
+   =gowl_input_capture_check_crossing()=, the machine goes *active*, and the
+   compositor emits =activated=. The local cursor is frozen at the crossing
+   point (re-warped each motion) and all input is diverted to the sink.
+5. The portal forwards the captured stream onto the EIS device; deskflow
+   receives EI pointer/keyboard events and replays them on the remote.
+6. =Release= / =Disable= (or the user's release keybind) ends the activation;
+   gowl emits =deactivated=, restores local input, and optionally warps the
+   cursor to the release point.
+
+** Injection flow (client / ingress)
+:PROPERTIES:
+:CUSTOM_ID: input-inject-flow
+:END:
+The RemoteDesktop backend's =NotifyPointer*= / =NotifyKeyboard*= methods drive
+the =zgowl_input_inject_v1= object, which calls
+=gowl_compositor_inject_pointer_motion= / =_button= / =_axis= / =_key= --
+synthesizing input through the compositor's =wlr_cursor= and seat. (gowl's
+=wlr_virtual_pointer_manager_v1= / =wlr_virtual_keyboard_manager_v1= globals
+back this.)
+
+** Zones and barriers
+:PROPERTIES:
+:CUSTOM_ID: input-capture-zones
+:END:
+A *zone* is one monitor's layout rectangle =(width, height, x, y)= (x/y may be
+negative). The =zone_set= id increments whenever the layout changes; the
+compositor emits =zones_changed= and drops installed barriers so the client
+re-queries and reinstalls.
+
+A *barrier* is an axis-aligned segment with a non-zero id and endpoints
+=(x1,y1,x2,y2)=: horizontal barriers have =y1 == y2=, vertical barriers
+=x1 == x2=. A barrier is accepted only if it lies on the *outer boundary of the
+zone union* and is fully contained within a single zone's edge span -- a
+barrier on an interior seam between two monitors is rejected (crossing it would
+merely move between two captured screens). =SetPointerBarriers= installs the
+valid subset and reports which ids were accepted.
+
+In capture mode the existing =mfact=-style knobs are irrelevant; barriers are
+set by the KVM client, not the user.
+
+** Routing
+:PROPERTIES:
+:CUSTOM_ID: input-capture-routing
+:END:
+=xdg-desktop-portal= chooses a backend per interface from =portals.conf= and
+=XDG_CURRENT_DESKTOP=. Gowl installs:
+
+- =/usr/share/xdg-desktop-portal/portals/gowl.portal= -- declares the
+  =org.freedesktop.impl.portal.desktop.gowl= D-Bus name implements
+  =InputCapture= + =RemoteDesktop= with =UseIn=gowl=.
+- =/usr/share/xdg-desktop-portal/gowl-portals.conf= -- pins
+  =InputCapture= / =RemoteDesktop= to =gowl= and leaves =default=wlr= so
+  ScreenCast/Screenshot still go to =xdg-desktop-portal-wlr=.
+- =org.freedesktop.impl.portal.desktop.gowl.service= -- D-Bus activation.
+
+The session's =XDG_CURRENT_DESKTOP= must contain =gowl=. Gowl's own session
+=data/gowl.desktop= uses =DesktopNames=gowl:wlroots=; the cmacs session uses
+=DesktopNames=CMacs:gowl=.
+
+** Building
+:PROPERTIES:
+:CUSTOM_ID: input-capture-building
+:END:
+The gowl-core mechanism + protocol need no extra dependency. The portal binary
+is built only when =libeis-1.0= is present (=libeis-devel= on Fedora); the
+parent Makefile gates the =xdg-desktop-portal-gowl= target on
+=LIBEIS_AVAILABLE=. Install with =make install= (installs the binary, the
+=.portal=, =portals.conf=, and the =.service= when libeis was available).
+
+** Security
+:PROPERTIES:
+:CUSTOM_ID: input-capture-security
+:END:
+Input capture and injection are powerful capabilities: a captured session sees
+every keystroke, and injection can drive any application. Access is gated by
+the =xdg-desktop-portal= frontend's normal permission model. The private
+Wayland protocol carries no security model of its own -- it trusts its single
+client, the portal binary, which the compositor launches. The protocol is
+deliberately not a public/stable interface.
+
+** Troubleshooting
+:PROPERTIES:
+:CUSTOM_ID: input-capture-troubleshooting
+:END:
+- *deskflow logs =CreateSession failed=*: no backend is routed. Confirm
+  =gowl= is in =XDG_CURRENT_DESKTOP=, the =gowl.portal= file is installed, and
+  =portals.conf= pins InputCapture to =gowl=. Run the frontend with
+  =G_MESSAGES_DEBUG=all= to see which backend it picks.
+- *backend not running*: it is D-Bus-activatable, but it must connect to the
+  live compositor; =cmacs --gowl= and standalone gowl launch it at session
+  start. Check =xdg-desktop-portal-gowl= is on =PATH= and libeis is installed.
+- *capture never activates*: confirm a barrier was installed on the correct
+  edge (=SetPointerBarriers= must target the outer boundary, not an interior
+  monitor seam), and that the session is =Enable=d.

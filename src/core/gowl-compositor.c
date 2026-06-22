@@ -322,6 +322,12 @@ gowl_compositor_dispose(GObject *object)
 		self->ext_workspace_manager = NULL;
 	}
 
+	if (self->input_capture_protocol != NULL) {
+		gowl_input_capture_protocol_unregister(
+			self->input_capture_protocol);
+		self->input_capture_protocol = NULL;
+	}
+
 	G_OBJECT_CLASS(gowl_compositor_parent_class)->dispose(object);
 }
 
@@ -850,6 +856,149 @@ gowl_compositor_set_key_intercept(
 
 	self->key_intercept_func = func;
 	self->key_intercept_data = user_data;
+}
+
+void
+gowl_compositor_set_input_capture(
+	GowlCompositor   *self,
+	GowlInputCapture *capture
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	self->input_capture = capture;
+}
+
+GowlInputCapture *
+gowl_compositor_get_input_capture(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->input_capture;
+}
+
+/* ---------------------------------------------------------------
+ * Input injection (RemoteDesktop portal backend).  These synthesize
+ * input as if from a real device, driving the cursor + seat directly.
+ * Used only by the gowl-input-capture protocol's inject object.
+ * --------------------------------------------------------------- */
+
+/* Monotonic milliseconds for synthesized input event timestamps. */
+static guint32
+inject_now_msec(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (guint32)(now.tv_sec * 1000 + now.tv_nsec / 1000000);
+}
+
+void
+gowl_compositor_inject_pointer_motion(
+	GowlCompositor *self,
+	gdouble         dx,
+	gdouble         dy
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_cursor == NULL)
+		return;
+
+	wlr_cursor_move(self->wlr_cursor, NULL, dx, dy);
+	gowl_compositor_motionnotify(self, inject_now_msec());
+}
+
+void
+gowl_compositor_inject_pointer_motion_absolute(
+	GowlCompositor *self,
+	gdouble         nx,
+	gdouble         ny
+){
+	struct wlr_box extents;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_cursor == NULL || self->output_layout == NULL)
+		return;
+
+	/* Map the normalized [0,1] coordinates onto the layout extents. */
+	wlr_output_layout_get_box(self->output_layout, NULL, &extents);
+	if (extents.width <= 0 || extents.height <= 0)
+		return;
+
+	wlr_cursor_warp_closest(self->wlr_cursor, NULL,
+	                        extents.x + nx * extents.width,
+	                        extents.y + ny * extents.height);
+	gowl_compositor_motionnotify(self, inject_now_msec());
+}
+
+void
+gowl_compositor_warp_cursor(
+	GowlCompositor *self,
+	gdouble         x,
+	gdouble         y
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_cursor == NULL)
+		return;
+
+	wlr_cursor_warp_closest(self->wlr_cursor, NULL, x, y);
+	self->prev_cursor_x = self->wlr_cursor->x;
+	self->prev_cursor_y = self->wlr_cursor->y;
+}
+
+void
+gowl_compositor_inject_button(
+	GowlCompositor *self,
+	guint32         button,
+	gboolean        pressed
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_seat == NULL)
+		return;
+
+	wlr_seat_pointer_notify_button(self->wlr_seat, inject_now_msec(),
+		button,
+		pressed ? WL_POINTER_BUTTON_STATE_PRESSED
+		        : WL_POINTER_BUTTON_STATE_RELEASED);
+	wlr_seat_pointer_notify_frame(self->wlr_seat);
+}
+
+void
+gowl_compositor_inject_axis(
+	GowlCompositor *self,
+	gboolean        horizontal,
+	gdouble         value
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_seat == NULL)
+		return;
+
+	wlr_seat_pointer_notify_axis(self->wlr_seat, inject_now_msec(),
+		horizontal ? WL_POINTER_AXIS_HORIZONTAL_SCROLL
+		           : WL_POINTER_AXIS_VERTICAL_SCROLL,
+		value, 0, WL_POINTER_AXIS_SOURCE_WHEEL,
+		WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
+	wlr_seat_pointer_notify_frame(self->wlr_seat);
+}
+
+void
+gowl_compositor_inject_key(
+	GowlCompositor *self,
+	guint32         keycode,
+	gboolean        pressed
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_seat == NULL || self->wlr_kb_group == NULL)
+		return;
+
+	wlr_seat_set_keyboard(self->wlr_seat, &self->wlr_kb_group->keyboard);
+	wlr_seat_keyboard_notify_key(self->wlr_seat, inject_now_msec(), keycode,
+		pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
+		        : WL_KEYBOARD_KEY_STATE_RELEASED);
 }
 
 void
@@ -2642,6 +2791,12 @@ gowl_compositor_start(
 	 * appear later. */
 	self->ext_workspace_manager =
 		gowl_ext_workspace_manager_register(self, self->wl_display);
+
+	/* gowl-input-capture-v1: register the private global for the
+	 * xdg-desktop-portal-gowl backend (InputCapture + RemoteDesktop).
+	 * Harmless when no portal binds it. */
+	self->input_capture_protocol =
+		gowl_input_capture_protocol_register(self, self->wl_display);
 
 	self->running = TRUE;
 	g_signal_emit(self, compositor_signals[SIGNAL_STARTUP], 0);
@@ -5836,6 +5991,24 @@ on_kb_key(struct wl_listener *listener, void *data)
 		}
 	}
 
+	/* InputCapture: while active, divert the key to the sink and consume
+	 * it (so it is not forwarded to a client).  Runs AFTER compositor and
+	 * module keybinds + the embedder intercept, so a release keybind can
+	 * still break capture. */
+	if (!handled && self->input_capture != NULL
+	    && gowl_input_capture_is_active(self->input_capture)) {
+		GowlInputEvent ev;
+
+		memset(&ev, 0, sizeof ev);
+		ev.type = GOWL_INPUT_EVENT_KEY;
+		ev.time_msec = event->time_msec;
+		ev.keycode = event->keycode;
+		ev.state = (event->state == WL_KEYBOARD_KEY_STATE_PRESSED)
+		           ? 1 : 0;
+		gowl_input_capture_emit(self->input_capture, &ev);
+		handled = TRUE;
+	}
+
 	if (!handled) {
 		/* Forward to the focused client */
 		wlr_seat_set_keyboard(self->wlr_seat, kb);
@@ -5874,6 +6047,25 @@ on_kb_modifiers(struct wl_listener *listener, void *data)
 
 	self = wl_container_of(listener, self, kb_modifiers);
 	(void)data;
+
+	/* InputCapture: while active, divert modifier state to the sink and
+	 * do not forward it to a client (the remote tracks modifiers via the
+	 * captured key + modifier stream). */
+	if (self->input_capture != NULL
+	    && gowl_input_capture_is_active(self->input_capture)) {
+		struct wlr_keyboard_modifiers *m =
+			&self->wlr_kb_group->keyboard.modifiers;
+		GowlInputEvent ev;
+
+		memset(&ev, 0, sizeof ev);
+		ev.type = GOWL_INPUT_EVENT_MODIFIERS;
+		ev.mods_depressed = m->depressed;
+		ev.mods_latched = m->latched;
+		ev.mods_locked = m->locked;
+		ev.mods_group = m->group;
+		gowl_input_capture_emit(self->input_capture, &ev);
+		return;
+	}
 
 	wlr_seat_set_keyboard(self->wlr_seat,
 	                      &self->wlr_kb_group->keyboard);
@@ -5993,6 +6185,28 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 		return;
 	}
 
+	/* InputCapture: test the motion segment against installed barriers
+	 * and, while active, freeze the local cursor at the activation point
+	 * so all motion streams to the capture sink instead of moving the
+	 * local pointer.  Guarded so a session that is not active leaves the
+	 * normal path below byte-for-byte unchanged. */
+	if (self->input_capture != NULL) {
+		gowl_input_capture_check_crossing(self->input_capture,
+		                                  self->prev_cursor_x,
+		                                  self->prev_cursor_y,
+		                                  self->wlr_cursor->x,
+		                                  self->wlr_cursor->y);
+		if (gowl_input_capture_is_active(self->input_capture)) {
+			/* Re-warp the cursor back to the frozen point; the
+			 * relative delta has already been pushed to the sink by
+			 * the motion handler.  Do not forward to any client. */
+			wlr_cursor_warp_closest(self->wlr_cursor, NULL,
+			                        self->prev_cursor_x,
+			                        self->prev_cursor_y);
+			return;
+		}
+	}
+
 	/* Find surface under cursor */
 	xytonode(self, self->wlr_cursor->x, self->wlr_cursor->y,
 	         &surface, &c, &sx, &sy);
@@ -6011,6 +6225,30 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 		                       self->xcursor_mgr, "default");
 
 	pointerfocus(self, c, surface, sx, sy, time_msec);
+
+	/* Remember the cursor position for the next barrier-crossing test. */
+	self->prev_cursor_x = self->wlr_cursor->x;
+	self->prev_cursor_y = self->wlr_cursor->y;
+}
+
+/* Push a relative pointer-motion event to the InputCapture sink.  A no-op
+ * unless a capture session is attached and active (the machine drops the
+ * event itself), so this is safe to call from the hot motion path. */
+static void
+input_capture_emit_motion(GowlCompositor *self, guint32 time_msec,
+                          gdouble dx, gdouble dy)
+{
+	GowlInputEvent ev;
+
+	if (self->input_capture == NULL)
+		return;
+
+	memset(&ev, 0, sizeof ev);
+	ev.type = GOWL_INPUT_EVENT_REL_MOTION;
+	ev.time_msec = time_msec;
+	ev.dx = dx;
+	ev.dy = dy;
+	gowl_input_capture_emit(self->input_capture, &ev);
 }
 
 static void
@@ -6025,6 +6263,10 @@ on_cursor_motion(struct wl_listener *listener, void *data)
 	wlr_cursor_move(self->wlr_cursor, &event->pointer->base,
 	                event->delta_x, event->delta_y);
 	gowl_compositor_motionnotify(self, event->time_msec);
+	/* After motionnotify (which may have activated capture and frozen the
+	 * cursor), stream the relative delta so deskflow's ei egress sees it. */
+	input_capture_emit_motion(self, event->time_msec,
+	                          event->delta_x, event->delta_y);
 }
 
 static void
@@ -6032,12 +6274,19 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 {
 	GowlCompositor *self;
 	struct wlr_pointer_motion_absolute_event *event;
+	gdouble before_x, before_y;
 
 	self = wl_container_of(listener, self, cursor_motion_absolute);
 	event = (struct wlr_pointer_motion_absolute_event *)data;
 
+	before_x = self->wlr_cursor->x;
+	before_y = self->wlr_cursor->y;
 	wlr_cursor_warp_absolute(self->wlr_cursor, &event->pointer->base,
 	                         event->x, event->y);
+	/* The relative delta the absolute warp produced, for capture egress. */
+	input_capture_emit_motion(self, event->time_msec,
+	                          self->wlr_cursor->x - before_x,
+	                          self->wlr_cursor->y - before_y);
 	gowl_compositor_motionnotify(self, event->time_msec);
 }
 
@@ -6060,6 +6309,22 @@ on_cursor_button(struct wl_listener *listener, void *data)
 
 	wlr_idle_notifier_v1_notify_activity(self->idle_notifier,
 	                                     self->wlr_seat);
+
+	/* InputCapture: while active, divert the button to the sink and do
+	 * not forward it to any client (and skip the focus/grab logic). */
+	if (self->input_capture != NULL
+	    && gowl_input_capture_is_active(self->input_capture)) {
+		GowlInputEvent ev;
+
+		memset(&ev, 0, sizeof ev);
+		ev.type = GOWL_INPUT_EVENT_BUTTON;
+		ev.time_msec = event->time_msec;
+		ev.button = event->button;
+		ev.state = (event->state == WL_POINTER_BUTTON_STATE_PRESSED)
+		           ? 1 : 0;
+		gowl_input_capture_emit(self->input_capture, &ev);
+		return;
+	}
 
 	switch (event->state) {
 	case WL_POINTER_BUTTON_STATE_PRESSED: {
@@ -6194,6 +6459,23 @@ on_cursor_axis(struct wl_listener *listener, void *data)
 
 	wlr_idle_notifier_v1_notify_activity(self->idle_notifier,
 	                                     self->wlr_seat);
+
+	/* InputCapture: while active, divert scroll to the sink instead of
+	 * forwarding it to a client.  axis 0 == vertical, 1 == horizontal. */
+	if (self->input_capture != NULL
+	    && gowl_input_capture_is_active(self->input_capture)) {
+		GowlInputEvent ev;
+
+		memset(&ev, 0, sizeof ev);
+		ev.type = GOWL_INPUT_EVENT_AXIS;
+		ev.time_msec = event->time_msec;
+		ev.axis = (event->orientation
+		           == WL_POINTER_AXIS_HORIZONTAL_SCROLL) ? 1 : 0;
+		ev.value = event->delta;
+		ev.discrete = event->delta_discrete;
+		gowl_input_capture_emit(self->input_capture, &ev);
+		return;
+	}
 
 	/* Forward scroll event to the focused client */
 	wlr_seat_pointer_notify_axis(self->wlr_seat,

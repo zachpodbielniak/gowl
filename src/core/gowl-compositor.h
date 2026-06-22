@@ -891,6 +891,105 @@ void gowl_compositor_set_key_intercept (GowlCompositor      *self,
                                         gpointer              user_data);
 
 /**
+ * gowl_compositor_set_input_capture:
+ * @self: a #GowlCompositor
+ * @capture: (nullable) (transfer none): the #GowlInputCapture to attach,
+ *   or %NULL to detach
+ *
+ * Attaches a #GowlInputCapture so the compositor's input hooks consult it
+ * for barrier crossing and divert input to it while capture is active.
+ * The compositor does not take a reference; the caller (the portal glue)
+ * owns @capture and must detach it before destroying it.
+ */
+void gowl_compositor_set_input_capture (GowlCompositor   *self,
+                                        GowlInputCapture *capture);
+
+/**
+ * gowl_compositor_get_input_capture:
+ * @self: a #GowlCompositor
+ *
+ * Returns the attached #GowlInputCapture, or %NULL.
+ *
+ * Returns: (transfer none) (nullable): the input-capture machine.
+ */
+GowlInputCapture *gowl_compositor_get_input_capture (GowlCompositor *self);
+
+/**
+ * gowl_compositor_inject_pointer_motion:
+ * @self: a #GowlCompositor
+ * @dx: relative x delta in layout pixels
+ * @dy: relative y delta in layout pixels
+ *
+ * Injects relative pointer motion as if from a real device.  Used by the
+ * RemoteDesktop portal backend to drive the cursor from a remote client.
+ */
+void gowl_compositor_inject_pointer_motion (GowlCompositor *self,
+                                            gdouble         dx,
+                                            gdouble         dy);
+
+/**
+ * gowl_compositor_inject_pointer_motion_absolute:
+ * @self: a #GowlCompositor
+ * @nx: normalized x in [0, 1] across the layout extents
+ * @ny: normalized y in [0, 1] across the layout extents
+ *
+ * Injects absolute pointer motion to a normalized layout position.
+ */
+void gowl_compositor_inject_pointer_motion_absolute (GowlCompositor *self,
+                                                     gdouble         nx,
+                                                     gdouble         ny);
+
+/**
+ * gowl_compositor_warp_cursor:
+ * @self: a #GowlCompositor
+ * @x: target x in layout coordinates
+ * @y: target y in layout coordinates
+ *
+ * Warps the cursor to an absolute layout position without generating a
+ * captured-motion event.  Used by InputCapture Release to reposition the
+ * cursor at the point the remote left off.
+ */
+void gowl_compositor_warp_cursor (GowlCompositor *self,
+                                  gdouble         x,
+                                  gdouble         y);
+
+/**
+ * gowl_compositor_inject_button:
+ * @self: a #GowlCompositor
+ * @button: evdev button code (e.g. BTN_LEFT)
+ * @pressed: %TRUE for press, %FALSE for release
+ *
+ * Injects a pointer button event to the focused surface.
+ */
+void gowl_compositor_inject_button (GowlCompositor *self,
+                                    guint32         button,
+                                    gboolean        pressed);
+
+/**
+ * gowl_compositor_inject_axis:
+ * @self: a #GowlCompositor
+ * @horizontal: %TRUE for horizontal scroll, %FALSE for vertical
+ * @value: scroll delta
+ *
+ * Injects a scroll event to the focused surface.
+ */
+void gowl_compositor_inject_axis (GowlCompositor *self,
+                                  gboolean        horizontal,
+                                  gdouble         value);
+
+/**
+ * gowl_compositor_inject_key:
+ * @self: a #GowlCompositor
+ * @keycode: evdev keycode (NOT offset by 8)
+ * @pressed: %TRUE for press, %FALSE for release
+ *
+ * Injects a keyboard key event to the focused surface.
+ */
+void gowl_compositor_inject_key (GowlCompositor *self,
+                                 guint32         keycode,
+                                 gboolean        pressed);
+
+/**
  * GowlClientMapFunc:
  * @compositor: the compositor
  * @client: the newly mapped client

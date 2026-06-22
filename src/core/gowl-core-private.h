@@ -40,11 +40,13 @@
 #include "core/gowl-keyboard-group.h"
 #include "core/gowl-cursor.h"
 #include "core/gowl-idle-manager.h"
+#include "core/gowl-input-capture.h"
 #include "core/gowl-bar.h"
 #include "core/gowl-layer-surface.h"
 #include "boxed/gowl-process-info.h"
 #include "interfaces/gowl-prefix-key-policy.h"
 #include "protocols/gowl-ext-workspace.h"
+#include "protocols/gowl-input-capture-protocol.h"
 
 /* wayland */
 #include <wayland-server-core.h>
@@ -221,6 +223,7 @@ struct _GowlCompositor {
 	 * workspace state once a GowlWorkspaceProvider is installed.
 	 * Opaque to the compositor — defined in protocols/gowl-ext-workspace.c. */
 	gpointer                      ext_workspace_manager;
+	gpointer                      input_capture_protocol;
 
 	/* input sub-objects (owned by compositor, created in start) */
 	struct wlr_seat              *wlr_seat;
@@ -362,6 +365,15 @@ struct _GowlCompositor {
 	/* Key intercept callback (embedder hook) */
 	GowlKeyInterceptFunc key_intercept_func;
 	gpointer             key_intercept_data;
+
+	/* InputCapture: the D-Bus-free capture state machine driven by the
+	 * xdg-desktop-portal-gowl backend over the gowl-input-capture
+	 * protocol.  NULL when no capture session exists.  prev_cursor_x/y
+	 * hold the last cursor position so motionnotify can test the motion
+	 * segment against installed barriers. */
+	GowlInputCapture *input_capture;
+	gdouble           prev_cursor_x;
+	gdouble           prev_cursor_y;
 
 	/* Client map callback (embedder hook) */
 	GowlClientMapFunc client_map_func;

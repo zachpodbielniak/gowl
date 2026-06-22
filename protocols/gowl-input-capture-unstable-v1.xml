@@ -1,0 +1,338 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="gowl_input_capture_unstable_v1">
+  <copyright>
+    Copyright © 2026 Zach Podbielniak
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Affero General Public License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with this program.  If not, see &lt;https://www.gnu.org/licenses/&gt;.
+  </copyright>
+
+  <description summary="private input capture and injection for the gowl portal">
+    This is a gowl-private protocol used solely by the
+    xdg-desktop-portal-gowl backend to implement the freedesktop
+    InputCapture and RemoteDesktop portals on a gowl compositor.
+
+    The compositor owns the input pipeline directly, so unlike the
+    layer-shell/pointer-constraints scheme used by the generic
+    xdg-desktop-portal-wlr backend, this protocol lets the portal:
+
+      * enumerate capture zones derived from the monitor layout,
+      * install pointer barriers on the outer boundary of the zone union,
+      * be told when the cursor crosses a barrier (activation) and receive
+        the captured pointer/keyboard event stream while active, and
+      * inject pointer/keyboard events (RemoteDesktop) via the
+        compositor's virtual-input devices.
+
+    It is intentionally NOT a public/stable protocol: it carries no
+    security model of its own and trusts its single client (the portal),
+    which the compositor launches.  Warning! Backward-incompatible changes
+    may be made; the 'z' prefix and version suffix are bumped accordingly.
+  </description>
+
+  <interface name="zgowl_input_capture_manager_v1" version="1">
+    <description summary="input capture/injection manager">
+      The manager is the global the portal binds.  It hands out capture
+      sessions (egress) and injection objects (ingress).
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager">
+        Destroying the manager does not affect sessions or injectors
+        already created through it.
+      </description>
+    </request>
+
+    <request name="create_capture">
+      <description summary="create an input capture session">
+        Create a capture session used to enumerate zones, install pointer
+        barriers, and receive captured input once a barrier is crossed.
+      </description>
+      <arg name="id" type="new_id" interface="zgowl_input_capture_v1"/>
+    </request>
+
+    <request name="create_inject">
+      <description summary="create an input injection object">
+        Create an injection object that drives the compositor's virtual
+        pointer/keyboard for the RemoteDesktop portal.
+      </description>
+      <arg name="id" type="new_id" interface="zgowl_input_inject_v1"/>
+    </request>
+  </interface>
+
+  <interface name="zgowl_input_capture_v1" version="1">
+    <description summary="an input capture session">
+      A capture session.  After creation the client should request
+      get_zones to learn the layout, set_barriers to install barriers,
+      then enable.  When the cursor crosses a barrier the compositor sends
+      activated and begins streaming captured input events (rel_motion,
+      button, axis, key, modifiers) until the session is deactivated.
+    </description>
+
+    <enum name="capability" bitfield="true">
+      <description summary="capturable input kinds"/>
+      <entry name="keyboard" value="1"/>
+      <entry name="pointer" value="2"/>
+    </enum>
+
+    <enum name="error">
+      <description summary="capture session error codes"/>
+      <entry name="invalid_barrier" value="0"
+             summary="a barrier was not axis-aligned, had a zero id, or was not on the zone-union boundary"/>
+      <entry name="no_barriers" value="1"
+             summary="set_barriers installed no valid barriers"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the capture session">
+        Releases the session, removing all barriers and ending any active
+        capture.
+      </description>
+    </request>
+
+    <request name="get_zones">
+      <description summary="request the current capture zones">
+        Ask the compositor to (re)send the current zone set via a series
+        of zone events terminated by zones_done.  The zone_set id in
+        zones_done identifies this layout; barriers set against a stale
+        zone_set are rejected.
+      </description>
+    </request>
+
+    <request name="add_barrier">
+      <description summary="stage a pointer barrier">
+        Stage one axis-aligned pointer barrier.  Barriers are not active
+        until set_barriers is called.  Horizontal barriers have y1 == y2,
+        vertical barriers x1 == x2; id must be non-zero.
+      </description>
+      <arg name="id" type="uint" summary="non-zero barrier id"/>
+      <arg name="x1" type="int"/>
+      <arg name="y1" type="int"/>
+      <arg name="x2" type="int"/>
+      <arg name="y2" type="int"/>
+    </request>
+
+    <request name="set_barriers">
+      <description summary="install the staged barriers">
+        Validate and install the barriers staged with add_barrier against
+        the given zone_set, replacing any previously installed set.  The
+        compositor replies with a barrier_status event per barrier, then a
+        set_barriers_done event.  Clears the staging list.
+      </description>
+      <arg name="zone_set" type="uint" summary="the zone_set the barriers are relative to"/>
+    </request>
+
+    <request name="enable">
+      <description summary="arm capture">
+        Arm the session: once enabled, crossing an installed barrier
+        activates input capture.
+      </description>
+    </request>
+
+    <request name="disable">
+      <description summary="disarm capture">
+        Disarm the session.  If currently active, capture is deactivated
+        first (a deactivated event is sent).
+      </description>
+    </request>
+
+    <request name="release">
+      <description summary="release an active capture">
+        End the current activation, restoring local input, optionally
+        warping the cursor to (x, y).  The session stays enabled so a
+        later barrier crossing re-activates.  Use has_position 0 to leave
+        the cursor where it is.
+      </description>
+      <arg name="activation_id" type="uint"/>
+      <arg name="has_position" type="uint"/>
+      <arg name="x" type="fixed"/>
+      <arg name="y" type="fixed"/>
+    </request>
+
+    <event name="capabilities">
+      <description summary="advertise capturable input kinds">
+        Sent once after creation.
+      </description>
+      <arg name="capabilities" type="uint" enum="capability"/>
+    </event>
+
+    <event name="zone">
+      <description summary="one capture zone">
+        Part of a get_zones reply.  Geometry is layout-relative; x/y may
+        be negative.
+      </description>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+    </event>
+
+    <event name="zones_done">
+      <description summary="end of a zone series">
+        Terminates a get_zones reply and names the zone_set.
+      </description>
+      <arg name="zone_set" type="uint"/>
+    </event>
+
+    <event name="zones_changed">
+      <description summary="the layout changed">
+        The monitor layout changed; the client should call get_zones again
+        and reinstall barriers.  Any installed barriers have been dropped.
+      </description>
+      <arg name="zone_set" type="uint"/>
+    </event>
+
+    <event name="barrier_status">
+      <description summary="result for one staged barrier">
+        Reports whether a barrier from the last set_barriers was accepted.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="accepted" type="uint" summary="1 if installed, 0 if rejected"/>
+    </event>
+
+    <event name="set_barriers_done">
+      <description summary="end of a set_barriers reply">
+        Terminates the barrier_status series.
+      </description>
+    </event>
+
+    <event name="activated">
+      <description summary="capture began">
+        The cursor crossed barrier barrier_id; capture is now active and
+        captured-input events follow.  cursor_x/cursor_y is the crossing
+        point.
+      </description>
+      <arg name="activation_id" type="uint"/>
+      <arg name="cursor_x" type="fixed"/>
+      <arg name="cursor_y" type="fixed"/>
+      <arg name="barrier_id" type="uint"/>
+    </event>
+
+    <event name="deactivated">
+      <description summary="capture ended">
+        Capture is no longer active; local input is restored.
+      </description>
+      <arg name="activation_id" type="uint"/>
+    </event>
+
+    <event name="disabled">
+      <description summary="session disabled">
+        The session was disabled (e.g. by the compositor).
+      </description>
+    </event>
+
+    <event name="rel_motion">
+      <description summary="captured relative pointer motion">
+        Only sent while active.
+      </description>
+      <arg name="time" type="uint" summary="milliseconds"/>
+      <arg name="dx" type="fixed"/>
+      <arg name="dy" type="fixed"/>
+    </event>
+
+    <event name="button">
+      <description summary="captured pointer button">
+        Only sent while active.  state is 1 for pressed, 0 for released.
+      </description>
+      <arg name="time" type="uint"/>
+      <arg name="button" type="uint"/>
+      <arg name="state" type="uint"/>
+    </event>
+
+    <event name="axis">
+      <description summary="captured scroll">
+        Only sent while active.  axis 0 is vertical, 1 horizontal.
+      </description>
+      <arg name="time" type="uint"/>
+      <arg name="axis" type="uint"/>
+      <arg name="value" type="fixed"/>
+      <arg name="discrete" type="int"/>
+    </event>
+
+    <event name="key">
+      <description summary="captured keyboard key">
+        Only sent while active.  state is 1 for pressed, 0 for released.
+      </description>
+      <arg name="time" type="uint"/>
+      <arg name="key" type="uint"/>
+      <arg name="state" type="uint"/>
+    </event>
+
+    <event name="modifiers">
+      <description summary="captured modifier state">
+        Only sent while active.
+      </description>
+      <arg name="depressed" type="uint"/>
+      <arg name="latched" type="uint"/>
+      <arg name="locked" type="uint"/>
+      <arg name="group" type="uint"/>
+    </event>
+  </interface>
+
+  <interface name="zgowl_input_inject_v1" version="1">
+    <description summary="input injection (RemoteDesktop)">
+      Drives the compositor's virtual pointer/keyboard to emulate input
+      for the RemoteDesktop portal.  Each motion/button/axis/key request
+      takes effect immediately.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the injector"/>
+    </request>
+
+    <request name="pointer_motion">
+      <description summary="inject relative pointer motion"/>
+      <arg name="dx" type="fixed"/>
+      <arg name="dy" type="fixed"/>
+    </request>
+
+    <request name="pointer_motion_absolute">
+      <description summary="inject absolute pointer motion">
+        x/y are normalized [0,1] across the layout extents, matching the
+        RemoteDesktop NotifyPointerMotionAbsolute convention.
+      </description>
+      <arg name="x" type="fixed"/>
+      <arg name="y" type="fixed"/>
+    </request>
+
+    <request name="button">
+      <description summary="inject a pointer button">
+        state is 1 for pressed, 0 for released.
+      </description>
+      <arg name="button" type="uint"/>
+      <arg name="state" type="uint"/>
+    </request>
+
+    <request name="axis">
+      <description summary="inject scroll">
+        axis 0 is vertical, 1 horizontal.
+      </description>
+      <arg name="axis" type="uint"/>
+      <arg name="value" type="fixed"/>
+    </request>
+
+    <request name="key">
+      <description summary="inject a keyboard key by keycode">
+        keycode is the evdev keycode (not offset by 8).  state is 1 for
+        pressed, 0 for released.
+      </description>
+      <arg name="keycode" type="uint"/>
+      <arg name="state" type="uint"/>
+    </request>
+
+    <request name="frame">
+      <description summary="commit a batch of injected events">
+        Groups the preceding inject requests into a single input frame.
+      </description>
+    </request>
+  </interface>
+</protocol>

@@ -298,6 +298,7 @@ modules: lib $(OUTDIR)/modules
 			$(MAKE) -C "$$dir" \
 				OUTDIR=$(abspath $(OUTDIR)/modules) \
 				LIBDIR=$(abspath $(OUTDIR)) \
+				WLROOTS_PC=$(WLROOTS_PC) \
 				CFLAGS="$(MODULE_CFLAGS)" \
 				LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"; \
 		fi \

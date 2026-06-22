@@ -1,8 +1,9 @@
 MODULE_NAME = wallpaper
 
 CC ?= gcc
-PKG_LIBS = $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0 gdk-pixbuf-2.0 wlroots-0.19)
-PKG_CFLAGS = $(shell pkg-config --cflags gdk-pixbuf-2.0 wlroots-0.19)
+WLROOTS_PC ?= $(shell pkg-config --exists wlroots-0.20 && echo wlroots-0.20 || echo wlroots-0.19)
+PKG_LIBS = $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0 gdk-pixbuf-2.0 $(WLROOTS_PC))
+PKG_CFLAGS = $(shell pkg-config --cflags gdk-pixbuf-2.0 $(WLROOTS_PC))
 
 OUTDIR ?= .
 LIBDIR ?= .

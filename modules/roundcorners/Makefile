@@ -1,8 +1,9 @@
 MODULE_NAME = roundcorners
 
 CC ?= gcc
-PKG_LIBS = $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0 wlroots-0.19 cairo)
-PKG_CFLAGS = $(shell pkg-config --cflags wlroots-0.19 cairo)
+WLROOTS_PC ?= $(shell pkg-config --exists wlroots-0.20 && echo wlroots-0.20 || echo wlroots-0.19)
+PKG_LIBS = $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0 $(WLROOTS_PC) cairo)
+PKG_CFLAGS = $(shell pkg-config --cflags $(WLROOTS_PC) cairo)
 
 OUTDIR ?= .
 LIBDIR ?= .

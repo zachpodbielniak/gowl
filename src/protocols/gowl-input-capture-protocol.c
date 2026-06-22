@@ -148,6 +148,16 @@ build_zones(GowlInputCaptureProtocol *proto)
 		GowlMonitor *mon = (GowlMonitor *)l->data;
 		gint x, y, w, h;
 
+		/* Skip disabled monitors (e.g. a closed laptop lid).  A
+		 * disabled output keeps its cached geometry box in the layout
+		 * (often at the origin, overlapping a live external display),
+		 * so including it produces a phantom capture zone -- and a
+		 * phantom pointer barrier at its edge -- that traps the cursor
+		 * mid-screen and never lets it cross to the remote.  The bar
+		 * skips disabled monitors for the same reason. */
+		if (!gowl_monitor_get_enabled(mon))
+			continue;
+
 		gowl_monitor_get_geometry(mon, &x, &y, &w, &h);
 		if (w <= 0 || h <= 0)
 			continue;

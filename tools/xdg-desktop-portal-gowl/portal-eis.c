@@ -42,8 +42,17 @@ struct _PortalEis {
 	struct eis_seat   *seat;
 	struct eis_device *device;        /* pointer+keyboard virtual device */
 
-	gboolean           device_ready;  /* resumed + emulating */
-	guint32            sequence;
+	/* Two independent gates, both required before events may be streamed:
+	 *   - capture_active: the portal Activated (a barrier was crossed).
+	 *   - emulating: the EIS *client* (deskflow) asked to emulate, via
+	 *     EIS_EVENT_DEVICE_START_EMULATING.  The server MUST NOT call
+	 *     eis_device_start_emulating() or send events until the client
+	 *     requests it -- doing so on portal activation alone is a protocol
+	 *     violation that makes libei disconnect, which deskflow handles by
+	 *     Releasing the capture (the activate/release loop). */
+	gboolean           capture_active;
+	gboolean           emulating;
+	guint32            sequence;      /* client-provided emulation sequence */
 };
 
 static uint64_t
@@ -68,7 +77,7 @@ drop_device(PortalEis *self)
 		eis_seat_unref(self->seat);
 		self->seat = NULL;
 	}
-	self->device_ready = FALSE;
+	self->emulating = FALSE;
 }
 
 /* Create the pointer+keyboard device on a freshly-bound seat. */
@@ -144,6 +153,21 @@ handle_event(PortalEis *self, struct eis_event *event)
 		drop_device(self);
 		break;
 
+	case EIS_EVENT_DEVICE_START_EMULATING:
+		/* The client is ready to receive emulated input.  Record its
+		 * sequence and (if the portal has already activated capture)
+		 * begin emulating so events start flowing. */
+		self->sequence = eis_event_emulating_get_sequence(event);
+		self->emulating = TRUE;
+		if (self->capture_active && self->device != NULL)
+			eis_device_start_emulating(self->device,
+				self->sequence);
+		break;
+
+	case EIS_EVENT_DEVICE_STOP_EMULATING:
+		self->emulating = FALSE;
+		break;
+
 	default:
 		break;
 	}
@@ -214,31 +238,48 @@ portal_eis_connect_fd(PortalEis *self)
 	return eis_backend_fd_add_client(self->ctx);
 }
 
+/* Events may flow only when the device exists, the portal has activated
+ * capture, AND the EIS client has requested emulation. */
+static gboolean
+streaming_ok(PortalEis *self)
+{
+	return self != NULL && self->device != NULL
+	       && self->capture_active && self->emulating;
+}
+
 void
 portal_eis_start(PortalEis *self)
 {
-	if (self == NULL || self->device == NULL)
+	if (self == NULL)
 		return;
 
-	self->sequence++;
-	eis_device_start_emulating(self->device, self->sequence);
-	self->device_ready = TRUE;
+	/* Portal Activated: mark capture active.  If the client has already
+	 * requested emulation, begin emulating now; otherwise we begin when
+	 * its EIS_EVENT_DEVICE_START_EMULATING arrives.  Do NOT fabricate a
+	 * sequence or start emulating before the client asks. */
+	self->capture_active = TRUE;
+	if (self->emulating && self->device != NULL)
+		eis_device_start_emulating(self->device, self->sequence);
 }
 
 void
 portal_eis_stop(PortalEis *self)
 {
-	if (self == NULL || self->device == NULL || !self->device_ready)
+	if (self == NULL || self->device == NULL)
 		return;
 
-	eis_device_stop_emulating(self->device);
-	self->device_ready = FALSE;
+	/* Portal Deactivated/Released: stop emulating if we were, but leave
+	 * the client's emulating-request state alone (it drives start/stop on
+	 * the next activation). */
+	if (self->capture_active && self->emulating)
+		eis_device_stop_emulating(self->device);
+	self->capture_active = FALSE;
 }
 
 void
 portal_eis_rel_motion(PortalEis *self, double dx, double dy)
 {
-	if (self == NULL || self->device == NULL || !self->device_ready)
+	if (!streaming_ok(self))
 		return;
 	eis_device_pointer_motion(self->device, dx, dy);
 }
@@ -246,7 +287,7 @@ portal_eis_rel_motion(PortalEis *self, double dx, double dy)
 void
 portal_eis_button(PortalEis *self, uint32_t button, bool pressed)
 {
-	if (self == NULL || self->device == NULL || !self->device_ready)
+	if (!streaming_ok(self))
 		return;
 	eis_device_button_button(self->device, button, pressed);
 }
@@ -254,7 +295,7 @@ portal_eis_button(PortalEis *self, uint32_t button, bool pressed)
 void
 portal_eis_scroll(PortalEis *self, uint32_t axis, double value)
 {
-	if (self == NULL || self->device == NULL || !self->device_ready)
+	if (!streaming_ok(self))
 		return;
 	/* axis 0 == vertical, 1 == horizontal. */
 	if (axis == 1)
@@ -266,7 +307,7 @@ portal_eis_scroll(PortalEis *self, uint32_t axis, double value)
 void
 portal_eis_key(PortalEis *self, uint32_t keycode, bool pressed)
 {
-	if (self == NULL || self->device == NULL || !self->device_ready)
+	if (!streaming_ok(self))
 		return;
 	eis_device_keyboard_key(self->device, keycode, pressed);
 }
@@ -275,7 +316,7 @@ void
 portal_eis_modifiers(PortalEis *self, uint32_t depressed, uint32_t latched,
                      uint32_t locked, uint32_t group)
 {
-	if (self == NULL || self->device == NULL || !self->device_ready)
+	if (!streaming_ok(self))
 		return;
 	eis_device_keyboard_send_xkb_modifiers(self->device, depressed,
 		latched, locked, group);
@@ -284,7 +325,7 @@ portal_eis_modifiers(PortalEis *self, uint32_t depressed, uint32_t latched,
 void
 portal_eis_frame(PortalEis *self)
 {
-	if (self == NULL || self->device == NULL || !self->device_ready)
+	if (!streaming_ok(self))
 		return;
 	eis_device_frame(self->device, now_usec());
 }

@@ -374,6 +374,18 @@ portal_dbus_end_session(PortalDbus *self, gboolean emit_closed)
 	if (self->session_reg_id == 0)
 		return;
 
+	/* Stop capturing in the compositor.  This is essential, not cosmetic:
+	 * the portal process (and the single Wayland capture object it holds)
+	 * outlives any one D-Bus session, so without an explicit disable the
+	 * compositor keeps this session's barriers armed and capture enabled
+	 * after the client (deskflow) exits.  The user would then cross the
+	 * armed edge (e.g. the right edge), capture would re-activate and
+	 * freeze the local cursor, and with no client left to call Release the
+	 * only escape is the compositor's hard keybind or killing the session.
+	 * Disable clears the enabled flag and deactivates if currently active,
+	 * so the barriers go inert until the next session re-installs them. */
+	portal_wayland_disable(self->wl);
+
 	if (emit_closed && self->conn != NULL && self->session_handle != NULL)
 		g_dbus_connection_emit_signal(self->conn, NULL,
 			self->session_handle,

@@ -222,3 +222,12 @@ deliberately not a public/stable interface.
   =[server] externalConfig=true= (or launch via the GUI) so the links load.
   Verify with the client's debug log (deskflow: =[log] level=7=, logs to stdout)
   -- "no neighbor on right of <screen>" is the signature.
+- *the cursor crosses but typing on the remote spams "failed to open x11 default
+  display" (and/or keys don't forward)*: this is a *client*-side limitation, not
+  a gowl bug. deskflow still uses an X11 display to translate keycodes even on
+  Wayland (the EI path covers events, not the keymap lookup). gowl runs XWayland
+  (=DISPLAY=:0=), but a *flatpak* deskflow with the default =fallback-x11= socket
+  permission is denied X11 whenever Wayland is present, so =XOpenDisplay= fails
+  once per key. Grant it real X11 access:
+  =flatpak override --user --socket=x11 org.deskflow.deskflow=, then restart
+  deskflow. (A native, non-flatpak deskflow already inherits =DISPLAY=.)

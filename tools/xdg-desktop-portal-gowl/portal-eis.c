@@ -42,17 +42,23 @@ struct _PortalEis {
 	struct eis_seat   *seat;
 	struct eis_device *device;        /* pointer+keyboard virtual device */
 
-	/* Two independent gates, both required before events may be streamed:
+	/* deskflow connects as a libei RECEIVER context, so OUR EIS context is
+	 * the SENDER: the server creates the device and SENDS events to the
+	 * client (it is the server that calls eis_device_start_emulating(),
+	 * choosing its own monotonic sequence -- see the libeis-receiver /
+	 * libei-sender group docs).  A receiver client never emits
+	 * EIS_EVENT_DEVICE_START_EMULATING, so the server must NOT wait for it.
+	 *
+	 * State:
+	 *   - resumed: the device has been added + resumed (ready to emulate).
+	 *   - emulating: we have an active start_emulating sequence in flight.
 	 *   - capture_active: the portal Activated (a barrier was crossed).
-	 *   - emulating: the EIS *client* (deskflow) asked to emulate, via
-	 *     EIS_EVENT_DEVICE_START_EMULATING.  The server MUST NOT call
-	 *     eis_device_start_emulating() or send events until the client
-	 *     requests it -- doing so on portal activation alone is a protocol
-	 *     violation that makes libei disconnect, which deskflow handles by
-	 *     Releasing the capture (the activate/release loop). */
-	gboolean           capture_active;
+	 * Events stream only when capture_active && emulating; emulation is
+	 * (re)started when the portal activates and the device is resumed. */
+	gboolean           resumed;
 	gboolean           emulating;
-	guint32            sequence;      /* client-provided emulation sequence */
+	gboolean           capture_active;
+	uint32_t           sequence;      /* server-chosen, +1 per start */
 };
 
 static uint64_t
@@ -62,6 +68,23 @@ now_usec(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000000 + (uint64_t)ts.tv_nsec / 1000;
+}
+
+/* Route libeis log messages to g_log so they land in the session log.
+ * libeis reports protocol violations / disconnect reasons here, which is
+ * the only way to see WHY a client (deskflow) is dropped. */
+static void
+eis_log(struct eis *eis, enum eis_log_priority priority,
+        const char *message, struct eis_log_context *ctx)
+{
+	(void)eis;
+	(void)ctx;
+	if (priority >= EIS_LOG_PRIORITY_ERROR)
+		g_warning("EIS: %s", message);
+	else if (priority >= EIS_LOG_PRIORITY_WARNING)
+		g_message("EIS: %s", message);
+	else
+		g_debug("EIS: %s", message);
 }
 
 /* Tear down the per-client device/seat state (client gone or device
@@ -77,6 +100,7 @@ drop_device(PortalEis *self)
 		eis_seat_unref(self->seat);
 		self->seat = NULL;
 	}
+	self->resumed = FALSE;
 	self->emulating = FALSE;
 }
 
@@ -100,6 +124,16 @@ create_device(PortalEis *self)
 	eis_device_resume(dev);
 
 	self->device = dev;
+	self->resumed = TRUE;
+
+	/* If the portal already activated capture (the barrier was crossed
+	 * before the client finished binding), begin emulating right away so
+	 * no events are lost. */
+	if (self->capture_active && !self->emulating) {
+		self->sequence++;
+		eis_device_start_emulating(self->device, self->sequence);
+		self->emulating = TRUE;
+	}
 }
 
 static void
@@ -153,20 +187,12 @@ handle_event(PortalEis *self, struct eis_event *event)
 		drop_device(self);
 		break;
 
-	case EIS_EVENT_DEVICE_START_EMULATING:
-		/* The client is ready to receive emulated input.  Record its
-		 * sequence and (if the portal has already activated capture)
-		 * begin emulating so events start flowing. */
-		self->sequence = eis_event_emulating_get_sequence(event);
-		self->emulating = TRUE;
-		if (self->capture_active && self->device != NULL)
-			eis_device_start_emulating(self->device,
-				self->sequence);
-		break;
-
-	case EIS_EVENT_DEVICE_STOP_EMULATING:
-		self->emulating = FALSE;
-		break;
+	/* EIS_EVENT_DEVICE_START_EMULATING / _STOP_EMULATING are only
+	 * generated on a *receiving* EIS context (i.e. when WE handle a
+	 * sender client).  deskflow is a receiver client, so our context is
+	 * the sender and these never fire -- the server itself drives
+	 * eis_device_start_emulating() on portal activation (see
+	 * portal_eis_start).  Nothing to do here. */
 
 	default:
 		break;
@@ -204,6 +230,13 @@ portal_eis_new(void)
 		return NULL;
 	}
 
+	/* Surface libeis diagnostics (incl. disconnect reasons).  DEBUG-level
+	 * when GOWL_PORTAL_EIS_DEBUG is set, else WARNING and above. */
+	eis_log_set_handler(self->ctx, eis_log);
+	eis_log_set_priority(self->ctx,
+		g_getenv("GOWL_PORTAL_EIS_DEBUG") != NULL
+		? EIS_LOG_PRIORITY_DEBUG : EIS_LOG_PRIORITY_WARNING);
+
 	if (eis_setup_backend_fd(self->ctx) != 0) {
 		eis_unref(self->ctx);
 		g_free(self);
@@ -238,13 +271,13 @@ portal_eis_connect_fd(PortalEis *self)
 	return eis_backend_fd_add_client(self->ctx);
 }
 
-/* Events may flow only when the device exists, the portal has activated
- * capture, AND the EIS client has requested emulation. */
+/* Events may flow only when the device is resumed and we have an active
+ * emulation sequence (which the server starts on portal activation). */
 static gboolean
 streaming_ok(PortalEis *self)
 {
 	return self != NULL && self->device != NULL
-	       && self->capture_active && self->emulating;
+	       && self->resumed && self->emulating;
 }
 
 void
@@ -253,26 +286,29 @@ portal_eis_start(PortalEis *self)
 	if (self == NULL)
 		return;
 
-	/* Portal Activated: mark capture active.  If the client has already
-	 * requested emulation, begin emulating now; otherwise we begin when
-	 * its EIS_EVENT_DEVICE_START_EMULATING arrives.  Do NOT fabricate a
-	 * sequence or start emulating before the client asks. */
+	/* Portal Activated (barrier crossed): WE are the sender, so the
+	 * server starts emulation itself with a monotonic sequence and then
+	 * streams events.  (A receiver client never asks us to start.)  If the
+	 * device is not resumed yet, create_device() will start emulating once
+	 * it is. */
 	self->capture_active = TRUE;
-	if (self->emulating && self->device != NULL)
+	if (self->resumed && self->device != NULL && !self->emulating) {
+		self->sequence++;
 		eis_device_start_emulating(self->device, self->sequence);
+		self->emulating = TRUE;
+	}
 }
 
 void
 portal_eis_stop(PortalEis *self)
 {
-	if (self == NULL || self->device == NULL)
+	if (self == NULL)
 		return;
 
-	/* Portal Deactivated/Released: stop emulating if we were, but leave
-	 * the client's emulating-request state alone (it drives start/stop on
-	 * the next activation). */
-	if (self->capture_active && self->emulating)
+	/* Portal Deactivated/Released: stop the emulation sequence. */
+	if (self->emulating && self->device != NULL)
 		eis_device_stop_emulating(self->device);
+	self->emulating = FALSE;
 	self->capture_active = FALSE;
 }
 

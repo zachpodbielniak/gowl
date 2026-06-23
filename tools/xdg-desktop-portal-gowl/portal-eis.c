@@ -16,11 +16,19 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE   /* memfd_create */
+#endif
+
 #include "portal-eis.h"
 
 #include <glib-unix.h>
 #include <libeis.h>
 #include <time.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <xkbcommon/xkbcommon.h>
 
 /*
  * The EIS server.  deskflow connects as a receiver libei client; this
@@ -104,11 +112,64 @@ drop_device(PortalEis *self)
 	self->emulating = FALSE;
 }
 
+/* Build a default XKB keymap and write it to a sealed memfd.  Returns the
+ * fd (caller owns it) and stores the byte length in *size_out, or -1 on
+ * failure.  A keyboard EIS device with no keymap makes the libei client
+ * (deskflow) warn "does not have a keymap, we are guessing" and mis-map
+ * keycodes; giving it a real keymap fixes keyboard forwarding. */
+static int
+make_keymap_fd(size_t *size_out)
+{
+	struct xkb_context *ctx;
+	struct xkb_keymap  *keymap;
+	char               *str;
+	size_t              len;
+	int                 fd;
+	ssize_t             written;
+
+	ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+	if (ctx == NULL)
+		return -1;
+
+	/* NULL rule-names -> the system default layout (RMLVO from the
+	 * environment or compile-time defaults). */
+	keymap = xkb_keymap_new_from_names(ctx, NULL,
+		XKB_KEYMAP_COMPILE_NO_FLAGS);
+	if (keymap == NULL) {
+		xkb_context_unref(ctx);
+		return -1;
+	}
+
+	str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
+	xkb_keymap_unref(keymap);
+	xkb_context_unref(ctx);
+	if (str == NULL)
+		return -1;
+
+	len = strlen(str) + 1;   /* include the NUL; eis maps the fd */
+	fd = memfd_create("gowl-eis-keymap", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+	if (fd < 0) {
+		free(str);
+		return -1;
+	}
+	written = write(fd, str, len);
+	free(str);
+	if (written < 0 || (size_t)written != len) {
+		close(fd);
+		return -1;
+	}
+
+	*size_out = len;
+	return fd;
+}
+
 /* Create the pointer+keyboard device on a freshly-bound seat. */
 static void
 create_device(PortalEis *self)
 {
 	struct eis_device *dev;
+	int                keymap_fd;
+	size_t             keymap_size = 0;
 
 	if (self->seat == NULL)
 		return;
@@ -120,6 +181,24 @@ create_device(PortalEis *self)
 	eis_device_configure_capability(dev, EIS_DEVICE_CAP_BUTTON);
 	eis_device_configure_capability(dev, EIS_DEVICE_CAP_SCROLL);
 	eis_device_configure_capability(dev, EIS_DEVICE_CAP_KEYBOARD);
+
+	/* Attach an XKB keymap so the client maps keycodes correctly (must be
+	 * done before eis_device_add).  deskflow warns "does not have a
+	 * keymap, we are guessing" without it. */
+	keymap_fd = make_keymap_fd(&keymap_size);
+	if (keymap_fd >= 0) {
+		struct eis_keymap *km;
+
+		km = eis_device_new_keymap(dev, EIS_KEYMAP_TYPE_XKB,
+			keymap_fd, keymap_size);
+		if (km != NULL)
+			eis_keymap_add(km);
+		close(keymap_fd);   /* eis dup'd / mapped it */
+	} else {
+		g_warning("portal: failed to build EIS keymap; the client "
+			"will guess keycodes");
+	}
+
 	eis_device_add(dev);
 	eis_device_resume(dev);
 

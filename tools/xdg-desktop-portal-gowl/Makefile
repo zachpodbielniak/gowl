@@ -8,7 +8,7 @@
 CC ?= gcc
 CSTD = -std=gnu89
 
-PKG_DEPS = glib-2.0 gio-2.0 gio-unix-2.0 wayland-client libeis-1.0
+PKG_DEPS = glib-2.0 gio-2.0 gio-unix-2.0 wayland-client libeis-1.0 xkbcommon
 PKG_CFLAGS = $(shell pkg-config --cflags $(PKG_DEPS))
 PKG_LIBS = $(shell pkg-config --libs $(PKG_DEPS))
 

@@ -16,6 +16,10 @@ src/protocols/*-protocol.h
 # source files are NOT generated -- keep them tracked.
 !src/protocols/gowl-input-capture-protocol.c
 !src/protocols/gowl-input-capture-protocol.h
+# Standalone tool binaries -- build artifacts produced from tracked source
+# by each tool's Makefile (the binary is named after its directory).
+/tools/xdg-desktop-portal-gowl/xdg-desktop-portal-gowl
+/tools/gowl-mcp/gowl-mcp
 .mcp.json
 .cache/
 compile_commands.json

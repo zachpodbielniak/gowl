@@ -6289,6 +6289,7 @@ on_cursor_motion(struct wl_listener *listener, void *data)
 {
 	GowlCompositor *self;
 	struct wlr_pointer_motion_event *event;
+	gboolean was_active;
 
 	self = wl_container_of(listener, self, cursor_motion);
 	event = (struct wlr_pointer_motion_event *)data;
@@ -6299,13 +6300,30 @@ on_cursor_motion(struct wl_listener *listener, void *data)
 	self->cap_motion_dx = event->delta_x;
 	self->cap_motion_dy = event->delta_y;
 
+	/* Was capture already active BEFORE this motion?  The motion that
+	 * crosses the barrier activates capture *inside* motionnotify; that
+	 * activating delta must not be streamed (see below). */
+	was_active = (self->input_capture != NULL
+	              && gowl_input_capture_is_active(self->input_capture));
+
 	wlr_cursor_move(self->wlr_cursor, &event->pointer->base,
 	                event->delta_x, event->delta_y);
 	gowl_compositor_motionnotify(self, event->time_msec);
-	/* After motionnotify (which may have activated capture and frozen the
-	 * cursor), stream the relative delta so deskflow's ei egress sees it. */
-	input_capture_emit_motion(self, event->time_msec,
-	                          event->delta_x, event->delta_y);
+	/* Stream the relative delta to deskflow's ei egress ONLY if capture
+	 * was already active before this motion.  Never forward the motion
+	 * that *activated* capture: deskflow handles the D-Bus Activated
+	 * asynchronously -- it queues a primary-screen switch (leave()) and
+	 * only then stops treating the pointer as on its own screen.  A
+	 * captured motion that arrives before that switch is processed makes
+	 * deskflow believe the pointer is still on-screen and immediately
+	 * Release the capture, producing an infinite activate/release loop
+	 * that never crosses.  Dropping the activating delta (as Mutter does)
+	 * lets the switch settle, after which the frozen local cursor keeps
+	 * re-crossings from happening and the next physical motion streams
+	 * cleanly. */
+	if (was_active)
+		input_capture_emit_motion(self, event->time_msec,
+		                          event->delta_x, event->delta_y);
 }
 
 static void
@@ -6314,9 +6332,15 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 	GowlCompositor *self;
 	struct wlr_pointer_motion_absolute_event *event;
 	gdouble before_x, before_y;
+	gboolean was_active;
 
 	self = wl_container_of(listener, self, cursor_motion_absolute);
 	event = (struct wlr_pointer_motion_absolute_event *)data;
+
+	/* Capture already active before this motion?  The activating motion
+	 * must not be streamed (same async-switch race as on_cursor_motion). */
+	was_active = (self->input_capture != NULL
+	              && gowl_input_capture_is_active(self->input_capture));
 
 	before_x = self->wlr_cursor->x;
 	before_y = self->wlr_cursor->y;
@@ -6327,8 +6351,10 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 	 * rarely drive deskflow's egress, but keep it consistent. */
 	self->cap_motion_dx = self->wlr_cursor->x - before_x;
 	self->cap_motion_dy = self->wlr_cursor->y - before_y;
-	input_capture_emit_motion(self, event->time_msec,
-	                          self->cap_motion_dx, self->cap_motion_dy);
+	if (was_active)
+		input_capture_emit_motion(self, event->time_msec,
+		                          self->cap_motion_dx,
+		                          self->cap_motion_dy);
 	gowl_compositor_motionnotify(self, event->time_msec);
 }
 

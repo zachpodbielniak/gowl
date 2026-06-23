@@ -92,6 +92,40 @@ compositor implements the same protocol in both cases.
    gowl emits =deactivated=, restores local input, and optionally warps the
    cursor to the release point.
 
+*** EIS device geometry: regions are REQUIRED
+:PROPERTIES:
+:CUSTOM_ID: input-capture-eis-regions
+:END:
+The EIS device the portal creates *must* carry one =ei_region= per capture zone
+(=eis_device_new_region= + =eis_region_set_offset/size= + =eis_region_add=,
+before =eis_device_add=), and the portal pushes the zones onto the device from
+its =GetZones= handler (before the client binds the seat and the device is
+created). This is not optional for relative-pointer capture, even though the EI
+wire protocol does not need a region for relative motion:
+
+- A libei *receiver* client derives its whole screen shape from the *union* of
+  the device's regions (deskflow's =EiScreen::updateShape()= sums
+  =ei_region_get_x/y/width/height=). With *no* region the client believes its
+  screen is *1×1*.
+- The client then normalises a barrier-crossing position to a fraction
+  =(y - top) / height= against that shape. On a 1×1 screen the fraction is wildly
+  outside =[0,1]=, so the client's neighbour lookup (deskflow's
+  =Config::getNeighbor()=) matches no edge and finds "no neighbor" in *every*
+  direction. The client can never leave its own screen: it treats each captured
+  motion as on-screen and immediately releases the capture, producing an
+  activate/release loop with the cursor pinned at the edge.
+
+Mutter attaches these regions, which is why the same deskflow worked under GNOME
+before gowl did. A keyboard capability additionally needs an XKB keymap
+(=eis_device_new_keymap= from a sealed memfd, before =eis_device_add=) or the
+client warns it is "guessing" keycodes.
+
+Note also that the *activating* motion (the delta that crosses the barrier) is
+NOT streamed to the EIS egress -- only motion while capture was already active.
+The receiver handles the D-Bus =Activated= asynchronously (it queues its own
+screen switch), and a captured motion arriving before that switch is processed
+makes it release immediately. (Mutter behaves the same way.)
+
 ** Injection flow (client / ingress)
 :PROPERTIES:
 :CUSTOM_ID: input-inject-flow
@@ -177,3 +211,14 @@ deliberately not a public/stable interface.
 - *capture never activates*: confirm a barrier was installed on the correct
   edge (=SetPointerBarriers= must target the outer boundary, not an interior
   monitor seam), and that the session is =Enable=d.
+- *capture activates then immediately releases in a loop; the cursor is pinned
+  at the edge and never crosses*: the EIS device is missing its regions, so the
+  client sees a 1×1 screen and finds "no neighbor" in every direction (see
+  [[#input-capture-eis-regions]]). gowl pushes the zones from =GetZones=; if a
+  client somehow binds the seat before =GetZones=, the device is created without
+  a region. Also confirm the *client's own* screen layout actually has a
+  neighbour on that edge -- e.g. deskflow's =deskflow-core server= run standalone
+  does not translate its GUI screen grid into links, so set
+  =[server] externalConfig=true= (or launch via the GUI) so the links load.
+  Verify with the client's debug log (deskflow: =[log] level=7=, logs to stdout)
+  -- "no neighbor on right of <screen>" is the signature.

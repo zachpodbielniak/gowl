@@ -42,9 +42,18 @@
  * and are forwarded onto the live device.
  */
 
+/* One capture zone (monitor) in layout coordinates; becomes an ei_region
+ * on the device so the receiver client can derive its screen shape. */
+struct portal_eis_zone {
+	int32_t  x, y;
+	uint32_t w, h;
+};
+
 struct _PortalEis {
 	struct eis        *ctx;
 	guint              fd_source;     /* g_unix_fd_add id */
+
+	GArray            *zones;         /* struct portal_eis_zone */
 
 	struct eis_client *client;        /* the connected receiver client */
 	struct eis_seat   *seat;
@@ -182,6 +191,41 @@ create_device(PortalEis *self)
 	eis_device_configure_capability(dev, EIS_DEVICE_CAP_SCROLL);
 	eis_device_configure_capability(dev, EIS_DEVICE_CAP_KEYBOARD);
 
+	/* Attach a region per capture zone (must be done before
+	 * eis_device_add).  The receiver client (deskflow) sums the device's
+	 * ei_regions to derive its screen shape; with no region it sees a 1x1
+	 * screen, the pointer-barrier crossing position normalises out of
+	 * [0,1], getNeighbor() finds nothing in any direction and the cursor
+	 * never crosses to the remote.  A device with the POINTER (relative)
+	 * capability does not need a region for the wire protocol, but the
+	 * client needs it for screen geometry -- so we always add one. */
+	if (self->zones != NULL && self->zones->len > 0) {
+		guint i;
+
+		for (i = 0; i < self->zones->len; i++) {
+			struct portal_eis_zone *z =
+				&g_array_index(self->zones,
+				               struct portal_eis_zone, i);
+			struct eis_region *region;
+
+			region = eis_device_new_region(dev);
+			if (region == NULL)
+				continue;
+			/* eis offsets are unsigned; negative-origin monitors
+			 * are clamped to 0 (the common single-monitor case is
+			 * at the origin anyway). */
+			eis_region_set_offset(region,
+				z->x < 0 ? 0u : (uint32_t)z->x,
+				z->y < 0 ? 0u : (uint32_t)z->y);
+			eis_region_set_size(region, z->w, z->h);
+			eis_region_add(region);
+		}
+	} else {
+		g_warning("portal: no capture zones set; the EIS device has no "
+			"region and the client will see a 1x1 screen (the "
+			"pointer will not cross).  GetZones must run first.");
+	}
+
 	/* Attach an XKB keymap so the client maps keycodes correctly (must be
 	 * done before eis_device_add).  deskflow warns "does not have a
 	 * keymap, we are guessing" without it. */
@@ -303,8 +347,10 @@ portal_eis_new(void)
 	int fd;
 
 	self = g_new0(PortalEis, 1);
+	self->zones = g_array_new(FALSE, FALSE, sizeof(struct portal_eis_zone));
 	self->ctx = eis_new(self);
 	if (self->ctx == NULL) {
+		g_array_unref(self->zones);
 		g_free(self);
 		return NULL;
 	}
@@ -339,6 +385,8 @@ portal_eis_free(PortalEis *self)
 		g_source_remove(self->fd_source);
 	if (self->ctx != NULL)
 		eis_unref(self->ctx);
+	if (self->zones != NULL)
+		g_array_unref(self->zones);
 	g_free(self);
 }
 
@@ -348,6 +396,30 @@ portal_eis_connect_fd(PortalEis *self)
 	g_return_val_if_fail(self != NULL, -1);
 
 	return eis_backend_fd_add_client(self->ctx);
+}
+
+void
+portal_eis_clear_zones(PortalEis *self)
+{
+	if (self == NULL || self->zones == NULL)
+		return;
+	g_array_set_size(self->zones, 0);
+}
+
+void
+portal_eis_add_zone(PortalEis *self, int32_t x, int32_t y,
+                    uint32_t width, uint32_t height)
+{
+	struct portal_eis_zone z;
+
+	if (self == NULL || self->zones == NULL)
+		return;
+
+	z.x = x;
+	z.y = y;
+	z.w = width;
+	z.h = height;
+	g_array_append_val(self->zones, z);
 }
 
 /* Events may flow only when the device is resumed and we have an active

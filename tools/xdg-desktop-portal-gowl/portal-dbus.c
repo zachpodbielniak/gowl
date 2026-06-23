@@ -602,11 +602,22 @@ ic_method(GDBusConnection *conn, const gchar *sender, const gchar *path,
 		portal_wayland_get_zones(self->wl, &zones, &n, &zone_set);
 		self->zone_set = zone_set;
 
+		/* Mirror the zones onto the EIS device as regions: the receiver
+		 * client (deskflow) derives its screen shape from them, and
+		 * without a region pointer-barrier neighbour mapping collapses
+		 * (1x1 screen -> no neighbour -> cursor never crosses).  Done
+		 * here, before the client binds the seat and the device is
+		 * created. */
+		portal_eis_clear_zones(self->eis);
+
 		g_variant_builder_init(&zarr, G_VARIANT_TYPE("a(uuii)"));
-		for (i = 0; i < n; i++)
+		for (i = 0; i < n; i++) {
 			g_variant_builder_add(&zarr, "(uuii)",
 				zones[i].width, zones[i].height,
 				zones[i].x, zones[i].y);
+			portal_eis_add_zone(self->eis, zones[i].x, zones[i].y,
+				zones[i].width, zones[i].height);
+		}
 
 		g_variant_builder_init(&results, G_VARIANT_TYPE("a{sv}"));
 		g_variant_builder_add(&results, "{sv}", "zones",

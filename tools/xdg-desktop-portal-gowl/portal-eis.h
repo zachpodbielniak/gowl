@@ -45,6 +45,21 @@ void        portal_eis_free (PortalEis *self);
  * reply.  Returns a fd (caller passes ownership to D-Bus) or -1. */
 int         portal_eis_connect_fd (PortalEis *self);
 
+/* Set the capture zones (monitor geometry, in the same coordinate space as
+ * the reported zones / Activated cursor_position).  Each zone becomes a
+ * region on the EIS device.  This is REQUIRED, not optional: the libei
+ * *receiver* client (deskflow) derives its screen shape from the union of
+ * the device's ei_regions (EiScreen::updateShape sums them).  With no
+ * region the client's screen is 1x1, so a pointer-barrier crossing at
+ * (x,y) normalises to a fraction far outside [0,1], getNeighbor() finds no
+ * neighbour in any direction, and the cursor can never switch to the
+ * remote machine.  (Mutter sets these, which is why deskflow works under
+ * GNOME.)  Call before the client binds the seat -- e.g. from GetZones;
+ * the regions are applied when the device is (re)created. */
+void        portal_eis_clear_zones (PortalEis *self);
+void        portal_eis_add_zone    (PortalEis *self, int32_t x, int32_t y,
+                                    uint32_t width, uint32_t height);
+
 /* Begin/end an emulation sequence around a burst of captured events.
  * Called on portal `activated`/`deactivated`. */
 void        portal_eis_start (PortalEis *self);

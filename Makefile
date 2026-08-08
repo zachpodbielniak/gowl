@@ -90,6 +90,7 @@ LIB_SRCS := \
 	src/core/gowl-input-capture.c \
 	src/core/gowl-frame-sink.c \
 	src/core/gowl-lid-policy.c \
+	src/core/gowl-focus-rules.c \
 	src/core/gowl-monitor.c \
 	src/core/gowl-client.c \
 	src/core/gowl-seat.c \
@@ -212,6 +213,12 @@ CRISPY_SRCS := \
 # Test sources
 TEST_SRCS := $(wildcard tests/test-*.c)
 
+# Source-level guard scripts.  These assert invariants no unit test can
+# reach -- "this wlroots call has exactly one call site", "gowl links no
+# rendering engine" -- and run before the compiled tests so a structural
+# regression fails fast.
+TEST_GUARDS := $(sort $(wildcard tests/test-*.sh))
+
 # Module directories
 MODULE_DIRS := $(wildcard modules/*)
 ifneq ($(MCP_AVAILABLE),1)
@@ -328,8 +335,10 @@ modules: lib $(OUTDIR)/modules
 
 # Build and run tests
 test: lib $(TEST_BINS)
-	@echo "Guard: gowl must not depend on libregnum/graylib/raylib..."
-	@sh tests/test-no-libregnum.sh
+	@echo "Running source guards..."
+	@for guard in $(TEST_GUARDS); do \
+		sh $$guard || exit 1; \
+	done
 	@echo "Running tests..."
 	@failed=0; \
 	for test in $(TEST_BINS); do \

@@ -43,6 +43,7 @@
 #include "core/gowl-input-capture.h"
 #include "core/gowl-bar.h"
 #include "core/gowl-layer-surface.h"
+#include "core/gowl-focus-rules.h"
 #include "boxed/gowl-process-info.h"
 #include "interfaces/gowl-prefix-key-policy.h"
 #include "protocols/gowl-ext-workspace.h"
@@ -258,6 +259,20 @@ struct _GowlCompositor {
 	 * from dwl's exclusive_focus.  Unowned; cleared on the surface's
 	 * unmap.  See on_client_map / gowl_compositor_focus_client. */
 	GowlClient                   *exclusive_focus;
+
+	/* Keyboard-interactive layer surface (a launcher such as wofi, an
+	 * on-screen keyboard) that currently holds the keyboard.  The
+	 * layer-shell equivalent of @exclusive_focus above, and needed for
+	 * the same reason: without it any later focus change -- an arrange,
+	 * a pointer enter, or a host embedder (cmacs `--gowl') syncing its
+	 * own idea of focus -- silently takes the keyboard back and leaves
+	 * the launcher visible, on top, and deaf, with no way to type into
+	 * it or dismiss it.  A separate field rather than a widened
+	 * @exclusive_focus because that one is typed #GowlClient and a
+	 * layer surface is not a client.  Unowned; set in
+	 * gowl_compositor_arrangelayers(), cleared on unmap, destroy, and
+	 * session lock.  See gowl_focus_decide(). */
+	GowlLayerSurface             *exclusive_layer;
 
 	/* state */
 	gboolean   running;

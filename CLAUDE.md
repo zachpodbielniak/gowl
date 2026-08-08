@@ -35,6 +35,26 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-keybind` -- Keybind parsing/serialization tests
 - `test-layout` -- Layout provider interface tests
 - `test-module` -- Module lifecycle and registration tests
+- `test-focus-rules` -- Keyboard-focus arbitration + client close routing
+
+`make test` also runs every `tests/*.sh` **source guard** before the compiled
+tests. These assert invariants no unit test can reach:
+- `test-no-libregnum.sh` -- gowl links no rendering engine (see below)
+- `test-close-guard.sh` -- `wlr_xdg_toplevel_send_close` /
+  `wlr_xwayland_surface_close` have exactly one call site each (inside
+  `gowl_client_close()`), `gowl_compositor_focus_client()` still consults
+  `gowl_focus_decide()`, and no new `wlr_seat_keyboard_notify_enter` call
+  sites have appeared
+
+> **Route every client close through `gowl_client_close()`, and every focus
+> change through `gowl_compositor_focus_client()`.** An X11 client's
+> `xdg_toplevel` is `NULL`, so a bare `wlr_xdg_toplevel_send_close()` crashes
+> the compositor — which under `emacs --gowl` *is* the user's whole session.
+> Likewise, a seat focus move that skips `gowl_focus_decide()` can steal the
+> keyboard from a mapped launcher and leave it visible but deaf. Embedders that
+> must move seat focus themselves have to call
+> `gowl_compositor_has_exclusive_keyboard_layer()` first. See *Keyboard Focus
+> Arbitration* in `docs/architecture.org`.
 
 ## Code Style
 

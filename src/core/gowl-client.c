@@ -668,24 +668,50 @@ gowl_client_get_id(GowlClient *self)
  * gowl_client_close:
  * @self: a #GowlClient
  *
- * Sends a close request to the client's XDG toplevel surface.
- * The client may choose to ignore the request (e.g. to prompt
- * the user about unsaved changes).
+ * Sends a close request to the client's shell surface, over XDG or
+ * XWayland as appropriate (see gowl_close_route_for()).  The client
+ * may choose to ignore the request (e.g. to prompt the user about
+ * unsaved changes).
+ *
+ * This is the ONLY place in the tree allowed to call
+ * wlr_xdg_toplevel_send_close() / wlr_xwayland_surface_close();
+ * `tests/test-close-guard.sh' enforces that.  Calling the XDG close
+ * directly on a client that turns out to be an X11 window derefs a
+ * %NULL toplevel inside wlroots and SIGSEGVs the compositor -- which
+ * under `emacs --gowl' takes the user's whole session with it.
  */
 void
 gowl_client_close(GowlClient *self)
 {
+	gboolean has_xwayland;
+
 	g_return_if_fail(GOWL_IS_CLIENT(self));
 
+	has_xwayland = FALSE;
 #ifdef GOWL_HAVE_XWAYLAND
-	if (self->xwayland_surface != NULL) {
-		wlr_xwayland_surface_close(self->xwayland_surface);
-		return;
-	}
+	has_xwayland = (self->xwayland_surface != NULL);
 #endif
 
-	if (self->xdg_toplevel != NULL)
+	switch (gowl_close_route_for(has_xwayland,
+	                             self->xdg_toplevel != NULL)) {
+#ifdef GOWL_HAVE_XWAYLAND
+	case GOWL_CLOSE_ROUTE_XWAYLAND:
+		wlr_xwayland_surface_close(self->xwayland_surface);
+		break;
+#else
+	case GOWL_CLOSE_ROUTE_XWAYLAND:
+		/* Unreachable: has_xwayland is hardcoded FALSE without
+		 * XWayland support.  Listed so the switch stays
+		 * exhaustive and -Wswitch stays quiet. */
+		break;
+#endif
+	case GOWL_CLOSE_ROUTE_XDG:
 		wlr_xdg_toplevel_send_close(self->xdg_toplevel);
+		break;
+	case GOWL_CLOSE_ROUTE_NONE:
+		/* Between map and unmap -- nothing left to close. */
+		break;
+	}
 }
 
 /**

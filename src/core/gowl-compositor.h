@@ -499,6 +499,28 @@ GowlModuleManager *gowl_compositor_get_module_manager (GowlCompositor *self);
 GowlSeat *gowl_compositor_get_seat (GowlCompositor *self);
 
 /**
+ * gowl_compositor_has_exclusive_keyboard_layer:
+ * @self: a #GowlCompositor
+ *
+ * Returns whether a keyboard-interactive layer-shell surface -- a
+ * launcher such as wofi, an on-screen keyboard -- currently holds an
+ * exclusive keyboard grab.  While it does, the compositor refuses
+ * every other keyboard-focus change until that surface unmaps or
+ * stops asking for the keyboard.
+ *
+ * Embedders that move seat focus themselves rather than through
+ * gowl_compositor_focus_client() (cmacs `--gowl' does, to hand keys
+ * to Emacs on a prefix key) MUST consult this first and do nothing
+ * when it returns %TRUE.  Calling wlr_seat_keyboard_notify_enter()
+ * behind the compositor's back while a launcher holds the grab leaves
+ * that launcher on screen and deaf: the user cannot type into it,
+ * cannot dismiss it, and cannot see what else is responding.
+ *
+ * Returns: %TRUE if a layer surface holds the keyboard.
+ */
+gboolean gowl_compositor_has_exclusive_keyboard_layer (GowlCompositor *self);
+
+/**
  * gowl_compositor_get_cursor:
  * @self: a #GowlCompositor
  *

@@ -10,6 +10,9 @@
 # so it is a regression test, not just a review note.
 
 set -e
+# An inherited CDPATH makes `cd' echo the resolved directory, which
+# would land in $root alongside pwd's output and break every path here.
+CDPATH=
 root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/build/release"
 fail=0

@@ -435,7 +435,102 @@ The split keeps gowl core free of D-Bus and libeis:
   =libeis-1.0= is present. Full reference: [[file:input-capture.org][Input
   Capture & Injection]].
 
+** Keyboard Focus Arbitration
+:PROPERTIES:
+:CUSTOM_ID: focus-arbitration
+:END:
+Every keyboard-focus change in gowl passes through a single gate,
+=gowl_compositor_focus_client=, which asks =gowl_focus_decide()=
+(=src/core/gowl-focus-rules.c=) whether the change is permitted.  The
+rules module is pure logic -- no wlroots, no GObject -- so the whole
+truth table is unit-tested in =tests/test-focus-rules.c=; the
+compositor only gathers the inputs.
+
+Guards, in escalating order of authority.  The first that fires
+refuses the change and names itself in the debug log
+(=G_MESSAGES_DEBUG=gowl=):
+
+| Guard                              | Refuses when                                                  |
+|------------------------------------+---------------------------------------------------------------|
+| =GOWL_FOCUS_DENY_LOCKED=           | A session lock owns the outputs.                              |
+| =GOWL_FOCUS_DENY_EMBEDDED=         | The target is an embedded client (host-driven; see below).    |
+| =GOWL_FOCUS_DENY_LAYER_GRAB=       | A keyboard-interactive layer surface holds the keyboard.      |
+| =GOWL_FOCUS_DENY_EXCLUSIVE_CLIENT= | An X11 override-redirect popup holds an exclusive grab.       |
+
+*** The two exclusive grabs
+
+Gowl tracks two independent "this surface owns the keyboard, leave it
+alone" grabs, because the two surface kinds are different types:
+
+- =GowlCompositor.exclusive_focus= (=GowlClient *=) -- an X11
+  override-redirect popup.  See [[#xwayland-override-redirect][XWayland
+  Override-Redirect]] below.
+- =GowlCompositor.exclusive_layer= (=GowlLayerSurface *=) -- a
+  keyboard-interactive layer-shell surface: a launcher (wofi, rofi), an
+  on-screen keyboard.  Set by =gowl_compositor_arrangelayers()= when it
+  hands the surface the keyboard; cleared on unmap, on destroy, and on
+  session lock.
+
+=gowl_layer_takes_keyboard()= decides which layer surfaces qualify:
+*mapped*, non-zero =keyboard_interactive= (both =EXCLUSIVE= and
+=ON_DEMAND= count), at layer =TOP= or =OVERLAY=, and the session not
+locked.  Bars and wallpapers sit below =TOP= and so can never take the
+keyboard from a window.
+
+The grab is re-derived from live surface state on every check rather
+than trusted from the stored pointer, so a surface that unmaps or
+commits =keyboard_interactive = 0= releases it on the spot; a missed
+clear cannot wedge the keyboard.  The pointer is still cleared on
+teardown, because reading a freed =GowlLayerSurface= is not an option.
+
+A focus *clear* (target =NULL=) is refused by the grab guards too --
+clearing focus out from under a launcher leaves it just as deaf as
+pointing the keyboard at another window does.
+
+When the grab holder goes away, =arrangelayers= re-runs: any other
+keyboard-interactive surface still up on that monitor takes the
+keyboard, otherwise it returns to the topmost client.
+
+*** Contract for embedders
+
+An embedder that moves seat keyboard focus itself, rather than through
+=gowl_compositor_focus_client()=, bypasses every guard above.  cmacs
+=--gowl= does exactly this -- embedded clients are deliberately absent
+from the compositor's focus stack, so it calls
+=wlr_seat_keyboard_notify_enter()= directly to hand keys to Emacs on a
+prefix key.
+
+Such code *must* call =gowl_compositor_has_exclusive_keyboard_layer()=
+first and do nothing when it returns =TRUE=.  Skipping the check
+produces a launcher that is mapped, drawn on top, covering the output,
+and completely deaf: the user can neither type into it, nor dismiss
+it, nor see that anything else is responding.  Under =emacs --gowl=
+this was reproducible by opening =wofi --show drun= within a few
+milliseconds of any focus-restoring command.
+
+=tests/test-close-guard.sh= caps the number of
+=wlr_seat_keyboard_notify_enter= call sites inside gowl so new
+seat-focus paths cannot slip in unreviewed; cmacs carries the matching
+assertion for its own sources in
+=test/cmacs/cmacs-gowl-tests.el=.
+
+*** Closing clients
+
+Related, and for the same reason -- one entry point, one set of
+guards: =gowl_client_close()= is the only place that may call
+=wlr_xdg_toplevel_send_close()= or =wlr_xwayland_surface_close()=.  It
+routes via =gowl_close_route_for()=, which picks the protocol from
+which surface pointer the client actually carries.  An X11 client's
+=xdg_toplevel= is =NULL=, so sending the XDG close to one derefs
+=NULL= inside wlroots and takes the compositor down -- and under
+=emacs --gowl= the compositor *is* the session, so every application
+in it dies too.  =tests/test-close-guard.sh= fails the build if a
+second call site appears.
+
 ** XWayland Override-Redirect (Unmanaged) Surfaces
+:PROPERTIES:
+:CUSTOM_ID: xwayland-override-redirect
+:END:
 
 X11 *override-redirect* surfaces -- popup menus, combo dropdowns,
 tooltips, DND icons, and app confirmation dialogs (e.g. Zoom's "End
@@ -452,7 +547,9 @@ toplevels:
   =GowlCompositor.exclusive_focus= and focus it.  The surface is *not*
   added to the client/focus lists and is never arranged.
 - =gowl_compositor_focus_client= refuses to focus anything else while
-  =exclusive_focus= still wants focus (so the popup keeps its grab), and
+  =exclusive_focus= still wants focus (so the popup keeps its grab --
+  the =GOWL_FOCUS_DENY_EXCLUSIVE_CLIENT= arm of =gowl_focus_decide()=,
+  see [[#focus-arbitration][Keyboard Focus Arbitration]]), and
   crucially does *not* deactivate the popup's parent toplevel when the
   incoming client wants focus.  Deactivating the parent makes Qt / wine
   treat the popup as dismissed and close it in ~0.5s -- the guard

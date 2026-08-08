@@ -237,6 +237,7 @@ static void on_xwayland_request_resize    (struct wl_listener *listener, void *d
 static gboolean            client_is_x11   (GowlClient *c);
 static gboolean            client_is_unmanaged(GowlClient *c);
 static gboolean            client_wants_focus (GowlClient *c);
+static gboolean            layer_grab_active  (GowlCompositor *self);
 static struct wlr_surface *client_surface  (GowlClient *c);
 
 /* decoration callbacks */
@@ -1468,6 +1469,10 @@ gowl_compositor_set_locked(
 	if (locked) {
 		/* Enable locked background */
 		wlr_scene_node_set_enabled(&self->locked_bg->node, TRUE);
+		/* Drop any layer-surface keyboard grab: the lock owns
+		 * input now, and a grab left standing would refuse the
+		 * focus restore on unlock. */
+		self->exclusive_layer = NULL;
 		/* Unfocus all clients */
 		gowl_compositor_focus_client(self, NULL, FALSE);
 		g_debug("Session locked (built-in)");
@@ -1566,6 +1571,14 @@ gowl_compositor_get_seat(GowlCompositor *self)
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
 	return self->seat;
+}
+
+gboolean
+gowl_compositor_has_exclusive_keyboard_layer(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	return layer_grab_active(self);
 }
 
 /**
@@ -2996,6 +3009,42 @@ client_wants_focus(GowlClient *c)
 #endif
 }
 
+/* The layer number gowl-focus-rules.h reasons about must stay the
+ * protocol's TOP layer.  Asserted here rather than in the rules file
+ * so that header can stay free of protocol includes; a renumbering in
+ * zwlr_layer_shell_v1 breaks the build instead of silently letting
+ * bars and wallpapers grab the keyboard. */
+G_STATIC_ASSERT(ZWLR_LAYER_SHELL_V1_LAYER_TOP == GOWL_LAYER_KEYBOARD_MIN);
+
+/**
+ * layer_grab_active:
+ *
+ * Returns %TRUE if a keyboard-interactive layer surface currently owns
+ * the keyboard and must not have it taken away.
+ *
+ * Deliberately re-derived from live state rather than trusting the
+ * @exclusive_layer pointer alone: a surface that commits
+ * `keyboard_interactive = 0', drops below the TOP layer, or unmaps
+ * releases the grab on the spot, so a missed clear can never wedge the
+ * keyboard.  The pointer is still cleared on unmap / destroy / lock,
+ * because reading a freed #GowlLayerSurface is not an option.
+ */
+static gboolean
+layer_grab_active(GowlCompositor *self)
+{
+	GowlLayerSurface *ls;
+
+	ls = self->exclusive_layer;
+	if (ls == NULL || ls->wlr_layer_surface == NULL)
+		return FALSE;
+
+	return gowl_layer_takes_keyboard(
+		self->locked,
+		ls->mapped,
+		(guint32)ls->wlr_layer_surface->current.keyboard_interactive,
+		(gint)ls->wlr_layer_surface->current.layer);
+}
+
 /**
  * client_surface:
  *
@@ -3810,26 +3859,29 @@ gowl_compositor_focus_client(
 ){
 	struct wlr_surface *old;
 	struct wlr_keyboard *kb;
+	GowlFocusDecision decision;
 
-	if (self->locked)
-		return;
-
-	/* Embedded clients never receive keyboard focus.
-	 * They are managed by the parent (Emacs) and only
-	 * receive pointer events for mouse interaction.
+	/*
+	 * One gate for every guard.  The decision itself is pure logic in
+	 * gowl-focus-rules.c so the truth table can be unit-tested; all
+	 * this does is gather the inputs.  Guards, in order of authority:
+	 * a locked session, an embedded (host-driven) target, a
+	 * keyboard-interactive layer surface holding the keyboard, and an
+	 * X11 override-redirect popup holding an exclusive grab.
 	 */
-	if (c != NULL && gowl_client_get_embedded(c))
-		return;
+	decision = gowl_focus_decide(
+		self->locked,
+		c != NULL && gowl_client_get_embedded(c),
+		layer_grab_active(self),
+		self->exclusive_focus != NULL
+		&& client_wants_focus(self->exclusive_focus),
+		c != NULL && c == self->exclusive_focus);
 
-	/* An X11 override-redirect surface holding an exclusive grab (a
-	 * popup menu) must keep focus until it unmaps -- refuse to focus
-	 * anything else while it still wants focus, or the menu loses its
-	 * grab and self-dismisses.  Focusing the exclusive surface itself
-	 * is allowed (it just re-asserts).  Ported from dwl's focusclient
-	 * exclusive_focus guard. */
-	if (self->exclusive_focus != NULL && c != self->exclusive_focus
-	    && client_wants_focus(self->exclusive_focus))
+	if (decision != GOWL_FOCUS_ALLOW) {
+		g_debug("focus_client: %s",
+		        gowl_focus_decision_to_string(decision));
 		return;
+	}
 
 	/* Raise client in stacking order if requested */
 	if (c != NULL && lift)
@@ -5398,8 +5450,14 @@ keybinding(
 				return TRUE;
 			case GOWL_ACTION_KILL_CLIENT: {
 				GowlClient *sel = focustop(self, self->selmon);
+				/* Must go through gowl_client_close(): the
+				 * focused window may be an X11 client, whose
+				 * xdg_toplevel is NULL.  Sending the XDG
+				 * close directly here used to SIGSEGV the
+				 * compositor -- and the whole session under
+				 * `emacs --gowl'. */
 				if (sel != NULL)
-					wlr_xdg_toplevel_send_close(sel->xdg_toplevel);
+					gowl_client_close(sel);
 				return TRUE;
 			}
 			case GOWL_ACTION_FOCUS_STACK: {
@@ -7888,20 +7946,55 @@ gowl_compositor_arrangelayers(
 	for (l = m->layer_surfaces; l != NULL; l = l->next) {
 		GowlLayerSurface *ls = (GowlLayerSurface *)l->data;
 
-		if (self->locked || !ls->mapped)
+		if (!gowl_layer_takes_keyboard(
+			    self->locked,
+			    ls->mapped,
+			    (guint32)ls->wlr_layer_surface
+				->current.keyboard_interactive,
+			    (gint)ls->wlr_layer_surface->current.layer))
 			continue;
 
-		if (!ls->wlr_layer_surface->current.keyboard_interactive)
-			continue;
-
-		if (ls->wlr_layer_surface->current.layer >=
-		    ZWLR_LAYER_SHELL_V1_LAYER_TOP) {
-			gowl_compositor_focus_client(self, NULL, FALSE);
-			wlr_seat_keyboard_notify_enter(self->wlr_seat,
-				ls->wlr_layer_surface->surface,
-				NULL, 0, NULL);
+		/* Already granted and still focused: nothing to do.
+		 * arrangelayers runs on every commit of the surface, and
+		 * re-running the hand-off below would emit a redundant
+		 * wl_keyboard.leave / .enter pair each time.  Clients see
+		 * that churn (it is visible in WAYLAND_DEBUG traces), and
+		 * a launcher that treats a leave as "dismiss me" would
+		 * act on it. */
+		if (self->exclusive_layer == ls
+		    && self->wlr_seat->keyboard_state.focused_surface
+		       == ls->wlr_layer_surface->surface)
 			return;
-		}
+
+		/* Drop any previous grab before clearing client focus,
+		 * so the focus_client() guard does not refuse our own
+		 * hand-off, then claim the grab BEFORE notifying enter.
+		 * From here until this surface unmaps, every other focus
+		 * change is refused -- that is what keeps a launcher
+		 * from ending up visible but deaf when an arrange, a
+		 * pointer enter, or a host embedder tries to refocus a
+		 * window a few milliseconds later. */
+		self->exclusive_layer = NULL;
+		gowl_compositor_focus_client(self, NULL, FALSE);
+		self->exclusive_layer = ls;
+
+		wlr_seat_keyboard_notify_enter(self->wlr_seat,
+			ls->wlr_layer_surface->surface,
+			NULL, 0, NULL);
+		return;
+	}
+
+	/* No keyboard-interactive surface left on this monitor.  If the
+	 * grab holder lived here it has stopped asking for the keyboard
+	 * (it committed keyboard_interactive = 0, or dropped below the
+	 * TOP layer) -- release the grab and hand the keyboard back to
+	 * the topmost client rather than leaving the seat focused on
+	 * nothing. */
+	if (self->exclusive_layer != NULL
+	    && self->exclusive_layer->mon == m) {
+		self->exclusive_layer = NULL;
+		gowl_compositor_focus_client(self,
+			focustop(self, self->selmon), TRUE);
 	}
 }
 
@@ -8042,10 +8135,20 @@ on_layer_unmap(struct wl_listener *listener, void *data)
 	ls->mapped = FALSE;
 	wlr_scene_node_set_enabled(&ls->scene->node, FALSE);
 
+	/* Release the keyboard grab first: while it is held every focus
+	 * change below is refused, including the restore. */
+	if (self->exclusive_layer == ls)
+		self->exclusive_layer = NULL;
+
+	/* Re-arrange, which also re-grants the keyboard to any other
+	 * keyboard-interactive layer surface still up on this monitor
+	 * (a second launcher, an on-screen keyboard). */
 	if (ls->mon != NULL)
 		gowl_compositor_arrangelayers(self, ls->mon);
 
-	/* If this layer surface had keyboard focus, restore client focus */
+	/* If this layer surface still had keyboard focus, restore client
+	 * focus.  Already handled when arrangelayers found a successor
+	 * or released the grab itself, hence the surface test. */
 	if (ls->wlr_layer_surface->surface ==
 	    self->wlr_seat->keyboard_state.focused_surface)
 		gowl_compositor_focus_client(self,
@@ -8068,6 +8171,12 @@ on_layer_destroy(struct wl_listener *listener, void *data)
 
 	ls = wl_container_of(listener, ls, destroy_surface);
 	(void)data;
+
+	/* Never leave a dangling grab pointer: layer_grab_active() reads
+	 * through it on every focus change, and a surface can be
+	 * destroyed without a preceding unmap (client crash). */
+	if (ls->compositor != NULL && ls->compositor->exclusive_layer == ls)
+		ls->compositor->exclusive_layer = NULL;
 
 	/* Remove event listeners */
 	wl_list_remove(&ls->commit.link);
@@ -8169,6 +8278,11 @@ on_new_session_lock(struct wl_listener *listener, void *data)
 		wlr_session_lock_v1_destroy(session_lock);
 		return;
 	}
+
+	/* Drop any layer-surface keyboard grab before unfocusing: the
+	 * lock client owns input from here, and a grab left standing
+	 * would refuse both this clear and the restore on unlock. */
+	self->exclusive_layer = NULL;
 
 	/* Unfocus all clients */
 	gowl_compositor_focus_client(self, NULL, FALSE);

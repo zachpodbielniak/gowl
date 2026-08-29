@@ -36,6 +36,9 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-layout` -- Layout provider interface tests
 - `test-module` -- Module lifecycle and registration tests
 - `test-focus-rules` -- Keyboard-focus arbitration + client close routing
+- `test-input-recorder` -- Input recording: consent gate, bounded ring,
+  motion coalescing, self-stop deadline, secret-suppression policy,
+  payload shape, and the config-to-recorder wiring
 
 `make test` also runs every `tests/*.sh` **source guard** before the compiled
 tests. These assert invariants no unit test can reach:
@@ -45,6 +48,25 @@ tests. These assert invariants no unit test can reach:
   `gowl_client_close()`), `gowl_compositor_focus_client()` still consults
   `gowl_focus_decide()`, and no new `wlr_seat_keyboard_notify_enter` call
   sites have appeared
+- `test-record-guard.sh` -- the input recorder's taps are still wired to
+  all six input hooks, the injection helpers and `motionnotify` are still
+  *un*wired (they are reached by both the real and the synthetic path, so
+  a tap there would record gowl's own injected input), `on_kb_key` still
+  carries the Super+Shift+Escape force-stop, and the on-screen indicator
+  is still raised from the recorder's own state change
+
+> **Input *recording* is not input *injection*, and they must never share a
+> switch.** `GowlInputRecorder` (`src/core/gowl-input-recorder.c`) observes
+> real key and pointer events for teach-a-task. It is gated by its own
+> `input-recording` config key, off by default, which nothing that enables
+> `send_key` or the RemoteDesktop portal may imply -- an agent allowed to
+> click must not thereby be allowed to watch somebody type. The ring is
+> bounded and reports what it `dropped`; the recording stops itself; a red
+> frame is drawn for as long as it runs; and `Super+Shift+Escape` stops one
+> without its token. gowl **cannot** recognise a password field (Wayland
+> gives a compositor no window-internal knowledge) -- only the lock screen
+> and an app-id/title deny list. Say so rather than implying otherwise. See
+> `docs/input-recording.org`.
 
 > **Route every client close through `gowl_client_close()`, and every focus
 > change through `gowl_compositor_focus_client()`.** An X11 client's

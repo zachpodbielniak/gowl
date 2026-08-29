@@ -41,6 +41,7 @@
 #include "core/gowl-cursor.h"
 #include "core/gowl-idle-manager.h"
 #include "core/gowl-input-capture.h"
+#include "core/gowl-input-recorder.h"
 #include "core/gowl-bar.h"
 #include "core/gowl-layer-surface.h"
 #include "core/gowl-focus-rules.h"
@@ -191,6 +192,13 @@ struct _GowlCompositor {
 	struct wlr_scene_rect        *root_bg;
 	struct wlr_scene_rect        *locked_bg;
 
+	/* Recording indicator: four thin rects forming a frame around the
+	 * whole output layout, parented directly under the scene root (so
+	 * xytonode, which only searches self->layers[], can never hit
+	 * them).  Enabled for exactly as long as a recording runs -- a
+	 * recorder somebody cannot see running is a keylogger. */
+	struct wlr_scene_rect        *rec_indicator[4];
+
 	/* protocol globals */
 	struct wlr_xdg_shell                    *xdg_shell;
 	struct wlr_layer_shell_v1               *layer_shell;
@@ -225,6 +233,13 @@ struct _GowlCompositor {
 	 * Opaque to the compositor — defined in protocols/gowl-ext-workspace.c. */
 	gpointer                      ext_workspace_manager;
 	gpointer                      input_capture_protocol;
+
+	/* Input recording (compositor-owned, always present).  Refuses to
+	 * start unless the `input-recording` config key consented, which is
+	 * a different switch from anything gating injection. */
+	GowlInputRecorder            *input_recorder;
+	gulong                        rec_changed_id;
+	struct wl_event_source       *rec_stop_source;
 
 	/* input sub-objects (owned by compositor, created in start) */
 	struct wlr_seat              *wlr_seat;

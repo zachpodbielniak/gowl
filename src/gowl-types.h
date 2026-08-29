@@ -36,6 +36,7 @@ typedef struct _GowlSessionLock     GowlSessionLock;
 typedef struct _GowlIdleManager     GowlIdleManager;
 typedef struct _GowlFrameSink       GowlFrameSink;
 typedef struct _GowlInputCapture    GowlInputCapture;
+typedef struct _GowlInputRecorder   GowlInputRecorder;
 
 /* Forward declarations for config types */
 typedef struct _GowlConfig          GowlConfig;

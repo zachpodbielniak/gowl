@@ -42,6 +42,8 @@
 #define GOWL_CONFIG_DEFAULT_MENU                "bemenu-run"
 #define GOWL_CONFIG_DEFAULT_SLOPPYFOCUS         (TRUE)
 #define GOWL_CONFIG_DEFAULT_MANAGE_LID          (TRUE)
+#define GOWL_CONFIG_DEFAULT_INPUT_RECORDING     (FALSE)
+#define GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS ""
 #define GOWL_CONFIG_DEFAULT_LOG_LEVEL           "warning"
 #define GOWL_CONFIG_DEFAULT_LOG_FILE            "~/.config/gowl/gowl.log"
 #define GOWL_CONFIG_DEFAULT_EVALUATE_GOWL_CONFIG_WITH_CMACS  (TRUE)
@@ -71,6 +73,8 @@ struct _GowlConfig {
 	gint     repeat_delay;
 	gboolean sloppyfocus;
 	gboolean manage_lid;
+	gboolean input_recording;
+	gchar   *input_recording_deny_apps;
 
 	/* Programs */
 	gchar   *terminal;
@@ -237,6 +241,13 @@ gowl_config_set_property(
 	case GOWL_CONFIG_PROP_MANAGE_LID:
 		self->manage_lid = g_value_get_boolean(value);
 		break;
+	case GOWL_CONFIG_PROP_INPUT_RECORDING:
+		self->input_recording = g_value_get_boolean(value);
+		break;
+	case GOWL_CONFIG_PROP_INPUT_RECORDING_DENY_APPS:
+		g_free(self->input_recording_deny_apps);
+		self->input_recording_deny_apps = g_value_dup_string(value);
+		break;
 	case GOWL_CONFIG_PROP_LOG_LEVEL:
 		g_free(self->log_level);
 		self->log_level = g_value_dup_string(value);
@@ -314,6 +325,12 @@ gowl_config_get_property(
 	case GOWL_CONFIG_PROP_MANAGE_LID:
 		g_value_set_boolean(value, self->manage_lid);
 		break;
+	case GOWL_CONFIG_PROP_INPUT_RECORDING:
+		g_value_set_boolean(value, self->input_recording);
+		break;
+	case GOWL_CONFIG_PROP_INPUT_RECORDING_DENY_APPS:
+		g_value_set_string(value, self->input_recording_deny_apps);
+		break;
 	case GOWL_CONFIG_PROP_LOG_LEVEL:
 		g_value_set_string(value, self->log_level);
 		break;
@@ -349,6 +366,7 @@ gowl_config_finalize(GObject *object)
 	g_free(self->menu);
 	g_free(self->log_level);
 	g_free(self->log_file);
+	g_free(self->input_recording_deny_apps);
 
 	if (self->keybinds != NULL)
 		g_array_unref(self->keybinds);
@@ -480,6 +498,29 @@ gowl_config_class_init(GowlConfigClass *klass)
 		                      GOWL_CONFIG_DEFAULT_MANAGE_LID,
 		                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
+	properties[GOWL_CONFIG_PROP_INPUT_RECORDING] =
+		g_param_spec_boolean("input-recording",
+		                      "Input Recording",
+		                      "Allow a recording of real key and pointer "
+		                      "input to be started.  Separate from -- and "
+		                      "never implied by -- the tools that inject "
+		                      "input, because capturing what somebody "
+		                      "types is a different permission from "
+		                      "clicking on their behalf.",
+		                      GOWL_CONFIG_DEFAULT_INPUT_RECORDING,
+		                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_INPUT_RECORDING_DENY_APPS] =
+		g_param_spec_string("input-recording-deny-apps",
+		                     "Input Recording Deny Apps",
+		                     "Comma-separated glob patterns.  Input is "
+		                     "not recorded while the focused window's "
+		                     "app-id or title matches one.  Added to the "
+		                     "built-in list of credential prompts, never "
+		                     "replacing it.",
+		                     GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS,
+		                     G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
 	properties[GOWL_CONFIG_PROP_LOG_LEVEL] =
 		g_param_spec_string("log-level",
 		                     "Log Level",
@@ -578,6 +619,9 @@ gowl_config_init(GowlConfig *self)
 	self->repeat_delay        = GOWL_CONFIG_DEFAULT_REPEAT_DELAY;
 	self->sloppyfocus         = GOWL_CONFIG_DEFAULT_SLOPPYFOCUS;
 	self->manage_lid          = GOWL_CONFIG_DEFAULT_MANAGE_LID;
+	self->input_recording     = GOWL_CONFIG_DEFAULT_INPUT_RECORDING;
+	self->input_recording_deny_apps =
+		g_strdup(GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS);
 	self->terminal            = g_strdup(GOWL_CONFIG_DEFAULT_TERMINAL);
 	self->menu                = g_strdup(GOWL_CONFIG_DEFAULT_MENU);
 	self->log_level           = g_strdup(GOWL_CONFIG_DEFAULT_LOG_LEVEL);
@@ -758,6 +802,18 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "manage_lid")) {
 		gboolean val = yaml_mapping_get_boolean_member(mapping, "manage_lid");
 		g_object_set(self, "manage-lid", val, NULL);
+	}
+	if (yaml_mapping_has_member(mapping, "input-recording")) {
+		gboolean val = yaml_mapping_get_boolean_member(mapping,
+			"input-recording");
+		g_object_set(self, "input-recording", val, NULL);
+	}
+	if (yaml_mapping_has_member(mapping, "input-recording-deny-apps")) {
+		const gchar *val = yaml_mapping_get_string_member(mapping,
+			"input-recording-deny-apps");
+		if (val != NULL)
+			g_object_set(self, "input-recording-deny-apps",
+			             val, NULL);
 	}
 	if (yaml_mapping_has_member(mapping, "log-level")) {
 		const gchar *val = yaml_mapping_get_string_member(mapping, "log-level");
@@ -1367,6 +1423,11 @@ gowl_config_generate_yaml(GowlConfig *self)
 	g_string_append_printf(yaml, "repeat-delay: %d\n", self->repeat_delay);
 	g_string_append_printf(yaml, "sloppyfocus: %s\n", self->sloppyfocus ? "true" : "false");
 	g_string_append_printf(yaml, "manage_lid: %s\n", self->manage_lid ? "true" : "false");
+	g_string_append_printf(yaml, "input-recording: %s\n",
+	                       self->input_recording ? "true" : "false");
+	g_string_append_printf(yaml, "input-recording-deny-apps: \"%s\"\n",
+	                       self->input_recording_deny_apps != NULL
+	                       ? self->input_recording_deny_apps : "");
 
 	/* Programs */
 	g_string_append_printf(yaml, "terminal: \"%s\"\n", self->terminal);
@@ -1529,6 +1590,22 @@ gowl_config_get_manage_lid(GowlConfig *self)
 	return self->manage_lid;
 }
 
+gboolean
+gowl_config_get_input_recording(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_INPUT_RECORDING);
+	return self->input_recording;
+}
+
+const gchar *
+gowl_config_get_input_recording_deny_apps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS);
+	return self->input_recording_deny_apps;
+}
+
 const gchar *
 gowl_config_get_log_level(GowlConfig *self)
 {
@@ -1631,6 +1708,9 @@ gowl_config_reset_values_to_defaults(GowlConfig *self)
 	             "menu",                GOWL_CONFIG_DEFAULT_MENU,
 	             "sloppyfocus",         GOWL_CONFIG_DEFAULT_SLOPPYFOCUS,
 	             "manage-lid",          GOWL_CONFIG_DEFAULT_MANAGE_LID,
+	             "input-recording",     GOWL_CONFIG_DEFAULT_INPUT_RECORDING,
+	             "input-recording-deny-apps",
+	                 GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS,
 	             "log-level",           GOWL_CONFIG_DEFAULT_LOG_LEVEL,
 	             "log-file",            GOWL_CONFIG_DEFAULT_LOG_FILE,
 	             NULL);

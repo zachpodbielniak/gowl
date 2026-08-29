@@ -72,6 +72,8 @@ General compositor settings.
 | =menu=         | string | ="wofi --show drun"= | Application launcher command (bound to =Super+p=)               |
 | =sloppyfocus=  | bool   | =true=         | Enable sloppy (focus-follows-mouse) focus                               |
 | =manage_lid=   | bool   | =true=         | Power off the internal panel (eDP/LVDS/DSI) when the laptop lid is shut and an external display is connected |
+| =input-recording= | bool | =false=       | Allow a recording of real key and pointer input to be started.  See [[file:input-recording.org][Input Recording]] |
+| =input-recording-deny-apps= | string | ="" | Comma-separated globs; recording pauses while the focused window matches one.  *Added* to the built-in list, never replacing it |
 
 When =manage_lid= is enabled (the default), gowl turns the laptop's
 built-in panel off while the lid is closed and at least one external
@@ -80,6 +82,16 @@ external output.  If no external display is connected, the internal
 panel stays on so the machine is never left blank.  Closing or opening
 the lid at runtime, and hotplugging the external display, are all
 handled live.
+
+=input-recording= is deliberately *not* implied by anything that grants
+input *injection*.  An agent allowed to click on your behalf must not
+thereby be allowed to watch you type, so the injection tools
+(=send_key=, =send_text=, ...) and the recording tools
+(=start_recording=, ...) sit behind different switches.  Turning this
+on is the whole consent step; everything else -- the on-screen
+indicator, the bounded ring, the self-stop deadline, and what the
+compositor can and cannot recognise as a secret -- is in
+[[file:input-recording.org][Input Recording]], which you should read before setting it.
 
 **** appearance
 :PROPERTIES:

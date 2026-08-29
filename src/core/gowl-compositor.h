@@ -937,6 +937,35 @@ void gowl_compositor_set_input_capture (GowlCompositor   *self,
 GowlInputCapture *gowl_compositor_get_input_capture (GowlCompositor *self);
 
 /**
+ * gowl_compositor_get_input_recorder:
+ * @self: a #GowlCompositor
+ *
+ * Returns the compositor-owned #GowlInputRecorder.  Unlike the
+ * input-capture machine this is always present -- it is created with
+ * the compositor -- but it refuses to start a recording until the
+ * `input-recording` config key has consented.  That key is separate
+ * from everything gating input *injection*, on purpose: an agent
+ * allowed to click must not thereby be allowed to watch somebody type.
+ *
+ * Include core/gowl-input-recorder.h for the recorder's own API.
+ *
+ * Returns: (transfer none) (nullable): the input recorder.
+ */
+GowlInputRecorder *gowl_compositor_get_input_recorder (GowlCompositor *self);
+
+/**
+ * gowl_compositor_apply_input_recording_config:
+ * @self: a #GowlCompositor
+ *
+ * Pushes the `input-recording` and `input-recording-deny-apps` config
+ * values into the recorder.  Called automatically whenever either key
+ * changes, so a reload that withdraws consent stops a running
+ * recording; exposed for an embedder that sets the config by other
+ * means.
+ */
+void gowl_compositor_apply_input_recording_config (GowlCompositor *self);
+
+/**
  * gowl_compositor_inject_pointer_motion:
  * @self: a #GowlCompositor
  * @dx: relative x delta in layout pixels

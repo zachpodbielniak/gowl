@@ -50,6 +50,10 @@ void gowl_mcp_register_tag_tools     (McpServer *server, GowlModuleMcp *module);
 void gowl_mcp_register_layout_tools  (McpServer *server, GowlModuleMcp *module);
 void gowl_mcp_register_config_tools  (McpServer *server, GowlModuleMcp *module);
 void gowl_mcp_register_input_tools   (McpServer *server, GowlModuleMcp *module);
+/* Input *recording* is its own category on purpose: a `tools:`
+ * allowlist must be able to grant injection without granting
+ * capture.  See modules/mcp/gowl-mcp-tools-record.c. */
+void gowl_mcp_register_record_tools  (McpServer *server, GowlModuleMcp *module);
 void gowl_mcp_register_screenshot_tools(McpServer *server, GowlModuleMcp *module);
 void gowl_mcp_register_clipboard_tools(McpServer *server, GowlModuleMcp *module);
 void gowl_mcp_register_process_tools (McpServer *server, GowlModuleMcp *module);

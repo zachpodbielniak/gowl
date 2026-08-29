@@ -1,0 +1,333 @@
+* Input Recording (teach-a-task)
+:PROPERTIES:
+:CUSTOM_ID: input-recording
+:END:
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: input-recording-overview
+:END:
+Gowl can *inject* input (=send_key=, =send_text=, =send_mouse=, the
+RemoteDesktop portal) and, with this feature, *observe* it: a bounded
+recorder that turns a human demonstration on the real desktop into an
+ordered list of key and pointer events, so a consumer can synthesise a
+reusable procedure from it.
+
+It is a keylogger by construction.  Everything below is about keeping
+that fact from becoming a problem, and about being precise where the
+protection stops.
+
+- =GowlInputRecorder= (=src/core/gowl-input-recorder.c=) -- the ring,
+  the consent flag, the deadline and the suppression policy.  Links no
+  wlroots and no Wayland; the compositor feeds it finished values, so
+  the policy is unit-testable with no compositor
+  (=tests/test-input-recorder.c=).
+- Passive taps in =gowl-compositor.c= -- =on_kb_key=,
+  =on_kb_modifiers=, =on_cursor_motion=, =on_cursor_motion_abs=,
+  =on_cursor_button=, =on_cursor_axis=.
+- MCP tools in =modules/mcp/gowl-mcp-tools-record.c=, registered as
+  their own category so a =tools:= allowlist can grant injection
+  without granting capture.
+
+Under =cmacs --gowl= the same recorder is reached through cmacs's own
+MCP server (=gowl_start_recording= and friends) and through the
+=gowl-*-recording= elisp functions.  There is one recorder per
+compositor either way.
+
+** Consent
+:PROPERTIES:
+:CUSTOM_ID: input-recording-consent
+:END:
+Recording is off until =input-recording: true= is set in the gowl
+config and reloaded.  Three properties of that gate matter:
+
+1. *It is not the injection switch.*  Nothing that enables =send_key=
+   enables =start_recording=.  Folding the two together would make
+   "may click for me" quietly mean "may watch me type", which is the
+   quiet widening this key exists to prevent.
+2. *It is followed, not sampled.*  The compositor watches
+   =notify::input-recording= on the config object, so every reload
+   path -- the =reload_config= MCP tool, =gowl-reload-config= in
+   cmacs, a C config -- takes effect immediately.
+3. *Withdrawing it stops what is running.*  Setting it back to =false=
+   and reloading ends the current recording, rather than only
+   affecting the next one.  A switch that applies to the future is not
+   a way to make the thing stop now.
+
+The MCP tools are registered whether or not consent has been given,
+and refuse with a message naming the config key.  That is deliberate:
+consent can be turned on at runtime, but an MCP client reads the tool
+list once at session start, so a tool that vanished when consent was
+off would need the client restarted to appear.
+
+** What you see while it runs
+:PROPERTIES:
+:CUSTOM_ID: input-recording-indicator
+:END:
+A saturated red frame, six pixels thick, around the whole output
+layout, for exactly as long as the recording is active.  It is:
+
+- four =wlr_scene_rect= nodes parented directly under the scene root,
+  raised to the top -- above fullscreen windows and above the
+  session-lock layer, because an indicator a window can cover is not
+  an indicator;
+- outside =self->layers[]=, which is the only thing =xytonode()=
+  searches, so it can never take a click;
+- resized whenever the output layout changes, so plugging a monitor in
+  mid-recording does not leave part of the screen unmarked.
+
+A start and a stop are also logged at =g_message= level, with the
+token, so the session log shows when a recording ran.
+
+** Stopping it
+:PROPERTIES:
+:CUSTOM_ID: input-recording-stopping
+:END:
+Four ways, in increasing order of "you did not start this":
+
+| How                                | Needs                          |
+|------------------------------------+--------------------------------|
+| =stop_recording(token)=            | the token                      |
+| the deadline                       | nothing; it is armed at start  |
+| =Super+Shift+Escape=               | nothing; a physical key        |
+| =input-recording: false= + reload  | the config                     |
+
+*=Super+Shift+Escape= is the one that matters.*  Somebody who did not
+start the recording has no token, and "ask the agent to stop" is not a
+way out of being recorded.  It is checked on the same footing as the
+InputCapture escape hatch, before anything can consume the key, and it
+is consumed rather than forwarded.
+
+The deadline defaults to 120 seconds and is capped at 3600.  It is
+armed as a real =wl_event_loop= timer, and re-checked at every entry
+point as a backstop -- checking only when the next event arrives would
+leave a forgotten recording nominally running on an idle machine and
+then capturing again the moment somebody came back.
+
+Buffered events survive every one of these: the stop ends the capture,
+not the read.  A final =drain_recording= still returns the tail.
+
+** The ring, and =dropped=
+:PROPERTIES:
+:CUSTOM_ID: input-recording-ring
+:END:
+The buffer is a fixed-size ring allocated at =start_recording=.  When
+it is full the *oldest* entry is overwritten and =dropped= is
+incremented.  It never grows: an unbounded allocation inside the
+compositor process is a way to lose a session, not a way to keep a
+demonstration.
+
+Every payload reports both =dropped= (since the last drain) and
+=dropped_total= (this recording).  A truncated demonstration is
+reported rather than passed off as complete, because a silently
+truncated demonstration teaches half a task.
+
+*Motion is coalesced.*  Consecutive pointer-motion events less than 8
+ms apart are merged into one entry, accumulating =dx= / =dy= and
+keeping the later position and a =merged= count.  Without it a single
+drag is hundreds of events, fills the ring, and pushes out the clicks
+and keystrokes the demonstration is actually about.  A merge is
+counted as =coalesced=, never as =dropped= -- nothing is lost but the
+sampling rate.
+
+Defaults and ceilings:
+
+| Limit         | Default | Ceiling |
+|---------------+---------+---------|
+| =max_seconds= |     120 |    3600 |
+| =max_events=  |    4096 |  100000 |
+
+** Secret suppression -- and exactly where it stops
+:PROPERTIES:
+:CUSTOM_ID: input-recording-secrets
+:END:
+This is the most important section in this document, and the honest
+version of it is shorter than anyone would like.
+
+*What gowl can be certain about:* the session is locked.
+=gowl_compositor_is_locked()= covers both an =ext-session-lock-v1=
+client (swaylock, gtklock) and gowl's own screenlock module.  Input is
+never recorded while the session is locked.
+
+*What gowl can guess at:* the focused window's app-id and title.
+Capture is suspended while either matches a glob on the deny list,
+which ships with the common credential prompts (pinentry, polkit,
+askpass, gcr-prompter, gnome-keyring, seahorse, KeePassXC, Bitwarden,
+1Password, Proton Pass, swaylock, gtklock) plus title patterns
+(=*password*=, =*passphrase*=, =*sign in*=, =*log in*=, =*login*=,
+=*unlock*=).  Add your own with =input-recording-deny-apps=; they are
+*added* to the built-in list, never substituted for it, so adding a
+pattern for your own vault cannot silently drop the protection for
+pinentry.
+
+*What gowl cannot do at all:* recognise a password field.
+
+There is no Wayland equivalent of GNOME Shell's
+"the key-focus actor is a =Clutter.Text= with =password_char= set".
+In GNOME Shell the entry *is* a compositor-side actor, so the
+compositor can see it.  In Wayland a client's widget tree is entirely
+private to the client; a compositor knows a surface, a size, an app-id
+and a title, and nothing about what is inside.  Gowl also implements
+neither =text-input-v3= nor =input-method-v2=, and even if it did,
+=CONTENT_PURPOSE_PASSWORD= only arrives when an input method is
+active, which for an ordinary GTK or Qt application it usually is not.
+
+*So: a password typed into a form inside an ordinary window whose
+app-id and title the deny list does not name IS recorded.*  A browser
+login page whose title does not contain one of the words above is the
+obvious case.  Review a trace before it is stored or shared, and treat
+one as credential material until you have.
+
+That sentence is repeated in the =secret_suppression= member of every
+payload the recorder produces -- status, drain and stop alike --
+because a trace is reviewed in a chat window, not next to this
+document.
+
+A suppressed event is not stored *and is not silent*: the
+=suppressed= / =suppressed_total= counters and the
+=suppress_reasons= array say how many events were withheld and why.  A
+gap the trace does not explain is indistinguishable from a gap in the
+demonstration.
+
+** Two clocks
+:PROPERTIES:
+:CUSTOM_ID: input-recording-clocks
+:END:
+A recorded event carries =wall_us= (=CLOCK_REALTIME=, microseconds
+since the epoch) and =offset_ms= (from the start of *this* recording).
+It deliberately carries *no* compositor event timestamp.
+
+=gowl_compositor_inject_pointer_button()= and friends stamp synthetic
+events from =CLOCK_MONOTONIC= milliseconds -- the same clock real
+events arrive on.  A =time_msec= in a recorded payload would therefore
+be a value that could be handed straight back to an injection call,
+which is how a replay ends up asserting that a human pressed a key at
+a time in the past.  Neither of the two fields that *are* emitted is
+usable as a synthetic timestamp, which is the point.
+=tests/test-input-recorder.c= asserts that no payload contains the
+string =time_msec=.
+
+** What is recorded, and what is not
+:PROPERTIES:
+:CUSTOM_ID: input-recording-scope
+:END:
+The taps sit on the =wlr_cursor= and keyboard listeners.  Gowl's own
+injection helpers deliberately bypass those -- they drive
+=wlr_seat_*_notify_*= directly -- so *synthetic input gowl produced is
+never recorded*.  A recording of an agent clicking is empty.
+
+*Virtual-input clients, and a caveat that is currently dormant.*  gowl
+creates =wlr_virtual_keyboard_manager_v1= and
+=wlr_virtual_pointer_manager_v1= (=gowl-compositor.c=, "protocol
+globals") and listens to *neither* manager's =new_virtual_*= signal.
+Only =backend->events.new_input= is handled, and a wlroots virtual
+device does not arrive that way -- the compositor has to adopt it from
+the manager itself, as dwl does.  So today a client binding either
+global gets a working protocol object whose events reach nothing: not
+other clients, not these listeners, and not the recorder.
+
+That is a pre-existing gap in gowl's input handling, not something
+this feature chose.  It matters here because *the moment somebody adds
+those listeners, this caveat becomes live*: an adopted virtual
+keyboard joins the same =wlr_keyboard_group= and an adopted virtual
+pointer the same =wlr_cursor= that the taps sit on, and its events
+become indistinguishable from hardware at this layer.  A recording
+made while such a client ran would then contain its events.  Re-check
+this paragraph against the code rather than trusting it.
+
+The key tap runs *before* any keybind check, so a demonstration
+includes the compositor keybinds the person used.  It is the
+suppression policy, not the position of the tap, that keeps
+lock-screen keystrokes out -- and it counts what it withheld.
+
+** MCP tools
+:PROPERTIES:
+:CUSTOM_ID: input-recording-tools
+:END:
+| Tool                | Arguments                    | Returns                            |
+|---------------------+------------------------------+------------------------------------|
+| =start_recording=   | =max_seconds?=, =max_events?= | status, including the token        |
+| =drain_recording=   | =token=                      | events so far + counters; keeps going |
+| =stop_recording=    | =token=                      | the tail + counters; stops         |
+| =recording_status=  | --                           | state and counters, consuming nothing |
+
+All four go through =gowl_mcp_dispatch_call()= onto the compositor
+thread, like every other gowl MCP tool.
+
+*** Payload shape
+:PROPERTIES:
+:CUSTOM_ID: input-recording-payload
+:END:
+#+begin_src js
+{
+  "token": "9f2c...",           // null before the first start
+  "active": true,
+  "consent": true,
+  "started_wall_us": 1756400000000000,
+  "max_seconds": 120,
+  "max_events": 4096,
+  "buffered": 12,
+  "dropped": 0,                 // since the last drain (drain/stop only)
+  "dropped_total": 0,           // this whole recording
+  "suppressed": 0,
+  "suppressed_total": 0,
+  "coalesced": 31,
+  "coalesced_total": 31,
+  "suppress_reasons": ["the session is locked"],
+  "stop_reason": null,
+  "secret_suppression": "...",  // the caveat above, in every payload
+  "generated_wall_us": 1756400012000000,
+  "events": [                   // drain/stop only
+    { "type": "key", "offset_ms": 812.5, "wall_us": ...,
+      "keycode": 30, "keysym": "a", "state": "press", "mods": 0 },
+    { "type": "pointer_motion", "offset_ms": 900.1, "wall_us": ...,
+      "x": 842.0, "y": 511.0, "dx": 12.0, "dy": -4.0, "merged": 5 },
+    { "type": "pointer_button", "offset_ms": 940.0, "wall_us": ...,
+      "button": 272, "state": "press", "x": 842.0, "y": 511.0, "mods": 0 },
+    { "type": "pointer_axis", "offset_ms": 1100.0, "wall_us": ...,
+      "axis": "vertical", "value": 15.0, "discrete": 120,
+      "x": 842.0, "y": 511.0 },
+    { "type": "modifiers", "offset_ms": 1200.0, "wall_us": ...,
+      "depressed": 64, "latched": 0, "locked": 0, "group": 0 }
+  ]
+}
+#+end_src
+
+=keysym= is the =xkb_keysym_get_name()= spelling, or =null= when the
+keycode resolved to nothing.  =keycode= is the evdev code, which is
+what an injection call takes.
+
+*** Learning that the state changed
+:PROPERTIES:
+:CUSTOM_ID: input-recording-notification
+:END:
+There is *no push notification over MCP*, and that is a decision
+rather than an omission.  mcp-glib's
+=mcp_server_notify_resource_updated()= targets one =McpServer=; the
+gowl MCP module runs two different server objects, both on the MCP
+thread, while the recorder's signal fires on the compositor thread.  A
+cross-thread notify would be a worse thing to own than a poll.
+
+Two channels exist instead:
+
+- *In-process*: the =GowlInputRecorder::changed= signal
+  (=active=, =token=).  This is what the compositor uses to raise the
+  indicator and arm the timer, and it is what an embedder such as
+  cmacs should connect to.
+- *Over MCP*: every payload -- =drain_recording= and =stop_recording=
+  included, not just =recording_status= -- carries =active= and
+  =stop_reason=.  A consumer that is already draining therefore learns
+  on its next call that the recording ended, and why (deadline,
+  keyboard, consent withdrawn, shutdown).  A consumer that is not
+  draining polls =recording_status=.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: input-recording-config
+:END:
+#+begin_src yaml
+input-recording: true
+input-recording-deny-apps: "*my-vault*, *corp-sso*"
+#+end_src
+
+Both are ordinary =GowlConfig= properties, so a C config can set them
+too.  See [[file:configuration.org][Configuration]].

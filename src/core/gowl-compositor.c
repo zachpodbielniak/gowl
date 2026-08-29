@@ -197,6 +197,21 @@ static void on_monitor_request_state(struct wl_listener *listener, void *data);
 /* key repeat timer callback */
 static int  on_key_repeat         (void *data);
 
+/* input recording */
+static void on_recording_changed  (GowlInputRecorder *recorder,
+                                   gboolean           active,
+                                   const gchar       *token,
+                                   gpointer           user_data);
+static void recording_indicator_sync(GowlCompositor *self);
+static void recording_note        (GowlCompositor          *self,
+                                   const GowlRecordedEvent *event);
+static void recording_note_motion (GowlCompositor *self,
+                                   gdouble         dx,
+                                   gdouble         dy);
+static void on_recording_config_notify(GObject    *config,
+                                       GParamSpec *pspec,
+                                       gpointer    user_data);
+
 /* layer surface lifecycle callbacks */
 static void on_layer_commit       (struct wl_listener *listener, void *data);
 static void on_layer_unmap        (struct wl_listener *listener, void *data);
@@ -303,6 +318,29 @@ gowl_compositor_dispose(GObject *object)
 
 	self = GOWL_COMPOSITOR(object);
 	self->running = FALSE;
+
+	if (self->config != NULL)
+		g_signal_handlers_disconnect_by_func(
+			self->config,
+			(gpointer)on_recording_config_notify, self);
+
+	/* Stop any running recording before the indicator's scene nodes go
+	 * with the scene: a recording that outlives its indicator is the
+	 * one state this feature must never reach. */
+	if (self->input_recorder != NULL) {
+		gowl_input_recorder_force_stop(self->input_recorder,
+		                               "the compositor is shutting down");
+		if (self->rec_changed_id != 0) {
+			g_signal_handler_disconnect(self->input_recorder,
+			                            self->rec_changed_id);
+			self->rec_changed_id = 0;
+		}
+	}
+	if (self->rec_stop_source != NULL) {
+		wl_event_source_remove(self->rec_stop_source);
+		self->rec_stop_source = NULL;
+	}
+	g_clear_object(&self->input_recorder);
 
 	/* Release GObject sub-object wrappers */
 	g_clear_object(&self->seat);
@@ -731,6 +769,15 @@ gowl_compositor_init(GowlCompositor *self)
 	self->fullscreen_bg_color[2] = 0.1f;
 	self->fullscreen_bg_color[3] = 1.0f;
 
+	/* The recorder exists from construction so every entry point can
+	 * ask it questions without a NULL check that would answer
+	 * "not recording" for the wrong reason.  It refuses to start
+	 * until consent arrives from the config. */
+	self->input_recorder = gowl_input_recorder_new();
+	self->rec_changed_id = g_signal_connect(
+		self->input_recorder, "changed",
+		G_CALLBACK(on_recording_changed), self);
+
 	self->prefloat_pids = g_array_new(FALSE, FALSE, sizeof(pid_t));
 	self->prefloat_hints = g_array_new(FALSE, FALSE,
 	                                    sizeof(GowlPrefloatHintEntry));
@@ -769,7 +816,25 @@ gowl_compositor_set_config(
 ){
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
+	if (self->config != NULL && self->config != config)
+		g_signal_handlers_disconnect_by_func(
+			self->config,
+			(gpointer)on_recording_config_notify, self);
+
 	self->config = config;
+
+	/* Follow the two recording keys rather than reading them once.
+	 * Every reload path -- the MCP tool, the cmacs DEFUN, a C config --
+	 * goes through g_object_set on the config, and a consent flag that
+	 * only took effect at startup would be a switch nobody could turn
+	 * back off without restarting their desktop. */
+	if (config != NULL) {
+		g_signal_connect(config, "notify::input-recording",
+		                 G_CALLBACK(on_recording_config_notify), self);
+		g_signal_connect(config, "notify::input-recording-deny-apps",
+		                 G_CALLBACK(on_recording_config_notify), self);
+		gowl_compositor_apply_input_recording_config(self);
+	}
 }
 
 /**
@@ -875,6 +940,313 @@ gowl_compositor_get_input_capture(GowlCompositor *self)
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
 	return self->input_capture;
+}
+
+
+/* ---------------------------------------------------------------
+ * Input recording (teach-a-task).
+ *
+ * A passive observer of *real* input.  The taps live in the
+ * wlr_cursor and keyboard listeners, which the injection helpers
+ * below deliberately bypass -- they drive wlr_seat_*_notify_*
+ * directly -- so gowl's own synthetic input is never recorded and no
+ * captured value can come back round as a synthetic timestamp.
+ *
+ * (gowl advertises wlr_virtual_pointer_v1 and wlr_virtual_keyboard_v1
+ * but listens to neither manager's new_virtual_* signal, so a client
+ * binding either global reaches nothing at all today -- not clients,
+ * not these listeners, not the recorder.  If a listener is ever added,
+ * as dwl has one, those devices land in the same keyboard group and
+ * wlr_cursor the taps sit on and become indistinguishable from
+ * hardware here.  Re-read this comment then; do not assume it still
+ * holds.  Recorded in docs/input-recording.org.)
+ * --------------------------------------------------------------- */
+
+/* Thickness of the on-screen recording frame, in layout pixels. */
+#define GOWL_REC_INDICATOR_THICKNESS (6)
+
+/* Deliberately saturated: the indicator's whole job is to be
+ * impossible to mistake for a window border. */
+static const float rec_indicator_color[4] = { 0.95f, 0.09f, 0.13f, 0.9f };
+
+/**
+ * recording_indicator_sync:
+ *
+ * Raises or lowers the frame that says a recording is running.  Four
+ * thin rects around the output layout's extents, parented directly
+ * under the scene root -- xytonode only searches self->layers[], so
+ * they can never take a click.
+ *
+ * Called from the recorder's "changed" signal and from every place the
+ * output layout is resized, so the frame follows a monitor being
+ * plugged in mid-recording.
+ */
+static void
+recording_indicator_sync(GowlCompositor *self)
+{
+	struct wlr_box full;
+	gboolean       active;
+	gint           i;
+	gint           t;
+	gint           side_h;
+
+	if (self->scene == NULL || self->output_layout == NULL)
+		return;
+
+	active = self->input_recorder != NULL
+	         && gowl_input_recorder_is_active(self->input_recorder);
+
+	if (!active) {
+		for (i = 0; i < 4; i++) {
+			if (self->rec_indicator[i] == NULL)
+				continue;
+			wlr_scene_node_destroy(&self->rec_indicator[i]->node);
+			self->rec_indicator[i] = NULL;
+		}
+		return;
+	}
+
+	wlr_output_layout_get_box(self->output_layout, NULL, &full);
+	if (wlr_box_empty(&full))
+		return;
+
+	t = GOWL_REC_INDICATOR_THICKNESS;
+	if (full.height < 2 * t || full.width < 2 * t)
+		t = 1;
+	side_h = full.height - 2 * t;
+	if (side_h < 1)
+		side_h = 1;
+
+	for (i = 0; i < 4; i++) {
+		if (self->rec_indicator[i] == NULL)
+			self->rec_indicator[i] = wlr_scene_rect_create(
+				&self->scene->tree, 1, 1,
+				rec_indicator_color);
+		if (self->rec_indicator[i] == NULL)
+			return;
+	}
+
+	wlr_scene_rect_set_size(self->rec_indicator[0], full.width, t);
+	wlr_scene_node_set_position(&self->rec_indicator[0]->node,
+	                            full.x, full.y);
+
+	wlr_scene_rect_set_size(self->rec_indicator[1], full.width, t);
+	wlr_scene_node_set_position(&self->rec_indicator[1]->node,
+	                            full.x, full.y + full.height - t);
+
+	wlr_scene_rect_set_size(self->rec_indicator[2], t, side_h);
+	wlr_scene_node_set_position(&self->rec_indicator[2]->node,
+	                            full.x, full.y + t);
+
+	wlr_scene_rect_set_size(self->rec_indicator[3], t, side_h);
+	wlr_scene_node_set_position(&self->rec_indicator[3]->node,
+	                            full.x + full.width - t, full.y + t);
+
+	/* Above everything, including the session-lock block layer: an
+	 * indicator a fullscreen window can cover is not an indicator. */
+	for (i = 0; i < 4; i++) {
+		wlr_scene_node_set_enabled(&self->rec_indicator[i]->node, TRUE);
+		wlr_scene_node_raise_to_top(&self->rec_indicator[i]->node);
+	}
+}
+
+/**
+ * on_recording_deadline:
+ *
+ * wl_event_loop timer callback for the recorder's self-stop deadline.
+ */
+static int
+on_recording_deadline(void *data)
+{
+	GowlCompositor *self;
+
+	self = (GowlCompositor *)data;
+	if (self->input_recorder != NULL)
+		gowl_input_recorder_check_expiry(self->input_recorder);
+
+	return 0;
+}
+
+/**
+ * on_recording_changed:
+ *
+ * The recorder started or stopped.  Syncs the indicator and arms (or
+ * disarms) the deadline timer.
+ *
+ * The timer is what makes "it stops itself" true: checking the
+ * deadline only when the next event arrives leaves a forgotten
+ * recording nominally running, indicator and all, on an idle machine
+ * -- and then capturing again the moment somebody comes back.
+ */
+static void
+on_recording_changed(GowlInputRecorder *recorder,
+                     gboolean           active,
+                     const gchar       *token,
+                     gpointer           user_data)
+{
+	GowlCompositor *self;
+
+	self = (GowlCompositor *)user_data;
+
+	recording_indicator_sync(self);
+
+	if (self->rec_stop_source != NULL) {
+		wl_event_source_remove(self->rec_stop_source);
+		self->rec_stop_source = NULL;
+	}
+
+	if (active && self->event_loop != NULL) {
+		gint64 remain_us;
+
+		remain_us = gowl_input_recorder_get_deadline_us(recorder)
+		            - g_get_monotonic_time();
+		if (remain_us < 0)
+			remain_us = 0;
+
+		self->rec_stop_source = wl_event_loop_add_timer(
+			self->event_loop, on_recording_deadline, self);
+		if (self->rec_stop_source != NULL)
+			wl_event_source_timer_update(
+				self->rec_stop_source,
+				(int)(remain_us / 1000) + 1);
+	}
+
+	/* At g_message level on purpose: a keylogger starting belongs in
+	 * the session log at the same volume as anything else the user
+	 * would want to find afterwards. */
+	g_message("gowl: input recording %s (token %s)",
+	          active ? "started" : "stopped",
+	          token != NULL ? token : "none");
+}
+
+/**
+ * recording_note:
+ *
+ * Hands one observed event to the recorder, with the three facts the
+ * suppression policy needs.
+ *
+ * The facts are gathered per event rather than cached on focus
+ * changes: a title changes under a window that already has focus --
+ * a browser navigating to a sign-in page is exactly the case that
+ * matters -- and a cache updated only on focus would miss it.
+ */
+static void
+recording_note(GowlCompositor *self, const GowlRecordedEvent *event)
+{
+	GowlClient  *focused;
+	const gchar *app_id;
+	const gchar *title;
+	const gchar *reason;
+
+	if (self->input_recorder == NULL
+	    || !gowl_input_recorder_is_active(self->input_recorder))
+		return;
+
+	focused = gowl_compositor_get_focused_client(self);
+	app_id  = focused != NULL ? gowl_client_get_app_id(focused) : NULL;
+	title   = focused != NULL ? gowl_client_get_title(focused) : NULL;
+
+	reason = gowl_input_recorder_suppress_reason(
+		self->input_recorder, self->locked, app_id, title);
+
+	gowl_input_recorder_note(self->input_recorder, event, reason);
+}
+
+/**
+ * recording_note_motion:
+ *
+ * Records a pointer motion, taking the absolute position from the
+ * cursor after it has been moved.
+ */
+static void
+recording_note_motion(GowlCompositor *self, gdouble dx, gdouble dy)
+{
+	GowlRecordedEvent rec;
+
+	if (self->input_recorder == NULL || self->wlr_cursor == NULL)
+		return;
+
+	memset(&rec, 0, sizeof rec);
+	rec.type = GOWL_RECORDED_EVENT_POINTER_MOTION;
+	rec.dx   = dx;
+	rec.dy   = dy;
+	rec.x    = self->wlr_cursor->x;
+	rec.y    = self->wlr_cursor->y;
+	recording_note(self, &rec);
+}
+
+/**
+ * gowl_compositor_get_input_recorder:
+ * @self: a #GowlCompositor
+ *
+ * Returns the compositor's input recorder.  Always present, but it
+ * refuses to start until the `input-recording` config key has
+ * consented.
+ *
+ * Returns: (transfer none) (nullable): the #GowlInputRecorder
+ */
+GowlInputRecorder *
+gowl_compositor_get_input_recorder(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->input_recorder;
+}
+
+/**
+ * gowl_compositor_apply_input_recording_config:
+ * @self: a #GowlCompositor
+ *
+ * Pushes the two `input-recording*` config values into the recorder.
+ * Called on every change to either key, so turning consent off in the
+ * config and reloading stops a running recording rather than only
+ * affecting the next one.
+ */
+void
+gowl_compositor_apply_input_recording_config(GowlCompositor *self)
+{
+	const gchar *deny;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->input_recorder == NULL || self->config == NULL)
+		return;
+
+	/* Reset to the built-in list first: without it a reload that
+	 * removed a pattern would keep it, and two reloads would
+	 * accumulate duplicates. */
+	gowl_input_recorder_set_deny_patterns(self->input_recorder, NULL);
+
+	deny = gowl_config_get_input_recording_deny_apps(self->config);
+	if (deny != NULL && *deny != '\0') {
+		g_auto(GStrv) parts = NULL;
+		gsize i;
+
+		parts = g_strsplit(deny, ",", -1);
+		for (i = 0; parts[i] != NULL; i++)
+			g_strstrip(parts[i]);
+		gowl_input_recorder_add_deny_patterns(
+			self->input_recorder,
+			(const gchar *const *)parts);
+	}
+
+	/* Consent last, so withdrawing it stops a running recording with
+	 * the final deny list already in place. */
+	gowl_input_recorder_set_consent(
+		self->input_recorder,
+		gowl_config_get_input_recording(self->config));
+}
+
+static void
+on_recording_config_notify(GObject    *config,
+                           GParamSpec *pspec,
+                           gpointer    user_data)
+{
+	(void)config;
+	(void)pspec;
+
+	gowl_compositor_apply_input_recording_config(
+		(GowlCompositor *)user_data);
 }
 
 /* ---------------------------------------------------------------
@@ -4836,6 +5208,8 @@ gowl_compositor_notify_output_resized(GowlCompositor    *self,
 			wlr_scene_rect_set_size(self->root_bg,
 			                        new_box.width, new_box.height);
 
+		recording_indicator_sync(self);
+
 		if (self->module_mgr != NULL) {
 			gowl_module_manager_dispatch_wallpaper_output(
 				self->module_mgr, self, m);
@@ -5143,6 +5517,10 @@ on_layout_change(struct wl_listener *listener, void *data)
 		wlr_output_layout_get_box(self->output_layout, NULL, &full);
 		wlr_scene_rect_set_size(self->root_bg, full.width, full.height);
 	}
+
+	/* ... and the recording frame with it, so plugging a monitor in
+	 * mid-recording does not leave part of the screen unmarked. */
+	recording_indicator_sync(self);
 
 	/* Notify wallpaper and bar providers so they can resize */
 	if (self->module_mgr != NULL) {
@@ -5909,6 +6287,25 @@ on_kb_key(struct wl_listener *listener, void *data)
 	nsyms = xkb_state_key_get_syms(kb->xkb_state, keycode, &syms);
 	mods = wlr_keyboard_get_modifiers(kb);
 
+	/* Record before anything can consume the key.  A demonstration
+	 * includes the compositor keybinds the person used, and a tap
+	 * placed after the keybind checks would drop exactly those.  It is
+	 * the suppression policy in recording_note(), not the position of
+	 * this call, that keeps lock-screen keystrokes out -- and it
+	 * counts what it withheld, so the trace says so. */
+	if (self->input_recorder != NULL) {
+		GowlRecordedEvent rec;
+
+		memset(&rec, 0, sizeof rec);
+		rec.type    = GOWL_RECORDED_EVENT_KEY;
+		rec.keycode = event->keycode;
+		rec.keysym  = nsyms > 0 ? (guint32)syms[0] : 0;
+		rec.state   = (event->state == WL_KEYBOARD_KEY_STATE_PRESSED)
+		              ? 1 : 0;
+		rec.mods    = mods;
+		recording_note(self, &rec);
+	}
+
 	if (nsyms > 0 && event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		g_info("on_kb_key: keycode=%u sym=0x%04x mods=0x%x clean=0x%x",
 		       keycode, (guint)syms[0], mods, GOWL_CLEANMASK(mods));
@@ -6049,6 +6446,27 @@ on_kb_key(struct wl_listener *listener, void *data)
 		}
 	}
 
+	/* Recording escape hatch: Super+Shift+Escape stops any running
+	 * recording, without its token.  Somebody who did not start the
+	 * recording has no handle on it, and "ask the agent to stop" is not
+	 * a way out of being recorded.  Checked here, on the same footing
+	 * as the InputCapture hatch below, and consumed. */
+	if (self->input_recorder != NULL
+	    && event->state == WL_KEYBOARD_KEY_STATE_PRESSED
+	    && (mods & WLR_MODIFIER_LOGO) && (mods & WLR_MODIFIER_SHIFT)
+	    && gowl_input_recorder_is_active(self->input_recorder)) {
+		for (i = 0; i < nsyms; i++) {
+			if (syms[i] != XKB_KEY_Escape)
+				continue;
+			gowl_input_recorder_force_stop(
+				self->input_recorder,
+				"stopped from the keyboard "
+				"(Super+Shift+Escape)");
+			handled = TRUE;
+			break;
+		}
+	}
+
 	/* InputCapture escape hatch: Super+Escape force-deactivates capture
 	 * unconditionally, even while active.  This is the user's guaranteed
 	 * way out -- if a misbehaving KVM client (or a bug) wedges capture
@@ -6125,6 +6543,20 @@ on_kb_modifiers(struct wl_listener *listener, void *data)
 
 	self = wl_container_of(listener, self, kb_modifiers);
 	(void)data;
+
+	if (self->input_recorder != NULL) {
+		struct wlr_keyboard_modifiers *rm;
+		GowlRecordedEvent              rec;
+
+		rm = &self->wlr_kb_group->keyboard.modifiers;
+		memset(&rec, 0, sizeof rec);
+		rec.type           = GOWL_RECORDED_EVENT_MODIFIERS;
+		rec.mods_depressed = rm->depressed;
+		rec.mods_latched   = rm->latched;
+		rec.mods_locked    = rm->locked;
+		rec.mods_group     = rm->group;
+		recording_note(self, &rec);
+	}
 
 	/* InputCapture: while active, divert modifier state to the sink and
 	 * do not forward it to a client (the remote tracks modifiers via the
@@ -6367,6 +6799,7 @@ on_cursor_motion(struct wl_listener *listener, void *data)
 	wlr_cursor_move(self->wlr_cursor, &event->pointer->base,
 	                event->delta_x, event->delta_y);
 	gowl_compositor_motionnotify(self, event->time_msec);
+	recording_note_motion(self, event->delta_x, event->delta_y);
 	/* Stream the relative delta to deskflow's ei egress ONLY if capture
 	 * was already active before this motion.  Never forward the motion
 	 * that *activated* capture: deskflow handles the D-Bus Activated
@@ -6414,6 +6847,7 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 		                          self->cap_motion_dx,
 		                          self->cap_motion_dy);
 	gowl_compositor_motionnotify(self, event->time_msec);
+	recording_note_motion(self, self->cap_motion_dx, self->cap_motion_dy);
 }
 
 /**
@@ -6435,6 +6869,24 @@ on_cursor_button(struct wl_listener *listener, void *data)
 
 	wlr_idle_notifier_v1_notify_activity(self->idle_notifier,
 	                                     self->wlr_seat);
+
+	if (self->input_recorder != NULL) {
+		GowlRecordedEvent    rec;
+		struct wlr_keyboard *rkbd;
+
+		memset(&rec, 0, sizeof rec);
+		rec.type   = GOWL_RECORDED_EVENT_POINTER_BUTTON;
+		rec.button = event->button;
+		rec.state  = (event->state == WL_POINTER_BUTTON_STATE_PRESSED)
+		             ? 1 : 0;
+		if (self->wlr_cursor != NULL) {
+			rec.x = self->wlr_cursor->x;
+			rec.y = self->wlr_cursor->y;
+		}
+		rkbd = wlr_seat_get_keyboard(self->wlr_seat);
+		rec.mods = rkbd != NULL ? wlr_keyboard_get_modifiers(rkbd) : 0;
+		recording_note(self, &rec);
+	}
 
 	/* InputCapture: while active, divert the button to the sink and do
 	 * not forward it to any client (and skip the focus/grab logic). */
@@ -6585,6 +7037,22 @@ on_cursor_axis(struct wl_listener *listener, void *data)
 
 	wlr_idle_notifier_v1_notify_activity(self->idle_notifier,
 	                                     self->wlr_seat);
+
+	if (self->input_recorder != NULL) {
+		GowlRecordedEvent rec;
+
+		memset(&rec, 0, sizeof rec);
+		rec.type     = GOWL_RECORDED_EVENT_POINTER_AXIS;
+		rec.axis     = (event->orientation
+		                == WL_POINTER_AXIS_HORIZONTAL_SCROLL) ? 1 : 0;
+		rec.value    = event->delta;
+		rec.discrete = event->delta_discrete;
+		if (self->wlr_cursor != NULL) {
+			rec.x = self->wlr_cursor->x;
+			rec.y = self->wlr_cursor->y;
+		}
+		recording_note(self, &rec);
+	}
 
 	/* InputCapture: while active, divert scroll to the sink instead of
 	 * forwarding it to a client.  axis 0 == vertical, 1 == horizontal. */

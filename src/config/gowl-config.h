@@ -167,6 +167,12 @@ typedef struct {
  * @GOWL_CONFIG_PROP_MENU: "menu" property.
  * @GOWL_CONFIG_PROP_SLOPPYFOCUS: "sloppyfocus" property.
  * @GOWL_CONFIG_PROP_MANAGE_LID: "manage-lid" property.
+ * @GOWL_CONFIG_PROP_INPUT_RECORDING: "input-recording" property.
+ *   Consent for recording real input.  Deliberately separate from the
+ *   switches that gate input *injection*.
+ * @GOWL_CONFIG_PROP_INPUT_RECORDING_DENY_APPS:
+ *   "input-recording-deny-apps" property.  Extra glob patterns whose
+ *   matching focused window suspends recording.
  * @GOWL_CONFIG_PROP_LOG_LEVEL: "log-level" property.
  * @GOWL_CONFIG_PROP_LOG_FILE: "log-file" property.
  * @GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS:
@@ -197,6 +203,8 @@ typedef enum {
 	GOWL_CONFIG_PROP_MENU,
 	GOWL_CONFIG_PROP_SLOPPYFOCUS,
 	GOWL_CONFIG_PROP_MANAGE_LID,
+	GOWL_CONFIG_PROP_INPUT_RECORDING,
+	GOWL_CONFIG_PROP_INPUT_RECORDING_DENY_APPS,
 	GOWL_CONFIG_PROP_LOG_LEVEL,
 	GOWL_CONFIG_PROP_LOG_FILE,
 	GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS,
@@ -393,6 +401,29 @@ gboolean gowl_config_get_sloppyfocus(GowlConfig *self);
  *   shut and at least one external display is connected.
  */
 gboolean gowl_config_get_manage_lid(GowlConfig *self);
+
+/**
+ * gowl_config_get_input_recording:
+ * @self: a #GowlConfig
+ *
+ * Returns whether input recording has been consented to.  Off unless
+ * the config says otherwise; see docs/input-recording.org.
+ *
+ * Returns: %TRUE when a recording may be started
+ */
+gboolean gowl_config_get_input_recording(GowlConfig *self);
+
+/**
+ * gowl_config_get_input_recording_deny_apps:
+ * @self: a #GowlConfig
+ *
+ * Returns the comma-separated extra deny patterns, possibly empty.
+ * These are added to the recorder's built-in list of credential
+ * prompts, never substituted for it.
+ *
+ * Returns: (transfer none): the pattern list
+ */
+const gchar *gowl_config_get_input_recording_deny_apps(GowlConfig *self);
 
 /**
  * gowl_config_get_log_level:

@@ -222,6 +222,30 @@ Tags use bitmasks: tag 1 = =1=, tag 2 = =2=, tag 3 = =4=, tags 1+2 = =3=, etc.
 Key names use XKB names: =Return=, =space=, =a=, =Escape=, =Tab=, =BackSpace=, =F1=, etc.
 Button names: =left=, =right=, =middle=, or numeric codes.
 
+*** Input Recording
+:PROPERTIES:
+:CUSTOM_ID: input-recording-tools-mcp
+:END:
+The mirror image of the tools above: observing real input rather than
+injecting synthetic input.  A separate tool category on purpose, so a
+=tools:= allowlist can grant injection without granting capture -- and
+gated again by the compositor's own =input-recording= config key,
+which is *off by default*.  An allowlist entry alone cannot turn
+recording on.
+
+| Tool               | Parameters                    | Description                                        |
+|--------------------+-------------------------------+----------------------------------------------------|
+| =start_recording=  | =max_seconds?=, =max_events?= | Begin a bounded recording; returns a token         |
+| =drain_recording=  | =token=                       | Take what is buffered, keep recording              |
+| =stop_recording=   | =token=                       | Stop and take the tail                             |
+| =recording_status= | (none)                        | State and counters, consuming nothing              |
+
+While a recording runs the whole screen is framed in red, and
+=Super+Shift+Escape= stops it without needing the token.  Capture is
+suppressed while the session is locked and while the focused window
+matches the deny list, but *gowl cannot see a password field inside an
+ordinary window* -- read [[file:input-recording.org][Input Recording]] before enabling this.
+
 *** Screenshot
 :PROPERTIES:
 :CUSTOM_ID: screenshot

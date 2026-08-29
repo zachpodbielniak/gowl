@@ -435,6 +435,45 @@ The split keeps gowl core free of D-Bus and libeis:
   =libeis-1.0= is present. Full reference: [[file:input-capture.org][Input
   Capture & Injection]].
 
+** Input Recording (teach-a-task)
+:PROPERTIES:
+:CUSTOM_ID: input-recording-arch
+:END:
+=GowlInputRecorder= (=src/core/gowl-input-recorder.c=) is the *observing*
+counterpart to the injection helpers: a bounded ring of real key and
+pointer events, so a human demonstration can become a reusable
+procedure.  Like =GowlInputCapture= it links no wlroots and no Wayland
+-- the compositor feeds it finished values and the three facts its
+suppression policy needs -- which is what makes the policy testable
+without a compositor.
+
+Four properties are load-bearing rather than incidental, and each has a
+test in =tests/test-input-recorder.c=:
+
+- *Its own consent gate.*  =input-recording= (default =false=) is
+  separate from everything that gates injection.  An agent allowed to
+  click must not thereby be allowed to watch you type.
+- *A ring that reports what it dropped.*  Never grows; =dropped= and
+  =dropped_total= are in every payload, because a silently truncated
+  demonstration teaches half a task.
+- *It stops itself.*  A =wl_event_loop= timer for =max_seconds=, plus a
+  deadline re-check at every entry point.
+- *Two clocks.*  Recorded events carry wall time and an offset from the
+  recording's start, and deliberately no compositor event timestamp --
+  the injection helpers stamp synthetic events from the same monotonic
+  clock real ones arrive on.
+
+The taps sit on the =wlr_cursor= and keyboard listeners, which the
+injection helpers bypass, so gowl's own synthetic input is never
+recorded.  A red frame is drawn around the whole layout for as long as
+a recording runs, and =Super+Shift+Escape= stops one without its token.
+
+*The protection gowl cannot offer* is a compositor-side notion of a
+password field: Wayland gives a compositor no window-internal
+knowledge.  The lock screen and an app-id/title deny list are what
+exist.  Full reference, including exactly where that stops:
+[[file:input-recording.org][Input Recording]].
+
 ** Keyboard Focus Arbitration
 :PROPERTIES:
 :CUSTOM_ID: focus-arbitration

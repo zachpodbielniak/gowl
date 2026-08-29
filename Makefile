@@ -88,6 +88,7 @@ LIB_SRCS := \
 	src/core/gowl-compositor.c \
 	src/core/gowl-capture-wlroots.c \
 	src/core/gowl-input-capture.c \
+	src/core/gowl-input-recorder.c \
 	src/core/gowl-frame-sink.c \
 	src/core/gowl-lid-policy.c \
 	src/core/gowl-focus-rules.c \

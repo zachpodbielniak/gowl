@@ -49,6 +49,7 @@ gowl_mcp_register_all_tools(McpServer *server, GowlModuleMcp *module)
 	gowl_mcp_register_process_tools(server, module);
 	gowl_mcp_register_compound_tools(server, module);
 	gowl_mcp_register_input_tools(server, module);
+	gowl_mcp_register_record_tools(server, module);
 	gowl_mcp_register_screenshot_tools(server, module);
 
 	/* TODO: enable as tool files are implemented

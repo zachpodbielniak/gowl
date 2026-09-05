@@ -274,9 +274,7 @@ static void create_keyboard       (GowlCompositor *self,
 static void create_pointer        (GowlCompositor *self,
                                    struct wlr_pointer *pointer);
 /* motionnotify is now non-static: gowl_compositor_motionnotify() */
-static gboolean keybinding        (GowlCompositor *self,
-                                   guint mods,
-                                   xkb_keysym_t sym);
+
 
 /* layout helpers */
 static void tile                  (GowlCompositor *self, GowlMonitor *m);
@@ -5789,17 +5787,34 @@ on_cursor_hold_end(struct wl_listener *listener, void *data)
  * ----------------------------------------------------------- */
 
 /**
- * keybinding:
+ * gowl_compositor_dispatch_keybind:
+ * @self: a #GowlCompositor
+ * @mods: modifier bitmask (#GowlKeyMod flags); cleaned internally, so
+ *   NumLock and CapsLock state does not matter
+ * @keysym: XKB keysym value
  *
- * Checks if a key matches a configured keybind and dispatches
- * the associated action.  Returns TRUE if the key was consumed.
+ * Runs the action bound to @mods + @keysym, if any.  This is the same
+ * path a real key press takes, so a `custom' bind reaches the
+ * embedder's handler and a `spawn' bind launches its command.
+ *
+ * Public rather than internal so that a bind can be invoked without
+ * synthesising input -- a menu entry, a cheatsheet that offers to run
+ * what it lists, or a test.  Nothing that injects keys through the
+ * seat reaches here: those go straight to the focused client, which is
+ * the point of them.
+ *
+ * Returns: %TRUE if a bind matched and its action ran.
  */
-static gboolean
-keybinding(
+gboolean
+gowl_compositor_dispatch_keybind(
 	GowlCompositor *self,
 	guint           mods,
-	xkb_keysym_t   sym
+	guint           keysym
 ){
+	xkb_keysym_t sym = (xkb_keysym_t)keysym;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
 	GArray *keybinds;
 	guint i;
 	guint clean_mods;
@@ -6374,7 +6389,8 @@ on_kb_key(struct wl_listener *listener, void *data)
 		 * like XKB_KEY_Return that don't change with Shift).
 		 */
 		for (i = 0; i < nsyms; i++) {
-			if (keybinding(self, mods, syms[i])) {
+			if (gowl_compositor_dispatch_keybind(self, mods,
+						     (guint)syms[i])) {
 				handled = TRUE;
 				break;
 			}
@@ -6404,7 +6420,8 @@ on_kb_key(struct wl_listener *listener, void *data)
 			}
 
 			for (i = 0; i < n_raw; i++) {
-				if (keybinding(self, mods, raw_syms[i])) {
+				if (gowl_compositor_dispatch_keybind(
+					    self, mods, (guint)raw_syms[i])) {
 					handled = TRUE;
 					break;
 				}
@@ -6630,7 +6647,9 @@ on_key_repeat(void *data)
 	    self->wlr_kb_group->keyboard.repeat_info.rate > 0) {
 		/* Re-fire the keybind */
 		for (i = 0; i < self->kb_nsyms; i++)
-			keybinding(self, self->kb_mods, self->kb_keysyms[i]);
+			gowl_compositor_dispatch_keybind(
+				self, self->kb_mods,
+				(guint)self->kb_keysyms[i]);
 
 		/* Schedule next repeat */
 		wl_event_source_timer_update(

@@ -579,12 +579,37 @@ so an inherited config does not start erroring.  And the key is
 consumed whether or not a handler ran: it matched a configured bind, so
 forwarding it on to the focused client would be surprising.
 
-The handler runs on the compositor thread, inside key dispatch.  An
-embedder that can block or signal must arrange its own protection
-there; cmacs wraps the eval in its =waiting_for_input= guard and a
-=condition-case=, because an error escaping into =signal_or_quit()=
-while the compositor is in input-wait aborts the process --- and under
-=--gowl= that process is the entire session.
+The handler runs on the compositor thread, inside key dispatch, so it
+must not block and must not touch anything that is not thread-safe.
+cmacs hands the form to the Emacs main loop with =g_idle_add= rather
+than evaluating it where it is called: the Lisp VM belongs to that
+thread, and blocking the compositor on it would stall every client's
+frame callbacks.  The eval that eventually runs is wrapped in cmacs's
+=waiting_for_input= guard and a =condition-case=, because an error
+escaping into =signal_or_quit()= while the compositor is in input-wait
+aborts the process --- and under =--gowl= that process is the entire
+session.
+
+*** Invoking a keybind without a key press
+
+=gowl_compositor_dispatch_keybind()= runs the action bound to a
+modifier+keysym pair directly.  It is the same function real key
+presses go through, so a =custom= bind reaches the embedder and a
+=spawn= bind launches its command.
+
+This is deliberately *not* what the input-injection calls do.
+=gowl_seat_send_key()=, =gowl_seat_send_text()= and the MCP =send_key=
+tool hand a key to the focused client and never consult the keybind
+table --- delivering a keystroke to an application is their entire
+purpose, and having them also fire compositor binds would make every
+injected =Super+q= quit the session.  The two are separate operations
+and each has its own entry point.
+
+The practical uses are a menu that offers to run a bind, a cheatsheet
+that can invoke what it lists, and tests: nothing else in the tree can
+synthesise input that reaches keybind dispatch, so without this the
+=custom= path would be unreachable from a test.  cmacs exposes it as
+=gowl-run-keybind=.
 
 *** Closing clients
 

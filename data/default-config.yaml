@@ -55,10 +55,10 @@ tag-count: 9
 #
 # "arg"  is action-specific and optional.
 # "desc" is optional, never affects dispatch, and is what a cheatsheet
-#        renders instead of an action name -- `gowl --list-keybinds',
-#        the MCP config tools, and cmacs's `cmacs-gowl-describe-keybinds'
-#        all read it.  A bind with no desc still lists, showing its
-#        action and arg.
+#        renders instead of an action name -- the MCP `list_keybinds'
+#        tool returns it, and cmacs's `cmacs-gowl-describe-keybinds'
+#        builds its listing from it.  A bind with no desc still lists,
+#        showing its action and arg.
 #
 # "custom" hands its arg to an embedder rather than to the compositor.
 # Standalone gowl has no handler for it, so such a bind is inert here;

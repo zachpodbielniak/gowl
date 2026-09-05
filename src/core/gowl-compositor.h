@@ -947,6 +947,25 @@ void gowl_compositor_set_custom_action_handler (GowlCompositor       *self,
                                                  gpointer              user_data);
 
 /**
+ * gowl_compositor_dispatch_keybind:
+ * @self: a #GowlCompositor
+ * @mods: modifier bitmask (#GowlKeyMod flags), cleaned internally
+ * @keysym: XKB keysym value
+ *
+ * Runs the action bound to @mods + @keysym, if one is bound.  The same
+ * path a real key press takes.
+ *
+ * Note this is NOT what the input-injection calls do: gowl_seat_send_key()
+ * and the send_key tool hand a key to the focused client and never
+ * consult the keybind table.  This runs the bind itself.
+ *
+ * Returns: %TRUE if a bind matched and its action ran.
+ */
+gboolean gowl_compositor_dispatch_keybind (GowlCompositor *self,
+                                            guint           mods,
+                                            guint           keysym);
+
+/**
  * gowl_compositor_set_input_capture:
  * @self: a #GowlCompositor
  * @capture: (nullable) (transfer none): the #GowlInputCapture to attach,

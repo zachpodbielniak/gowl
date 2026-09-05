@@ -28,6 +28,7 @@
 struct wlr_seat;
 struct wlr_renderer;
 struct wlr_output;
+struct wlr_pointer_constraint_v1;
 
 G_BEGIN_DECLS
 
@@ -945,6 +946,30 @@ typedef gboolean (*GowlCustomActionFunc)(GowlCompositor *compositor,
 void gowl_compositor_set_custom_action_handler (GowlCompositor       *self,
                                                  GowlCustomActionFunc  func,
                                                  gpointer              user_data);
+
+/**
+ * gowl_compositor_pointer_is_locked:
+ * @self: a #GowlCompositor
+ *
+ * Returns: %TRUE when a client holds a LOCKED pointer constraint, so
+ *   the cursor is deliberately not moving and the client is reading
+ *   relative motion instead.  This is the state a game or a VM console
+ *   puts the pointer in; it is also the state that looks like a frozen
+ *   cursor to anyone who does not know a constraint exists, which is
+ *   why it is introspectable.
+ */
+gboolean gowl_compositor_pointer_is_locked (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_active_pointer_constraint:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the active
+ *   #wlr_pointer_constraint_v1, or %NULL when the pointer is
+ *   unconstrained.  At most one is ever active.
+ */
+struct wlr_pointer_constraint_v1 *
+gowl_compositor_get_active_pointer_constraint (GowlCompositor *self);
 
 /**
  * gowl_compositor_dispatch_keybind:

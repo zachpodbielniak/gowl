@@ -43,6 +43,8 @@
 #include <wlr/types/wlr_damage_ring.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_pointer_gestures_v1.h>
+#include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/backend/libinput.h>
 #include <libinput.h>
 
@@ -274,6 +276,12 @@ static void create_keyboard       (GowlCompositor *self,
 static void create_pointer        (GowlCompositor *self,
                                    struct wlr_pointer *pointer);
 /* motionnotify is now non-static: gowl_compositor_motionnotify() */
+
+/* pointer constraints (definitions live beside the motion handlers) */
+static void on_new_pointer_constraint (struct wl_listener *listener,
+                                       void *data);
+static void constraint_check_surface  (GowlCompositor *self,
+                                       struct wlr_surface *surface);
 
 
 /* layout helpers */
@@ -2976,6 +2984,21 @@ gowl_compositor_start(
 	/* Virtual keyboard + pointer managers */
 	wlr_virtual_keyboard_manager_v1_create(self->wl_display);
 	wlr_virtual_pointer_manager_v1_create(self->wl_display);
+
+	/* Pointer lock/confinement and the relative motion stream that goes
+	 * with it.  Without these an FPS, a VM console, an RDP or VNC
+	 * client and anything else that wants to hide the cursor and read
+	 * raw deltas simply does not work -- the pointer walks off the
+	 * window and the view stops turning. */
+	self->relative_pointer_mgr =
+		wlr_relative_pointer_manager_v1_create(self->wl_display);
+	self->pointer_constraints =
+		wlr_pointer_constraints_v1_create(self->wl_display);
+	if (self->pointer_constraints != NULL) {
+		self->new_pointer_constraint.notify = on_new_pointer_constraint;
+		wl_signal_add(&self->pointer_constraints->events.new_constraint,
+		              &self->new_pointer_constraint);
+	}
 
 	/* 16. Seat */
 	self->wlr_seat = wlr_seat_create(self->wl_display, "seat0");
@@ -6785,6 +6808,11 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 		wlr_cursor_set_xcursor(self->wlr_cursor,
 		                       self->xcursor_mgr, "default");
 
+	/* Activate the constraint belonging to whatever is under the cursor
+	 * now, and deactivate any other.  Before pointerfocus, so a client
+	 * that locks the pointer on entry is told before it is entered. */
+	constraint_check_surface(self, surface);
+
 	pointerfocus(self, c, surface, sx, sy, time_msec);
 
 	/* Remember the cursor position for the next barrier-crossing test. */
@@ -6796,6 +6824,174 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 	 * warp) must not reuse a stale delta for crossing detection. */
 	self->cap_motion_dx = 0.0;
 	self->cap_motion_dy = 0.0;
+}
+
+/* ── Pointer constraints and relative motion ─────────────────────────
+ *
+ * pointer-constraints-v1 lets a client ask for the pointer to be LOCKED
+ * (frozen, no absolute position -- what an FPS or a VM console wants) or
+ * CONFINED to a region.  relative-pointer-v1 is what such a client reads
+ * instead: raw deltas, unaffected by the screen edge.  They are one
+ * feature in practice, because locking without a relative stream leaves
+ * a client with no motion input at all.
+ */
+
+/* Deactivate whatever constraint is active, if any.  Safe to call when
+ * none is: the seat may have moved off the surface, the surface may have
+ * gone, or the client may have destroyed the constraint. */
+static void
+constraint_deactivate(GowlCompositor *self)
+{
+	if (self->active_constraint == NULL)
+		return;
+
+	wl_list_remove(&self->active_constraint_destroy.link);
+	/* send_deactivated may destroy the constraint (for a ONESHOT
+	 * lifetime), so drop our pointer first. */
+	{
+		struct wlr_pointer_constraint_v1 *c = self->active_constraint;
+
+		self->active_constraint = NULL;
+		wlr_pointer_constraint_v1_send_deactivated(c);
+	}
+}
+
+static void
+on_active_constraint_destroy(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+
+	(void)data;
+	self = wl_container_of(listener, self, active_constraint_destroy);
+
+	/* The constraint went away underneath us.  Just forget it: sending
+	 * deactivated to a destroyed constraint is a use-after-free. */
+	wl_list_remove(&self->active_constraint_destroy.link);
+	self->active_constraint = NULL;
+}
+
+/*
+ * Called from motionnotify with whatever surface is now under the
+ * cursor.  Activates that surface's constraint and deactivates any
+ * other, so exactly one is live at a time.
+ */
+static void
+constraint_check_surface(GowlCompositor *self, struct wlr_surface *surface)
+{
+	struct wlr_pointer_constraint_v1 *want = NULL;
+
+	if (self->pointer_constraints == NULL)
+		return;
+
+	if (surface != NULL)
+		want = wlr_pointer_constraints_v1_constraint_for_surface(
+			self->pointer_constraints, surface, self->wlr_seat);
+
+	if (want == self->active_constraint)
+		return;
+
+	constraint_deactivate(self);
+
+	if (want != NULL) {
+		self->active_constraint = want;
+		self->active_constraint_destroy.notify =
+			on_active_constraint_destroy;
+		wl_signal_add(&want->events.destroy,
+		              &self->active_constraint_destroy);
+		wlr_pointer_constraint_v1_send_activated(want);
+	}
+}
+
+static void
+on_new_pointer_constraint(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+	struct wlr_pointer_constraint_v1 *constraint;
+	struct wlr_surface *focused;
+
+	self = wl_container_of(listener, self, new_pointer_constraint);
+	constraint = (struct wlr_pointer_constraint_v1 *)data;
+
+	/* A client normally asks for the constraint while it already has
+	 * pointer focus -- a game locking on its own click -- so activate
+	 * immediately rather than waiting for the next motion event, which
+	 * a locked pointer will never produce. */
+	focused = self->wlr_seat->pointer_state.focused_surface;
+	if (focused != NULL && focused == constraint->surface)
+		constraint_check_surface(self, focused);
+}
+
+/*
+ * TRUE when the cursor must not move in absolute terms.  A LOCKED
+ * constraint means exactly that: the client is reading relative deltas
+ * and drawing its own crosshair, and moving the real cursor would drag
+ * focus out from under it at the screen edge.
+ */
+static gboolean
+constraint_locks_cursor(GowlCompositor *self)
+{
+	return (self->active_constraint != NULL
+	        && self->active_constraint->type
+	           == WLR_POINTER_CONSTRAINT_V1_LOCKED);
+}
+
+/*
+ * Clamp a proposed cursor position to a CONFINED constraint's region,
+ * expressed in surface-local coordinates.  Returns TRUE when the
+ * position was accepted (possibly unchanged), FALSE when the motion
+ * would leave the region and should be dropped.
+ */
+static gboolean
+constraint_allows_position(GowlCompositor *self, gdouble x, gdouble y)
+{
+	struct wlr_pointer_constraint_v1 *c = self->active_constraint;
+	GowlClient *client = NULL;
+	struct wlr_surface *surface = NULL;
+	gdouble sx, sy;
+
+	if (c == NULL || c->type != WLR_POINTER_CONSTRAINT_V1_CONFINED)
+		return TRUE;
+
+	xytonode(self, x, y, &surface, &client, &sx, &sy);
+	if (surface != c->surface)
+		return FALSE;
+
+	return pixman_region32_contains_point(&c->region,
+	                                      (int)floor(sx), (int)floor(sy),
+	                                      NULL);
+}
+
+gboolean
+gowl_compositor_pointer_is_locked(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	return constraint_locks_cursor(self);
+}
+
+struct wlr_pointer_constraint_v1 *
+gowl_compositor_get_active_pointer_constraint(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->active_constraint;
+}
+
+/* Send a relative-motion event to whichever client is listening.  A
+ * no-op when no client has asked for one, so this is safe in the hot
+ * motion path.  Time is microseconds here, milliseconds everywhere
+ * else in this file -- that asymmetry is the protocol's, not ours. */
+static void
+relative_pointer_send(GowlCompositor *self, guint32 time_msec,
+                       gdouble dx, gdouble dy,
+                       gdouble dx_unaccel, gdouble dy_unaccel)
+{
+	if (self->relative_pointer_mgr == NULL)
+		return;
+
+	wlr_relative_pointer_manager_v1_send_relative_motion(
+		self->relative_pointer_mgr, self->wlr_seat,
+		(guint64)time_msec * 1000, dx, dy, dx_unaccel, dy_unaccel);
 }
 
 /* Push a relative pointer-motion event to the InputCapture sink.  A no-op
@@ -6840,8 +7036,22 @@ on_cursor_motion(struct wl_listener *listener, void *data)
 	was_active = (self->input_capture != NULL
 	              && gowl_input_capture_is_active(self->input_capture));
 
-	wlr_cursor_move(self->wlr_cursor, &event->pointer->base,
-	                event->delta_x, event->delta_y);
+	/* Relative motion goes out first and unconditionally: a locked
+	 * client reads only this, so gating it on the cursor actually
+	 * moving would leave it with no input at all. */
+	relative_pointer_send(self, event->time_msec,
+	                      event->delta_x, event->delta_y,
+	                      event->unaccel_dx, event->unaccel_dy);
+
+	/* A locked pointer does not move.  A confined one moves only where
+	 * the region allows.  Everything else moves normally. */
+	if (!constraint_locks_cursor(self)) {
+		if (constraint_allows_position(self,
+		                               self->wlr_cursor->x + event->delta_x,
+		                               self->wlr_cursor->y + event->delta_y))
+			wlr_cursor_move(self->wlr_cursor, &event->pointer->base,
+			                event->delta_x, event->delta_y);
+	}
 	gowl_compositor_motionnotify(self, event->time_msec);
 	recording_note_motion(self, event->delta_x, event->delta_y);
 	/* Stream the relative delta to deskflow's ei egress ONLY if capture
@@ -6879,13 +7089,23 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 
 	before_x = self->wlr_cursor->x;
 	before_y = self->wlr_cursor->y;
-	wlr_cursor_warp_absolute(self->wlr_cursor, &event->pointer->base,
-	                         event->x, event->y);
+	/* A locked pointer does not move, even for an absolute device --
+	 * a tablet or a VM's absolute mouse must not teleport the cursor
+	 * out from under a client that has asked for the lock. */
+	if (!constraint_locks_cursor(self))
+		wlr_cursor_warp_absolute(self->wlr_cursor, &event->pointer->base,
+		                         event->x, event->y);
 	/* The relative delta the absolute warp produced (post-clamp); used
 	 * both for capture egress and barrier-crossing.  Absolute devices
 	 * rarely drive deskflow's egress, but keep it consistent. */
 	self->cap_motion_dx = self->wlr_cursor->x - before_x;
 	self->cap_motion_dy = self->wlr_cursor->y - before_y;
+	/* Relative motion from an absolute device is the delta the warp
+	 * produced; there is no unaccelerated variant to report, so the
+	 * same values go in both slots. */
+	relative_pointer_send(self, event->time_msec,
+	                      self->cap_motion_dx, self->cap_motion_dy,
+	                      self->cap_motion_dx, self->cap_motion_dy);
 	if (was_active)
 		input_capture_emit_motion(self, event->time_msec,
 		                          self->cap_motion_dx,

@@ -553,6 +553,51 @@ seat-focus paths cannot slip in unreviewed; cmacs carries the matching
 assertion for its own sources in
 =test/cmacs/cmacs-gowl-tests.el=.
 
+*** Pointer lock and confinement
+
+=pointer-constraints-v1= lets a client ask for the pointer to be
+*locked* --- frozen, with no absolute position --- or *confined* to a
+region.  =relative-pointer-v1= is what such a client reads instead:
+raw deltas, unaffected by the screen edge.
+
+They are one feature rather than two.  Locking without a relative
+stream leaves a client with no motion input at all, and a relative
+stream without locking leaves the cursor free to walk out of the
+window mid-turn.  Together they are what makes an FPS, a VM console,
+and an RDP or VNC client usable; without them the pointer escapes the
+window and the view stops turning.
+
+The model is one active constraint at a time --- the protocol says so,
+and it is the only thing that makes sense for a single cursor.
+=constraint_check_surface()= runs from =motionnotify= with whatever
+surface is under the cursor, activating that surface's constraint and
+deactivating any other.  =on_new_pointer_constraint= additionally
+activates immediately when the requesting surface already has pointer
+focus, because a client that locks on its own click will never produce
+the motion event that would otherwise trigger activation.
+
+In the motion handlers:
+
+- relative motion is sent *first and unconditionally*.  Gating it on
+  the cursor actually moving would starve exactly the client that
+  asked for the lock.
+- a =LOCKED= constraint suppresses =wlr_cursor_move= entirely, in the
+  absolute handler as well as the relative one --- a tablet or a VM's
+  absolute mouse must not teleport the cursor out from under a client
+  holding the lock.
+- a =CONFINED= constraint drops motion that would leave the region.
+
+Deactivation has one trap worth naming:
+=wlr_pointer_constraint_v1_send_deactivated()= may *destroy* the
+constraint, for a =ONESHOT= lifetime.  The stored pointer is therefore
+cleared before the call, not after.  A separate destroy listener
+handles the constraint going away underneath us, where sending
+deactivated would be a use-after-free.
+
+=gowl_compositor_pointer_is_locked()= exposes the state, because a
+locked pointer is indistinguishable from a frozen cursor to anyone who
+does not know a constraint exists.
+
 *** Embedder-defined keybind actions
 
 The keybind action list is a C enum, so every bind resolves to one of a

@@ -417,6 +417,22 @@ struct _GowlCompositor {
 	gdouble           cap_motion_dx;
 	gdouble           cap_motion_dy;
 
+	/* Pointer lock and confinement (pointer-constraints-v1) plus the
+	 * relative motion stream (relative-pointer-v1) that a locked client
+	 * reads instead of absolute position.  The two are one feature in
+	 * practice: locking the pointer without a relative stream leaves a
+	 * client with no motion input at all.
+	 *
+	 * active_constraint is the constraint whose surface currently has
+	 * pointer focus, or NULL.  At most one can be active at a time --
+	 * the protocol says so, and it is also the only thing that makes
+	 * sense for a cursor. */
+	struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
+	struct wlr_pointer_constraints_v1      *pointer_constraints;
+	struct wlr_pointer_constraint_v1       *active_constraint;
+	struct wl_listener new_pointer_constraint;
+	struct wl_listener active_constraint_destroy;
+
 	/* Client map callback (embedder hook) */
 	GowlClientMapFunc client_map_func;
 	gpointer          client_map_data;

@@ -417,6 +417,14 @@ struct _GowlCompositor {
 	gdouble           cap_motion_dx;
 	gdouble           cap_motion_dy;
 
+	/* Graphics tablets (tablet-v2).  Kept as lists rather than a single
+	 * device because a tablet, its pad, and each tool the user picks up
+	 * are separate libinput devices with separate lifetimes. */
+	struct wlr_tablet_manager_v2 *tablet_manager;
+	struct wl_list tablets;       /* GowlTablet.link */
+	struct wl_list tablet_tools;  /* GowlTabletTool.link */
+	struct wl_list tablet_pads;   /* GowlTabletPad.link */
+
 	/* Pointer lock and confinement (pointer-constraints-v1) plus the
 	 * relative motion stream (relative-pointer-v1) that a locked client
 	 * reads instead of absolute position.  The two are one feature in

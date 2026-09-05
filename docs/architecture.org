@@ -553,6 +553,56 @@ seat-focus paths cannot slip in unreviewed; cmacs carries the matching
 assertion for its own sources in
 =test/cmacs/cmacs-gowl-tests.el=.
 
+*** Graphics tablets
+
+Before =src/core/gowl-tablet.c=, the new-input switch handled
+=KEYBOARD=, =POINTER= and =SWITCH=, and every other device type fell
+into =default: break;=.  A pen therefore did *nothing at all* under
+gowl --- not a stroke, not a click, not even cursor motion --- and
+nothing said so.  A silently ignored device produces no warning and no
+log line; the only symptom is hardware that appears broken.
+
+Two audiences are served from the same events, chosen per motion:
+
+- a surface that accepts tablet-v2 gets real tool events, with
+  pressure, tilt, distance and rotation.  GDK3 binds the whole
+  =zwp_tablet_*= family, so this is what carries pressure into a GTK
+  client --- cmacs's org-ex ink already reads =GDK_AXIS_PRESSURE= and
+  scales stroke width by it, and had simply never received a value
+  other than 1.0 under gowl.
+- everything else gets *pointer emulation*: the tip is a left click,
+  the barrel buttons are right and middle, and motion goes through the
+  normal =motionnotify= path so sloppy focus and the cursor image
+  behave exactly as they do for a mouse.
+
+The choice is made per event rather than per tool, by asking
+=wlr_surface_accepts_tablet_v2()= about whatever is under the cursor.
+A pen can therefore cross from an inking buffer onto a menu and keep
+working.
+
+Three lists rather than one device: a tablet, its pad, and each tool
+the user picks up are separate libinput devices with separate
+lifetimes.  Tools are created lazily and cached on the wlroots object,
+because libinput reports a tool the first time it is seen and again
+every time it returns.
+
+Two details that are easy to get wrong:
+
+- Only the axes flagged in =updated_axes= carry new values.  Feeding a
+  stale one back would jitter the stroke, and =NAN= is how
+  =wlr_cursor_warp_absolute()= spells "this axis did not change".
+- A tool that leaves proximity mid-stroke must be sent an explicit
+  *up*.  Nothing else will ever tell the client, which would otherwise
+  keep drawing.
+
+The pad is presented to clients but gowl binds nothing to its buttons:
+what they should do is a user decision, and the keybind table is where
+user decisions live.
+
+=tests/test-input-device-guard.sh= fails the build if the default arm
+of the device switch goes back to a bare =break=, because that is
+exactly how tablets were lost the first time.
+
 *** Pointer lock and confinement
 
 =pointer-constraints-v1= lets a client ask for the pointer to be

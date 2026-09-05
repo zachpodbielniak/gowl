@@ -44,6 +44,7 @@
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
+#include "gowl-tablet.h"
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/backend/libinput.h>
 #include <libinput.h>
@@ -2990,6 +2991,11 @@ gowl_compositor_start(
 	 * client and anything else that wants to hide the cursor and read
 	 * raw deltas simply does not work -- the pointer walks off the
 	 * window and the view stops turning. */
+	/* Graphics tablets.  Before this a pen did nothing at all: the
+	 * new-input switch handled keyboard, pointer and switch, and every
+	 * other device type fell into `default: break;'. */
+	gowl_tablet_manager_init(self);
+
 	self->relative_pointer_mgr =
 		wlr_relative_pointer_manager_v1_create(self->wl_display);
 	self->pointer_constraints =
@@ -5635,6 +5641,9 @@ on_new_input(struct wl_listener *listener, void *data)
 		break;
 	}
 	default:
+		/* Tablets and tablet pads.  Everything else is genuinely
+		 * unhandled and falls through silently, as before. */
+		gowl_tablet_new_device(self, device);
 		break;
 	}
 
@@ -6959,6 +6968,29 @@ constraint_allows_position(GowlCompositor *self, gdouble x, gdouble y)
 	return pixman_region32_contains_point(&c->region,
 	                                      (int)floor(sx), (int)floor(sy),
 	                                      NULL);
+}
+
+gboolean
+gowl_compositor_surface_at(GowlCompositor      *self,
+                            gdouble              lx,
+                            gdouble              ly,
+                            struct wlr_surface **surface,
+                            gdouble             *sx,
+                            gdouble             *sy)
+{
+	GowlClient *c = NULL;
+	struct wlr_surface *found = NULL;
+	gdouble nx = 0, ny = 0;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	xytonode(self, lx, ly, &found, &c, &nx, &ny);
+
+	if (surface != NULL) *surface = found;
+	if (sx != NULL) *sx = nx;
+	if (sy != NULL) *sy = ny;
+
+	return found != NULL;
 }
 
 gboolean

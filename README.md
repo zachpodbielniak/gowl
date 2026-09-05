@@ -22,6 +22,7 @@ A GObject-based Wayland compositor built on wlroots (0.19 or 0.20). Gowl takes i
 - **Session lock** -- ext-session-lock-v1 support.
 - **Layer shell** -- wlr-layer-shell for panels, bars, and overlays.
 - **Pointer lock** -- pointer-constraints-v1 and relative-pointer-v1, so FPS games, VM consoles and RDP/VNC clients can hide the cursor and read raw motion instead of absolute position.
+- **Graphics tablets** -- tablet-v2 with pressure, tilt, distance and rotation for clients that speak it (GTK3/GTK4 do), and pointer emulation for everything else, so a pen works everywhere.
 - **Built-in config compiler** -- Auto-compiles C config files at startup.
 
 ## Quick Build

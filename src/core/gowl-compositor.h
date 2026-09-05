@@ -28,6 +28,7 @@
 struct wlr_seat;
 struct wlr_renderer;
 struct wlr_output;
+struct wlr_surface;
 struct wlr_pointer_constraint_v1;
 
 G_BEGIN_DECLS
@@ -946,6 +947,29 @@ typedef gboolean (*GowlCustomActionFunc)(GowlCompositor *compositor,
 void gowl_compositor_set_custom_action_handler (GowlCompositor       *self,
                                                  GowlCustomActionFunc  func,
                                                  gpointer              user_data);
+
+/**
+ * gowl_compositor_surface_at:
+ * @self: a #GowlCompositor
+ * @lx: layout-space X
+ * @ly: layout-space Y
+ * @surface: (out) (nullable): the surface found, or %NULL
+ * @sx: (out): surface-local X of the point
+ * @sy: (out): surface-local Y of the point
+ *
+ * Finds the surface at a layout position, the same way pointer motion
+ * does.  Public because input paths that do NOT go through the cursor
+ * need it too --- a tablet tool has to know whether what it is over
+ * speaks tablet-v2 before deciding to emulate a pointer instead.
+ *
+ * Returns: %TRUE when a surface was found.
+ */
+gboolean gowl_compositor_surface_at (GowlCompositor      *self,
+                                      gdouble              lx,
+                                      gdouble              ly,
+                                      struct wlr_surface **surface,
+                                      gdouble             *sx,
+                                      gdouble             *sy);
 
 /**
  * gowl_compositor_pointer_is_locked:

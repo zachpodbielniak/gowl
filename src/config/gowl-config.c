@@ -163,13 +163,66 @@ gowl_dropdown_entry_free(gpointer entry)
 	g_free(d);
 }
 
+/* --- Helper: escape a string for a YAML double-quoted scalar --- */
+
+/**
+ * gowl_config_escape_yaml:
+ * @str: (nullable): the string to escape
+ *
+ * Escapes @str for inclusion inside a YAML double-quoted scalar.
+ * A double-quoted scalar uses JSON-style backslash escapes, so a
+ * literal backslash or quote in a spawn command (a regex in a rule,
+ * a shell argument) must be doubled or the emitted document does not
+ * parse.  Control characters are escaped as \xNN.
+ *
+ * Deliberately NOT g_strescape(): that emits octal escapes for bytes
+ * >= 0x80, which YAML does not define, so any non-ASCII description
+ * would come back as literal backslash-digits.  UTF-8 is passed
+ * through untouched instead.
+ *
+ * Returns: (transfer full): a newly allocated escaped string
+ */
+static gchar *
+gowl_config_escape_yaml(const gchar *str)
+{
+	GString *out;
+	const gchar *p;
+
+	if (str == NULL)
+		return g_strdup("");
+
+	out = g_string_sized_new(strlen(str) + 8);
+
+	for (p = str; *p != '\0'; p++) {
+		guchar c = (guchar)*p;
+
+		switch (c) {
+		case '"':  g_string_append(out, "\\\""); break;
+		case '\\': g_string_append(out, "\\\\"); break;
+		case '\n': g_string_append(out, "\\n");  break;
+		case '\r': g_string_append(out, "\\r");  break;
+		case '\t': g_string_append(out, "\\t");  break;
+		default:
+			/* Escape the remaining C0 controls; pass every other
+			 * byte (UTF-8 continuation bytes included) through. */
+			if (c < 0x20 || c == 0x7f)
+				g_string_append_printf(out, "\\x%02x", c);
+			else
+				g_string_append_c(out, (gchar)c);
+			break;
+		}
+	}
+
+	return g_string_free(out, FALSE);
+}
+
 /* --- Helper: free a GowlKeybindEntry (array element) --- */
 
 /**
  * gowl_keybind_entry_clear:
  * @entry: pointer to a #GowlKeybindEntry stored in a GArray
  *
- * Frees the arg string inside the keybind entry.
+ * Frees the owned strings inside the keybind entry.
  */
 static void
 gowl_keybind_entry_clear(gpointer entry)
@@ -177,6 +230,7 @@ gowl_keybind_entry_clear(gpointer entry)
 	GowlKeybindEntry *kb = (GowlKeybindEntry *)entry;
 
 	g_clear_pointer(&kb->arg, g_free);
+	g_clear_pointer(&kb->desc, g_free);
 }
 
 /* --- GObject vfuncs --- */
@@ -864,11 +918,15 @@ gowl_config_apply_mapping(
 		}
 	}
 
-	/* Keybinds: mapping of "Mod+Key": { action: <name>, arg: "<value>" }
+	/* Keybinds: mapping of
+	 *   "Mod+Key": { action: <name>, arg: "<value>", desc: "<text>" }
 	 *
 	 * Example:
-	 *   "Super+Return": { action: spawn, arg: "gst" }
+	 *   "Super+Return": { action: spawn, arg: "gst", desc: "Terminal" }
 	 *   "Super+Shift+q": { action: quit }
+	 *
+	 * "desc" is optional and never affects dispatch; it is what
+	 * a cheatsheet renders instead of an action number.
 	 */
 	if (yaml_mapping_has_member(mapping, "keybinds")) {
 		YamlMapping *kb_mapping = yaml_mapping_get_mapping_member(
@@ -883,6 +941,7 @@ gowl_config_apply_mapping(
 				YamlMapping *val_map;
 				const gchar *action_str;
 				const gchar *arg_str;
+				const gchar *desc_str;
 				guint mods;
 				guint keysym;
 				GEnumClass *action_class;
@@ -903,6 +962,10 @@ gowl_config_apply_mapping(
 				arg_str = NULL;
 				if (yaml_mapping_has_member(val_map, "arg"))
 					arg_str = yaml_mapping_get_string_member(val_map, "arg");
+
+				desc_str = NULL;
+				if (yaml_mapping_has_member(val_map, "desc"))
+					desc_str = yaml_mapping_get_string_member(val_map, "desc");
 
 				/* Parse bind string into modifiers + keysym */
 				mods = 0;
@@ -933,7 +996,8 @@ gowl_config_apply_mapping(
 
 				g_debug("gowl_config: keybind '%s' -> mods=0x%x sym=0x%x action=%d",
 			        bind_str, mods, keysym, action);
-			gowl_config_add_keybind(self, mods, keysym, action, arg_str);
+			gowl_config_add_keybind_full(self, mods, keysym, action,
+			                              arg_str, desc_str);
 			}
 		}
 	}
@@ -1447,26 +1511,39 @@ gowl_config_generate_yaml(GowlConfig *self)
 	                       self->evaluate_c_config_with_cmacs
 	                       ? "true" : "false");
 
-	/* Keybinds */
+	/* Keybinds.
+	 *
+	 * Emitted as a MAPPING of "bind": { action: ..., arg: ..., desc: ... },
+	 * which is the shape gowl_config_apply_mapping() reads back.  An
+	 * earlier version wrote a sequence of "- bind:" items; the parser
+	 * asks for a mapping member, got NULL for a sequence and dropped
+	 * every keybind silently, so a config saved from the dashboard came
+	 * back with no binds at all. */
 	if (self->keybinds->len > 0) {
+		GEnumClass *action_class = (GEnumClass *)g_type_class_ref(
+			gowl_action_get_type());
+
 		g_string_append(yaml, "\nkeybinds:\n");
 		for (i = 0; i < self->keybinds->len; i++) {
 			GowlKeybindEntry *kb = &g_array_index(self->keybinds, GowlKeybindEntry, i);
 			g_autofree gchar *bind_str = gowl_keybind_to_string(kb->modifiers, kb->keysym);
-
-			/* Resolve action enum value to nick */
-			GEnumClass *action_class = (GEnumClass *)g_type_class_ref(
-				gowl_action_get_type());
 			GEnumValue *enum_val = g_enum_get_value(action_class, kb->action);
 			const gchar *action_nick = (enum_val != NULL) ? enum_val->value_nick : "none";
 
-			g_string_append_printf(yaml, "  - bind: \"%s\"\n", bind_str);
-			g_string_append_printf(yaml, "    action: \"%s\"\n", action_nick);
-			if (kb->arg != NULL)
-				g_string_append_printf(yaml, "    arg: \"%s\"\n", kb->arg);
-
-			g_type_class_unref(action_class);
+			g_string_append_printf(yaml, "  \"%s\": { action: %s",
+			                       bind_str, action_nick);
+			if (kb->arg != NULL) {
+				g_autofree gchar *esc = gowl_config_escape_yaml(kb->arg);
+				g_string_append_printf(yaml, ", arg: \"%s\"", esc);
+			}
+			if (kb->desc != NULL) {
+				g_autofree gchar *esc = gowl_config_escape_yaml(kb->desc);
+				g_string_append_printf(yaml, ", desc: \"%s\"", esc);
+			}
+			g_string_append(yaml, " }\n");
 		}
+
+		g_type_class_unref(action_class);
 	}
 
 	/* Rules */
@@ -1741,7 +1818,9 @@ gowl_config_reset_values_to_defaults(GowlConfig *self)
  * @action: a #GowlAction value
  * @arg: (nullable): optional argument string (will be copied)
  *
- * Appends a keybind entry to the internal keybind array.
+ * Appends a keybind entry with no description.  Thin wrapper over
+ * gowl_config_add_keybind_full(); kept so that every pre-existing
+ * caller compiles unchanged.
  */
 void
 gowl_config_add_keybind(
@@ -1751,6 +1830,30 @@ gowl_config_add_keybind(
 	gint         action,
 	const gchar *arg
 ){
+	gowl_config_add_keybind_full(self, modifiers, keysym, action,
+	                              arg, NULL);
+}
+
+/**
+ * gowl_config_add_keybind_full:
+ * @self: a #GowlConfig
+ * @modifiers: bitmask of #GowlKeyMod flags
+ * @keysym: XKB keysym value
+ * @action: a #GowlAction value
+ * @arg: (nullable): optional argument string (will be copied)
+ * @desc: (nullable): human-readable description (will be copied)
+ *
+ * Appends a keybind entry to the internal keybind array.
+ */
+void
+gowl_config_add_keybind_full(
+	GowlConfig  *self,
+	guint        modifiers,
+	guint        keysym,
+	gint         action,
+	const gchar *arg,
+	const gchar *desc
+){
 	GowlKeybindEntry entry;
 
 	g_return_if_fail(GOWL_IS_CONFIG(self));
@@ -1759,6 +1862,7 @@ gowl_config_add_keybind(
 	entry.keysym    = keysym;
 	entry.action    = action;
 	entry.arg       = g_strdup(arg);
+	entry.desc      = g_strdup(desc);
 
 	g_array_append_val(self->keybinds, entry);
 }

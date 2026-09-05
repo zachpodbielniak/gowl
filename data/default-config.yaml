@@ -43,47 +43,62 @@ nmaster: 1
 # Tags
 tag-count: 9
 
-# Keybind format: "Modifier+Modifier+Key": { action: <action>, arg: "<argument>" }
+# Keybind format:
+#   "Modifier+Modifier+Key":
+#     { action: <action>, arg: "<argument>", desc: "<description>" }
 #
 # Modifier names: Super (Logo), Shift, Ctrl (Control), Alt (Mod1), Mod2, Mod3, Mod5
 # Action values:  spawn, kill_client, toggle_float, toggle_fullscreen, focus_stack,
 #                 focus_monitor, tag_view, tag_set, tag_toggle_view, tag_toggle,
 #                 move_to_monitor, set_mfact, inc_nmaster, set_layout, cycle_layout,
 #                 set_split, zoom, quit, reload_config, ipc_command, lock, custom
+#
+# "arg"  is action-specific and optional.
+# "desc" is optional, never affects dispatch, and is what a cheatsheet
+#        renders instead of an action name -- `gowl --list-keybinds',
+#        the MCP config tools, and cmacs's `cmacs-gowl-describe-keybinds'
+#        all read it.  A bind with no desc still lists, showing its
+#        action and arg.
+#
+# "custom" hands its arg to an embedder rather than to the compositor.
+# Standalone gowl has no handler for it, so such a bind is inert here;
+# under `emacs --gowl' the arg is evaluated as an Elisp form.
 keybinds:
   # Launch applications
-  "Super+Return": { action: spawn, arg: "gst" }
-  "Super+p": { action: spawn, arg: "wofi --show drun" }
-  "Super+Shift+p": { action: spawn, arg: "wofi --show run" }
+  "Super+Return": { action: spawn, arg: "gst", desc: "Terminal" }
+  "Super+p": { action: spawn, arg: "wofi --show drun", desc: "App launcher" }
+  "Super+Shift+p": { action: spawn, arg: "wofi --show run", desc: "Run command" }
 
   # Client management
-  "Super+Shift+c": { action: kill_client }
-  "Super+space": { action: toggle_float }
-  "Super+Shift+space": { action: toggle_fullscreen }
-  "Super+Shift+Return": { action: zoom }
+  "Super+Shift+c": { action: kill_client, desc: "Close window" }
+  "Super+space": { action: toggle_float, desc: "Toggle floating" }
+  "Super+Shift+space": { action: toggle_fullscreen, desc: "Toggle fullscreen" }
+  "Super+Shift+Return": { action: zoom, desc: "Promote to master" }
 
   # Focus navigation
-  "Super+j": { action: focus_stack, arg: "+1" }
-  "Super+k": { action: focus_stack, arg: "-1" }
+  "Super+j": { action: focus_stack, arg: "+1", desc: "Focus next window" }
+  "Super+k": { action: focus_stack, arg: "-1", desc: "Focus previous window" }
 
   # Master area adjustment
-  "Super+h": { action: set_mfact, arg: "-0.05" }
-  "Super+l": { action: set_mfact, arg: "+0.05" }
-  "Super+i": { action: inc_nmaster, arg: "+1" }
-  "Super+d": { action: inc_nmaster, arg: "-1" }
+  "Super+h": { action: set_mfact, arg: "-0.05", desc: "Shrink master area" }
+  "Super+l": { action: set_mfact, arg: "+0.05", desc: "Grow master area" }
+  "Super+i": { action: inc_nmaster, arg: "+1", desc: "More master windows" }
+  "Super+d": { action: inc_nmaster, arg: "-1", desc: "Fewer master windows" }
 
   # Layout selection
-  "Super+t": { action: set_layout, arg: "tile" }
-  "Super+f": { action: set_layout, arg: "float" }
-  "Super+m": { action: set_layout, arg: "monocle" }
-  "Super+v": { action: set_split, arg: "vsplit" }
-  "Super+Shift+v": { action: set_split, arg: "normal" }
+  "Super+t": { action: set_layout, arg: "tile", desc: "Tile layout" }
+  "Super+f": { action: set_layout, arg: "float", desc: "Float layout" }
+  "Super+m": { action: set_layout, arg: "monocle", desc: "Monocle layout" }
+  "Super+v": { action: set_split, arg: "vsplit", desc: "Vertical split" }
+  "Super+Shift+v": { action: set_split, arg: "normal", desc: "Horizontal split" }
 
   # Multi-monitor
-  "Super+comma": { action: focus_monitor, arg: "-1" }
-  "Super+period": { action: focus_monitor, arg: "+1" }
-  "Super+Shift+comma": { action: move_to_monitor, arg: "-1" }
-  "Super+Shift+period": { action: move_to_monitor, arg: "+1" }
+  "Super+comma": { action: focus_monitor, arg: "-1", desc: "Focus left monitor" }
+  "Super+period": { action: focus_monitor, arg: "+1", desc: "Focus right monitor" }
+  "Super+Shift+comma":
+    { action: move_to_monitor, arg: "-1", desc: "Move to left monitor" }
+  "Super+Shift+period":
+    { action: move_to_monitor, arg: "+1", desc: "Move to right monitor" }
 
   # View all tags / tag all
   "Super+0": { action: tag_view, arg: "0" }
@@ -135,9 +150,46 @@ keybinds:
   "Super+Shift+Ctrl+9": { action: tag_toggle, arg: "256" }
 
   # Session
-  "Super+Shift+q": { action: quit }
-  "Super+Shift+r": { action: reload_config }
-  "Super+Shift+l": { action: lock }
+  "Super+Shift+q": { action: quit, desc: "Quit gowl" }
+  "Super+Shift+r": { action: reload_config, desc: "Reload config" }
+  "Super+Shift+l": { action: lock, desc: "Lock the session" }
+
+  # Media, volume and brightness keys.
+  #
+  # These take no modifier, which dispatch handles the same as any
+  # other bind (the cleaned modifier mask is simply 0).  The keysyms
+  # resolve through xkb_keysym_from_name() like every other key name.
+  #
+  # wpctl comes with wireplumber, so it is present wherever pipewire
+  # is; brightnessctl and playerctl are separate packages and these
+  # binds are inert without them.  -l 1.0 caps the sink at 100% so a
+  # held key cannot drive it into amplification.
+  "XF86AudioRaiseVolume":
+    { action: spawn, desc: "Volume up",
+      arg: "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+" }
+  "XF86AudioLowerVolume":
+    { action: spawn, desc: "Volume down",
+      arg: "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-" }
+  "XF86AudioMute":
+    { action: spawn, desc: "Mute output",
+      arg: "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" }
+  "XF86AudioMicMute":
+    { action: spawn, desc: "Mute microphone",
+      arg: "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle" }
+  "XF86MonBrightnessUp":
+    { action: spawn, desc: "Brightness up",
+      arg: "brightnessctl set 5%+" }
+  "XF86MonBrightnessDown":
+    { action: spawn, desc: "Brightness down",
+      arg: "brightnessctl set 5%-" }
+  "XF86AudioPlay":
+    { action: spawn, desc: "Play / pause", arg: "playerctl play-pause" }
+  "XF86AudioNext":
+    { action: spawn, desc: "Next track", arg: "playerctl next" }
+  "XF86AudioPrev":
+    { action: spawn, desc: "Previous track", arg: "playerctl previous" }
+  "XF86AudioStop":
+    { action: spawn, desc: "Stop playback", arg: "playerctl stop" }
 
 # Window rules
 # Each rule matches clients by app-id and/or title, then applies settings.

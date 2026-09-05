@@ -632,6 +632,13 @@ tool_list_keybinds(
 		else
 			json_builder_add_null_value(builder);
 
+		/* description (nullable) -- what the bind does, in words */
+		json_builder_set_member_name(builder, "desc");
+		if (entry->desc != NULL)
+			json_builder_add_string_value(builder, entry->desc);
+		else
+			json_builder_add_null_value(builder);
+
 		json_builder_end_object(builder);
 	}
 	json_builder_end_array(builder);

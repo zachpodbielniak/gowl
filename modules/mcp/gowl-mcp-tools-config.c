@@ -183,6 +183,7 @@ tool_add_keybind(
 	const gchar *key_str;
 	const gchar *action_str;
 	const gchar *arg;
+	const gchar *desc;
 	guint modifiers;
 	xkb_keysym_t keysym;
 	GEnumClass *action_class;
@@ -251,7 +252,13 @@ tool_add_keybind(
 		? json_object_get_string_member(arguments, "arg")
 		: NULL;
 
-	gowl_config_add_keybind(config, modifiers, keysym, action, arg);
+	/* optional description, for cheatsheets */
+	desc = json_object_has_member(arguments, "desc")
+		? json_object_get_string_member(arguments, "desc")
+		: NULL;
+
+	gowl_config_add_keybind_full(config, modifiers, keysym, action,
+	                              arg, desc);
 
 	return mcp_tool_result_new(FALSE);
 }
@@ -508,6 +515,16 @@ gowl_mcp_register_config_tools(
 		json_builder_add_string_value(b,
 			"Optional argument for the action "
 			"(e.g. command for spawn)");
+		json_builder_end_object(b);
+
+		json_builder_set_member_name(b, "desc");
+		json_builder_begin_object(b);
+		json_builder_set_member_name(b, "type");
+		json_builder_add_string_value(b, "string");
+		json_builder_set_member_name(b, "description");
+		json_builder_add_string_value(b,
+			"Optional human-readable description of what the "
+			"bind does, shown by cheatsheets and list_keybinds");
 		json_builder_end_object(b);
 
 		json_builder_end_object(b);

@@ -925,6 +925,18 @@ gowl_compositor_set_key_intercept(
 }
 
 void
+gowl_compositor_set_custom_action_handler(
+	GowlCompositor      *self,
+	GowlCustomActionFunc func,
+	gpointer             user_data
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	self->custom_action_func = func;
+	self->custom_action_data = user_data;
+}
+
+void
 gowl_compositor_set_input_capture(
 	GowlCompositor   *self,
 	GowlInputCapture *capture
@@ -6243,8 +6255,21 @@ keybinding(
 					gowl_module_manager_dispatch_lock(
 						self->module_mgr, (gpointer)self);
 				return TRUE;
-			case GOWL_ACTION_NONE:
 			case GOWL_ACTION_CUSTOM:
+				/* Hand the bind's arg to the embedder.  The
+				 * key is consumed either way: it matched a
+				 * configured bind, so forwarding it to the
+				 * focused client would be surprising. */
+				if (self->custom_action_func != NULL)
+					self->custom_action_func(
+						self, kb->arg,
+						self->custom_action_data);
+				else
+					g_debug("custom keybind fired with no "
+					        "handler installed (arg '%s')",
+					        kb->arg ? kb->arg : "");
+				return TRUE;
+			case GOWL_ACTION_NONE:
 			default:
 				g_debug("Unhandled action %d for keybind",
 				        kb->action);

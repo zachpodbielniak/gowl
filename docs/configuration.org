@@ -159,18 +159,23 @@ Modifier names (case-insensitive):
 
 The last token in the =+=-separated string is the key name, resolved via =xkb_keysym_from_name()=. Common examples: =Return=, =space=, =Tab=, =a=-=z=, =0=-=9=, =F1=-=F12=, =comma=, =period=, =bracketleft=, =bracketright=.
 
+A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit --- =XF86AudioRaiseVolume=, =XF86AudioMute=, =XF86MonBrightnessUp=, =XF86AudioPlay= and friends --- resolve through the same call as every other key name, and dispatch compares the cleaned modifier mask, so a mask of zero matches like any other combination. The shipped =default-config.yaml= binds ten of them.
+
 **** Action Object Format
 :PROPERTIES:
 :CUSTOM_ID: action-object-format
 :END:
 #+begin_src yaml
-"Super+Return": { action: spawn, arg: "gst" }
+"Super+Return": { action: spawn, arg: "gst", desc: "Terminal" }
 #+end_src
 
 | Field    | Type   | Required | Description                                   |
 |----------+--------+----------+-----------------------------------------------|
 | =action= | string | yes      | The action to perform (see action list below) |
 | =arg=    | string | no       | Argument for the action                       |
+| =desc=   | string | no       | Human-readable description of the bind        |
+
+=desc= never affects dispatch. It exists so that something can render what a bind /does/ rather than the action name it happens to use: the MCP =list_keybinds= tool returns it, and under cmacs =cmacs-gowl-describe-keybinds= builds a cheatsheet from it. A bind with no =desc= still lists, falling back to its action and argument.
 
 **** Actions
 :PROPERTIES:
@@ -198,7 +203,19 @@ The last token in the =+=-separated string is the key name, resolved via =xkb_ke
 | =quit=              | --                               | Quit the compositor                         |
 | =reload_config=     | --                               | Reload configuration                        |
 | =ipc_command=       | IPC command string               | Execute an IPC command                      |
-| =custom=            | varies                           | Custom action handled by a module           |
+| =custom=            | passed to the embedder           | Embedder-defined action (see below)         |
+
+**** The =custom= action
+:PROPERTIES:
+:CUSTOM_ID: custom-action
+:END:
+=custom= is the escape hatch from the fixed action list. The compositor does not interpret its =arg= at all; it hands the string to whatever embedder registered a handler with =gowl_compositor_set_custom_action_handler()=, and consumes the key either way.
+
+Standalone gowl registers no handler, so a =custom= bind is inert here --- it is logged at debug level and swallowed. It exists for embedders. Under =emacs --gowl= the handler evaluates the =arg= as an Elisp form, which is what lets a compositor key run editor code rather than being limited to the actions above or to spawning a subprocess:
+
+#+begin_src yaml
+"XF86AudioRaiseVolume": { action: custom, arg: "(cmacs-volume-raise)" }
+#+end_src
 
 **** Example
 :PROPERTIES:
@@ -206,20 +223,34 @@ The last token in the =+=-separated string is the key name, resolved via =xkb_ke
 :END:
 #+begin_src yaml
 keybinds:
-  "Super+Return": { action: spawn, arg: "gst" }
-  "Super+p": { action: spawn, arg: "wofi --show drun" }
-  "Super+Shift+p": { action: spawn, arg: "wofi --show run" }
-  "Super+Shift+c": { action: kill_client }
-  "Super+j": { action: focus_stack, arg: "+1" }
-  "Super+k": { action: focus_stack, arg: "-1" }
-  "Super+h": { action: set_mfact, arg: "-0.05" }
-  "Super+l": { action: set_mfact, arg: "+0.05" }
-  "Super+v": { action: set_split, arg: "vsplit" }
-  "Super+Shift+v": { action: set_split, arg: "normal" }
+  "Super+Return": { action: spawn, arg: "gst", desc: "Terminal" }
+  "Super+p": { action: spawn, arg: "wofi --show drun", desc: "App launcher" }
+  "Super+Shift+p": { action: spawn, arg: "wofi --show run", desc: "Run command" }
+  "Super+Shift+c": { action: kill_client, desc: "Close window" }
+  "Super+j": { action: focus_stack, arg: "+1", desc: "Focus next window" }
+  "Super+k": { action: focus_stack, arg: "-1", desc: "Focus previous window" }
+  "Super+h": { action: set_mfact, arg: "-0.05", desc: "Shrink master area" }
+  "Super+l": { action: set_mfact, arg: "+0.05", desc: "Grow master area" }
+  "Super+v": { action: set_split, arg: "vsplit", desc: "Vertical split" }
+  "Super+Shift+v": { action: set_split, arg: "normal", desc: "Horizontal split" }
   "Super+1": { action: tag_view, arg: "1" }
   "Super+Shift+1": { action: tag_set, arg: "1" }
-  "Super+Shift+q": { action: quit }
+  "Super+Shift+q": { action: quit, desc: "Quit gowl" }
+
+  # Media keys need no modifier.
+  "XF86AudioRaiseVolume":
+    { action: spawn, desc: "Volume up",
+      arg: "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+" }
+  "XF86AudioMute":
+    { action: spawn, desc: "Mute output",
+      arg: "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle" }
+  "XF86MonBrightnessUp":
+    { action: spawn, desc: "Brightness up", arg: "brightnessctl set 5%+" }
+  "XF86AudioPlay":
+    { action: spawn, desc: "Play / pause", arg: "playerctl play-pause" }
 #+end_src
+
+The shipped media binds use =wpctl= (from wireplumber, present wherever pipewire is), =brightnessctl= and =playerctl=. The latter two are separate packages; a bind whose command is not installed simply fails to spawn.
 
 *** Window Rules
 :PROPERTIES:
@@ -470,7 +501,7 @@ g_object_set(gowl_config,
 :PROPERTIES:
 :CUSTOM_ID: adding-keybinds
 :END:
-Use =gowl_config_add_keybind()=:
+Use =gowl_config_add_keybind()=, or =gowl_config_add_keybind_full()= when the bind should carry a description:
 
 #+begin_src C
 #include <xkbcommon/xkbcommon.h>
@@ -482,7 +513,14 @@ gowl_config_add_keybind(gowl_config,
 gowl_config_add_keybind(gowl_config,
     GOWL_KEY_MOD_LOGO | GOWL_KEY_MOD_SHIFT, XKB_KEY_c,
     GOWL_ACTION_KILL_CLIENT, NULL);
+
+/* Same thing, with a description for the cheatsheet. */
+gowl_config_add_keybind_full(gowl_config,
+    GOWL_KEY_MOD_LOGO, XKB_KEY_Return,
+    GOWL_ACTION_SPAWN, "gst", "Terminal");
 #+end_src
+
+=gowl_config_add_keybind()= is a wrapper that passes a =NULL= description, so existing C configs need no change.
 
 **** Adding Rules
 :PROPERTIES:

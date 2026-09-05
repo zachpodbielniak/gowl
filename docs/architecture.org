@@ -553,6 +553,39 @@ seat-focus paths cannot slip in unreviewed; cmacs carries the matching
 assertion for its own sources in
 =test/cmacs/cmacs-gowl-tests.el=.
 
+*** Embedder-defined keybind actions
+
+The keybind action list is a C enum, so every bind resolves to one of a
+fixed set of compositor operations --- or to =spawn=, which launches a
+subprocess.  For an embedder that is a poor fit: under =emacs --gowl=
+the compositor /is/ the editor's process, and "run this Elisp" was
+expressible only by spawning something that talked back over D-Bus.
+
+=GOWL_ACTION_CUSTOM= closes that gap.  A bind carrying it hands its
+=arg= string, uninterpreted, to the handler registered with:
+
+#+begin_src C
+void gowl_compositor_set_custom_action_handler (GowlCompositor       *self,
+                                                 GowlCustomActionFunc  func,
+                                                 gpointer              user_data);
+#+end_src
+
+The compositor attaches no meaning to =arg= --- deciding what it says
+is the embedder's whole job.  cmacs reads it as an Elisp form.
+
+Two properties are deliberate.  With no handler installed the bind is a
+no-op, which is the behaviour every gowl before the hook existed had,
+so an inherited config does not start erroring.  And the key is
+consumed whether or not a handler ran: it matched a configured bind, so
+forwarding it on to the focused client would be surprising.
+
+The handler runs on the compositor thread, inside key dispatch.  An
+embedder that can block or signal must arrange its own protection
+there; cmacs wraps the eval in its =waiting_for_input= guard and a
+=condition-case=, because an error escaping into =signal_or_quit()=
+while the compositor is in input-wait aborts the process --- and under
+=--gowl= that process is the entire session.
+
 *** Closing clients
 
 Related, and for the same reason -- one entry point, one set of

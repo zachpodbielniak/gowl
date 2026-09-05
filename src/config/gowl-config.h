@@ -35,6 +35,9 @@ G_DECLARE_FINAL_TYPE(GowlConfig, gowl_config, GOWL, CONFIG, GObject)
  * @keysym: XKB keysym value
  * @action: a #GowlAction value
  * @arg: (nullable): optional argument string for the action
+ * @desc: (nullable): human-readable description of what the bind
+ *        does, for cheatsheets and menus.  %NULL when the bind was
+ *        registered without one.
  *
  * A single keybind mapping stored in the config.
  */
@@ -43,6 +46,7 @@ typedef struct {
 	guint  keysym;
 	gint   action;
 	gchar *arg;
+	gchar *desc;
 } GowlKeybindEntry;
 
 /* --- GowlRuleEntry --- */
@@ -520,7 +524,8 @@ void gowl_config_reset_values_to_defaults(GowlConfig *self);
  * @action: a #GowlAction value
  * @arg: (nullable): optional argument string for the action
  *
- * Appends a keybind entry to the configuration.
+ * Appends a keybind entry to the configuration, with no description.
+ * Equivalent to gowl_config_add_keybind_full() with @desc %NULL.
  */
 void
 gowl_config_add_keybind(
@@ -529,6 +534,29 @@ gowl_config_add_keybind(
 	guint        keysym,
 	gint         action,
 	const gchar *arg
+);
+
+/**
+ * gowl_config_add_keybind_full:
+ * @self: a #GowlConfig
+ * @modifiers: bitmask of #GowlKeyMod flags
+ * @keysym: XKB keysym value
+ * @action: a #GowlAction value
+ * @arg: (nullable): optional argument string for the action
+ * @desc: (nullable): human-readable description of the bind
+ *
+ * Appends a keybind entry carrying a description.  The description is
+ * never consulted during dispatch; it exists so that a cheatsheet or
+ * menu can render what a bind does instead of an action number.
+ */
+void
+gowl_config_add_keybind_full(
+	GowlConfig  *self,
+	guint        modifiers,
+	guint        keysym,
+	gint         action,
+	const gchar *arg,
+	const gchar *desc
 );
 
 /**

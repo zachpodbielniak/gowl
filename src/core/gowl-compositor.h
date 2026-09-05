@@ -913,6 +913,40 @@ void gowl_compositor_set_key_intercept (GowlCompositor      *self,
                                         gpointer              user_data);
 
 /**
+ * GowlCustomActionFunc:
+ * @compositor: the compositor
+ * @arg: (nullable): the keybind's argument string
+ * @user_data: caller-supplied data
+ *
+ * Called when a keybind whose action is %GOWL_ACTION_CUSTOM fires.
+ * @arg is whatever the config carried for that bind, uninterpreted by
+ * the compositor: an embedder decides what it means.  cmacs treats it
+ * as an Elisp form, which is what lets a compositor key run editor
+ * code rather than only one of the built-in actions or a subprocess.
+ *
+ * Return %TRUE if the action was handled.  Returning %FALSE still
+ * consumes the key (a bind that matched is not forwarded to the
+ * client), but logs that nothing acted on it.
+ */
+typedef gboolean (*GowlCustomActionFunc)(GowlCompositor *compositor,
+                                         const gchar    *arg,
+                                         gpointer        user_data);
+
+/**
+ * gowl_compositor_set_custom_action_handler:
+ * @self: a #GowlCompositor
+ * @func: (nullable): the handler, or %NULL to clear
+ * @user_data: data passed to @func
+ *
+ * Registers the handler for %GOWL_ACTION_CUSTOM keybinds.  With no
+ * handler installed such a bind is a no-op that still swallows the
+ * key, which is the behaviour every gowl before this had.
+ */
+void gowl_compositor_set_custom_action_handler (GowlCompositor       *self,
+                                                 GowlCustomActionFunc  func,
+                                                 gpointer              user_data);
+
+/**
  * gowl_compositor_set_input_capture:
  * @self: a #GowlCompositor
  * @capture: (nullable) (transfer none): the #GowlInputCapture to attach,

@@ -17,8 +17,10 @@
  */
 
 #include "config/gowl-config.h"
+#include "gowl-enums.h"
 #include <glib/gstdio.h>
 #include <string.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 static void
 test_config_new(void)
@@ -352,6 +354,181 @@ test_config_monitors_transform_invalid(void)
 	g_object_unref(config);
 }
 
+/* --- Keybind descriptions and YAML round-trip --- */
+
+/* Finds a keybind by its 1-based position, or NULL. */
+static GowlKeybindEntry *
+nth_keybind(GowlConfig *config, guint n)
+{
+	GArray *binds = gowl_config_get_keybinds(config);
+
+	if (binds == NULL || binds->len <= n)
+		return NULL;
+	return &g_array_index(binds, GowlKeybindEntry, n);
+}
+
+/* A "desc" on a keybind is parsed and stored; its absence is NULL
+ * rather than an empty string, so a caller can tell "no description"
+ * from "described as nothing". */
+static void
+test_config_keybind_desc_from_yaml(void)
+{
+	GowlConfig *config;
+	GowlKeybindEntry *kb;
+	GError *err = NULL;
+	const gchar *yaml =
+		"keybinds:\n"
+		"  \"Super+Return\":"
+		" { action: spawn, arg: \"gst\", desc: \"Terminal\" }\n"
+		"  \"Super+Shift+q\": { action: quit }\n";
+
+	config = gowl_config_new();
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+
+	g_assert_cmpuint(gowl_config_get_keybinds(config)->len, ==, 2);
+
+	kb = nth_keybind(config, 0);
+	g_assert_nonnull(kb);
+	g_assert_cmpstr(kb->arg, ==, "gst");
+	g_assert_cmpstr(kb->desc, ==, "Terminal");
+
+	kb = nth_keybind(config, 1);
+	g_assert_nonnull(kb);
+	g_assert_null(kb->desc);
+
+	g_object_unref(config);
+}
+
+/* The XF86 media keysyms resolve and bind with no modifier.  This is
+ * what makes the shipped media-key binds work: dispatch compares a
+ * cleaned modifier mask, and 0 == 0 matches like any other combo. */
+static void
+test_config_keybind_media_keys(void)
+{
+	GowlConfig *config;
+	GowlKeybindEntry *kb;
+	GError *err = NULL;
+	const gchar *yaml =
+		"keybinds:\n"
+		"  \"XF86AudioRaiseVolume\":"
+		" { action: spawn, arg: \"vol up\", desc: \"Volume up\" }\n";
+
+	config = gowl_config_new();
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+
+	kb = nth_keybind(config, 0);
+	g_assert_nonnull(kb);
+	g_assert_cmpuint(kb->modifiers, ==, 0);
+	g_assert_cmpuint(kb->keysym, !=, 0);
+	g_assert_cmpstr(kb->desc, ==, "Volume up");
+
+	g_object_unref(config);
+}
+
+/* Generated YAML must be loadable again.  The generator used to emit a
+ * sequence of "- bind:" items while the parser asked for a mapping, so
+ * every keybind vanished on reload -- silently, because a missing
+ * mapping member is not an error. */
+static void
+test_config_keybind_yaml_round_trip(void)
+{
+	GowlConfig *config;
+	GowlConfig *reloaded;
+	GowlKeybindEntry *kb;
+	GError *err = NULL;
+	g_autofree gchar *yaml = NULL;
+
+	config = gowl_config_new();
+	gowl_config_add_keybind_full(config, GOWL_KEY_MOD_LOGO,
+	                              XKB_KEY_Return, GOWL_ACTION_SPAWN,
+	                              "gst", "Terminal");
+	gowl_config_add_keybind(config, GOWL_KEY_MOD_LOGO,
+	                         XKB_KEY_q, GOWL_ACTION_QUIT, NULL);
+
+	yaml = gowl_config_generate_yaml(config);
+	g_assert_nonnull(yaml);
+
+	reloaded = gowl_config_new();
+	g_assert_true(load_yaml_from_string(reloaded, yaml, &err));
+	g_assert_no_error(err);
+
+	g_assert_cmpuint(gowl_config_get_keybinds(reloaded)->len, ==, 2);
+
+	kb = nth_keybind(reloaded, 0);
+	g_assert_nonnull(kb);
+	g_assert_cmpint(kb->action, ==, GOWL_ACTION_SPAWN);
+	g_assert_cmpstr(kb->arg, ==, "gst");
+	g_assert_cmpstr(kb->desc, ==, "Terminal");
+
+	kb = nth_keybind(reloaded, 1);
+	g_assert_nonnull(kb);
+	g_assert_cmpint(kb->action, ==, GOWL_ACTION_QUIT);
+	g_assert_null(kb->desc);
+
+	g_object_unref(reloaded);
+	g_object_unref(config);
+}
+
+/* A quote or backslash in an arg has to survive the emitted
+ * double-quoted scalar.  Unescaped, the closing quote lands early and
+ * the document either fails to parse or parses into the wrong values. */
+static void
+test_config_keybind_yaml_escapes(void)
+{
+	GowlConfig *config;
+	GowlConfig *reloaded;
+	GowlKeybindEntry *kb;
+	GError *err = NULL;
+	g_autofree gchar *yaml = NULL;
+	const gchar *tricky = "sh -c \"echo a\\b\"";
+
+	config = gowl_config_new();
+	gowl_config_add_keybind_full(config, GOWL_KEY_MOD_LOGO,
+	                              XKB_KEY_x, GOWL_ACTION_SPAWN,
+	                              tricky, "Quote \"test\"");
+
+	yaml = gowl_config_generate_yaml(config);
+	reloaded = gowl_config_new();
+	g_assert_true(load_yaml_from_string(reloaded, yaml, &err));
+	g_assert_no_error(err);
+
+	kb = nth_keybind(reloaded, 0);
+	g_assert_nonnull(kb);
+	g_assert_cmpstr(kb->arg, ==, tricky);
+	g_assert_cmpstr(kb->desc, ==, "Quote \"test\"");
+
+	g_object_unref(reloaded);
+	g_object_unref(config);
+}
+
+/* The "custom" action parses from YAML like any other nick.  Standalone
+ * gowl has no handler for it, but the config must still carry it so an
+ * embedder can act on the bind. */
+static void
+test_config_keybind_custom_action(void)
+{
+	GowlConfig *config;
+	GowlKeybindEntry *kb;
+	GError *err = NULL;
+	const gchar *yaml =
+		"keybinds:\n"
+		"  \"XF86AudioMute\":"
+		" { action: custom, arg: \"(cmacs-volume-mute)\" }\n";
+
+	config = gowl_config_new();
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+
+	kb = nth_keybind(config, 0);
+	g_assert_nonnull(kb);
+	g_assert_cmpint(kb->action, ==, GOWL_ACTION_CUSTOM);
+	g_assert_cmpstr(kb->arg, ==, "(cmacs-volume-mute)");
+
+	g_object_unref(config);
+}
+
 static void
 test_config_monitors_names_iter(void)
 {
@@ -396,6 +573,16 @@ main(int argc, char *argv[])
 	                test_config_monitors_transform_string);
 	g_test_add_func("/config/monitors-transform-invalid",
 	                test_config_monitors_transform_invalid);
+	g_test_add_func("/config/keybind-desc-from-yaml",
+	                test_config_keybind_desc_from_yaml);
+	g_test_add_func("/config/keybind-media-keys",
+	                test_config_keybind_media_keys);
+	g_test_add_func("/config/keybind-yaml-round-trip",
+	                test_config_keybind_yaml_round_trip);
+	g_test_add_func("/config/keybind-yaml-escapes",
+	                test_config_keybind_yaml_escapes);
+	g_test_add_func("/config/keybind-custom-action",
+	                test_config_keybind_custom_action);
 	g_test_add_func("/config/monitors-names-iter",
 	                test_config_monitors_names_iter);
 

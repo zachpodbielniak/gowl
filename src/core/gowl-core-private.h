@@ -396,6 +396,12 @@ struct _GowlCompositor {
 	GowlKeyInterceptFunc key_intercept_func;
 	gpointer             key_intercept_data;
 
+	/* GOWL_ACTION_CUSTOM handler (embedder hook).  Lets a keybind
+	 * run embedder code -- for cmacs, an Elisp form -- instead of
+	 * being limited to the built-in actions and spawn. */
+	GowlCustomActionFunc custom_action_func;
+	gpointer             custom_action_data;
+
 	/* InputCapture: the D-Bus-free capture state machine driven by the
 	 * xdg-desktop-portal-gowl backend over the gowl-input-capture
 	 * protocol.  NULL when no capture session exists.  prev_cursor_x/y

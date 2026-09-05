@@ -154,7 +154,7 @@ Only listed tools will be registered. Omit the =tools= key entirely to enable al
 | =list_monitors=      | List all outputs with name, geometry, active tags, layout, mfact, nmaster |
 | =get_tag_state=      | Per-monitor tag info: which tags are active and client count per tag      |
 | =get_config=         | Current runtime config (borders, layout defaults, keyboard, terminal)     |
-| =list_keybinds=      | All active keybinds with combo string, action nick, and argument          |
+| =list_keybinds=      | All active keybinds with combo string, action nick, argument and description |
 | =list_modules=       | Loaded modules with name, description, version, priority, active state    |
 | =get_focused_client= | Details of the currently focused window, or null if none                  |
 
@@ -203,7 +203,7 @@ Tags use bitmasks: tag 1 = =1=, tag 2 = =2=, tag 3 = =4=, tags 1+2 = =3=, etc.
 | Tool              | Parameters                                       | Description              |
 |-------------------+--------------------------------------------------+--------------------------|
 | =add_rule=        | =app_id=, =title=, =tags=, =floating=, =monitor= | Add a window rule        |
-| =add_keybind=     | =modifiers=, =key=, =action=, =arg=              | Bind key combo to action |
+| =add_keybind=     | =modifiers=, =key=, =action=, =arg=, =desc=     | Bind key combo to action |
 | =spawn=           | =command=                                        | Launch external process  |
 | =compositor_quit= | (none)                                           | Shut down the compositor |
 

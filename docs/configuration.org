@@ -102,9 +102,71 @@ Visual appearance settings.
 | Property               | Type   | Default     | Description                           |
 |------------------------+--------+-------------+---------------------------------------|
 | =border-width=         | int    | =2=         | Window border width in pixels         |
-| =border-color-focus=   | string | ="#005577"= | Hex color for focused window border   |
-| =border-color-unfocus= | string | ="#444444"= | Hex color for unfocused window border |
-| =border-color-urgent=  | string | ="#ff0000"= | Hex color for urgent window border    |
+| =border-color-focus=   | string | =accent=    | Focused window border                 |
+| =border-color-unfocus= | string | =surface=   | Unfocused window border               |
+| =border-color-urgent=  | string | =red=       | Urgent window border                  |
+
+The three colours default to palette entry names rather than literals,
+so they follow the palette.  See [[#palette][Palette]] --- any colour
+setting accepts a literal too.
+
+**** palette
+:PROPERTIES:
+:CUSTOM_ID: palette
+:END:
+
+One set of named colours that every colour setting in the config
+resolves against, so the borders, the bar and the lock screen can be
+changed together instead of one at a time.
+
+#+begin_src yaml
+palette:
+  name: latte          # a built-in flavour to start from
+  accent: "#d20f39"    # any other key overrides one of its entries
+
+border-color-focus: accent
+
+modules:
+  bar:
+    bg-color: base/cc  # the same background at 80% opacity
+    fg-color: text
+#+end_src
+
+A colour setting is one of three things:
+
+| Spec        | Means                                            |
+|-------------+--------------------------------------------------|
+| ="#rrggbb"= | A literal, used as written.  =#rrggbbaa= too.    |
+| =accent=    | A palette entry.                                 |
+| =accent/cc= | That entry with its alpha replaced.              |
+
+An unknown name resolves to itself rather than failing the config: far
+more likely a colour format the consumer understands and the palette
+does not than a typo worth refusing to start over.
+
+Built-in flavours are =mocha=, =macchiato=, =frappe= and =latte= (the
+four Catppuccin ones) and =dwm=, which reproduces exactly what gowl
+looked like before palettes existed.  All five define the same key set,
+so a config written against one renders under any other: =base=,
+=mantle=, =crust=, =surface=, =overlay=, =text=, =subtext=, =accent=,
+=red=, =green=, =yellow=, =blue=, =mauve=, =teal=, =peach=.
+
+***** Module settings
+
+A module setting is resolved against the palette when its *key* contains
+=color= or =colour=.  Module settings are an untyped string map with no
+schema, so the key name is the only thing available to decide it --- and
+because the decision lives in the config layer, a module written later
+gets palette support without knowing the feature exists.  A setting
+named anything else (=font=, =height=) is passed through exactly as
+written.
+
+***** What is stored
+
+Specs are stored as written and resolved on read.  A generated config
+writes =accent= back out, not the literal it currently resolves to ---
+a file with today's colours baked into it is one the next palette
+change cannot reach, which is the situation this replaced.
 
 **** layout
 :PROPERTIES:
@@ -666,7 +728,7 @@ A common pattern is to use YAML for declarative settings and C config only for t
 # config.yaml -- base settings
 appearance:
   border-width: 2
-  border-color-focus: "#005577"
+  border-color-focus: accent
 
 layout:
   mfact: 0.55

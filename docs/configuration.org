@@ -203,6 +203,13 @@ configure the client has to acknowledge and re-render for, which turns
 one move into a dozen round trips per window.  An interactive drag is
 exempt entirely --- a dragged window tracks the pointer 1:1.
 
+A window's *first* placement is instant; only moves after it animate.
+A scene tree is created at the origin, so animating the first placement
+sends a newly opened window on a diagonal sweep from the top-left
+corner of the display to wherever the layout puts it --- an artifact of
+how the node is created rather than anything anyone chose, and a long
+one on a large screen.
+
 The =tile= layout also has a /vsplit/ orientation — master row on top, stack row on
 the bottom — toggled at runtime via the =set_split= action or the =gowl-set-vsplit=
 Elisp primitive (it is not a config property).  In vsplit mode =mfact= sizes the

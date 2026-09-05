@@ -3540,7 +3540,7 @@ resize_client(
 	 * the frame loop walks it to the new spot.  An interactive
 	 * move/resize is exempt: the window has to track the pointer 1:1
 	 * or dragging feels like steering a boat. */
-	if (!interact && gowl_animation_enabled(self)) {
+	if (!interact && c->anim_placed && gowl_animation_enabled(self)) {
 		gint cx = c->scene->node.x;
 		gint cy = c->scene->node.y;
 
@@ -3553,6 +3553,9 @@ resize_client(
 		wlr_scene_node_set_position(&c->scene->node,
 		                            c->geom.x, c->geom.y);
 	}
+	/* Set after the branch, so the FIRST placement takes the instant
+	 * path and every one after it animates. */
+	c->anim_placed = TRUE;
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 
 	/* Borders: delegate to decorator module if active, else use rects */

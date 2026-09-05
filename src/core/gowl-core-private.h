@@ -547,6 +547,17 @@ struct _GowlClient {
 	gint64   anim_start_us;
 	gint64   anim_dur_us;
 
+	/*
+	 * Whether this client has ever been placed.  A scene tree is
+	 * created at the origin, so without this a newly mapped window
+	 * animates from the top-left corner of the display to wherever
+	 * the layout puts it --- a long diagonal sweep on a large screen,
+	 * and an artifact of how the node is created rather than anything
+	 * anyone chose.  The first placement is instant; every move after
+	 * it animates.
+	 */
+	gboolean anim_placed;
+
 	guint32  tags;
 	guint    bw;             /* border width in pixels */
 	gboolean isfloating;

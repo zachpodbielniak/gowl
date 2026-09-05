@@ -279,6 +279,20 @@ gowl_config_load_yaml(
  *
  * Returns: %TRUE on success, %FALSE if a file was found but invalid
  */
+/**
+ * gowl_config_load_rules_d:
+ * @self: a #GowlConfig
+ * @config_path: the config file that was loaded
+ *
+ * Loads window rules from `rules.d/' beside @config_path, one file per
+ * application, in sorted order, merged after the main config's flat
+ * `rules:' list.  A broken fragment warns and is skipped rather than
+ * failing the load.
+ *
+ * Returns: how many files were loaded.
+ */
+guint gowl_config_load_rules_d(GowlConfig *self, const gchar *config_path);
+
 gboolean
 gowl_config_load_yaml_from_search_path(
 	GowlConfig  *self,

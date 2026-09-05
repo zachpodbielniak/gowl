@@ -84,6 +84,8 @@ Gowl supports two configuration methods:
 
 Declarative configuration in `~/.config/gowl/config.yaml`. Covers appearance, layout, keybinds, rules, autostart, monitor settings, and module configuration.
 
+Window rules may also be split one file per application into `~/.config/gowl/rules.d/`, loaded in sorted order after the main config; a fragment that fails to parse is skipped rather than failing the load.
+
 Generate a default config:
 
 ```bash

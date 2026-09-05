@@ -309,6 +309,40 @@ rules:
     monitor: -1
 #+end_src
 
+**** =rules.d/=
+:PROPERTIES:
+:CUSTOM_ID: rules-d
+:END:
+
+Rules may also live one file per application in a =rules.d/= directory
+beside the config file --- =~/.config/gowl/rules.d/10-steam.yaml=,
+=20-picture-in-picture.yaml=, and so on.  Each is an ordinary config
+fragment carrying its own =rules:= sequence, so it is a valid config
+file in its own right.
+
+Files load in sorted order after the main config's flat =rules:= list,
+so a numeric prefix decides precedence and the two mechanisms merge
+rather than competing.
+
+#+begin_src yaml
+# ~/.config/gowl/rules.d/10-steam.yaml
+rules:
+  - app-id: "steam"
+    floating: true
+    tags: 16
+#+end_src
+
+A fragment that does not parse costs itself and nothing else: it warns,
+is skipped, and every rule that did parse stays.  These are files
+edited by hand, and one typo should not take out the rest or stop the
+compositor starting.
+
+Why this exists at all: a single growing =rules:= array is the wrong
+shape for the job.  A rule for Steam and a rule for a screenshot
+overlay have nothing to do with each other, and a distribution that
+ships rules cannot be edited by a user without merging.  Omarchy keeps
+one Lua file per application for the same reason.
+
 *** Autostart
 :PROPERTIES:
 :CUSTOM_ID: autostart

@@ -302,6 +302,38 @@ test_config_monitors_transform_string(void)
  * structured logs route through the writer instead.  Returning
  * G_LOG_WRITER_HANDLED prevents both the default print and the
  * implicit abort that GTest installs on G_LOG_LEVEL_WARNING. */
+/*
+ * The build defines G_LOG_USE_STRUCTURED, so warnings go through the
+ * writer rather than the legacy handler -- which means
+ * g_test_expect_message() never sees them, and GTest's default abort on
+ * G_LOG_LEVEL_WARNING fires instead.  Swallowing the one warning a test
+ * expects is the only interception point.
+ */
+static const char *expected_warning = NULL;
+static gboolean saw_expected_warning = FALSE;
+
+static GLogWriterOutput expect_warning_writer(GLogLevelFlags, const GLogField *,
+                                               gsize, gpointer);
+
+/*
+ * g_log_set_writer_func() may be called only ONCE per process, so the
+ * writer is installed on first use and left in place.  It is
+ * transparent while expected_warning is NULL, falling through to the
+ * default, so a test that wants no interception simply clears it.
+ */
+static void
+expect_warning(const char *substring)
+{
+	static gboolean installed = FALSE;
+
+	if (!installed) {
+		g_log_set_writer_func(expect_warning_writer, NULL, NULL);
+		installed = TRUE;
+	}
+	expected_warning = substring;
+	saw_expected_warning = FALSE;
+}
+
 static GLogWriterOutput
 expect_warning_writer(GLogLevelFlags    log_level,
                        const GLogField  *fields,
@@ -315,9 +347,12 @@ expect_warning_writer(GLogLevelFlags    log_level,
 		for (i = 0; i < n_fields; i++) {
 			if (g_strcmp0(fields[i].key, "MESSAGE") == 0
 			    && fields[i].value != NULL
+			    && expected_warning != NULL
 			    && strstr((const char *)fields[i].value,
-			              "invalid transform") != NULL)
+			              expected_warning) != NULL) {
+				saw_expected_warning = TRUE;
 				return G_LOG_WRITER_HANDLED;
+			}
 		}
 	}
 	return g_log_writer_default(log_level, fields, n_fields, NULL);
@@ -341,7 +376,7 @@ test_config_monitors_transform_invalid(void)
 	 * "invalid transform" warning, then restore the default after.
 	 * g_log_set_writer_func can be called multiple times in tests
 	 * by passing NULL to revert. */
-	g_log_set_writer_func(expect_warning_writer, NULL, NULL);
+	expect_warning("invalid transform");
 
 	ok = load_yaml_from_string(config, yaml, &err);
 	g_assert_no_error(err);
@@ -529,6 +564,130 @@ test_config_keybind_custom_action(void)
 	g_object_unref(config);
 }
 
+/* --- rules.d --- */
+
+/* Write FILES (name, content pairs) into a fresh temp dir and return it. */
+static gchar *
+make_rules_tree(const gchar *main_yaml, const gchar **files)
+{
+	gchar *dir = g_dir_make_tmp("gowl-rulesd-XXXXXX", NULL);
+	g_autofree gchar *rd = g_build_filename(dir, "rules.d", NULL);
+	g_autofree gchar *main_path = g_build_filename(dir, "config.yaml", NULL);
+	gint i;
+
+	g_mkdir_with_parents(rd, 0700);
+	g_file_set_contents(main_path, main_yaml, -1, NULL);
+
+	for (i = 0; files != NULL && files[i] != NULL; i += 2) {
+		g_autofree gchar *p = g_build_filename(rd, files[i], NULL);
+
+		g_file_set_contents(p, files[i + 1], -1, NULL);
+	}
+	return dir;
+}
+
+static void
+remove_rules_tree(gchar *dir)
+{
+	g_autofree gchar *rd = g_build_filename(dir, "rules.d", NULL);
+	g_autoptr(GDir) d = g_dir_open(rd, 0, NULL);
+	const gchar *name;
+
+	if (d != NULL) {
+		while ((name = g_dir_read_name(d)) != NULL) {
+			g_autofree gchar *p = g_build_filename(rd, name, NULL);
+			g_unlink(p);
+		}
+	}
+	{
+		g_autofree gchar *m = g_build_filename(dir, "config.yaml", NULL);
+		g_unlink(m);
+	}
+	g_rmdir(rd);
+	g_rmdir(dir);
+	g_free(dir);
+}
+
+/* Fragments add to the main config's rules rather than replacing them. */
+static void
+test_config_rules_d_merges(void)
+{
+	const gchar *files[] = {
+		"10-steam.yaml", "rules:\n  - app-id: \"steam\"\n    floating: true\n",
+		"20-pip.yaml",   "rules:\n  - title: \"Picture-in-Picture\"\n    floating: true\n",
+		NULL
+	};
+	gchar *dir = make_rules_tree(
+		"border-width: 3\nrules:\n  - app-id: \"firefox\"\n    tags: 2\n",
+		files);
+	g_autofree gchar *main_path = g_build_filename(dir, "config.yaml", NULL);
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+
+	g_assert_true(gowl_config_load_yaml(config, main_path, &err));
+	g_assert_no_error(err);
+	g_assert_cmpuint(gowl_config_get_rules(config)->len, ==, 1);
+
+	g_assert_cmpuint(gowl_config_load_rules_d(config, main_path), ==, 2);
+	g_assert_cmpuint(gowl_config_get_rules(config)->len, ==, 3);
+
+	/* A fragment carries only rules; it must not reset anything else
+	 * back to a default just by being a valid config file. */
+	g_assert_cmpint(gowl_config_get_border_width(config), ==, 3);
+
+	g_object_unref(config);
+	remove_rules_tree(dir);
+}
+
+/*
+ * A fragment that does not parse costs itself and nothing else.  These
+ * are per-application files a user edits by hand; one typo must not
+ * take out the rules that were fine, nor stop the compositor starting.
+ */
+static void
+test_config_rules_d_survives_a_bad_file(void)
+{
+	const gchar *files[] = {
+		"10-good.yaml",   "rules:\n  - app-id: \"steam\"\n    floating: true\n",
+		"99-broken.yaml", "rules: [[[ not valid\n",
+		NULL
+	};
+	gchar *dir = make_rules_tree("rules: []\n", files);
+	g_autofree gchar *main_path = g_build_filename(dir, "config.yaml", NULL);
+	GowlConfig *config = gowl_config_new();
+
+	g_assert_true(gowl_config_load_yaml(config, main_path, NULL));
+
+	/* Only the good one counts, and it did load.  The warning is
+	 * swallowed by a writer rather than g_test_expect_message: this
+	 * build logs structurally, which that never sees. */
+	expect_warning("99-broken");
+
+	g_assert_cmpuint(gowl_config_load_rules_d(config, main_path), ==, 1);
+
+	g_assert_true(saw_expected_warning);
+	expected_warning = NULL;
+	g_assert_cmpuint(gowl_config_get_rules(config)->len, ==, 1);
+
+	g_object_unref(config);
+	remove_rules_tree(dir);
+}
+
+/* No rules.d is the normal case and is not an error. */
+static void
+test_config_rules_d_absent(void)
+{
+	gchar *dir = make_rules_tree("rules: []\n", NULL);
+	g_autofree gchar *main_path = g_build_filename(dir, "config.yaml", NULL);
+	GowlConfig *config = gowl_config_new();
+
+	g_assert_true(gowl_config_load_yaml(config, main_path, NULL));
+	g_assert_cmpuint(gowl_config_load_rules_d(config, main_path), ==, 0);
+
+	g_object_unref(config);
+	remove_rules_tree(dir);
+}
+
 static void
 test_config_monitors_names_iter(void)
 {
@@ -583,6 +742,10 @@ main(int argc, char *argv[])
 	                test_config_keybind_yaml_escapes);
 	g_test_add_func("/config/keybind-custom-action",
 	                test_config_keybind_custom_action);
+	g_test_add_func("/config/rules-d-merges", test_config_rules_d_merges);
+	g_test_add_func("/config/rules-d-bad-file",
+	                test_config_rules_d_survives_a_bad_file);
+	g_test_add_func("/config/rules-d-absent", test_config_rules_d_absent);
 	g_test_add_func("/config/monitors-names-iter",
 	                test_config_monitors_names_iter);
 

@@ -1442,6 +1442,77 @@ gowl_config_load_yaml(
 }
 
 /**
+ * gowl_config_load_rules_d:
+ * @self: a #GowlConfig
+ * @config_path: the config file that was loaded
+ *
+ * Loads window rules from `rules.d/' beside @config_path, one file per
+ * application, merged after the flat `rules:' list in the main config.
+ *
+ * A single growing `rules:' array is the wrong shape for this: a rule
+ * for Steam and a rule for a screenshot overlay have nothing to do with
+ * each other, and a config that ships rules cannot be edited by a user
+ * without merging.  Omarchy keeps one Lua file per application for
+ * exactly this reason.
+ *
+ * Files are read in sorted order so a numeric prefix decides
+ * precedence, and each is a fragment carrying its own `rules:'
+ * sequence, so it is a valid config file in its own right.
+ *
+ * Returns: how many files were loaded.
+ */
+guint
+gowl_config_load_rules_d(GowlConfig *self, const gchar *config_path)
+{
+	g_autofree gchar *dir_path = NULL;
+	g_autofree gchar *parent = NULL;
+	g_autoptr(GDir) dir = NULL;
+	g_autoptr(GPtrArray) files = NULL;
+	const gchar *name;
+	guint i, loaded = 0;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0);
+	g_return_val_if_fail(config_path != NULL, 0);
+
+	parent = g_path_get_dirname(config_path);
+	dir_path = g_build_filename(parent, "rules.d", NULL);
+
+	dir = g_dir_open(dir_path, 0, NULL);
+	if (dir == NULL)
+		return 0;         /* no rules.d is the normal case */
+
+	files = g_ptr_array_new_with_free_func(g_free);
+	while ((name = g_dir_read_name(dir)) != NULL) {
+		if (!g_str_has_suffix(name, ".yaml")
+		    && !g_str_has_suffix(name, ".yml"))
+			continue;
+		g_ptr_array_add(files, g_build_filename(dir_path, name, NULL));
+	}
+
+	/* Sorted, so a `10-' prefix means what it looks like it means.
+	 * Directory order is not sorted and differs between filesystems. */
+	g_ptr_array_sort_values(files, (GCompareFunc)g_strcmp0);
+
+	for (i = 0; i < files->len; i++) {
+		const gchar *file = g_ptr_array_index(files, i);
+		GError *err = NULL;
+
+		/* A broken fragment costs itself, not the whole session: the
+		 * rules that did parse stay, and the compositor still starts. */
+		if (!gowl_config_load_yaml(self, file, &err)) {
+			g_warning("gowl_config: %s: %s", file,
+			          err ? err->message : "failed to load");
+			g_clear_error(&err);
+			continue;
+		}
+		g_debug("gowl_config: loaded rules from '%s'", file);
+		loaded++;
+	}
+
+	return loaded;
+}
+
+/**
  * gowl_config_load_yaml_from_search_path:
  * @self: a #GowlConfig
  * @error: (nullable): return location for a #GError
@@ -1477,8 +1548,14 @@ gowl_config_load_yaml_from_search_path(
 
 	for (i = 0; search_paths[i] != NULL; i++) {
 		if (g_file_test(search_paths[i], G_FILE_TEST_EXISTS)) {
-			g_debug("gowl_config: loading config from '%s'", search_paths[i]);
-			return gowl_config_load_yaml(self, search_paths[i], error);
+			gboolean ok;
+
+			g_debug("gowl_config: loading config from '%s'",
+			        search_paths[i]);
+			ok = gowl_config_load_yaml(self, search_paths[i], error);
+			if (ok)
+				gowl_config_load_rules_d(self, search_paths[i]);
+			return ok;
 		}
 	}
 

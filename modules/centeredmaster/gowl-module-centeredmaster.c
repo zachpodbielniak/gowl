@@ -24,6 +24,10 @@
 
 #include "module/gowl-module.h"
 #include "interfaces/gowl-layout-provider.h"
+#include "core/gowl-compositor.h"
+#include "core/gowl-monitor.h"
+#include "core/gowl-client.h"
+#include <wlr/util/box.h>
 
 /**
  * GowlModuleCenteredmaster:
@@ -114,27 +118,91 @@ centeredmaster_arrange(
 	GList              *clients,
 	gpointer            area
 ){
-	(void)self;
-	(void)monitor;
-	(void)clients;
-	(void)area;
+	GowlMonitor *m = (GowlMonitor *)monitor;
+	struct wlr_box *a = (struct wlr_box *)area;
+	GowlCompositor *comp;
+	GList *l;
+	gint n, i, nmaster;
+	gint center_w, left_w, right_w, center_x, right_x;
+	gint my, ly, ry;
+	gint left_n, right_n, stack_n;
+	gdouble mfact;
 
-	/*
-	 * Layout algorithm:
-	 * 1. Count visible tiling clients (n)
-	 * 2. If n <= nmaster, all go in center at full width
-	 * 3. Otherwise:
-	 *    - center_w = w * mfact
-	 *    - left_w = (w - center_w) / 2
-	 *    - right_w = w - center_w - left_w
-	 *    - Master windows fill center column, stacked vertically
-	 *    - Stack windows alternate left/right, stacked vertically
-	 *      in each column
-	 *
-	 * Implementation deferred until compositor exposes layout
-	 * dispatch through the module manager.
-	 */
-	g_debug("centeredmaster: arrange called (awaiting compositor integration)");
+	(void)self;
+
+	if (m == NULL || a == NULL || clients == NULL)
+		return;
+
+	comp = gowl_monitor_get_compositor(m);
+	if (comp == NULL)
+		return;
+
+	n = (gint)g_list_length(clients);
+	if (n == 0)
+		return;
+
+	nmaster = gowl_monitor_get_nmaster(m);
+	if (nmaster < 0)
+		nmaster = 0;
+	mfact = gowl_monitor_get_mfact(m);
+	if (mfact <= 0.0 || mfact >= 1.0)
+		mfact = 0.55;
+
+	/* Everything fits in the master column: one full-width stack, which
+	 * is what makes this layout usable with a single window rather than
+	 * leaving two empty side columns. */
+	if (n <= nmaster || nmaster == 0) {
+		my = a->y;
+		i = 0;
+		for (l = clients; l != NULL; l = l->next, i++) {
+			gint h = (a->height - (my - a->y)) / (n - i);
+
+			gowl_compositor_place_client(comp, (GowlClient *)l->data,
+			                              a->x, my, a->width, h);
+			my += h;
+		}
+		return;
+	}
+
+	center_w = (gint)((gdouble)a->width * mfact);
+	left_w   = (a->width - center_w) / 2;
+	right_w  = a->width - center_w - left_w;
+	center_x = a->x + left_w;
+	right_x  = center_x + center_w;
+
+	/* Stack alternates left and right, so the left column takes the
+	 * ceiling when the count is odd. */
+	stack_n = n - nmaster;
+	left_n  = (stack_n + 1) / 2;
+	right_n = stack_n - left_n;
+
+	my = ly = ry = a->y;
+	i = 0;
+	for (l = clients; l != NULL; l = l->next, i++) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if (i < nmaster) {
+			gint h = (a->height - (my - a->y)) / (nmaster - i);
+
+			gowl_compositor_place_client(comp, c, center_x, my,
+			                              center_w, h);
+			my += h;
+		} else if ((i - nmaster) % 2 == 0 && left_n > 0) {
+			gint idx = (i - nmaster) / 2;
+			gint h = (a->height - (ly - a->y)) / (left_n - idx);
+
+			gowl_compositor_place_client(comp, c, a->x, ly,
+			                              left_w, h);
+			ly += h;
+		} else if (right_n > 0) {
+			gint idx = (i - nmaster - 1) / 2;
+			gint h = (a->height - (ry - a->y)) / (right_n - idx);
+
+			gowl_compositor_place_client(comp, c, right_x, ry,
+			                              right_w, h);
+			ry += h;
+		}
+	}
 }
 
 static const gchar *

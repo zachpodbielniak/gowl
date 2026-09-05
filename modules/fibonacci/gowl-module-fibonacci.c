@@ -24,6 +24,10 @@
 
 #include "module/gowl-module.h"
 #include "interfaces/gowl-layout-provider.h"
+#include "core/gowl-compositor.h"
+#include "core/gowl-monitor.h"
+#include "core/gowl-client.h"
+#include <wlr/util/box.h>
 
 /**
  * GowlModuleFibonacci:
@@ -106,34 +110,71 @@ fibonacci_arrange(
 	GList              *clients,
 	gpointer            area
 ){
+	GowlMonitor *m = (GowlMonitor *)monitor;
+	struct wlr_box *a = (struct wlr_box *)area;
+	GowlCompositor *comp;
+	GList *l;
+	gint n, i;
+	gint x, y, w, h;
+
 	(void)self;
-	(void)monitor;
-	(void)clients;
-	(void)area;
+
+	if (m == NULL || a == NULL || clients == NULL)
+		return;
+
+	comp = gowl_monitor_get_compositor(m);
+	if (comp == NULL)
+		return;
+
+	n = (gint)g_list_length(clients);
+	if (n == 0)
+		return;
 
 	/*
-	 * Fibonacci layout algorithm:
-	 *
-	 *   cx = area.x, cy = area.y, cw = area.w, ch = area.h
-	 *   for i = 0..n-1:
-	 *     if i < n-1:
-	 *       if i % 2 == 0:  (vertical split)
-	 *         client[i].w = cw / 2
-	 *         client[i].h = ch
-	 *         cw -= client[i].w
-	 *         cx += client[i].w
-	 *       else:            (horizontal split)
-	 *         client[i].w = cw
-	 *         client[i].h = ch / 2
-	 *         ch -= client[i].h
-	 *         cy += client[i].h
-	 *     else:
-	 *       client[i] gets remaining (cx, cy, cw, ch)
-	 *
-	 * Implementation deferred until compositor exposes layout
-	 * dispatch through the module manager.
+	 * Spiral: each window takes half of what is left, alternating the
+	 * axis it splits on, and the last one takes the whole remainder.
+	 * Splitting on the longer edge each time would be the "dwindle"
+	 * variant; alternating is what makes it a spiral.
 	 */
-	g_debug("fibonacci: arrange called (awaiting compositor integration)");
+	x = a->x;
+	y = a->y;
+	w = a->width;
+	h = a->height;
+
+	i = 0;
+	for (l = clients; l != NULL; l = l->next, i++) {
+		GowlClient *c = (GowlClient *)l->data;
+		gint cw = w, ch = h;
+
+		if (l->next != NULL) {
+			if (i % 2 == 0)
+				cw = w / 2;
+			else
+				ch = h / 2;
+		}
+
+		/* A window narrower or shorter than this is not a window any
+		 * more; stop splitting and let the rest share the remainder. */
+		if (cw < 40 || ch < 40) {
+			cw = w;
+			ch = h;
+		}
+
+		gowl_compositor_place_client(comp, c, x, y, cw, ch);
+
+		if (l->next == NULL)
+			break;
+
+		if (cw != w) {
+			x += cw;
+			w -= cw;
+		} else if (ch != h) {
+			y += ch;
+			h -= ch;
+		} else {
+			break;      /* remainder too small to split further */
+		}
+	}
 }
 
 static const gchar *

@@ -341,6 +341,18 @@ const gchar *gowl_config_get_border_color_urgent(GowlConfig *self);
 gdouble gowl_config_get_mfact(GowlConfig *self);
 
 /**
+ * gowl_config_get_scroll_column_width:
+ * @self: a #GowlConfig
+ *
+ * Column width in the scrolling layout, as a fraction of the usable
+ * width.  0.5 shows two columns at a time; 1.0 shows one.  Named after
+ * Hyprland's `scrolling.column_width' so a config translates.
+ *
+ * Returns: the fraction, clamped by the layout to 0.05 - 1.0.
+ */
+gdouble gowl_config_get_scroll_column_width(GowlConfig *self);
+
+/**
  * gowl_config_get_nmaster:
  * @self: a #GowlConfig
  *

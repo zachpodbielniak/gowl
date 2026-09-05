@@ -161,6 +161,22 @@ gint                gowl_module_manager_bar_tag_at        (GowlModuleManager *se
  */
 gpointer            gowl_module_manager_get_decorator (GowlModuleManager *self);
 
+/**
+ * gowl_module_manager_get_layout_providers:
+ * @self: a #GowlModuleManager
+ *
+ * Every module implementing #GowlLayoutProvider, priority-sorted.
+ *
+ * Unlike the decorator, layouts are not "first active wins": the user
+ * picks one by name, so the caller needs the whole list rather than a
+ * winner.  The array was already being built and had no reader at all
+ * until the layout registry became one.
+ *
+ * Returns: (transfer none) (element-type GowlLayoutProvider): the array.
+ */
+GPtrArray          *gowl_module_manager_get_layout_providers (
+                                                 GowlModuleManager *self);
+
 G_END_DECLS
 
 #endif /* GOWL_MODULE_MANAGER_H */

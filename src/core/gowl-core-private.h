@@ -435,6 +435,10 @@ struct _GowlCompositor {
 	 * pointer focus, or NULL.  At most one can be active at a time --
 	 * the protocol says so, and it is also the only thing that makes
 	 * sense for a cursor. */
+	/* Every layout the compositor can arrange with, built-in and
+	 * module-provided as peers.  See gowl-layout-registry.c. */
+	GPtrArray *layouts;    /* element-type GowlLayoutEntry* */
+
 	/* Gamma / colour temperature (wlr-gamma-control-v1).  This is what
 	 * gammastep, wlsunset and every other night-light program drives;
 	 * without it they exit with "compositor does not support gamma
@@ -486,7 +490,15 @@ struct _GowlMonitor {
 
 	guint32  tagset[2];
 	guint    seltags;    /* index into tagset[] (0 or 1) */
-	guint    sellt;      /* selected layout index */
+	guint    sellt;      /* legacy layout index; superseded by layout_name */
+	/* The monitor's layout, by NAME rather than by index into an array
+	 * that a module can grow or shrink under it.  NULL means "the first
+	 * registered layout", so a freshly created monitor needs no
+	 * initialisation to start in tile. */
+	gchar   *layout_name;
+	/* Scrolling layout: how far the column strip is scrolled, in
+	 * pixels, and which client the viewport last followed. */
+	gint     scroll_x;
 	gint     nmaster;
 	gdouble  mfact;
 	gboolean vsplit;     /* TRUE: master row on top, stack row below (vsplit) */

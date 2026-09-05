@@ -18,6 +18,7 @@
 
 #include "gowl.h"
 #include "config/gowl-keybind.h"
+#include "core/gowl-layout-registry.h"
 #include "ipc/gowl-ipc.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -939,6 +940,18 @@ main(int argc, char *argv[])
 
 	/* Dispatch startup hooks */
 	gowl_module_manager_dispatch_startup(module_mgr, compositor);
+
+	/* Adopt every module layout into the registry now that modules are
+	 * active, so `centeredmaster' and `fibonacci' become selectable by
+	 * name.  Before the registry existed the module manager collected
+	 * these and nothing read the array, so loading either did nothing. */
+	{
+		guint adopted = gowl_layout_adopt_providers(compositor);
+
+		if (adopted > 0)
+			g_message("gowl: %u module layout%s available",
+			          adopted, adopted == 1 ? "" : "s");
+	}
 
 	/* Run startup command if specified */
 	if (startup_cmd != NULL) {

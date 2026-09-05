@@ -1310,6 +1310,24 @@ gowl_module_manager_dispatch_bar_render(
 }
 
 /**
+ * gowl_module_manager_get_layout_providers:
+ * @self: a #GowlModuleManager
+ *
+ * Every module implementing #GowlLayoutProvider, priority-sorted.
+ * Unlike the decorator this is not "first active wins": the user picks
+ * a layout by name, so the caller wants the whole list.
+ *
+ * Returns: (transfer none) (element-type GowlLayoutProvider): the array
+ */
+GPtrArray *
+gowl_module_manager_get_layout_providers(GowlModuleManager *self)
+{
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+
+	return self->layout_providers;
+}
+
+/**
  * gowl_module_manager_get_decorator:
  * @self: a #GowlModuleManager
  *

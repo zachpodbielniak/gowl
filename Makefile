@@ -92,6 +92,7 @@ LIB_SRCS := \
 	src/core/gowl-frame-sink.c \
 	src/core/gowl-lid-policy.c \
 	src/core/gowl-tablet.c \
+	src/core/gowl-layout-registry.c \
 	src/core/gowl-focus-rules.c \
 	src/core/gowl-monitor.c \
 	src/core/gowl-client.c \

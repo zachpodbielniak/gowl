@@ -58,6 +58,7 @@ gowl_monitor_finalize(GObject *object)
 	self = GOWL_MONITOR(object);
 
 	g_free(self->layout_symbol);
+	g_free(self->layout_name);
 
 	G_OBJECT_CLASS(gowl_monitor_parent_class)->finalize(object);
 }
@@ -370,6 +371,14 @@ gowl_monitor_get_nmaster(GowlMonitor *self)
 	g_return_val_if_fail(GOWL_IS_MONITOR(self), 1);
 
 	return self->nmaster;
+}
+
+gpointer
+gowl_monitor_get_compositor(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), NULL);
+
+	return self->compositor;
 }
 
 /**

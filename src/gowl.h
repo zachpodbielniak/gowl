@@ -90,6 +90,7 @@
 
 /* Core */
 #include "core/gowl-compositor.h"
+#include "core/gowl-layout-registry.h"
 #include "core/gowl-monitor.h"
 #include "core/gowl-client.h"
 #include "core/gowl-seat.h"

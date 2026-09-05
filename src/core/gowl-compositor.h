@@ -949,6 +949,68 @@ void gowl_compositor_set_custom_action_handler (GowlCompositor       *self,
                                                  gpointer              user_data);
 
 /**
+ * gowl_compositor_place_client:
+ * @self: a #GowlCompositor
+ * @client: the client to place
+ * @x: layout-space X
+ * @y: layout-space Y
+ * @width: width in pixels
+ * @height: height in pixels
+ *
+ * Move and size a client for real: updates its geometry, configures the
+ * surface and moves its scene node.
+ *
+ * This is what a module layout needs and could not reach.
+ * gowl_client_set_geometry() only writes the struct --- a layout that
+ * called it would compute a perfect arrangement that never reached a
+ * single client.
+ */
+void gowl_compositor_place_client (GowlCompositor *self,
+                                    GowlClient     *client,
+                                    gint            x,
+                                    gint            y,
+                                    gint            width,
+                                    gint            height);
+
+/**
+ * gowl_compositor_tiling_clients:
+ * @self: a #GowlCompositor
+ * @monitor: the monitor
+ *
+ * Returns: (transfer container) (element-type GowlClient): the visible,
+ *   tiled, non-fullscreen clients on @monitor, in stack order.  Free
+ *   the list, not the clients.  Every layout starts here.
+ */
+GList *gowl_compositor_tiling_clients (GowlCompositor *self,
+                                        GowlMonitor    *monitor);
+
+/**
+ * gowl_compositor_scroll_to_client:
+ * @self: a #GowlCompositor
+ * @client: the client to reveal
+ *
+ * In the scrolling layout, move the strip by the smallest amount that
+ * brings @client fully into view.  A no-op in every other layout, and
+ * a no-op when the client is already visible --- otherwise every focus
+ * change would scroll.
+ */
+void gowl_compositor_scroll_to_client (GowlCompositor *self,
+                                        GowlClient     *client);
+
+/**
+ * gowl_compositor_scroll_by:
+ * @self: a #GowlCompositor
+ * @monitor: (nullable): the monitor, or %NULL for the selected one
+ * @dx: pixels to move the strip by
+ *
+ * Scrolls the column strip.  Clamping happens in the layout, so a
+ * caller may push past either end without knowing the strip's length.
+ */
+void gowl_compositor_scroll_by (GowlCompositor *self,
+                                 GowlMonitor    *monitor,
+                                 gint            dx);
+
+/**
  * gowl_compositor_surface_at:
  * @self: a #GowlCompositor
  * @lx: layout-space X

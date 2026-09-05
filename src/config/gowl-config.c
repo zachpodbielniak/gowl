@@ -34,6 +34,8 @@
 #define GOWL_CONFIG_DEFAULT_BORDER_COLOR_UNFOCUS "#444444"
 #define GOWL_CONFIG_DEFAULT_BORDER_COLOR_URGENT  "#ff0000"
 #define GOWL_CONFIG_DEFAULT_MFACT               (0.55)
+/* Two columns visible at a time, matching Omarchy's Hyprland default. */
+#define GOWL_CONFIG_DEFAULT_SCROLL_COLUMN_WIDTH (0.5)
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
 #define GOWL_CONFIG_DEFAULT_REPEAT_RATE         (25)
@@ -65,6 +67,7 @@ struct _GowlConfig {
 
 	/* Layout */
 	gdouble  mfact;
+	gdouble  scroll_column_width;
 	gint     nmaster;
 	gint     tag_count;
 
@@ -667,6 +670,7 @@ gowl_config_init(GowlConfig *self)
 	self->border_color_unfocus = g_strdup(GOWL_CONFIG_DEFAULT_BORDER_COLOR_UNFOCUS);
 	self->border_color_urgent = g_strdup(GOWL_CONFIG_DEFAULT_BORDER_COLOR_URGENT);
 	self->mfact               = GOWL_CONFIG_DEFAULT_MFACT;
+	self->scroll_column_width = GOWL_CONFIG_DEFAULT_SCROLL_COLUMN_WIDTH;
 	self->nmaster             = GOWL_CONFIG_DEFAULT_NMASTER;
 	self->tag_count           = GOWL_CONFIG_DEFAULT_TAG_COUNT;
 	self->repeat_rate         = GOWL_CONFIG_DEFAULT_REPEAT_RATE;
@@ -819,6 +823,11 @@ gowl_config_apply_mapping(
 		if (val != NULL)
 			g_object_set(self, "border-color-urgent", val, NULL);
 	}
+	if (yaml_mapping_has_member(mapping, "scroll-column-width")) {
+		self->scroll_column_width = yaml_mapping_get_double_member(
+			mapping, "scroll-column-width");
+	}
+
 	if (yaml_mapping_has_member(mapping, "mfact")) {
 		gdouble val = yaml_mapping_get_double_member(mapping, "mfact");
 		g_object_set(self, "mfact", val, NULL);
@@ -1602,6 +1611,15 @@ gowl_config_get_border_color_urgent(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_BORDER_COLOR_URGENT);
 	return self->border_color_urgent;
+}
+
+gdouble
+gowl_config_get_scroll_column_width(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SCROLL_COLUMN_WIDTH);
+
+	return self->scroll_column_width;
 }
 
 gdouble

@@ -128,6 +128,21 @@ void           gowl_monitor_set_mfact         (GowlMonitor *self,
 gint           gowl_monitor_get_nmaster       (GowlMonitor *self);
 
 /**
+ * gowl_monitor_get_compositor:
+ * @self: a #GowlMonitor
+ *
+ * The compositor this monitor belongs to.
+ *
+ * Exists for module layouts: #GowlLayoutProvider hands them a monitor
+ * and a client list, and placing a client needs the compositor.  The
+ * alternative was widening the interface signature, which every
+ * existing implementation would have had to change for.
+ *
+ * Returns: (transfer none) (nullable): the #GowlCompositor
+ */
+gpointer       gowl_monitor_get_compositor    (GowlMonitor *self);
+
+/**
  * gowl_monitor_set_nmaster:
  * @self: a #GowlMonitor
  * @nmaster: the new master count

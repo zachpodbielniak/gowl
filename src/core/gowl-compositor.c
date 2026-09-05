@@ -45,6 +45,7 @@
 #include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include "gowl-tablet.h"
+#include "gowl-layout-registry.h"
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/backend/libinput.h>
@@ -291,8 +292,12 @@ static void constraint_check_surface  (GowlCompositor *self,
 
 
 /* layout helpers */
-static void tile                  (GowlCompositor *self, GowlMonitor *m);
-static void monocle               (GowlCompositor *self, GowlMonitor *m);
+/* Built-in layouts.  Non-static: the layout registry holds pointers to
+ * them, alongside the module-provided ones. */
+void gowl_compositor_layout_tile      (GowlCompositor *self, GowlMonitor *m);
+void gowl_compositor_layout_monocle   (GowlCompositor *self, GowlMonitor *m);
+void gowl_compositor_layout_float     (GowlCompositor *self, GowlMonitor *m);
+void gowl_compositor_layout_scrolling (GowlCompositor *self, GowlMonitor *m);
 static void resize_client         (GowlCompositor *self, GowlClient *c,
                                    struct wlr_box geo, gboolean interact);
 static void applybounds           (GowlClient *c, struct wlr_box *bbox);
@@ -388,6 +393,11 @@ gowl_compositor_finalize(GObject *object)
 	GowlCompositor *self;
 
 	self = GOWL_COMPOSITOR(object);
+
+	/* Tablets and layouts hold no scene resources, so they can go
+	 * first and cannot be affected by the teardown below. */
+	gowl_tablet_finish(self);
+	gowl_layout_registry_finish(self);
 
 	/* Drop external raw-frame sinks while their scene nodes are still valid
 	 * (before the scene/display teardown below). */
@@ -3001,6 +3011,10 @@ gowl_compositor_start(
 	 * other device type fell into `default: break;'. */
 	gowl_tablet_manager_init(self);
 
+	/* The layout registry, before any monitor exists so a monitor
+	 * created during backend start already has layouts to pick from. */
+	gowl_layout_registry_init(self);
+
 	/* Gamma control, so gammastep / wlsunset can warm the screen at
 	 * night.  Without this global they refuse to start at all. */
 	self->gamma_control_mgr =
@@ -3898,9 +3912,6 @@ gowl_compositor_arrange(
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node,
 	                           top != NULL && top->isfullscreen);
 
-	/* Update layout symbol */
-	g_free(m->layout_symbol);
-	m->layout_symbol = g_strdup("[]=");
 
 	/* Re-parent floaters to correct layer.
 	 * Embedded clients are externally managed — skip them. */
@@ -3919,11 +3930,11 @@ gowl_compositor_arrange(
 		/* non-floating stays in current parent (tile) */
 	}
 
-	/* Call layout function - always use tile for now */
-	if (m->sellt == 0)
-		tile(self, m);
-	else
-		monocle(self, m);
+	/* Run the monitor's selected layout, which also sets its symbol.
+	 * This used to be `if (sellt == 0) tile else monocle', with the
+	 * symbol hardcoded above it -- so only two layouts existed and
+	 * every surface reported the wrong one. */
+	gowl_layout_apply(self, m);
 
 	/* Re-size fullscreen clients to the current monitor area.
 	 * Tile/monocle skip fullscreen clients, so after a mode or
@@ -4449,8 +4460,8 @@ gowl_compositor_focus_client(
  * inner gaps add spacing between tiled windows.
  * Ported from dwl's tile().
  */
-static void
-tile(
+void
+gowl_compositor_layout_tile(
 	GowlCompositor *self,
 	GowlMonitor    *m
 ){
@@ -4582,8 +4593,239 @@ tile(
  * window area minus outer gaps.
  * Ported from dwl's monocle().
  */
-static void
-monocle(
+/*
+ * gowl_compositor_tiling_clients:
+ *
+ * The visible, tiled, non-fullscreen clients on a monitor, in stack
+ * order.  Every layout starts from this list, and a module layout
+ * receives it rather than walking the compositor's client list itself
+ * (which it cannot see).
+ */
+void
+gowl_compositor_place_client(GowlCompositor *self, GowlClient *client,
+                              gint x, gint y, gint width, gint height)
+{
+	struct wlr_box geo;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(client != NULL);
+
+	geo.x = x;
+	geo.y = y;
+	geo.width = width;
+	geo.height = height;
+	resize_client(self, client, geo, FALSE);
+}
+
+GList *
+gowl_compositor_tiling_clients(GowlCompositor *self, GowlMonitor *m)
+{
+	GList *out = NULL, *l;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if (VISIBLEON(c, m) && !c->isfloating && !c->isfullscreen)
+			out = g_list_prepend(out, c);
+	}
+	return g_list_reverse(out);
+}
+
+/*
+ * The float layout: leave every client where the user put it.
+ *
+ * Deliberately not a no-op.  Clients that were tiled have their scene
+ * node in the tiling layer; float has to move them to the float layer
+ * or they stay clipped below tiled windows.  Their geometry is left
+ * alone -- that is what floating means.
+ */
+void
+gowl_compositor_layout_float(GowlCompositor *self, GowlMonitor *m)
+{
+	GList *l;
+
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if (!VISIBLEON(c, m) || c->isfullscreen || c->isembedded)
+			continue;
+		if (c->scene == NULL)
+			continue;
+		if (c->scene->node.parent == self->layers[GOWL_SCENE_LAYER_FS])
+			continue;
+
+		wlr_scene_node_reparent(&c->scene->node,
+		                        self->layers[GOWL_SCENE_LAYER_FLOAT]);
+	}
+}
+
+/*
+ * The scrolling layout: a niri-style horizontal strip of columns.
+ *
+ * Every window is a full-height column of a fixed fractional width, laid
+ * left to right in stack order, and the viewport scrolls along the strip
+ * rather than the windows being squeezed to fit.  With the default
+ * column width of 0.5 two are visible at a time; at 1.0 it is one window
+ * per screen.
+ *
+ * The scroll offset is clamped so the strip cannot be dragged past
+ * either end, and so a strip narrower than the screen sits at the left
+ * rather than floating in the middle.
+ */
+void
+gowl_compositor_layout_scrolling(GowlCompositor *self, GowlMonitor *m)
+{
+	GList *clients, *l;
+	gint ih, iv, oh, ov;
+	gint ax, ay, aw, ah;
+	gint col_w, strip_w, max_scroll;
+	gint n, i;
+	gdouble frac;
+
+	clients = gowl_compositor_tiling_clients(self, m);
+	n = (gint)g_list_length(clients);
+	if (n == 0) {
+		g_list_free(clients);
+		return;
+	}
+
+	ih = iv = oh = ov = 0;
+	if (self->module_mgr != NULL)
+		gowl_module_manager_get_gaps(self->module_mgr, (gpointer)m,
+		                             &ih, &iv, &oh, &ov);
+
+	ax = m->w.x + oh;
+	ay = m->w.y + ov;
+	aw = m->w.width - 2 * oh;
+	ah = m->w.height - 2 * ov;
+	if (aw <= 0 || ah <= 0) {
+		g_list_free(clients);
+		return;
+	}
+
+	frac = self->config != NULL
+		? gowl_config_get_scroll_column_width(self->config)
+		: 0.5;
+	if (frac <= 0.05) frac = 0.05;
+	if (frac > 1.0)  frac = 1.0;
+
+	col_w = (gint)((gdouble)aw * frac) - ih;
+	if (col_w < 1)
+		col_w = 1;
+
+	strip_w = n * (col_w + ih) - ih;
+	max_scroll = strip_w - aw;
+	if (max_scroll < 0)
+		max_scroll = 0;
+	if (m->scroll_x < 0)
+		m->scroll_x = 0;
+	if (m->scroll_x > max_scroll)
+		m->scroll_x = max_scroll;
+
+	i = 0;
+	for (l = clients; l != NULL; l = l->next, i++) {
+		GowlClient *c = (GowlClient *)l->data;
+		struct wlr_box geo;
+
+		geo.x = ax + i * (col_w + ih) - m->scroll_x;
+		geo.y = ay;
+		geo.width = col_w;
+		geo.height = ah;
+		resize_client(self, c, geo, FALSE);
+	}
+
+	g_list_free(clients);
+}
+
+/*
+ * gowl_compositor_scroll_to_client:
+ *
+ * Bring a client into view in the scrolling layout, by the smallest
+ * movement that does so.  A focus change that already has the window
+ * on screen must not jump the strip, or every focus change becomes a
+ * scroll.
+ */
+void
+gowl_compositor_scroll_to_client(GowlCompositor *self, GowlClient *c)
+{
+	GowlMonitor *m;
+	GList *clients;
+	gint idx, ih, oh, aw, col_w, x0, x1;
+	gdouble frac;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (c == NULL || c->mon == NULL)
+		return;
+	m = c->mon;
+
+	{
+		GowlLayoutEntry *e = gowl_layout_get(self, m);
+
+		if (e == NULL || g_strcmp0(e->name, "scrolling") != 0)
+			return;
+	}
+
+	clients = gowl_compositor_tiling_clients(self, m);
+	idx = g_list_index(clients, c);
+	g_list_free(clients);
+	if (idx < 0)
+		return;
+
+	ih = oh = 0;
+	if (self->module_mgr != NULL)
+		gowl_module_manager_get_gaps(self->module_mgr, (gpointer)m,
+		                             &ih, NULL, &oh, NULL);
+
+	aw = m->w.width - 2 * oh;
+	frac = self->config != NULL
+		? gowl_config_get_scroll_column_width(self->config)
+		: 0.5;
+	if (frac <= 0.05) frac = 0.05;
+	if (frac > 1.0)  frac = 1.0;
+
+	col_w = (gint)((gdouble)aw * frac) - ih;
+	if (col_w < 1)
+		col_w = 1;
+
+	x0 = idx * (col_w + ih);
+	x1 = x0 + col_w;
+
+	if (x0 < m->scroll_x)
+		m->scroll_x = x0;
+	else if (x1 > m->scroll_x + aw)
+		m->scroll_x = x1 - aw;
+	else
+		return;                 /* already fully visible */
+
+	gowl_compositor_arrange(self, m);
+}
+
+/*
+ * gowl_compositor_scroll_by:
+ *
+ * Move the strip by @dx pixels.  Clamping happens in the layout, so a
+ * caller can push past the end without having to know how long the
+ * strip is.
+ */
+void
+gowl_compositor_scroll_by(GowlCompositor *self, GowlMonitor *m, gint dx)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (m == NULL)
+		m = self->selmon;
+	if (m == NULL)
+		return;
+
+	m->scroll_x += dx;
+	gowl_compositor_arrange(self, m);
+}
+
+void
+gowl_compositor_layout_monocle(
 	GowlCompositor *self,
 	GowlMonitor    *m
 ){
@@ -5019,6 +5261,9 @@ on_new_output(struct wl_listener *listener, void *data)
 	m->sellt     = 0;
 	g_free(m->layout_symbol);
 	m->layout_symbol = g_strdup("[]=");
+	g_free(m->layout_name);
+	m->layout_name = NULL;      /* NULL == the first registered layout */
+	m->scroll_x = 0;
 
 	/* Set preferred mode and scale.
 	 * Wayland outputs created from a surface (libdecor) have no mode
@@ -6117,13 +6362,11 @@ gowl_compositor_dispatch_keybind(
 			case GOWL_ACTION_SET_LAYOUT: {
 				if (self->selmon == NULL)
 					return TRUE;
-				if (kb->arg != NULL && g_strcmp0(kb->arg, "monocle") == 0)
-					self->selmon->sellt = 1;
-				else
-					self->selmon->sellt = 0;
-				gowl_compositor_arrange(self, self->selmon);
+				/* By name, through the registry.  This used to
+				 * be "monocle or else tile", which is why
+				 * selecting `float' silently gave tile. */
+				gowl_layout_set(self, self->selmon, kb->arg);
 
-				/* Push layout to IPC subscribers */
 				if (self->ipc != NULL) {
 					gowl_ipc_push_event(self->ipc,
 						"EVENT layout %s %s",
@@ -6308,14 +6551,17 @@ gowl_compositor_dispatch_keybind(
 			}
 			case GOWL_ACTION_CYCLE_LAYOUT: {
 				/*
-				 * Cycle between tile (0) and monocle (1) layouts
-				 * on the selected monitor.
+				 * Cycle through every registered layout, not
+				 * just the two the old `sellt' index could
+				 * hold.  An arg of "-1" goes backwards.
 				 */
 				if (self->selmon == NULL)
 					return TRUE;
 
-				self->selmon->sellt = (self->selmon->sellt + 1) % 2;
-				gowl_compositor_arrange(self, self->selmon);
+				gowl_layout_cycle(self, self->selmon,
+				                  (kb->arg != NULL
+				                   && g_strcmp0(kb->arg, "-1") == 0)
+				                  ? -1 : 1);
 
 				/* Push layout to IPC subscribers */
 				if (self->ipc != NULL) {

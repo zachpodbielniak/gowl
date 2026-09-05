@@ -553,6 +553,38 @@ seat-focus paths cannot slip in unreviewed; cmacs carries the matching
 assertion for its own sources in
 =test/cmacs/cmacs-gowl-tests.el=.
 
+*** Gamma control and the frame commit
+
+=wlr-gamma-control-v1= is what =gammastep=, =wlsunset= and every other
+night-light program drives.  Without the global they do not merely
+fail to tint the screen --- they report that the compositor does not
+support gamma control and exit.
+
+The protocol part is a global and one handler.  The interesting part
+is the frame path.  A gamma ramp cannot be committed on its own: it
+goes into the same =wlr_output_state= as the frame.  So
+=on_monitor_frame()= builds the state explicitly ---
+=wlr_output_state_init=, =wlr_scene_output_build_state=, optionally
+=wlr_gamma_control_v1_apply=, =wlr_output_commit_state=,
+=wlr_output_state_finish= --- rather than calling the one-shot
+=wlr_scene_output_commit()=, which is exactly that sequence with no
+opportunity to add anything.
+
+The handler therefore cannot apply the ramp itself.  It sets
+=gamma_dirty= on the monitor and calls =wlr_output_schedule_frame()=.
+That second call is not optional: an otherwise idle output would never
+redraw, and the ramp would sit unapplied until something else damaged
+the screen --- which is precisely the case that matters, because a
+night-light program sets gamma on a screen nobody is touching.
+
+A ramp the hardware will not accept gets
+=wlr_gamma_control_v1_send_failed_and_destroy()= rather than being
+dropped, so the client learns the screen is not warm instead of
+believing that it is.
+
+The API is identical between wlroots 0.19 and 0.20, so unlike the
+capture protocols this needs no entry in =gowl-wlroots-compat.h=.
+
 *** Graphics tablets
 
 Before =src/core/gowl-tablet.c=, the new-input switch handled

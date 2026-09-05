@@ -21,6 +21,8 @@
 
 #include <glib-object.h>
 
+#include "boxed/gowl-palette.h"
+
 G_BEGIN_DECLS
 
 #define GOWL_TYPE_CONFIG (gowl_config_get_type())
@@ -325,6 +327,12 @@ gint gowl_config_get_border_width(GowlConfig *self);
 /**
  * gowl_config_get_border_color_focus:
  * @self: a #GowlConfig
+ *
+ * The value is fully resolved: a `border-color-focus: accent' in the
+ * config file comes back here as the palette's literal, because every
+ * caller wants something it can paint with.  The unresolved spec is
+ * still on the `border-color-focus' GObject property, which is what
+ * the generated config writes back out.
  *
  * Returns: (transfer none): the focused border colour hex string
  */
@@ -844,6 +852,18 @@ gowl_config_get_monitor_config(GowlConfig  *self,
  *          must g_list_free() the list itself but not the strings
  */
 GList *gowl_config_get_monitor_names(GowlConfig *self);
+
+/* --- Palette --- */
+
+GowlPalette * gowl_config_get_palette       (GowlConfig  *self);
+const gchar * gowl_config_get_palette_name  (GowlConfig  *self);
+void          gowl_config_set_palette_name  (GowlConfig  *self,
+                                              const gchar *name);
+void          gowl_config_set_palette_color (GowlConfig  *self,
+                                              const gchar *name,
+                                              const gchar *hex);
+gchar *       gowl_config_resolve_color     (GowlConfig  *self,
+                                              const gchar *spec);
 
 G_END_DECLS
 

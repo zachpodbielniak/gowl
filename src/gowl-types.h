@@ -50,6 +50,7 @@ typedef struct _GowlModuleManager   GowlModuleManager;
 /* Forward declarations for boxed types */
 typedef struct _GowlGeometry        GowlGeometry;
 typedef struct _GowlColor           GowlColor;
+typedef struct _GowlPalette         GowlPalette;
 typedef struct _GowlKeyCombo        GowlKeyCombo;
 typedef struct _GowlTagMask         GowlTagMask;
 typedef struct _GowlGaps            GowlGaps;

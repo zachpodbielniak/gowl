@@ -30,11 +30,25 @@ sloppyfocus: true
 # a closed-lid panel.
 manage_lid: true
 
+# Palette -- one set of colours for the whole session.
+#
+# Every colour setting below, in this file and in any module, may be a
+# literal ("#rrggbb" or "#rrggbbaa"), a name from this palette, or
+# "name/aa" for the same colour at a different opacity.  Change the
+# flavour here and the borders, the bar and the lock screen all follow.
+#
+# Built-in flavours: mocha, macchiato, frappe, latte (Catppuccin), and
+# dwm for the colours gowl used before palettes existed.  Any key you
+# add overrides that flavour's entry.
+palette:
+  name: mocha
+  # accent: "#89b4fa"
+
 # Appearance
 border-width: 2
-border-color-focus: "#005577"
-border-color-unfocus: "#444444"
-border-color-urgent: "#ff0000"
+border-color-focus: accent
+border-color-unfocus: surface
+border-color-urgent: red
 
 # Layout
 mfact: 0.55
@@ -352,19 +366,19 @@ modules:
   bar:
     enabled: false
     height: 28
-    # Background with alpha for transparency (8-digit hex = RRGGBBAA)
-    bg-color: "#1e1e2ecc"
-    fg-color: "#cdd6f4"
+    # "base/cc" is the palette's background at 80% opacity.
+    bg-color: base/cc
+    fg-color: text
     font: "monospace"
     font-size: 13
     # Right-side widgets (space-separated): cpu memory disk battery clock
     widgets: "cpu memory disk battery clock"
     # Per-widget colors (optional, falls back to fg-color)
-    # cpu-color: "#a6e3a1"
-    # memory-color: "#89b4fa"
-    # disk-color: "#f9e2af"
-    # battery-color: "#94e2d5"
-    # clock-color: "#cdd6f4"
+    # cpu-color: green
+    # memory-color: blue
+    # disk-color: yellow
+    # battery-color: teal
+    # clock-color: text
   alpha:
     enabled: false
     # Opacity for the focused window (0.0 = transparent, 1.0 = opaque)
@@ -385,10 +399,10 @@ modules:
     enabled: false
     pam-service: "gowl"
     auto-lock-timeout: 300
-    bg-color: "#1e1e2e"
-    text-color: "#cdd6f4"
-    indicator-color: "#89b4fa"
-    error-color: "#f38ba8"
+    bg-color: base
+    text-color: text
+    indicator-color: accent
+    error-color: red
     font: "monospace"
     font-size: 24
   mcp:

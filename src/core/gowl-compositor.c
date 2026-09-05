@@ -2322,7 +2322,6 @@ gowl_compositor_screenshot_output(
 	GError         **error
 ){
 	GowlMonitor *mon;
-	struct wlr_output *output;
 
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
@@ -2347,8 +2346,6 @@ gowl_compositor_screenshot_output(
 		                    "No output found for screenshot");
 		return NULL;
 	}
-
-	output = mon->wlr_output;
 
 	/* Render the scene to a buffer via wlr_scene_output_build_state
 	 * and read back pixels with wlr_buffer_begin_data_ptr_access. */

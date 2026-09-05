@@ -31,6 +31,7 @@ LIB_SRCS := \
 	src/gowl-enums.c \
 	src/boxed/gowl-geometry.c \
 	src/boxed/gowl-color.c \
+	src/boxed/gowl-palette.c \
 	src/boxed/gowl-key-combo.c \
 	src/boxed/gowl-tag-mask.c \
 	src/boxed/gowl-gaps.c \
@@ -123,6 +124,7 @@ LIB_HDRS := \
 	src/gowl-version.h \
 	src/boxed/gowl-geometry.h \
 	src/boxed/gowl-color.h \
+	src/boxed/gowl-palette.h \
 	src/boxed/gowl-key-combo.h \
 	src/boxed/gowl-tag-mask.h \
 	src/boxed/gowl-gaps.h \

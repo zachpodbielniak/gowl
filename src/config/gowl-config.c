@@ -17,6 +17,7 @@
  */
 
 #include "gowl-config.h"
+#include "boxed/gowl-palette.h"
 #include "gowl-keybind.h"
 #include "gowl-enums.h"
 #include "gowl-types.h"
@@ -30,9 +31,15 @@
 
 /* --- Default values --- */
 #define GOWL_CONFIG_DEFAULT_BORDER_WIDTH        (2)
-#define GOWL_CONFIG_DEFAULT_BORDER_COLOR_FOCUS   "#bbbbbb"
-#define GOWL_CONFIG_DEFAULT_BORDER_COLOR_UNFOCUS "#444444"
-#define GOWL_CONFIG_DEFAULT_BORDER_COLOR_URGENT  "#ff0000"
+/*
+ * The defaults are palette names, not literals.  A hex default
+ * would be a fourth independent palette that no theme change can
+ * reach --- which is exactly the state this replaced.
+ */
+#define GOWL_CONFIG_DEFAULT_BORDER_COLOR_FOCUS   "accent"
+#define GOWL_CONFIG_DEFAULT_BORDER_COLOR_UNFOCUS "surface"
+#define GOWL_CONFIG_DEFAULT_BORDER_COLOR_URGENT  "red"
+#define GOWL_CONFIG_DEFAULT_PALETTE              "mocha"
 #define GOWL_CONFIG_DEFAULT_MFACT               (0.55)
 /* Two columns visible at a time, matching Omarchy's Hyprland default. */
 #define GOWL_CONFIG_DEFAULT_SCROLL_COLUMN_WIDTH (0.5)
@@ -58,6 +65,8 @@
 /* Configuration file name */
 #define GOWL_CONFIG_FILENAME "config.yaml"
 
+static void gowl_config_reresolve_colors(GowlConfig *self);
+
 /* --- Instance struct --- */
 
 struct _GowlConfig {
@@ -68,6 +77,24 @@ struct _GowlConfig {
 	gchar   *border_color_focus;
 	gchar   *border_color_unfocus;
 	gchar   *border_color_urgent;
+
+	/*
+	 * Colour specs above are stored exactly as written, so that
+	 * to_yaml round-trips a palette reference rather than baking it
+	 * into a literal the next theme change cannot reach.  The
+	 * resolved forms are shadows, recomputed whenever either the
+	 * spec or the palette changes, because every consumer wants a
+	 * hex string and none of them should have to know about
+	 * palettes.
+	 */
+	gchar   *border_hex_focus;
+	gchar   *border_hex_unfocus;
+	gchar   *border_hex_urgent;
+
+	/* Palette */
+	GowlPalette *palette;             /* effective, after merging */
+	GowlPalette *palette_override;    /* pushed in at runtime */
+	gchar       *palette_name;
 
 	/* Layout */
 	gdouble  mfact;
@@ -267,14 +294,17 @@ gowl_config_set_property(
 	case GOWL_CONFIG_PROP_BORDER_COLOR_FOCUS:
 		g_free(self->border_color_focus);
 		self->border_color_focus = g_value_dup_string(value);
+		gowl_config_reresolve_colors(self);
 		break;
 	case GOWL_CONFIG_PROP_BORDER_COLOR_UNFOCUS:
 		g_free(self->border_color_unfocus);
 		self->border_color_unfocus = g_value_dup_string(value);
+		gowl_config_reresolve_colors(self);
 		break;
 	case GOWL_CONFIG_PROP_BORDER_COLOR_URGENT:
 		g_free(self->border_color_urgent);
 		self->border_color_urgent = g_value_dup_string(value);
+		gowl_config_reresolve_colors(self);
 		break;
 	case GOWL_CONFIG_PROP_MFACT:
 		self->mfact = g_value_get_double(value);
@@ -418,6 +448,44 @@ gowl_config_get_property(
  *
  * Releases all resources owned by the #GowlConfig instance.
  */
+/*
+ * Recomputes every resolved colour shadow from its spec.  Called after
+ * anything that can change a spec or the palette; cheap enough (three
+ * hash lookups) that no attempt is made to work out which ones
+ * actually changed.
+ */
+static void
+gowl_config_reresolve_colors(GowlConfig *self)
+{
+	g_free(self->border_hex_focus);
+	g_free(self->border_hex_unfocus);
+	g_free(self->border_hex_urgent);
+
+	self->border_hex_focus = gowl_palette_resolve(self->palette,
+	                                              self->border_color_focus);
+	self->border_hex_unfocus = gowl_palette_resolve(self->palette,
+	                                                self->border_color_unfocus);
+	self->border_hex_urgent = gowl_palette_resolve(self->palette,
+	                                               self->border_color_urgent);
+}
+
+/*
+ * Rebuilds the effective palette: the named built-in, then whatever the
+ * config file defined on top of it, then whatever was pushed in at
+ * runtime.  Layered in that order so a reload cannot discard a palette
+ * an editor theme pushed in --- the file is the base, the override is
+ * the last word.
+ */
+static void
+gowl_config_rebuild_palette(GowlConfig *self, const GowlPalette *from_file)
+{
+	g_clear_pointer(&self->palette, gowl_palette_free);
+	self->palette = gowl_palette_new_builtin(self->palette_name);
+	gowl_palette_merge(self->palette, from_file);
+	gowl_palette_merge(self->palette, self->palette_override);
+	gowl_config_reresolve_colors(self);
+}
+
 static void
 gowl_config_finalize(GObject *object)
 {
@@ -426,6 +494,12 @@ gowl_config_finalize(GObject *object)
 	g_free(self->border_color_focus);
 	g_free(self->border_color_unfocus);
 	g_free(self->border_color_urgent);
+	g_free(self->border_hex_focus);
+	g_free(self->border_hex_unfocus);
+	g_free(self->border_hex_urgent);
+	g_free(self->palette_name);
+	g_clear_pointer(&self->palette, gowl_palette_free);
+	g_clear_pointer(&self->palette_override, gowl_palette_free);
 	g_free(self->terminal);
 	g_free(self->menu);
 	g_free(self->log_level);
@@ -677,6 +751,10 @@ gowl_config_init(GowlConfig *self)
 	self->border_color_focus  = g_strdup(GOWL_CONFIG_DEFAULT_BORDER_COLOR_FOCUS);
 	self->border_color_unfocus = g_strdup(GOWL_CONFIG_DEFAULT_BORDER_COLOR_UNFOCUS);
 	self->border_color_urgent = g_strdup(GOWL_CONFIG_DEFAULT_BORDER_COLOR_URGENT);
+	self->palette_name        = g_strdup(GOWL_CONFIG_DEFAULT_PALETTE);
+	self->palette             = gowl_palette_new_builtin(self->palette_name);
+	self->palette_override    = gowl_palette_new();
+	gowl_config_reresolve_colors(self);
 	self->mfact               = GOWL_CONFIG_DEFAULT_MFACT;
 	self->scroll_column_width = GOWL_CONFIG_DEFAULT_SCROLL_COLUMN_WIDTH;
 	self->animations          = TRUE;
@@ -800,6 +878,69 @@ gowl_parse_monitor_transform(YamlMapping *cm)
 	return -1;
 }
 
+/*
+ * Reads a `palette:' block and rebuilds the effective palette.
+ *
+ *   palette:
+ *     name: latte          # a built-in to start from
+ *     accent: "#d20f39"    # anything else overrides one entry
+ *
+ * `name' is consumed rather than stored as an entry, so a palette
+ * cannot accidentally define a colour called "name".  A config with no
+ * palette block still gets one --- the default flavour --- so a colour
+ * key naming `accent' resolves in every config, including one written
+ * before palettes existed.
+ */
+static void
+gowl_config_apply_palette_mapping(GowlConfig *self, YamlMapping *mapping)
+{
+	g_autoptr(GowlPalette) from_file = NULL;
+	YamlNode *node;
+	YamlMapping *pal_map;
+	guint i, count;
+
+	from_file = gowl_palette_new();
+
+	if (!yaml_mapping_has_member(mapping, "palette")) {
+		gowl_config_rebuild_palette(self, from_file);
+		return;
+	}
+
+	node = yaml_mapping_get_member(mapping, "palette");
+	pal_map = node != NULL ? yaml_node_get_mapping(node) : NULL;
+	if (pal_map == NULL) {
+		g_warning("gowl_config: `palette:' is not a mapping, ignoring");
+		gowl_config_rebuild_palette(self, from_file);
+		return;
+	}
+
+	count = yaml_mapping_get_size(pal_map);
+	for (i = 0; i < count; i++) {
+		const gchar *key;
+		YamlNode *val_node;
+		const gchar *val;
+
+		key = yaml_mapping_get_key(pal_map, i);
+		val_node = yaml_mapping_get_value(pal_map, i);
+		if (key == NULL || val_node == NULL)
+			continue;
+
+		val = yaml_node_get_scalar(val_node);
+		if (val == NULL)
+			continue;
+
+		if (g_strcmp0(key, "name") == 0) {
+			g_free(self->palette_name);
+			self->palette_name = g_strdup(val);
+			continue;
+		}
+
+		gowl_palette_set(from_file, key, val);
+	}
+
+	gowl_config_rebuild_palette(self, from_file);
+}
+
 /**
  * gowl_config_apply_mapping:
  * @self: a #GowlConfig
@@ -815,6 +956,15 @@ gowl_config_apply_mapping(
 	YamlMapping *mapping
 ){
 	/* Scalar properties: read from the mapping if present */
+	/*
+	 * The palette is applied before anything else in the mapping,
+	 * regardless of where it appears in the file.  Colour keys resolve
+	 * against it as they are read, so a `palette:' block written at the
+	 * bottom of a config would otherwise silently do nothing to the
+	 * keys above it --- a failure with no error and a plausible result.
+	 */
+	gowl_config_apply_palette_mapping(self, mapping);
+
 	if (yaml_mapping_has_member(mapping, "border-width")) {
 		gint64 val = yaml_mapping_get_int_member(mapping, "border-width");
 		g_object_set(self, "border-width", (gint)val, NULL);
@@ -1246,9 +1396,20 @@ gowl_config_apply_mapping(
 					 * (e.g. "5", "true"). */
 					val_str = yaml_node_get_scalar(val_node);
 					if (val_str != NULL) {
+						/* A colour setting is resolved against the
+						 * palette here rather than in each module.
+						 * Module settings are an untyped string map
+						 * with no schema, so the key name is all
+						 * there is to go on --- and doing it here
+						 * means a module written tomorrow gets
+						 * palette support without knowing the
+						 * feature exists. */
 						g_hash_table_insert(settings,
 						                    g_strdup(key),
-						                    g_strdup(val_str));
+						                    gowl_palette_key_is_color(key)
+						                    ? gowl_palette_resolve(
+						                              self->palette, val_str)
+						                    : g_strdup(val_str));
 					} else {
 						/* Handle sequence values (e.g. commands list).
 						 * Join elements with newline so modules can
@@ -1585,6 +1746,27 @@ gowl_config_generate_yaml(GowlConfig *self)
 
 	yaml = g_string_new("# gowl configuration\n\n");
 
+	/*
+	 * The palette first, and the specs below unresolved --- a generated
+	 * config that baked in today's literals would be one a theme change
+	 * could no longer reach, which is the state this replaced.
+	 */
+	{
+		g_auto(GStrv) names = gowl_palette_names(self->palette_override);
+		gsize i;
+
+		g_string_append(yaml, "palette:\n");
+		g_string_append_printf(yaml, "  name: %s\n", self->palette_name);
+		/* Only the overrides: the flavour supplies the rest, and
+		 * writing all fifteen out would freeze them. */
+		for (i = 0; names != NULL && names[i] != NULL; i++) {
+			g_string_append_printf(yaml, "  %s: \"%s\"\n", names[i],
+			                       gowl_palette_lookup(
+			                               self->palette_override, names[i]));
+		}
+		g_string_append_c(yaml, '\n');
+	}
+
 	/* Appearance */
 	g_string_append_printf(yaml, "border-width: %d\n", self->border_width);
 	g_string_append_printf(yaml, "border-color-focus: \"%s\"\n", self->border_color_focus);
@@ -1700,22 +1882,22 @@ gowl_config_get_border_width(GowlConfig *self)
 const gchar *
 gowl_config_get_border_color_focus(GowlConfig *self)
 {
-	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_BORDER_COLOR_FOCUS);
-	return self->border_color_focus;
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), "#89b4fa");
+	return self->border_hex_focus;
 }
 
 const gchar *
 gowl_config_get_border_color_unfocus(GowlConfig *self)
 {
-	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_BORDER_COLOR_UNFOCUS);
-	return self->border_color_unfocus;
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), "#313244");
+	return self->border_hex_unfocus;
 }
 
 const gchar *
 gowl_config_get_border_color_urgent(GowlConfig *self)
 {
-	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_BORDER_COLOR_URGENT);
-	return self->border_color_urgent;
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), "#f38ba8");
+	return self->border_hex_urgent;
 }
 
 gboolean
@@ -2387,4 +2569,108 @@ gowl_config_get_monitor_names(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
 	return g_hash_table_get_keys(self->monitor_configs);
+}
+
+/* ── Palette ─────────────────────────────────────────────────────── */
+
+/**
+ * gowl_config_get_palette:
+ * @self: a #GowlConfig
+ *
+ * The effective palette: the named built-in, with the config file's
+ * `palette:' entries and then any runtime overrides layered on it.
+ *
+ * Returns: (transfer none): the palette.  Never %NULL.
+ */
+GowlPalette *
+gowl_config_get_palette(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->palette;
+}
+
+/**
+ * gowl_config_get_palette_name:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none): the built-in flavour the palette starts from.
+ */
+const gchar *
+gowl_config_get_palette_name(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->palette_name;
+}
+
+/**
+ * gowl_config_set_palette_name:
+ * @self: a #GowlConfig
+ * @name: (nullable): a built-in palette name
+ *
+ * Switches the flavour the palette starts from, keeping every override.
+ * Everything that reads a colour through the config picks the change up
+ * on the next arrange; nothing is repainted here.
+ */
+void
+gowl_config_set_palette_name(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	g_free(self->palette_name);
+	self->palette_name = g_strdup(name != NULL
+	                              ? name : GOWL_CONFIG_DEFAULT_PALETTE);
+
+	/* No from_file layer: the file's entries were folded into the
+	 * override-free base at load time and are re-read on reload.  A
+	 * flavour switch between reloads keeps only the runtime
+	 * overrides, which is the layer the caller owns. */
+	gowl_config_rebuild_palette(self, NULL);
+}
+
+/**
+ * gowl_config_set_palette_color:
+ * @self: a #GowlConfig
+ * @name: a palette entry name
+ * @hex: (nullable): a literal colour, or %NULL to drop the override
+ *
+ * Overrides one palette entry at runtime.  Overrides sit above the
+ * config file, so they survive a reload --- which is what makes
+ * "follow the editor's theme" work: the theme pushes its colours in
+ * once and a later `gowl-reload-config' does not undo it.
+ */
+void
+gowl_config_set_palette_color(GowlConfig  *self,
+                              const gchar *name,
+                              const gchar *hex)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_return_if_fail(name != NULL);
+
+	gowl_palette_set(self->palette_override, name, hex);
+
+	/* Rebuilding from the built-in drops the file's entries until the
+	 * next reload.  Setting the entry on the effective palette too
+	 * keeps them, at the cost of the override being invisible in
+	 * `palette_override' order --- which nothing depends on. */
+	gowl_palette_set(self->palette, name, hex);
+	gowl_config_reresolve_colors(self);
+}
+
+/**
+ * gowl_config_resolve_color:
+ * @self: a #GowlConfig
+ * @spec: (nullable): a colour spec --- a literal, a palette entry name,
+ *   or `name/aa'
+ *
+ * Resolves a colour spec against the config's palette.  Public so that
+ * a module handling colours outside the `*color*' setting convention,
+ * or building one at runtime, can still go through the palette.
+ *
+ * Returns: (transfer full) (nullable): a newly allocated hex string.
+ */
+gchar *
+gowl_config_resolve_color(GowlConfig *self, const gchar *spec)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), g_strdup(spec));
+	return gowl_palette_resolve(self->palette, spec);
 }

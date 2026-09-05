@@ -36,6 +36,10 @@
 #define GOWL_CONFIG_DEFAULT_MFACT               (0.55)
 /* Two columns visible at a time, matching Omarchy's Hyprland default. */
 #define GOWL_CONFIG_DEFAULT_SCROLL_COLUMN_WIDTH (0.5)
+/* Short enough not to feel like waiting, long enough to read as motion.
+ * Omarchy's Hyprland "speed 3.79" works out around here. */
+#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION  (180)
+#define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE     "ease-out-quint"
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
 #define GOWL_CONFIG_DEFAULT_REPEAT_RATE         (25)
@@ -68,6 +72,9 @@ struct _GowlConfig {
 	/* Layout */
 	gdouble  mfact;
 	gdouble  scroll_column_width;
+	gboolean animations;
+	gint     animation_duration;
+	gchar   *animation_curve;
 	gint     nmaster;
 	gint     tag_count;
 
@@ -424,6 +431,7 @@ gowl_config_finalize(GObject *object)
 	g_free(self->log_level);
 	g_free(self->log_file);
 	g_free(self->input_recording_deny_apps);
+	g_free(self->animation_curve);
 
 	if (self->keybinds != NULL)
 		g_array_unref(self->keybinds);
@@ -671,6 +679,9 @@ gowl_config_init(GowlConfig *self)
 	self->border_color_urgent = g_strdup(GOWL_CONFIG_DEFAULT_BORDER_COLOR_URGENT);
 	self->mfact               = GOWL_CONFIG_DEFAULT_MFACT;
 	self->scroll_column_width = GOWL_CONFIG_DEFAULT_SCROLL_COLUMN_WIDTH;
+	self->animations          = TRUE;
+	self->animation_duration  = GOWL_CONFIG_DEFAULT_ANIMATION_DURATION;
+	self->animation_curve     = g_strdup(GOWL_CONFIG_DEFAULT_ANIMATION_CURVE);
 	self->nmaster             = GOWL_CONFIG_DEFAULT_NMASTER;
 	self->tag_count           = GOWL_CONFIG_DEFAULT_TAG_COUNT;
 	self->repeat_rate         = GOWL_CONFIG_DEFAULT_REPEAT_RATE;
@@ -823,6 +834,23 @@ gowl_config_apply_mapping(
 		if (val != NULL)
 			g_object_set(self, "border-color-urgent", val, NULL);
 	}
+	if (yaml_mapping_has_member(mapping, "animations")) {
+		self->animations = yaml_mapping_get_boolean_member(
+			mapping, "animations");
+	}
+	if (yaml_mapping_has_member(mapping, "animation-duration")) {
+		self->animation_duration = (gint)yaml_mapping_get_int_member(
+			mapping, "animation-duration");
+	}
+	if (yaml_mapping_has_member(mapping, "animation-curve")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "animation-curve");
+		if (v != NULL) {
+			g_free(self->animation_curve);
+			self->animation_curve = g_strdup(v);
+		}
+	}
+
 	if (yaml_mapping_has_member(mapping, "scroll-column-width")) {
 		self->scroll_column_width = yaml_mapping_get_double_member(
 			mapping, "scroll-column-width");
@@ -1611,6 +1639,30 @@ gowl_config_get_border_color_urgent(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_BORDER_COLOR_URGENT);
 	return self->border_color_urgent;
+}
+
+gboolean
+gowl_config_get_animations(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+
+	return self->animations;
+}
+
+gint
+gowl_config_get_animation_duration(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0);
+
+	return self->animation_duration;
+}
+
+const gchar *
+gowl_config_get_animation_curve(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+
+	return self->animation_curve;
 }
 
 gdouble

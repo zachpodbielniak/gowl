@@ -46,6 +46,7 @@
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include "gowl-tablet.h"
 #include "gowl-layout-registry.h"
+#include "gowl-animation.h"
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/backend/libinput.h>
@@ -3536,8 +3537,25 @@ resize_client(
 	c->geom = geo;
 	applybounds(c, bbox);
 
-	/* Update scene-graph positions, including borders */
-	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
+	/* Update scene-graph positions, including borders.
+	 *
+	 * With animations on, the node is held at where it already is and
+	 * the frame loop walks it to the new spot.  An interactive
+	 * move/resize is exempt: the window has to track the pointer 1:1
+	 * or dragging feels like steering a boat. */
+	if (!interact && gowl_animation_enabled(self)) {
+		gint cx = c->scene->node.x;
+		gint cy = c->scene->node.y;
+
+		gowl_animation_start(self, c, cx, cy, c->geom.x, c->geom.y);
+		if (!c->anim_active)
+			wlr_scene_node_set_position(&c->scene->node,
+			                            c->geom.x, c->geom.y);
+	} else {
+		gowl_animation_cancel(c);
+		wlr_scene_node_set_position(&c->scene->node,
+		                            c->geom.x, c->geom.y);
+	}
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 
 	/* Borders: delegate to decorator module if active, else use rects */
@@ -5436,6 +5454,13 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 	}
 
 frame_done:
+
+	/* Advance any sliding windows and ask for another frame while one
+	 * is still moving: an idle output stops redrawing, which would
+	 * freeze a slide halfway. */
+	if (gowl_animation_tick(m->compositor != NULL ? m->compositor : NULL,
+	                        g_get_monotonic_time()))
+		wlr_output_schedule_frame(m->wlr_output);
 
 	/* Notify clients that a frame has been rendered */
 	clock_gettime(CLOCK_MONOTONIC, &now);

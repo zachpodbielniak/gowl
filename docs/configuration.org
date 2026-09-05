@@ -114,9 +114,32 @@ Layout engine settings.
 
 | Property  | Type   | Default  | Description                                      |
 |-----------+--------+----------+--------------------------------------------------|
-| =default= | string | ="tile"= | Default layout: ="tile"=, ="float"=, ="monocle"= |
+| =default= | string | ="tile"= | Default layout: ="tile"=, ="float"=, ="monocle"=, ="scrolling"= |
 | =mfact=   | float  | =0.55=   | Master area factor (0.05 - 0.95)                 |
 | =nmaster= | int    | =1=      | Number of windows in the master area             |
+| =scroll-column-width= | float | =0.5= | Scrolling-layout column width, as a fraction of the usable width.  0.5 shows two columns, 1.0 shows one.  Matches Hyprland's =scrolling.column_width= |
+
+**** Motion
+:PROPERTIES:
+:CUSTOM_ID: animations
+:END:
+
+| Property             | Type   | Default            | Description                        |
+|----------------------+--------+--------------------+------------------------------------|
+| =animations=         | bool   | =true=             | Slide windows to new positions     |
+| =animation-duration= | int    | =180=              | Milliseconds; =0= disables         |
+| =animation-curve=    | string | ="ease-out-quint"= | Easing curve                       |
+
+Curves: =linear=, =ease-out-quint=, =ease-in-out-cubic=,
+=almost-linear=, =quick= --- the set Omarchy configures Hyprland with,
+by the same names in kebab-case.
+
+Only *position* is animated.  A window is configured to its final size
+the moment the layout decides it, and its node slides to meet it.
+Animating the size as well would make every intermediate size a
+configure the client has to acknowledge and re-render for, which turns
+one move into a dozen round trips per window.  An interactive drag is
+exempt entirely --- a dragged window tracks the pointer 1:1.
 
 The =tile= layout also has a /vsplit/ orientation — master row on top, stack row on
 the bottom — toggled at runtime via the =set_split= action or the =gowl-set-vsplit=

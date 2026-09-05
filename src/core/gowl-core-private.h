@@ -536,6 +536,17 @@ struct _GowlClient {
 	struct wlr_box geom;    /* layout position including border */
 	struct wlr_box prev;    /* saved geometry for fullscreen restore */
 
+	/* Position animation.  Lives on the client so that destroying one
+	 * mid-slide takes its animation with it; a list on the compositor
+	 * would have to be told.  Only POSITION is animated -- see
+	 * gowl-animation.c for why size is not. */
+	gboolean anim_active;
+	gint     anim_from_x, anim_from_y;
+	gint     anim_to_x,   anim_to_y;
+	gint     anim_cur_x,  anim_cur_y;
+	gint64   anim_start_us;
+	gint64   anim_dur_us;
+
 	guint32  tags;
 	guint    bw;             /* border width in pixels */
 	gboolean isfloating;

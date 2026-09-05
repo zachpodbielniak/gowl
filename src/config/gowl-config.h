@@ -353,6 +353,32 @@ gdouble gowl_config_get_mfact(GowlConfig *self);
 gdouble gowl_config_get_scroll_column_width(GowlConfig *self);
 
 /**
+ * gowl_config_get_animations:
+ * @self: a #GowlConfig
+ *
+ * Returns: %TRUE when windows slide to new positions instead of
+ *   snapping.  Only position is animated; see gowl-animation.c.
+ */
+gboolean gowl_config_get_animations(GowlConfig *self);
+
+/**
+ * gowl_config_get_animation_duration:
+ * @self: a #GowlConfig
+ *
+ * Returns: how long a slide takes, in milliseconds.  0 disables.
+ */
+gint gowl_config_get_animation_duration(GowlConfig *self);
+
+/**
+ * gowl_config_get_animation_curve:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none): the easing curve's name.  See
+ *   gowl_curve_eval() for the set.
+ */
+const gchar *gowl_config_get_animation_curve(GowlConfig *self);
+
+/**
  * gowl_config_get_nmaster:
  * @self: a #GowlConfig
  *

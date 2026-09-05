@@ -585,6 +585,84 @@ believing that it is.
 The API is identical between wlroots 0.19 and 0.20, so unlike the
 capture protocols this needs no entry in =gowl-wlroots-compat.h=.
 
+*** Layouts
+
+Layouts live in a registry keyed by name, in which a built-in and a
+module layout are peers.  Four ship: =tile=, =monocle=, =float= and
+=scrolling=.
+
+This replaced an =if (sellt == 0) tile else monocle=, and the
+consequences of that shape were all silent.  =GowlLayoutProvider= was
+one of the typed extension interfaces, the module manager collected
+every implementer into a priority-sorted array, and *nothing ever read
+it* --- so =centeredmaster= and =fibonacci= shipped as modules and did
+nothing when loaded.  =float= was unreachable, because =SET_LAYOUT=
+mapped every argument that was not ="monocle"= onto tile; selecting it
+gave tile with no complaint.  And =src/layout/*.c= is pure geometry
+with passing tests and no caller: the compositor's own =tile()=
+duplicates the maths with gaps and vsplit that the pure function does
+not have.
+
+A monitor stores the *name* it selected, not an index.  A layout module
+loading or unloading therefore cannot leave a monitor pointing into a
+changed array, and =gowl_layout_unregister()= moves any monitor using
+the departing layout back to the first one.
+
+Two functions exist because a module layout could not otherwise do its
+job: =gowl_compositor_place_client()=, since
+=gowl_client_set_geometry()= only writes the struct and a layout
+calling it would compute a perfect arrangement that reached no client;
+and =gowl_monitor_get_compositor()=, since the interface hands a layout
+a monitor and placing anything needs the compositor.  Widening the
+interface signature was the alternative, and every existing
+implementation would have had to change for it.
+
+**** The scrolling layout
+
+A niri-style horizontal strip: full-height columns laid left to right,
+the viewport scrolling along them rather than windows being squeezed to
+fit.  =scroll-column-width= (default 0.5, so two are visible) matches
+Hyprland's =scrolling.column_width=, which is what Omarchy configures,
+so a config translates.
+
+=gowl_compositor_scroll_to_client()= moves by the smallest amount that
+reveals a window and does nothing when it is already visible ---
+otherwise every focus change would scroll the strip.
+
+*** Animation
+
+Windows slide to new positions rather than snapping.  What is animated
+is the scene node's *position*, and only that.
+
+Size is deliberately not animated.  The client is configured to its
+final size the moment the layout decides it, and the node slides to
+meet it.  Animating size means every intermediate size is a configure
+the client must acknowledge and re-render for --- a 200 ms resize
+becomes a dozen round trips per window per move, and a slow client
+falls visibly behind its own frame.  Position is a compositor-side
+transform of something already rendered, so it costs nothing.
+
+State lives on the client, not in a list on the compositor: a client
+destroyed mid-slide takes its animation with it, where a list would
+have to be told.
+
+Three details worth keeping:
+
+- =on_monitor_frame= calls =wlr_output_schedule_frame()= while any
+  slide is live.  An idle output stops redrawing, which would freeze a
+  window in mid-air.
+- An interactive move or resize is exempt.  A dragged window has to
+  track the pointer 1:1, or dragging feels like steering a boat.
+- Re-targeting mid-flight starts from where the node *is*, not from the
+  caller's idea of "before", so a second layout change bends the path
+  instead of teleporting the window back to restart.
+
+Curves are cubic Béziers with endpoints fixed at (0,0) and (1,1) ---
+the same definition CSS and Hyprland use, so a Hyprland =bezier= line
+translates directly.  Solving "y at x" needs the =t= whose x is that
+value first, and that is done by bisection rather than Newton: these
+curves have a near-zero derivative at the ends, where Newton diverges.
+
 *** Graphics tablets
 
 Before =src/core/gowl-tablet.c=, the new-input switch handled

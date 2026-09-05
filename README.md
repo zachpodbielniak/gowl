@@ -16,7 +16,8 @@ A GObject-based Wayland compositor built on wlroots (0.19 or 0.20). Gowl takes i
 - **wlroots 0.19 / 0.20** -- Builds against either; newest present wins, override with `make WLROOTS=0.19`. 0.20 adds per-window screencast capture.
 - **XWayland support** -- Optional X11 client compatibility (compile-time toggle).
 - **GObject Introspection** -- Optional GIR/typelib generation for language bindings.
-- **dwm-style tiling** -- Master-stack tile (with optional vsplit orientation), monocle, and float layouts with tag-based workspaces.
+- **Layouts** -- tile (with optional vsplit), monocle, float, and a niri-style **scrolling** column layout, in a registry where module-provided layouts are peers of the built-ins.
+- **Animations** -- windows slide to new positions along configurable easing curves.
 - **Screencast capture** -- Monitor capture (all versions) and per-window capture (wlroots 0.20+) for `xdg-desktop-portal-wlr`, behind the `GowlCaptureProvider` interface.
 - **InputCapture / RemoteDesktop** -- Native freedesktop portal backends (`xdg-desktop-portal-gowl`, libeis EIS server) so deskflow / input-leap software-KVM works under gowl. See [docs/input-capture.org](docs/input-capture.org).
 - **Session lock** -- ext-session-lock-v1 support.

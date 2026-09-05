@@ -43,6 +43,19 @@ nmaster: 1
 # Tags
 tag-count: 9
 
+# Motion.  Windows slide to their new positions instead of snapping.
+# Only POSITION is animated: animating size too would mean a configure
+# round-trip per intermediate frame per window.
+# Curves: linear, ease-out-quint, ease-in-out-cubic, almost-linear, quick.
+animations: true
+animation-duration: 180      # milliseconds; 0 disables
+animation-curve: "ease-out-quint"
+
+# Scrolling layout: column width as a fraction of the usable width.
+# 0.5 shows two columns at a time, 1.0 shows one.  Matches Hyprland's
+# scrolling.column_width so a config translates.
+scroll-column-width: 0.5
+
 # Keybind format:
 #   "Modifier+Modifier+Key":
 #     { action: <action>, arg: "<argument>", desc: "<description>" }
@@ -89,6 +102,11 @@ keybinds:
   "Super+t": { action: set_layout, arg: "tile", desc: "Tile layout" }
   "Super+f": { action: set_layout, arg: "float", desc: "Float layout" }
   "Super+m": { action: set_layout, arg: "monocle", desc: "Monocle layout" }
+  "Super+s":
+    { action: set_layout, arg: "scrolling", desc: "Scrolling layout" }
+  "Super+Tab": { action: cycle_layout, desc: "Next layout" }
+  "Super+Shift+Tab":
+    { action: cycle_layout, arg: "-1", desc: "Previous layout" }
   "Super+v": { action: set_split, arg: "vsplit", desc: "Vertical split" }
   "Super+Shift+v": { action: set_split, arg: "normal", desc: "Horizontal split" }
 

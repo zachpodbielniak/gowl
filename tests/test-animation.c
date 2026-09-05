@@ -1,0 +1,118 @@
+/* test-animation.c -- easing curves
+ *
+ * Copyright (C) 2026 Zach Podbielniak
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * The curve evaluator is the part of the animation layer that can be
+ * wrong without looking wrong: a slide still happens, it just moves
+ * with the wrong shape, or -- worse -- overshoots and lands a window
+ * off its own position.  The tick loop needs a running compositor and
+ * real clients, so it is exercised by driving a session instead.
+ */
+
+#include <glib.h>
+#include <math.h>
+
+#include "core/gowl-animation.h"
+
+/* Every curve is pinned at both ends: a window must start where it was
+ * and finish exactly where the layout put it, whatever the shape in
+ * between.  An endpoint that is off by a fraction leaves windows a
+ * pixel out of place after every move. */
+static void
+test_endpoints_are_exact(void)
+{
+	const char *names[] = { "linear", "ease-out-quint",
+	                        "ease-in-out-cubic", "almost-linear",
+	                        "quick", NULL };
+	int i;
+
+	for (i = 0; names[i] != NULL; i++) {
+		g_assert_cmpfloat(gowl_curve_eval(names[i], 0.0), ==, 0.0);
+		g_assert_cmpfloat(gowl_curve_eval(names[i], 1.0), ==, 1.0);
+	}
+}
+
+/* Out-of-range input is clamped rather than extrapolated.  A tick that
+ * arrives late must not push a window past its target. */
+static void
+test_out_of_range_is_clamped(void)
+{
+	g_assert_cmpfloat(gowl_curve_eval("ease-out-quint", -0.5), ==, 0.0);
+	g_assert_cmpfloat(gowl_curve_eval("ease-out-quint", 1.5), ==, 1.0);
+}
+
+/* Linear is the identity, which is also the cheap path the evaluator
+ * short-circuits rather than solving a Bézier for. */
+static void
+test_linear_is_identity(void)
+{
+	gdouble t;
+
+	for (t = 0.1; t < 1.0; t += 0.1)
+		g_assert_cmpfloat(fabs(gowl_curve_eval("linear", t) - t),
+		                  <, 0.0001);
+}
+
+/* Every curve is monotonic: progress never goes backwards, or a window
+ * would visibly reverse mid-slide. */
+static void
+test_curves_are_monotonic(void)
+{
+	const char *names[] = { "linear", "ease-out-quint",
+	                        "ease-in-out-cubic", "almost-linear",
+	                        "quick", NULL };
+	int i;
+
+	for (i = 0; names[i] != NULL; i++) {
+		gdouble prev = -1.0, t;
+
+		for (t = 0.0; t <= 1.0; t += 0.01) {
+			gdouble v = gowl_curve_eval(names[i], t);
+
+			g_assert_cmpfloat(v, >=, prev);
+			g_assert_cmpfloat(v, >=, 0.0);
+			g_assert_cmpfloat(v, <=, 1.0);
+			prev = v;
+		}
+	}
+}
+
+/* ease-out-quint is most of the way there early: that is what makes a
+ * slide feel responsive rather than floaty, and it is the property that
+ * would be lost silently if the solver regressed. */
+static void
+test_ease_out_front_loads(void)
+{
+	g_assert_cmpfloat(gowl_curve_eval("ease-out-quint", 0.25), >, 0.6);
+	g_assert_cmpfloat(gowl_curve_eval("ease-out-quint", 0.5), >, 0.85);
+}
+
+/* An unknown name falls back rather than returning garbage or zero --
+ * a typo in a config should cost the chosen shape, not all motion. */
+static void
+test_unknown_curve_falls_back(void)
+{
+	g_assert_cmpfloat(gowl_curve_eval("no-such-curve", 0.5), >, 0.0);
+	g_assert_cmpfloat(gowl_curve_eval(NULL, 0.5), >, 0.0);
+	g_assert_cmpfloat(gowl_curve_eval("no-such-curve", 0.5), ==,
+	                  gowl_curve_eval("ease-out-quint", 0.5));
+}
+
+int
+main(int argc, char *argv[])
+{
+	g_test_init(&argc, &argv, NULL);
+
+	g_test_add_func("/animation/endpoints-exact", test_endpoints_are_exact);
+	g_test_add_func("/animation/out-of-range-clamped",
+	                test_out_of_range_is_clamped);
+	g_test_add_func("/animation/linear-identity", test_linear_is_identity);
+	g_test_add_func("/animation/monotonic", test_curves_are_monotonic);
+	g_test_add_func("/animation/ease-out-front-loads",
+	                test_ease_out_front_loads);
+	g_test_add_func("/animation/unknown-falls-back",
+	                test_unknown_curve_falls_back);
+
+	return g_test_run();
+}

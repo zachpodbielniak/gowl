@@ -46,6 +46,7 @@
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include "gowl-tablet.h"
 #include <wlr/types/wlr_relative_pointer_v1.h>
+#include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/backend/libinput.h>
 #include <libinput.h>
 
@@ -277,6 +278,10 @@ static void create_keyboard       (GowlCompositor *self,
 static void create_pointer        (GowlCompositor *self,
                                    struct wlr_pointer *pointer);
 /* motionnotify is now non-static: gowl_compositor_motionnotify() */
+
+/* gamma control (definition lives beside the frame commit) */
+static void on_gamma_control_set_gamma (struct wl_listener *listener,
+                                        void *data);
 
 /* pointer constraints (definitions live beside the motion handlers) */
 static void on_new_pointer_constraint (struct wl_listener *listener,
@@ -2996,6 +3001,16 @@ gowl_compositor_start(
 	 * other device type fell into `default: break;'. */
 	gowl_tablet_manager_init(self);
 
+	/* Gamma control, so gammastep / wlsunset can warm the screen at
+	 * night.  Without this global they refuse to start at all. */
+	self->gamma_control_mgr =
+		wlr_gamma_control_manager_v1_create(self->wl_display);
+	if (self->gamma_control_mgr != NULL) {
+		self->gamma_set.notify = on_gamma_control_set_gamma;
+		wl_signal_add(&self->gamma_control_mgr->events.set_gamma,
+		              &self->gamma_set);
+	}
+
 	self->relative_pointer_mgr =
 		wlr_relative_pointer_manager_v1_create(self->wl_display);
 	self->pointer_constraints =
@@ -5094,6 +5109,34 @@ on_new_output(struct wl_listener *listener, void *data)
  * and sends frame-done events to clients.
  * Ported from dwl's rendermon().
  */
+/*
+ * A client set (or cleared) a gamma ramp.  It cannot be applied here:
+ * gamma goes into the same wlr_output_state as the next frame, so this
+ * marks the output dirty and asks for a frame.  An output that is
+ * otherwise idle would never redraw, and the ramp would sit unapplied
+ * until something else happened to damage the screen -- which is
+ * exactly the case that matters, because a night-light program sets
+ * gamma on a screen nobody is touching.
+ */
+static void
+on_gamma_control_set_gamma(struct wl_listener *listener, void *data)
+{
+	struct wlr_gamma_control_manager_v1_set_gamma_event *event = data;
+	GowlMonitor *m;
+
+	(void)listener;
+
+	if (event == NULL || event->output == NULL)
+		return;
+
+	m = (GowlMonitor *)event->output->data;
+	if (m == NULL)
+		return;
+
+	m->gamma_dirty = TRUE;
+	wlr_output_schedule_frame(event->output);
+}
+
 static void
 on_monitor_frame(struct wl_listener *listener, void *data)
 {
@@ -5108,8 +5151,46 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 	if (m->scene_output == NULL)
 		return;
 
-	/* Commit the scene graph to this output */
-	wlr_scene_output_commit(m->scene_output, NULL);
+	/* Commit the scene graph to this output.
+	 *
+	 * Built into an explicit wlr_output_state rather than the one-shot
+	 * wlr_scene_output_commit(), because a gamma ramp cannot be applied
+	 * on its own: it has to ride the same commit as the frame.  When no
+	 * client has set one this is exactly what the one-shot call did. */
+	{
+		struct wlr_output_state state;
+
+		wlr_output_state_init(&state);
+		if (!wlr_scene_output_build_state(m->scene_output, &state,
+		                                   NULL)) {
+			wlr_output_state_finish(&state);
+			goto frame_done;
+		}
+
+		if (m->gamma_dirty && m->compositor != NULL
+		    && m->compositor->gamma_control_mgr != NULL) {
+			struct wlr_gamma_control_v1 *control;
+
+			control = wlr_gamma_control_manager_v1_get_control(
+				m->compositor->gamma_control_mgr, m->wlr_output);
+			/* A NULL control means the client dropped its ramp
+			 * between the request and this frame, which is normal
+			 * on exit; apply() handles NULL by resetting gamma. */
+			if (!wlr_gamma_control_v1_apply(control, &state)) {
+				/* The ramp did not fit the hardware.  Tell the
+				 * client rather than leaving it believing the
+				 * screen is warm when it is not. */
+				wlr_gamma_control_v1_send_failed_and_destroy(
+					control);
+			}
+			m->gamma_dirty = FALSE;
+		}
+
+		wlr_output_commit_state(m->wlr_output, &state);
+		wlr_output_state_finish(&state);
+	}
+
+frame_done:
 
 	/* Notify clients that a frame has been rendered */
 	clock_gettime(CLOCK_MONOTONIC, &now);

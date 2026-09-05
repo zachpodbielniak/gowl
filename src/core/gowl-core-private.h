@@ -435,6 +435,13 @@ struct _GowlCompositor {
 	 * pointer focus, or NULL.  At most one can be active at a time --
 	 * the protocol says so, and it is also the only thing that makes
 	 * sense for a cursor. */
+	/* Gamma / colour temperature (wlr-gamma-control-v1).  This is what
+	 * gammastep, wlsunset and every other night-light program drives;
+	 * without it they exit with "compositor does not support gamma
+	 * control" and the screen stays blue at midnight. */
+	struct wlr_gamma_control_manager_v1 *gamma_control_mgr;
+	struct wl_listener gamma_set;
+
 	struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
 	struct wlr_pointer_constraints_v1      *pointer_constraints;
 	struct wlr_pointer_constraint_v1       *active_constraint;
@@ -465,6 +472,13 @@ struct _GowlMonitor {
 
 	struct wlr_output       *wlr_output;
 	struct wlr_scene_output *scene_output;
+
+	/* A client set a gamma ramp for this output and it has not been
+	 * committed yet.  Gamma cannot be applied on its own: it goes into
+	 * the same wlr_output_state as the frame, so the flag is what
+	 * carries the request from the protocol handler to the next
+	 * commit. */
+	gboolean gamma_dirty;
 	struct wlr_scene_rect   *fullscreen_bg;
 
 	struct wlr_box m;   /* monitor area, layout-relative */

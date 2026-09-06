@@ -41,6 +41,8 @@
 
 #include <math.h>
 
+#include <wlr/types/wlr_buffer.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_output.h>
 
@@ -285,6 +287,260 @@ open_tick(GowlCompositor *self, GowlClient *c, gint64 now_us,
 	return TRUE;
 }
 
+/* ── Closing ─────────────────────────────────────────────────────── */
+
+/*
+ * A window that has gone, still on screen.
+ *
+ * There is no wlr_scene_node_snapshot in wlroots 0.20, so the way to
+ * keep a closed window visible is to hold on to the last thing it
+ * drew: lock its buffer, hang a standalone scene buffer off the same
+ * layer, and let the client die.  A locked buffer outlives the surface,
+ * the role object and the client, which is exactly the guarantee this
+ * needs.
+ *
+ * The snapshot is the toplevel's own surface and nothing else, so a
+ * window whose decorations or content live in SUBSURFACES loses them
+ * for the duration of the fade.  That is also what makes the shrink
+ * below safe: scaling one buffer is a supported operation, where
+ * scaling a tree of them would pull a window apart --- which is why the
+ * open animation has no scale and this one does.
+ */
+struct _GowlCloseAnim {
+	struct wlr_scene_buffer *node;
+	struct wlr_buffer       *buffer;   /* locked */
+	GowlMonitor             *mon;      /* NULL once its output is gone */
+	gint64                   start_us;
+	gint64                   dur_us;
+	gint                     x, y;     /* where the window was */
+	gint                     w, h;     /* and how big */
+};
+
+/*
+ * How far a closing window shrinks, as a fraction of its size.  Small:
+ * the fade does most of the work and a big shrink reads as the window
+ * being sucked away rather than dismissed.
+ */
+#define GOWL_ANIM_CLOSE_SHRINK (0.06)
+
+/* How far it sinks, in pixels, over the same time. */
+#define GOWL_ANIM_CLOSE_SINK (12)
+
+static gint
+close_duration(GowlCompositor *self)
+{
+	gint d;
+
+	if (self->config == NULL)
+		return 0;
+
+	d = gowl_config_get_animation_duration_close(self->config);
+	if (d < 0)
+		d = gowl_config_get_animation_duration(self->config);
+
+	return d;
+}
+
+static void
+close_anim_free(GowlCloseAnim *a)
+{
+	if (a == NULL)
+		return;
+
+	if (a->node != NULL)
+		wlr_scene_node_destroy(&a->node->node);
+	if (a->buffer != NULL)
+		wlr_buffer_unlock(a->buffer);
+
+	g_free(a);
+}
+
+void
+gowl_animation_close_start(GowlCompositor *self, GowlClient *c)
+{
+	GowlCloseAnim *a;
+	struct wlr_surface *surface;
+	struct wlr_scene_tree *parent;
+	gint duration;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(c != NULL);
+
+	if (!gowl_animation_enabled(self) || c->scene == NULL)
+		return;
+
+	/* A window that never got placed never appeared, so there is
+	 * nothing to fade out. */
+	if (!c->anim_placed || c->isembedded)
+		return;
+
+	duration = close_duration(self);
+	if (duration <= 0)
+		return;
+
+	surface = gowl_client_get_wlr_surface(c);
+	/*
+	 * No buffer, no snapshot.  This is not an error: unmap fires for a
+	 * committed NULL buffer as well as for a destroyed role object,
+	 * and in the first case the client has already thrown away the
+	 * thing we would have kept.  Such a window just disappears, which
+	 * is what every window did before this existed.
+	 */
+	if (surface == NULL || surface->buffer == NULL)
+		return;
+
+	/*
+	 * Above the tiling layer, not in it.
+	 *
+	 * Closing a window in a tiling layout immediately re-tiles the
+	 * others into the space it left, so a ghost left among them is
+	 * drawn over by the very window expanding into its place --- it
+	 * animates perfectly and is invisible the whole time, which is
+	 * exactly what happened the first time this was tested under a
+	 * real session.  The float layer is above the tiles and below the
+	 * bars, fullscreen and the lock screen, which is where something
+	 * that was on top and is leaving belongs.
+	 */
+	parent = self->layers[GOWL_SCENE_LAYER_FLOAT];
+	if (parent == NULL)
+		return;
+
+	a = g_new0(GowlCloseAnim, 1);
+	a->buffer = wlr_buffer_lock(&surface->buffer->base);
+	a->node = wlr_scene_buffer_create(parent, a->buffer);
+	if (a->node == NULL) {
+		close_anim_free(a);
+		return;
+	}
+
+	/* Where the window actually was, which mid-move is the animated
+	 * position rather than the one the layout last decided. */
+	a->x = c->scene->node.x + (gint)c->bw;
+	a->y = c->scene->node.y + (gint)c->bw;
+	a->w = c->geom.width - 2 * (gint)c->bw;
+	a->h = c->geom.height - 2 * (gint)c->bw;
+	if (a->w <= 0 || a->h <= 0) {
+		close_anim_free(a);
+		return;
+	}
+
+	a->mon = c->mon;
+	a->start_us = g_get_monotonic_time();
+	a->dur_us = (gint64)duration * 1000;
+
+	wlr_scene_node_set_position(&a->node->node, a->x, a->y);
+	wlr_scene_buffer_set_dest_size(a->node, a->w, a->h);
+	/* On top of its siblings: the window was the thing being looked
+	 * at, and having it slide behind whatever is re-tiling into its
+	 * place looks like a glitch rather than a dismissal. */
+	wlr_scene_node_raise_to_top(&a->node->node);
+
+	self->close_anims = g_list_prepend(self->close_anims, a);
+}
+
+void
+gowl_animation_close_finish_all(GowlCompositor *self)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	g_list_free_full(self->close_anims, (GDestroyNotify)close_anim_free);
+	self->close_anims = NULL;
+}
+
+void
+gowl_animation_close_forget_monitor(GowlCompositor *self, GowlMonitor *m)
+{
+	GList *l;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	/*
+	 * An output going away takes its snapshots with it rather than
+	 * leaving them pointing at freed memory.  They are a decoration
+	 * measured in milliseconds; ending them early on a screen that no
+	 * longer exists costs nothing.
+	 */
+	l = self->close_anims;
+	while (l != NULL) {
+		GowlCloseAnim *a = (GowlCloseAnim *)l->data;
+		GList *next = l->next;
+
+		if (a->mon == m) {
+			self->close_anims =
+				g_list_delete_link(self->close_anims, l);
+			close_anim_free(a);
+		}
+		l = next;
+	}
+}
+
+/*
+ * Advances every closing window.  Returns TRUE while one is still
+ * fading on @m.
+ */
+static gboolean
+close_tick(GowlCompositor *self, GowlMonitor *m, gint64 now_us,
+           const gchar *curve)
+{
+	gboolean live = FALSE;
+	GList *l;
+
+	l = self->close_anims;
+	while (l != NULL) {
+		GowlCloseAnim *a = (GowlCloseAnim *)l->data;
+		GList *next = l->next;
+		gdouble t, e, scale;
+		gint w, h;
+
+		t = a->dur_us > 0
+			? (gdouble)(now_us - a->start_us) / (gdouble)a->dur_us
+			: 1.0;
+
+		if (t >= 1.0) {
+			self->close_anims =
+				g_list_delete_link(self->close_anims, l);
+			close_anim_free(a);
+			l = next;
+			continue;
+		}
+		if (t < 0.0)
+			t = 0.0;
+
+		/*
+		 * Clamped, because an overshoot curve would drive the opacity
+		 * negative and the scale past the window's own size --- a
+		 * closing window briefly growing is not the effect anyone
+		 * configured an overshoot for.
+		 */
+		e = gowl_curve_eval(curve, t);
+		if (e < 0.0) e = 0.0;
+		if (e > 1.0) e = 1.0;
+
+		wlr_scene_buffer_set_opacity(a->node, (float)(1.0 - e));
+
+		scale = 1.0 - e * GOWL_ANIM_CLOSE_SHRINK;
+		w = (gint)lround((gdouble)a->w * scale);
+		h = (gint)lround((gdouble)a->h * scale);
+		if (w < 1) w = 1;
+		if (h < 1) h = 1;
+		wlr_scene_buffer_set_dest_size(a->node, w, h);
+
+		/* Shrink about the centre, and sink a little. */
+		wlr_scene_node_set_position(
+			&a->node->node,
+			a->x + (a->w - w) / 2,
+			a->y + (a->h - h) / 2
+				+ (gint)lround(e * (gdouble)GOWL_ANIM_CLOSE_SINK));
+
+		if (m == NULL || a->mon == NULL || a->mon == m)
+			live = TRUE;
+
+		l = next;
+	}
+
+	return live;
+}
+
 /* ── Driving ─────────────────────────────────────────────────────── */
 
 void
@@ -368,6 +624,9 @@ gowl_animation_tick(GowlCompositor *self, GowlMonitor *m, gint64 now_us)
 	curve = self->config != NULL
 		? gowl_config_get_animation_curve(self->config)
 		: NULL;
+
+	if (close_tick(self, m, now_us, curve))
+		live = TRUE;
 
 	for (l = self->clients; l != NULL; l = l->next) {
 		GowlClient *c = (GowlClient *)l->data;

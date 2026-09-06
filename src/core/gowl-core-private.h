@@ -264,6 +264,13 @@ struct _GowlCompositor {
 	/* client / monitor lists */
 	GList                        *monitors;   /* GList of GowlMonitor* */
 	GList                        *clients;    /* GList of GowlClient* (tiling) */
+
+	/*
+	 * Windows that have closed and are still fading out.  These outlive
+	 * the GowlClient they came from --- that is the whole point --- so
+	 * they cannot live on it the way the open and move animations do.
+	 */
+	GList                        *close_anims; /* GList of GowlCloseAnim* */
 	GList                        *fstack;     /* GList of GowlClient* (focus) */
 	GowlMonitor                  *selmon;     /* selected monitor */
 

@@ -51,6 +51,9 @@
  * than a correction, so it can afford a longer beat than a re-tile.
  */
 #define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_OPEN (220)
+/* Shorter than either: a closed window is finished, and holding its
+ * ghost on screen is holding up the re-tile behind it. */
+#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_CLOSE (140)
 #define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE     "ease-out-expo"
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
@@ -103,6 +106,7 @@ struct _GowlConfig {
 
 	/* Layout */
 	gint     animation_duration_open;
+	gint     animation_duration_close;
 	gdouble  mfact;
 	gdouble  scroll_column_width;
 	gboolean animations;
@@ -767,6 +771,8 @@ gowl_config_init(GowlConfig *self)
 	self->animation_duration  = GOWL_CONFIG_DEFAULT_ANIMATION_DURATION;
 	self->animation_duration_open =
 		GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_OPEN;
+	self->animation_duration_close =
+		GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_CLOSE;
 	self->animation_curve     = g_strdup(GOWL_CONFIG_DEFAULT_ANIMATION_CURVE);
 	self->nmaster             = GOWL_CONFIG_DEFAULT_NMASTER;
 	self->tag_count           = GOWL_CONFIG_DEFAULT_TAG_COUNT;
@@ -1004,6 +1010,11 @@ gowl_config_apply_mapping(
 		self->animation_duration_open =
 			(gint)yaml_mapping_get_int_member(
 				mapping, "animation-duration-open");
+	}
+	if (yaml_mapping_has_member(mapping, "animation-duration-close")) {
+		self->animation_duration_close =
+			(gint)yaml_mapping_get_int_member(
+				mapping, "animation-duration-close");
 	}
 	if (yaml_mapping_has_member(mapping, "animation-curve")) {
 		const gchar *v = yaml_mapping_get_string_member(
@@ -2702,4 +2713,20 @@ gowl_config_get_animation_duration_open(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), -1);
 	return self->animation_duration_open;
+}
+
+/**
+ * gowl_config_get_animation_duration_close:
+ * @self: a #GowlConfig
+ *
+ * How long a window's close animation runs, in milliseconds.
+ *
+ * Returns: the duration, or -1 to mean "use the general
+ *   `animation-duration'".
+ */
+gint
+gowl_config_get_animation_duration_close(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), -1);
+	return self->animation_duration_close;
 }

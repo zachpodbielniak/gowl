@@ -337,6 +337,10 @@ gowl_compositor_dispose(GObject *object)
 	self = GOWL_COMPOSITOR(object);
 	self->running = FALSE;
 
+	/* Release every closing window's held buffer while the renderer
+	 * that owns it is still alive. */
+	gowl_animation_close_finish_all(self);
+
 	if (self->config != NULL)
 		g_signal_handlers_disconnect_by_func(
 			self->config,
@@ -5515,6 +5519,11 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 
 	g_debug("Output destroyed: %s", m->wlr_output->name);
 
+	/* Snapshots of windows that closed on this output would otherwise
+	 * outlive the monitor they point at. */
+	if (self != NULL)
+		gowl_animation_close_forget_monitor(self, m);
+
 	/* Remove event listeners */
 	wl_list_remove(&m->frame.link);
 	wl_list_remove(&m->destroy.link);
@@ -8431,6 +8440,12 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	c = wl_container_of(listener, c, unmap);
 	self = c->compositor;
 	(void)data;
+
+	/* Take the closing snapshot first: it needs the surface's buffer,
+	 * which is gone once the scene tree is, and it wants the node's
+	 * current position, which cancelling the move animation would
+	 * leave mid-slide. */
+	gowl_animation_close_start(self, c);
 
 	/* Stop both animations before the scene tree goes.  A client that
 	 * unmaps and maps again --- which is normal for a splash window or

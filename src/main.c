@@ -188,6 +188,7 @@ static const gchar *default_yaml_config =
 	"animations: true\n"
 	"animation-duration: 180\n"
 	"animation-duration-open: 220\n"
+	"animation-duration-close: 140\n"
 	"# ease-out-back and spring overshoot; the rest do not.\n"
 	"animation-curve: \"ease-out-expo\"\n"
 	"\n"

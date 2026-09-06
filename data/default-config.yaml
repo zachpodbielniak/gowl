@@ -63,7 +63,8 @@ tag-count: 9
 # Curves: linear, ease-out-quint, ease-in-out-cubic, almost-linear, quick.
 animations: true
 animation-duration: 180      # milliseconds; 0 disables
-animation-duration-open: 220 # a window opening gets its own beat
+animation-duration-open: 220  # a window opening gets its own beat
+animation-duration-close: 140 # and a closed one should not linger
 # linear | ease-out-quint | ease-in-out-cubic | almost-linear | quick
 #   | ease-out-expo | ease-out-back | spring
 # The last two OVERSHOOT: a window goes past its target and settles

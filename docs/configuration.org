@@ -191,11 +191,13 @@ Layout engine settings.
 | =animations=              | bool   | =true=            | Animate windows                      |
 | =animation-duration=      | int    | =180=             | Milliseconds for a move; =0= disables |
 | =animation-duration-open= | int    | =220=             | Milliseconds for an open             |
+| =animation-duration-close= | int   | =140=             | Milliseconds for a close             |
 | =animation-curve=         | string | ="ease-out-expo"= | Easing curve                         |
 
-Opening has its own duration because it is not the same gesture as a
-re-tile.  A re-tile is a correction and wants to be over; an open is an
-arrival and can afford the extra beat that makes it read as one.
+Each has its own duration because they are not the same gesture.  A
+re-tile is a correction and wants to be over; an open is an arrival and
+can afford the extra beat that makes it read as one; a close is
+finished, and its ghost is holding up the re-tile behind it.
 
 Curves: =linear=, =ease-out-quint=, =ease-in-out-cubic=,
 =almost-linear=, =quick= --- the set Omarchy configures Hyprland with,
@@ -231,9 +233,33 @@ of snapping to full and back.
 A scale-up would read better still and is not possible here: wlroots
 0.20 can scale an individual scene /buffer/ but has no transform for a
 /node/, so a window with subsurfaces would come apart into
-independently-scaled pieces.  There is no close animation for the same
-generation of reason --- it needs a snapshot of a surface that is
-already going away, and wlroots 0.20 has no =wlr_scene_node_snapshot=.
+independently-scaled pieces.
+
+*Closing.* A closed window stays on screen while it fades out, shrinks
+6% and sinks a few pixels.
+
+wlroots 0.20 has no =wlr_scene_node_snapshot=, so what is kept is the
+last buffer the client drew: locked with =wlr_buffer_lock=, hung off the
+scene as a standalone node, and outliving the surface, the role object
+and the client process itself.  A locked =wlr_client_buffer= keeps its
+/texture/ even once the client's own buffer is destroyed, which is the
+guarantee the whole thing rests on.
+
+The snapshot is the toplevel surface alone, so a window whose content
+or decorations live in *subsurfaces* loses them for the duration of the
+fade.  That is also what makes the shrink safe here and impossible on
+open: scaling one buffer is a supported operation, where scaling a tree
+of them pulls a window apart.
+
+The ghost goes in the *float* layer rather than among the tiles.  In a
+tiling layout, closing a window immediately re-tiles the others into
+the space it left --- so a ghost left among them animates perfectly and
+is painted over by the very window expanding into its place, which is
+exactly what happened the first time this was tested.
+
+A window whose surface has already dropped its buffer gets no
+animation and simply disappears.  That is the case when unmap came from
+a committed null buffer rather than from the window going away.
 
 The rise is deliberately small.  A large one is a slide, and a slide
 from anywhere but the window's own neighbourhood is a window flying in

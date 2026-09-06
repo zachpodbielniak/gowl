@@ -26,6 +26,7 @@ G_BEGIN_DECLS
 typedef struct _GowlCompositor GowlCompositor;
 typedef struct _GowlMonitor GowlMonitor;
 typedef struct _GowlClient GowlClient;
+typedef struct _GowlCloseAnim GowlCloseAnim;
 
 /**
  * gowl_curve_eval:
@@ -105,6 +106,53 @@ void gowl_animation_open_start (GowlCompositor *self, GowlClient *client);
  * animation finishes, and when a client is torn down mid-fade.
  */
 void gowl_animation_open_cancel (GowlClient *client);
+
+/**
+ * gowl_animation_close_start:
+ * @self: a #GowlCompositor
+ * @client: a client that is unmapping
+ *
+ * Keeps a closing window on screen long enough to fade and shrink it
+ * away.  Must be called while @client's surface still has its buffer
+ * --- that is, from the unmap handler and before the scene tree goes.
+ *
+ * There is no node snapshot in wlroots 0.20, so what is kept is the
+ * last buffer the client drew: locked, hung off the same scene layer as
+ * a standalone node, and outliving the surface, the role object and the
+ * client itself.
+ *
+ * The snapshot is the toplevel surface alone, so a window whose content
+ * or decorations live in subsurfaces loses them for the duration.  That
+ * is also what makes the shrink safe --- one buffer scales cleanly where
+ * a tree of them would come apart.
+ *
+ * Does nothing when the surface has already dropped its buffer, which
+ * is the case when unmap came from a committed NULL buffer rather than
+ * from the window going away.  Such a window simply disappears.
+ */
+void gowl_animation_close_start (GowlCompositor *self, GowlClient *client);
+
+/**
+ * gowl_animation_close_finish_all:
+ * @self: a #GowlCompositor
+ *
+ * Ends every close animation immediately, releasing the buffers they
+ * hold.  For shutdown, where a held client buffer would outlive the
+ * renderer.
+ */
+void gowl_animation_close_finish_all (GowlCompositor *self);
+
+/**
+ * gowl_animation_close_forget_monitor:
+ * @self: a #GowlCompositor
+ * @monitor: the output going away
+ *
+ * Ends any close animation on @monitor.  They are a decoration measured
+ * in milliseconds, so finishing them early on a screen that no longer
+ * exists costs nothing and keeps them from pointing at freed memory.
+ */
+void gowl_animation_close_forget_monitor (GowlCompositor *self,
+                                           GowlMonitor    *monitor);
 
 /**
  * gowl_animation_tick:

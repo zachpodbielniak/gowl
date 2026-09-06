@@ -3932,6 +3932,15 @@ gowl_compositor_arrange(
 			continue;
 		if (c->mon == m) {
 			gboolean vis = VISIBLEON(c, m);
+
+			/* A window becoming visible fades in rather than
+			 * appearing.  Only on the transition --- arrange runs on
+			 * every layout change, and re-fading an already-visible
+			 * window on each of them would make the whole tag flicker
+			 * whenever anything moved. */
+			if (vis && !c->scene->node.enabled && c->anim_placed)
+				gowl_animation_reveal_start(self, c);
+
 			wlr_scene_node_set_enabled(&c->scene->node, vis);
 		}
 	}

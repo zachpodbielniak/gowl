@@ -265,6 +265,13 @@ The rise is deliberately small.  A large one is a slide, and a slide
 from anywhere but the window's own neighbourhood is a window flying in
 across the display.
 
+*Switching tags.* Windows revealed by a tag switch fade in, without the
+rise --- a whole screen of them rising in unison reads as the desktop
+lurching rather than as anything arriving.  Only on the transition from
+hidden to visible: arrange runs on every layout change, and re-fading
+an already-visible window on each of them would make the tag flicker
+whenever anything moved at all.
+
 A window's *first placement* is instant; only moves after it animate.
 A scene tree is created at the origin, so animating the first placement
 sends a newly opened window on a diagonal sweep from the top-left

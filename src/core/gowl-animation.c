@@ -200,13 +200,11 @@ open_duration(GowlCompositor *self)
 
 /* ── Opening ─────────────────────────────────────────────────────── */
 
-void
-gowl_animation_open_start(GowlCompositor *self, GowlClient *c)
+/* The half both entrances share. */
+static void
+fade_in_start(GowlCompositor *self, GowlClient *c, gboolean rise)
 {
 	gint duration;
-
-	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
-	g_return_if_fail(c != NULL);
 
 	if (!gowl_animation_enabled(self) || c->scene == NULL)
 		return;
@@ -215,6 +213,7 @@ gowl_animation_open_start(GowlCompositor *self, GowlClient *c)
 	if (duration <= 0)
 		return;
 
+	c->anim_open_rise = rise;
 	c->anim_opening = TRUE;
 	c->anim_open_start_us = g_get_monotonic_time();
 	c->anim_open_dur_us = (gint64)duration * 1000;
@@ -223,6 +222,30 @@ gowl_animation_open_start(GowlCompositor *self, GowlClient *c)
 	 * that the frame between mapping and the first tick does not show
 	 * the window at full opacity --- one frame of pop is still a pop. */
 	gowl_client_set_anim_alpha(c, 0.0f);
+}
+
+void
+gowl_animation_open_start(GowlCompositor *self, GowlClient *c)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(c != NULL);
+
+	fade_in_start(self, c, TRUE);
+}
+
+void
+gowl_animation_reveal_start(GowlCompositor *self, GowlClient *c)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(c != NULL);
+
+	/* Already fading for some other reason; leave it be rather than
+	 * restarting it from zero, which on a fast tag switch would keep
+	 * a window permanently half-transparent. */
+	if (c->anim_opening)
+		return;
+
+	fade_in_start(self, c, FALSE);
 }
 
 void
@@ -278,7 +301,7 @@ open_tick(GowlCompositor *self, GowlClient *c, gint64 now_us,
 	 * fighting it for the same node --- the fade carries on either
 	 * way, which is the half that does most of the work.
 	 */
-	if (!c->anim_active) {
+	if (c->anim_open_rise && !c->anim_active) {
 		rise = (gint)lround((1.0 - e) * (gdouble)GOWL_ANIM_OPEN_RISE);
 		wlr_scene_node_set_position(&c->scene->node,
 		                            c->geom.x, c->geom.y + rise);

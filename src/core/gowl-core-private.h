@@ -586,6 +586,13 @@ struct _GowlClient {
 	gboolean anim_opening;
 	gint64   anim_open_start_us;
 	gint64   anim_open_dur_us;
+	/*
+	 * Whether that fade also rises.  A window opening does; a window
+	 * revealed by a tag switch does not --- a whole screen of them
+	 * rising in unison reads as the desktop lurching rather than as
+	 * anything arriving.
+	 */
+	gboolean anim_open_rise;
 
 	guint32  tags;
 	guint    bw;             /* border width in pixels */

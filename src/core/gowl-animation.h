@@ -99,6 +99,21 @@ void gowl_animation_cancel (GowlClient *client);
 void gowl_animation_open_start (GowlCompositor *self, GowlClient *client);
 
 /**
+ * gowl_animation_reveal_start:
+ * @self: a #GowlCompositor
+ * @client: a client that has just become visible
+ *
+ * Fades a client in without the rise that gowl_animation_open_start()
+ * adds.  For a window revealed by a tag switch rather than opened: a
+ * whole screen of windows rising in unison reads as the desktop
+ * lurching rather than as anything arriving.
+ *
+ * Does nothing to a client that is already fading, so a fast run of tag
+ * switches cannot leave one permanently half-transparent.
+ */
+void gowl_animation_reveal_start (GowlCompositor *self, GowlClient *client);
+
+/**
  * gowl_animation_open_cancel:
  * @client: the client
  *

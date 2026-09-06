@@ -611,11 +611,21 @@ a monitor and placing anything needs the compositor.  Widening the
 interface signature was the alternative, and every existing
 implementation would have had to change for it.
 
+Each arrangement reads the full logical geometry of its own monitor.
+The shared module helper =modules/layout-axis.h= selects portrait only
+when height exceeds width; usable-area insets do not affect orientation.
+Tile uses its top/bottom split in portrait, while centered-master and
+Fibonacci transpose their placements. Scrolling uses the current axis
+for placement, gaps, focus visibility and the saved offset (the legacy
+=scroll_x= field). Output-layout changes retain the previous usable area
+until layer arrangement compares it with the new area, ensuring resize
+and rotation trigger placement even without bars or exclusive zones.
+
 **** The scrolling layout
 
-A niri-style horizontal strip: full-height columns laid left to right,
-the viewport scrolling along them rather than windows being squeezed to
-fit.  =scroll-column-width= (default 0.5, so two are visible) matches
+A niri-style strip: full-height columns laid left to right on landscape
+and square outputs, or full-width rows running top to bottom on portrait
+outputs. The viewport scrolls along them instead of squeezing windows to fit.  =scroll-column-width= (default 0.5, so two are visible) matches
 Hyprland's =scrolling.column_width=, which is what Omarchy configures,
 so a config translates.
 
@@ -631,6 +641,16 @@ and viewport clipping support those hooks; layout geometry is owned by
 the plugin. A change in effective layout emits monitor and compositor
 =layout-changed= signals after arrangement, which the optional
 =layout-indicator= plugin uses for its non-interactive toast.
+
+*** Host close protection
+
+=gowl_client_close()= emits the compositor's =client-close-request=
+signal before sending a protocol close. A handler returning true vetoes
+the request and stops further handlers. Without a handler, standalone
+Gowl retains its normal close behavior. CMacs compares the client's peer
+PID with its own PID to protect its hosting windows, and emits
+=toast-requested= with a monitor and message. The indicator plugin owns
+the presentation; the guard works even when that plugin is disabled.
 
 *** Animation
 

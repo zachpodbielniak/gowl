@@ -28,6 +28,7 @@
 #include "core/gowl-monitor.h"
 #include "core/gowl-client.h"
 #include <wlr/util/box.h>
+#include "../layout-axis.h"
 
 /**
  * GowlModuleCenteredmaster:
@@ -107,9 +108,7 @@ centeredmaster_get_version(GowlModule *mod)
  * is a layout computation module, we receive geometry through the
  * interface parameters.
  *
- * NOTE: The compositor currently hardcodes tile/monocle.  This
- * layout function is registered for use when the compositor adds
- * module-based layout dispatch.
+ * Portrait monitors transpose the layout into a central horizontal band.
  */
 static void
 centeredmaster_arrange(
@@ -120,6 +119,8 @@ centeredmaster_arrange(
 ){
 	GowlMonitor *m = (GowlMonitor *)monitor;
 	struct wlr_box *a = (struct wlr_box *)area;
+	struct wlr_box oriented;
+	gboolean portrait;
 	GowlCompositor *comp;
 	GList *l;
 	gint n, i, nmaster;
@@ -132,6 +133,10 @@ centeredmaster_arrange(
 
 	if (m == NULL || a == NULL || clients == NULL)
 		return;
+
+	portrait = gowl_layout_is_portrait(m);
+	oriented = gowl_layout_axis_box(*a, portrait);
+	a = &oriented;
 
 	comp = gowl_monitor_get_compositor(m);
 	if (comp == NULL)
@@ -157,7 +162,7 @@ centeredmaster_arrange(
 		for (l = clients; l != NULL; l = l->next, i++) {
 			gint h = (a->height - (my - a->y)) / (n - i);
 
-			gowl_compositor_place_client(comp, (GowlClient *)l->data,
+			gowl_layout_place_oriented(comp, (GowlClient *)l->data, portrait,
 			                              a->x, my, a->width, h);
 			my += h;
 		}
@@ -184,21 +189,21 @@ centeredmaster_arrange(
 		if (i < nmaster) {
 			gint h = (a->height - (my - a->y)) / (nmaster - i);
 
-			gowl_compositor_place_client(comp, c, center_x, my,
+			gowl_layout_place_oriented(comp, c, portrait, center_x, my,
 			                              center_w, h);
 			my += h;
 		} else if ((i - nmaster) % 2 == 0 && left_n > 0) {
 			gint idx = (i - nmaster) / 2;
 			gint h = (a->height - (ly - a->y)) / (left_n - idx);
 
-			gowl_compositor_place_client(comp, c, a->x, ly,
+			gowl_layout_place_oriented(comp, c, portrait, a->x, ly,
 			                              left_w, h);
 			ly += h;
 		} else if (right_n > 0) {
 			gint idx = (i - nmaster - 1) / 2;
 			gint h = (a->height - (ry - a->y)) / (right_n - idx);
 
-			gowl_compositor_place_client(comp, c, right_x, ry,
+			gowl_layout_place_oriented(comp, c, portrait, right_x, ry,
 			                              right_w, h);
 			ry += h;
 		}

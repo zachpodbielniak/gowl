@@ -686,7 +686,8 @@ gowl_client_get_id(GowlClient *self)
  * gowl_client_close:
  * @self: a #GowlClient
  *
- * Sends a close request to the client's shell surface, over XDG or
+ * The compositor's client-close-request signal may veto this operation.
+ * Otherwise sends a close request to the client's shell surface, over XDG or
  * XWayland as appropriate (see gowl_close_route_for()).  The client
  * may choose to ignore the request (e.g. to prompt the user about
  * unsaved changes).
@@ -702,8 +703,16 @@ void
 gowl_client_close(GowlClient *self)
 {
 	gboolean has_xwayland;
+	gboolean prevented = FALSE;
 
 	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	if (self->compositor != NULL) {
+		g_signal_emit_by_name(self->compositor, "client-close-request",
+		                      self, &prevented);
+		if (prevented)
+			return;
+	}
 
 	has_xwayland = FALSE;
 #ifdef GOWL_HAVE_XWAYLAND

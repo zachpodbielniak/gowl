@@ -179,7 +179,18 @@ Layout engine settings.
 | =default= | string | ="tile"= | Default layout: ="tile"=, ="float"=, ="monocle"=, ="scrolling"= |
 | =mfact=   | float  | =0.55=   | Master area factor (0.05 - 0.95)                 |
 | =nmaster= | int    | =1=      | Number of windows in the master area             |
-| =scroll-column-width= | float | =0.5= | Scrolling-layout column width, as a fraction of the usable width.  0.5 shows two columns, 1.0 shows one.  Matches Hyprland's =scrolling.column_width= |
+| =scroll-column-width= | float | =0.5= | Window size as a fraction of usable width (landscape/square) or height (portrait).  0.5 shows two columns or rows, 1.0 shows one.  Matches Hyprland's =scrolling.column_width= |
+
+Layouts adapt to each monitor's current logical dimensions on every
+arrangement, including live mode and rotation changes. When height is
+greater than width, tile puts the master above the stack (a horizontal
+split), scrolling runs top to bottom, centered-master uses a central
+horizontal band, and Fibonacci starts with a horizontal split. Square
+and landscape monitors keep the normal orientation. Bars and gaps do
+not affect this decision, and monitors choose independently. Monocle
+still fills the usable area; floating windows retain their positions.
+An explicitly enabled =vsplit= continues to select top/bottom tiling
+on landscape and square monitors too.
 
 Layouts are plugins. The standalone defaults enable =tile=, =monocle=
 and =float=; enable scrolling and the optional layout toast in the
@@ -195,7 +206,7 @@ modules:
 
 CMacs loads these modules by default. Its Super+< / Super+> shortcuts
 cycle active layouts only on the current tag view. Super+s selects the
-scrolling row and Super+[ / Super+] scroll it. Each tag view remembers
+scrolling strip and Super+[ / Super+] scroll it. Each tag view remembers
 its layout independently.
 
 **** Motion

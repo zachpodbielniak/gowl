@@ -15,6 +15,7 @@ typedef struct {
  struct wl_event_source *timer;
  struct wl_listener display_destroy;
  gulong changed;
+ gulong requested;
 } LayoutIndicator;
 typedef struct { GowlModuleClass parent; } LayoutIndicatorClass;
 static void startup_init(GowlStartupHandlerInterface *iface);
@@ -47,7 +48,7 @@ static const gchar *label_for(const gchar *name)
  if (g_str_equal(name, "fibonacci")) return "Fibonacci";
  return name;
 }
-static void changed(GowlCompositor *comp, GowlMonitor *mon, const gchar *name,
+static void show_toast(GowlCompositor *comp, GowlMonitor *mon, const gchar *label,
                     gpointer data)
 {
  LayoutIndicator *self = data;
@@ -55,7 +56,6 @@ static void changed(GowlCompositor *comp, GowlMonitor *mon, const gchar *name,
  cairo_t *cr;
  struct wlr_buffer *buffer;
  cairo_text_extents_t extents;
- const gchar *label = label_for(name);
  gint width, height = 58;
  gdouble scale;
 
@@ -113,6 +113,11 @@ static void changed(GowlCompositor *comp, GowlMonitor *mon, const gchar *name,
  wlr_scene_node_raise_to_top(&self->toast->node);
  wl_event_source_timer_update(self->timer, 1200);
 }
+static void changed(GowlCompositor *comp, GowlMonitor *mon, const gchar *name,
+                    gpointer data)
+{
+ show_toast(comp, mon, label_for(name), data);
+}
 static void detach(LayoutIndicator *self)
 {
  hide(self);
@@ -122,10 +127,12 @@ static void detach(LayoutIndicator *self)
  }
  if (self->compositor != NULL) {
   if (self->changed != 0) g_signal_handler_disconnect(self->compositor, self->changed);
+  if (self->requested != 0) g_signal_handler_disconnect(self->compositor, self->requested);
   g_object_remove_weak_pointer(G_OBJECT(self->compositor), (gpointer *)&self->compositor);
   self->compositor = NULL;
  }
  self->changed = 0;
+ self->requested = 0;
  wl_list_remove(&self->display_destroy.link);
  wl_list_init(&self->display_destroy.link);
 }
@@ -142,6 +149,7 @@ static void startup(GowlStartupHandler *handler, gpointer compositor)
  self->compositor = compositor;
  g_object_add_weak_pointer(G_OBJECT(compositor), (gpointer *)&self->compositor);
  self->changed = g_signal_connect(compositor, "layout-changed", G_CALLBACK(changed), self);
+ self->requested = g_signal_connect(compositor, "toast-requested", G_CALLBACK(show_toast), self);
  self->timer = wl_event_loop_add_timer(gowl_compositor_get_event_loop(compositor), expire, self);
  self->display_destroy.notify = display_destroyed;
  wl_display_add_destroy_listener(gowl_compositor_get_wl_display(compositor), &self->display_destroy);

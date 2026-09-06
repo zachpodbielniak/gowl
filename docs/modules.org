@@ -623,18 +623,18 @@ Gowl ships with several modules in the =modules/= directory:
 All layout algorithms live in their respective =modules/= directories.
 Standalone Gowl loads =tile=, =monocle= and =float= unless explicitly
 configured with =enabled: false=. Enable =scrolling= in the =modules=
-mapping to add full-height horizontal columns. CMacs loads all four by
+mapping to add a scrolling strip of columns (or rows on portrait monitors). CMacs loads all four by
 default. Additional active layout providers join the same registry.
 
 Layout selection and scroll offset are independent for each monitor's
 tag view; combined tag masks have their own state. Focus changes reveal
-offscreen columns, and the viewport clips content to its own monitor.
+offscreen windows, and the viewport clips content to its own monitor.
 The layout-provider interface supports focus, scrolling and overflow
 policy without putting layout algorithms in the compositor.
 
 CMacs binds Super+< / Super+> to previous/next layout on the current tag.
 Super+Tab / Super+Shift+Tab remain aliases; Super+s selects scrolling,
-Super+t selects tile, and Super+[ / Super+] scroll the column strip.
+Super+t selects tile, and Super+[ / Super+] scroll the strip.
 Monitor-moving shortcuts use Super+Ctrl+Shift+comma/period. Super+Shift+j/k
 swap the focused tiled client with the next/previous eligible client,
 wrapping at either end and keeping focus on the moved window. The
@@ -647,6 +647,25 @@ at the active monitor's top center. Rapid changes replace one toast;
 ordinary rearrangements do not retrigger it. It never takes focus or
 intercepts clicks. Disable it in CMacs with
 =(gowl-disable-module "layout-indicator")=.
+
+The indicator also handles =toast-requested= on the compositor, with a
+monitor and message string. It uses the same 1.2-second timer and replaces
+any current notice. CMacs uses this to explain blocked close requests for
+its hosting process. Disabling the indicator hides notices but does not
+remove close protection.
+
+*** Monitor orientation
+
+Layouts adapt to each monitor's current logical dimensions on every
+arrangement, including live mode and rotation changes. When height is
+greater than width, tile puts the master above the stack (a horizontal
+split), scrolling runs top to bottom, centered-master uses a central
+horizontal band, and Fibonacci starts with a horizontal split. Square
+and landscape monitors keep the normal orientation. Bars and gaps do
+not affect this decision, and monitors choose independently. Monocle
+still fills the usable area; floating windows retain their positions.
+An explicitly enabled =vsplit= continues to select top/bottom tiling
+on landscape and square monitors too.
 
 *** Dropdown overlay
 

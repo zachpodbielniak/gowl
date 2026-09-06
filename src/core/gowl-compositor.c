@@ -529,6 +529,15 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	object_class->set_property = gowl_compositor_set_property;
 	object_class->get_property = gowl_compositor_get_property;
 
+	/* Hosts may veto compositor-initiated closes of session-owned windows.
+	 * TRUE stops emission and suppresses the protocol close request. */
+	g_signal_new("client-close-request", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, g_signal_accumulator_true_handled, NULL, NULL,
+	             G_TYPE_BOOLEAN, 1, GOWL_TYPE_CLIENT);
+	/* Presentation stays in the optional indicator plugin. */
+	g_signal_new("toast-requested", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_MONITOR, G_TYPE_STRING);
+
 	/* Emitted after a monitor's effective layout changes, including tag views. */
 	g_signal_new("layout-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
 	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_MONITOR, G_TYPE_STRING);
@@ -5788,9 +5797,9 @@ on_layout_change(struct wl_listener *listener, void *data)
 
 		m->m = box;
 
-		/* Window area starts as full monitor area; layer-shell
-		 * surfaces will subtract their exclusive zones later */
-		m->w = m->m;
+		/* Keep the previous usable area until arrangelayers compares it
+		 * with the new one.  Resetting it here skips arrangement on
+		 * resize/rotation when no bar or layer reserves space. */
 	}
 
 	/* Resize root background to cover all outputs */

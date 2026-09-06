@@ -491,9 +491,13 @@ help:
 -include $(LIB_OBJS:.o=.d)
 -include $(MAIN_OBJ:.o=.d)
 
-$(OUTDIR)/modules/tile.so $(OUTDIR)/modules/monocle.so $(OUTDIR)/modules/float.so $(OUTDIR)/modules/scrolling.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+$(OUTDIR)/modules/tile.so $(OUTDIR)/modules/monocle.so $(OUTDIR)/modules/float.so $(OUTDIR)/modules/scrolling.so $(OUTDIR)/modules/centeredmaster.so $(OUTDIR)/modules/fibonacci.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-layout: $(addprefix $(OUTDIR)/modules/,tile.so monocle.so float.so scrolling.so)
 $(OUTDIR)/test-layout: TEST_LDFLAGS += -L$(OUTDIR)/modules -l:tile.so -l:monocle.so -l:float.so -Wl,-rpath,$(abspath $(OUTDIR)/modules)
 
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
+$(OUTDIR)/test-layout-orientation: $(addprefix $(OUTDIR)/modules/,tile.so monocle.so scrolling.so centeredmaster.so fibonacci.so)
+$(OUTDIR)/test-layout-orientation: TEST_LDFLAGS += -Wl,--export-dynamic
+$(OBJDIR)/tests/test-layout-orientation.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

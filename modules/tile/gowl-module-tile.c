@@ -6,6 +6,7 @@
 #include "core/gowl-layout-registry.h"
 #include "interfaces/gowl-layout-provider.h"
 #include <math.h>
+#include "../layout-axis.h"
 #define VISIBLEON(C,M) ((C)->mon == (M) && !(C)->isembedded && !(C)->isoverlay && ((C)->tags & (M)->tagset[(M)->seltags]))
 void
 gowl_compositor_layout_tile(
@@ -43,7 +44,7 @@ gowl_compositor_layout_tile(
 	if (aw <= 0 || ah <= 0)
 		return;
 
-	if (m->vsplit) {
+	if (m->vsplit || gowl_layout_is_portrait(m)) {
 		/* vsplit: master row on top, stack row on bottom, both
 		 * subdivided along X.  Transpose of the normal layout:
 		 * width and height swap roles, and the inner-gap roles

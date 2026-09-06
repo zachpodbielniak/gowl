@@ -6,142 +6,109 @@
 #include "core/gowl-layout-registry.h"
 #include "interfaces/gowl-layout-provider.h"
 #include <math.h>
-#define VISIBLEON(C,M) ((C)->mon == (M) && !(C)->isembedded && !(C)->isoverlay && ((C)->tags & (M)->tagset[(M)->seltags]))
+#include "../layout-axis.h"
+
+typedef struct {
+	gboolean portrait;
+	struct wlr_box area;
+	gint gap;
+	gint size;
+} ScrollMetrics;
+
+/* Work along a horizontal virtual axis, transposing for portrait outputs.
+ * Arrangement and focus visibility must use exactly the same measurements. */
+static ScrollMetrics
+scroll_metrics(GowlCompositor *self, GowlMonitor *m)
+{
+	gint ih = 0, iv = 0, oh = 0, ov = 0;
+	gdouble fraction;
+	ScrollMetrics metrics;
+
+	if (self->module_mgr != NULL)
+		gowl_module_manager_get_gaps(self->module_mgr, m,
+		                             &ih, &iv, &oh, &ov);
+	metrics.portrait = gowl_layout_is_portrait(m);
+	metrics.area = gowl_layout_axis_box((struct wlr_box){
+		m->w.x + oh, m->w.y + ov,
+		m->w.width - 2 * oh, m->w.height - 2 * ov}, metrics.portrait);
+	metrics.gap = metrics.portrait ? iv : ih;
+	fraction = self->config != NULL
+		? gowl_config_get_scroll_column_width(self->config) : 0.5;
+	fraction = CLAMP(fraction, 0.05, 1.0);
+	metrics.size = MAX(1, (gint)(metrics.area.width * fraction) - metrics.gap);
+	return metrics;
+}
+
 void
 gowl_compositor_layout_scrolling(GowlCompositor *self, GowlMonitor *m)
 {
+	ScrollMetrics metrics = scroll_metrics(self, m);
 	GList *clients, *l;
-	gint ih, iv, oh, ov;
-	gint ax, ay, aw, ah;
-	gint col_w, strip_w, max_scroll;
-	gint n, i;
-	gdouble frac;
+	gint n, i, maximum;
 
+	if (metrics.area.width <= 0 || metrics.area.height <= 0)
+		return;
 	clients = gowl_compositor_tiling_clients(self, m);
 	n = (gint)g_list_length(clients);
-	if (n == 0) {
-		g_list_free(clients);
-		return;
+	maximum = MAX(0, n * (metrics.size + metrics.gap) - metrics.gap
+	                 - metrics.area.width);
+	/* The legacy scroll_x field is the offset along the current axis. */
+	m->scroll_x = CLAMP(m->scroll_x, 0, maximum);
+	for (l = clients, i = 0; l != NULL; l = l->next, i++) {
+		gowl_layout_place_oriented(self, l->data, metrics.portrait,
+			metrics.area.x + i * (metrics.size + metrics.gap) - m->scroll_x,
+			metrics.area.y, metrics.size, metrics.area.height);
 	}
-
-	ih = iv = oh = ov = 0;
-	if (self->module_mgr != NULL)
-		gowl_module_manager_get_gaps(self->module_mgr, (gpointer)m,
-		                             &ih, &iv, &oh, &ov);
-
-	ax = m->w.x + oh;
-	ay = m->w.y + ov;
-	aw = m->w.width - 2 * oh;
-	ah = m->w.height - 2 * ov;
-	if (aw <= 0 || ah <= 0) {
-		g_list_free(clients);
-		return;
-	}
-
-	frac = self->config != NULL
-		? gowl_config_get_scroll_column_width(self->config)
-		: 0.5;
-	if (frac <= 0.05) frac = 0.05;
-	if (frac > 1.0)  frac = 1.0;
-
-	col_w = (gint)((gdouble)aw * frac) - ih;
-	if (col_w < 1)
-		col_w = 1;
-
-	strip_w = n * (col_w + ih) - ih;
-	max_scroll = strip_w - aw;
-	if (max_scroll < 0)
-		max_scroll = 0;
-	if (m->scroll_x < 0)
-		m->scroll_x = 0;
-	if (m->scroll_x > max_scroll)
-		m->scroll_x = max_scroll;
-
-	i = 0;
-	for (l = clients; l != NULL; l = l->next, i++) {
-		GowlClient *c = (GowlClient *)l->data;
-		struct wlr_box geo;
-
-		geo.x = ax + i * (col_w + ih) - m->scroll_x;
-		geo.y = ay;
-		geo.width = col_w;
-		geo.height = ah;
-		gowl_compositor_place_client(self, c, geo.x, geo.y, geo.width, geo.height);
-	}
-
 	g_list_free(clients);
 }
-void
+
+static void
 scroll_focus(GowlLayoutProvider *provider, gpointer client)
 {
 	GowlClient *c = client;
-	GowlCompositor *self = c->compositor;
+	GowlCompositor *self;
 	GowlMonitor *m;
+	GowlLayoutEntry *entry;
+	ScrollMetrics metrics;
 	GList *clients;
-	gint idx, ih, oh, aw, col_w, x0, x1;
-	gdouble frac;
-
-	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	gint index, start, end;
 
 	if (c == NULL || c->mon == NULL)
 		return;
+	self = c->compositor;
 	m = c->mon;
-
-	{
-		GowlLayoutEntry *e = gowl_layout_get(self, m);
-
-		if (e == NULL || g_strcmp0(e->name, "scrolling") != 0)
-			return;
-	}
-
-	clients = gowl_compositor_tiling_clients(self, m);
-	idx = g_list_index(clients, c);
-	g_list_free(clients);
-	if (idx < 0)
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	entry = gowl_layout_get(self, m);
+	if (entry == NULL || g_strcmp0(entry->name, "scrolling") != 0)
 		return;
-
-	ih = oh = 0;
-	if (self->module_mgr != NULL)
-		gowl_module_manager_get_gaps(self->module_mgr, (gpointer)m,
-		                             &ih, NULL, &oh, NULL);
-
-	aw = m->w.width - 2 * oh;
-	frac = self->config != NULL
-		? gowl_config_get_scroll_column_width(self->config)
-		: 0.5;
-	if (frac <= 0.05) frac = 0.05;
-	if (frac > 1.0)  frac = 1.0;
-
-	col_w = (gint)((gdouble)aw * frac) - ih;
-	if (col_w < 1)
-		col_w = 1;
-
-	x0 = idx * (col_w + ih);
-	x1 = x0 + col_w;
-
-	if (x0 < m->scroll_x)
-		m->scroll_x = x0;
-	else if (x1 > m->scroll_x + aw)
-		m->scroll_x = x1 - aw;
+	clients = gowl_compositor_tiling_clients(self, m);
+	index = g_list_index(clients, c);
+	g_list_free(clients);
+	if (index < 0)
+		return;
+	metrics = scroll_metrics(self, m);
+	if (metrics.area.width <= 0 || metrics.area.height <= 0)
+		return;
+	start = index * (metrics.size + metrics.gap);
+	end = start + metrics.size;
+	if (start < m->scroll_x)
+		m->scroll_x = start;
+	else if (end > m->scroll_x + metrics.area.width)
+		m->scroll_x = end - metrics.area.width;
 	else
-		return;                 /* already fully visible */
-
+		return;
 	gowl_compositor_arrange(self, m);
 }
-void
-scroll_view(GowlLayoutProvider *provider, gpointer monitor, gint dx)
+
+static void
+scroll_view(GowlLayoutProvider *provider, gpointer monitor, gint delta)
 {
 	GowlMonitor *m = monitor;
-	GowlCompositor *self = m->compositor;
-	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
-
-	if (m == NULL)
-		m = self->selmon;
 	if (m == NULL)
 		return;
-
-	m->scroll_x += dx;
-	gowl_compositor_arrange(self, m);
+	g_return_if_fail(GOWL_IS_COMPOSITOR(m->compositor));
+	m->scroll_x += delta;
+	gowl_compositor_arrange(m->compositor, m);
 }
 static gboolean overflow(GowlLayoutProvider *p) { return TRUE; }
 

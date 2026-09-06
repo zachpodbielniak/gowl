@@ -28,6 +28,7 @@
 #include "core/gowl-monitor.h"
 #include "core/gowl-client.h"
 #include <wlr/util/box.h>
+#include "../layout-axis.h"
 
 /**
  * GowlModuleFibonacci:
@@ -100,8 +101,7 @@ fibonacci_get_version(GowlModule *mod)
  * area.  Each subsequent window takes half of the remaining space,
  * alternating the split direction.
  *
- * NOTE: Registered for use when the compositor adds module-based
- * layout dispatch.
+ * Portrait monitors start with a horizontal split.
  */
 static void
 fibonacci_arrange(
@@ -112,6 +112,8 @@ fibonacci_arrange(
 ){
 	GowlMonitor *m = (GowlMonitor *)monitor;
 	struct wlr_box *a = (struct wlr_box *)area;
+	struct wlr_box oriented;
+	gboolean portrait;
 	GowlCompositor *comp;
 	GList *l;
 	gint n, i;
@@ -121,6 +123,10 @@ fibonacci_arrange(
 
 	if (m == NULL || a == NULL || clients == NULL)
 		return;
+
+	portrait = gowl_layout_is_portrait(m);
+	oriented = gowl_layout_axis_box(*a, portrait);
+	a = &oriented;
 
 	comp = gowl_monitor_get_compositor(m);
 	if (comp == NULL)
@@ -160,7 +166,7 @@ fibonacci_arrange(
 			ch = h;
 		}
 
-		gowl_compositor_place_client(comp, c, x, y, cw, ch);
+		gowl_layout_place_oriented(comp, c, portrait, x, y, cw, ch);
 
 		if (l->next == NULL)
 			break;

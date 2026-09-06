@@ -21,6 +21,8 @@
 
 #include <glib.h>
 
+#include <wlr/util/box.h>
+
 G_BEGIN_DECLS
 
 typedef struct _GowlCompositor GowlCompositor;
@@ -56,30 +58,39 @@ gdouble gowl_curve_eval (const gchar *name, gdouble t);
 /**
  * gowl_animation_start:
  * @self: a #GowlCompositor
- * @client: the client that is moving
- * @from_x: where it is now, in layout space
- * @from_y: ditto
- * @to_x: where it is going
- * @to_y: ditto
+ * @client: the client whose geometry is changing
+ * @from: the rect the window occupies now
+ * @to: the rect the layout wants it to occupy
  *
- * Begins sliding @client from one position to another.  A client
- * already animating is retargeted from wherever it currently is rather
- * than restarted from @from_x/@from_y, so a second layout change
+ * Begins morphing @client from one rect to the other --- position and
+ * size together, because a tiling layout changes both and animating
+ * only one of them looks broken: the window snaps to its final size in
+ * a single frame and then spends the animation sliding, mis-sized
+ * relative to where it is, for the whole duration.
+ *
+ * The client is configured once, to @to.  What actually gets resized
+ * each frame is a locked snapshot of its last buffer, so the animation
+ * costs no round trips --- see the `anim_ghost' comment in
+ * gowl-core-private.h.  A pure move (same size) skips the snapshot and
+ * keeps the window's live content on screen.
+ *
+ * A client already animating is retargeted from wherever it currently
+ * is rather than restarted from @from, so a second layout change
  * mid-flight bends the path instead of snapping back.
  */
-void gowl_animation_start (GowlCompositor *self,
-                            GowlClient     *client,
-                            gint            from_x,
-                            gint            from_y,
-                            gint            to_x,
-                            gint            to_y);
+void gowl_animation_start (GowlCompositor       *self,
+                            GowlClient           *client,
+                            const struct wlr_box *from,
+                            const struct wlr_box *to);
 
 /**
  * gowl_animation_cancel:
  * @client: the client
  *
- * Stops an animation and leaves the node wherever it is.  Used when a
- * client is about to be destroyed or torn out of the scene.
+ * Stops a geometry animation, releases the snapshot it was stretching
+ * and puts the real surface back on screen.  Used when a client is
+ * about to be destroyed or torn out of the scene, and whenever an
+ * animation is superseded.
  */
 void gowl_animation_cancel (GowlClient *client);
 

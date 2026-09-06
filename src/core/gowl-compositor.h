@@ -1358,6 +1358,22 @@ void gowl_compositor_arrangelayers (GowlCompositor *self,
 void gowl_compositor_notify_output_resized (GowlCompositor    *self,
                                             struct wlr_output *output);
 
+/**
+ * gowl_compositor_apply_frame_geometry:
+ * @self: a #GowlCompositor
+ * @client: the client
+ * @width: the frame width to draw
+ * @height: the frame height
+ *
+ * Lays out @client's borders at the given size.  Called by the layout
+ * with the final geometry and by the animation with an interpolated
+ * one; they must agree, which is why there is only one of it.
+ */
+void gowl_compositor_apply_frame_geometry (GowlCompositor *self,
+                                            GowlClient     *client,
+                                            gint            width,
+                                            gint            height);
+
 G_END_DECLS
 
 #endif /* GOWL_COMPOSITOR_H */

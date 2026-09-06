@@ -45,15 +45,15 @@
 #define GOWL_CONFIG_DEFAULT_SCROLL_COLUMN_WIDTH (0.5)
 /* Short enough not to feel like waiting, long enough to read as motion.
  * Omarchy's Hyprland "speed 3.79" works out around here. */
-#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION  (180)
+#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION  (150)
 /*
  * -1 means "use animation-duration".  Opening is an arrival rather
  * than a correction, so it can afford a longer beat than a re-tile.
  */
-#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_OPEN (220)
+#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_OPEN (190)
 /* Shorter than either: a closed window is finished, and holding its
  * ghost on screen is holding up the re-tile behind it. */
-#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_CLOSE (140)
+#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_CLOSE (120)
 #define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE     "ease-out-expo"
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)

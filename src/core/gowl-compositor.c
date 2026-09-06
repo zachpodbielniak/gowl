@@ -3535,6 +3535,68 @@ client_surface(GowlClient *c)
  * box is the full output layout; otherwise it's the monitor's window area.
  * Ported from dwl's resize().
  */
+/**
+ * gowl_compositor_apply_frame_geometry:
+ * @self: a #GowlCompositor
+ * @c: the client
+ * @width: the frame width to draw
+ * @height: the frame height
+ *
+ * Lays out a client's borders at @width x @height.
+ *
+ * Split out because it is called from two places that must agree: the
+ * layout, with the final geometry, and the animation tick, with an
+ * interpolated one.  A border that keeps the final size while the
+ * content morphs is the same incoherence this animation exists to fix,
+ * one layer out.
+ */
+void
+gowl_compositor_apply_frame_geometry(
+	GowlCompositor *self,
+	GowlClient     *c,
+	gint            width,
+	gint            height
+){
+	GowlClientDecorator *dec;
+	gint bi;
+
+	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
+	          self->module_mgr);
+	if (dec != NULL) {
+		/* Hide rect borders when a decorator is active */
+		for (bi = 0; bi < 4; bi++) {
+			if (c->border[bi] != NULL)
+				wlr_scene_node_set_enabled(
+					&c->border[bi]->node, FALSE);
+		}
+		/* Decorator renders the rounded frame */
+		gowl_client_decorator_render_decoration(
+			dec, c, width, height, c->bw,
+			(c == gowl_compositor_get_focused_client(self))
+				? self->focus_color : self->unfocus_color);
+		return;
+	}
+
+	/* Re-enable rect borders if a decorator was deactivated */
+	for (bi = 0; bi < 4; bi++) {
+		if (c->border[bi] != NULL)
+			wlr_scene_node_set_enabled(&c->border[bi]->node, TRUE);
+	}
+
+	/* top, bottom, left, right */
+	wlr_scene_rect_set_size(c->border[0], width, c->bw);
+	wlr_scene_rect_set_size(c->border[1], width, c->bw);
+	wlr_scene_rect_set_size(c->border[2], c->bw,
+	                        height - 2 * (gint)c->bw);
+	wlr_scene_rect_set_size(c->border[3], c->bw,
+	                        height - 2 * (gint)c->bw);
+	wlr_scene_node_set_position(&c->border[1]->node, 0,
+	                            height - (gint)c->bw);
+	wlr_scene_node_set_position(&c->border[2]->node, 0, c->bw);
+	wlr_scene_node_set_position(&c->border[3]->node,
+	                            width - (gint)c->bw, c->bw);
+}
+
 static void
 resize_client(
 	GowlCompositor *self,
@@ -3542,6 +3604,7 @@ resize_client(
 	struct wlr_box  geo,
 	gboolean        interact
 ){
+	struct wlr_box prev_geom;
 	struct wlr_box *bbox;
 	struct wlr_box sgeom;
 	struct wlr_box clip;
@@ -3556,20 +3619,34 @@ resize_client(
 		bbox = &c->mon->w;
 	}
 
+	/* The rect the window occupied before this call, for the animation
+	 * to start from --- c->geom is about to become the new one. */
+	prev_geom = c->geom;
+
 	c->geom = geo;
 	applybounds(c, bbox);
 
-	/* Update scene-graph positions, including borders.
+	/* Update scene-graph geometry, borders included.
 	 *
-	 * With animations on, the node is held at where it already is and
-	 * the frame loop walks it to the new spot.  An interactive
-	 * move/resize is exempt: the window has to track the pointer 1:1
-	 * or dragging feels like steering a boat. */
+	 * With animations on the window is held at the rect it currently
+	 * occupies and the frame loop walks the whole rect --- position and
+	 * size together --- to the new one.  An interactive move/resize is
+	 * exempt: the window has to track the pointer 1:1 or dragging
+	 * feels like steering a boat. */
 	if (!interact && c->anim_placed && gowl_animation_enabled(self)) {
-		gint cx = c->scene->node.x;
-		gint cy = c->scene->node.y;
+		struct wlr_box from;
 
-		gowl_animation_start(self, c, cx, cy, c->geom.x, c->geom.y);
+		/*
+		 * Where the window IS, which mid-animation is the rect the
+		 * tick last drew rather than the one the layout last decided.
+		 * Taking `old geometry' from c->geom would be taking it from
+		 * a value this function overwrote four lines ago.
+		 */
+		from = c->anim_active ? c->anim_cur : prev_geom;
+		from.x = c->scene->node.x;
+		from.y = c->scene->node.y;
+
+		gowl_animation_start(self, c, &from, &c->geom);
 		if (!c->anim_active)
 			wlr_scene_node_set_position(&c->scene->node,
 			                            c->geom.x, c->geom.y);
@@ -3585,59 +3662,41 @@ resize_client(
 	 * are relative to. */
 	if (!c->anim_placed) {
 		c->anim_placed = TRUE;
-		if (!interact && !c->isembedded)
+		if (!interact && !c->isembedded) {
+			struct wlr_box from;
+			gint dx, dy;
+
 			gowl_animation_open_start(self, c);
+
+			/*
+			 * And grow into place.  This is the scale-up that was
+			 * not possible before the geometry animation existed:
+			 * what gets scaled is a snapshot, one buffer, which
+			 * scales cleanly where the live tree of them a window
+			 * is made of would come apart.
+			 *
+			 * Six percent.  Enough to read as arriving, small
+			 * enough that a window never appears to come from
+			 * somewhere it is not.  The open fade's rise stands
+			 * down while this runs --- growing and rising at once
+			 * is two ideas where one will do.
+			 */
+			from = c->geom;
+			dx = c->geom.width * 6 / 100;
+			dy = c->geom.height * 6 / 100;
+			from.x += dx / 2;
+			from.y += dy / 2;
+			from.width -= dx;
+			from.height -= dy;
+
+			gowl_animation_start(self, c, &from, &c->geom);
+		}
 	}
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 
-	/* Borders: delegate to decorator module if active, else use rects */
-	{
-		GowlClientDecorator *dec;
-
-		dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
-		          self->module_mgr);
-		if (dec != NULL) {
-			gint bi;
-
-			/* Hide rect borders when decorator is active */
-			for (bi = 0; bi < 4; bi++) {
-				if (c->border[bi] != NULL)
-					wlr_scene_node_set_enabled(
-						&c->border[bi]->node, FALSE);
-			}
-			/* Decorator renders the rounded frame */
-			gowl_client_decorator_render_decoration(
-				dec, c, c->geom.width, c->geom.height, c->bw,
-				(c == gowl_compositor_get_focused_client(self))
-					? self->focus_color : self->unfocus_color);
-		} else {
-			gint bi;
-
-			/* Re-enable rect borders if decorator was deactivated */
-			for (bi = 0; bi < 4; bi++) {
-				if (c->border[bi] != NULL)
-					wlr_scene_node_set_enabled(
-						&c->border[bi]->node, TRUE);
-			}
-			/* top, bottom, left, right borders */
-			wlr_scene_rect_set_size(c->border[0],
-			                        c->geom.width, c->bw);
-			wlr_scene_rect_set_size(c->border[1],
-			                        c->geom.width, c->bw);
-			wlr_scene_rect_set_size(c->border[2], c->bw,
-			                        c->geom.height - 2 * (gint)c->bw);
-			wlr_scene_rect_set_size(c->border[3], c->bw,
-			                        c->geom.height - 2 * (gint)c->bw);
-			wlr_scene_node_set_position(&c->border[1]->node,
-			                            0,
-			                            c->geom.height - (gint)c->bw);
-			wlr_scene_node_set_position(&c->border[2]->node,
-			                            0, c->bw);
-			wlr_scene_node_set_position(&c->border[3]->node,
-			                            c->geom.width - (gint)c->bw,
-			                            c->bw);
-		}
-	}
+	/* Borders, sized to the geometry the layout just decided. */
+	gowl_compositor_apply_frame_geometry(self, c,
+	                                     c->geom.width, c->geom.height);
 
 	/* Send configure to the underlying surface */
 #ifdef GOWL_HAVE_XWAYLAND
@@ -8579,6 +8638,16 @@ on_client_destroy(struct wl_listener *listener, void *data)
 
 	c = wl_container_of(listener, c, destroy_surface);
 	(void)data;
+
+	/* Release the animation's locked buffer before the client goes.
+	 * The snapshot NODE is a child of the client's scene tree and dies
+	 * with it, but the wlr_buffer it holds is reference-counted and
+	 * would simply never be unlocked --- an invisible leak of one full
+	 * window buffer per client that died mid-animation.  Unmap
+	 * normally gets here first; a client destroyed without one does
+	 * not. */
+	gowl_animation_cancel(c);
+	gowl_animation_open_cancel(c);
 
 	/* Remove all listeners.  The registered set differs between XDG
 	 * and X11 clients (see on_new_xdg_toplevel / on_new_xwayland_surface),

@@ -562,16 +562,48 @@ struct _GowlClient {
 	struct wlr_box geom;    /* layout position including border */
 	struct wlr_box prev;    /* saved geometry for fullscreen restore */
 
-	/* Position animation.  Lives on the client so that destroying one
-	 * mid-slide takes its animation with it; a list on the compositor
-	 * would have to be told.  Only POSITION is animated -- see
-	 * gowl-animation.c for why size is not. */
+	/*
+	 * Geometry animation.  Lives on the client so that destroying one
+	 * mid-flight takes its animation with it; a list on the compositor
+	 * would have to be told.
+	 *
+	 * The whole RECT is animated, not just the position.  Position
+	 * alone is wrong in a tiling compositor and measurably so: opening
+	 * a second window took the first from 1272px wide to 568px in a
+	 * single frame and then spent the animation sliding it, so the one
+	 * change the eye actually tracks -- the size -- was the one that
+	 * snapped, and the window sat at its final size in the wrong place
+	 * for the whole duration.
+	 */
 	gboolean anim_active;
-	gint     anim_from_x, anim_from_y;
-	gint     anim_to_x,   anim_to_y;
-	gint     anim_cur_x,  anim_cur_y;
+	struct wlr_box anim_from;
+	struct wlr_box anim_to;
+	struct wlr_box anim_cur;
 	gint64   anim_start_us;
 	gint64   anim_dur_us;
+
+	/*
+	 * The frozen picture that does the resizing.
+	 *
+	 * A client cannot be resized every frame -- each size is a
+	 * configure it has to acknowledge and re-render for, so a 150ms
+	 * animation would be nine round trips per window and a slow client
+	 * would fall visibly behind its own frame.  So it is configured
+	 * once, to its final size, and what the animation stretches is a
+	 * snapshot of how the window looked before: its last buffer,
+	 * locked, hung inside the client's own scene tree, and scaled each
+	 * frame to the interpolated rect.
+	 *
+	 * The real surface is hidden while this runs and revealed at the
+	 * end, when the two are the same size and the only difference is
+	 * that the real one is crisp.
+	 *
+	 * Scaling is safe here for the same reason it is safe on close and
+	 * impossible on open: a snapshot is ONE buffer, and one buffer
+	 * scales cleanly where a live tree of them would come apart.
+	 */
+	struct wlr_scene_buffer *anim_ghost;
+	struct wlr_buffer       *anim_ghost_buffer;   /* locked */
 
 	/*
 	 * Whether this client has ever been placed.  A scene tree is

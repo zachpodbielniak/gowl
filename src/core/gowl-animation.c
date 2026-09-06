@@ -310,6 +310,9 @@ open_tick(GowlCompositor *self, GowlClient *c, gint64 now_us,
 	return TRUE;
 }
 
+/* Defined below, next to the geometry animation they belong to. */
+static void ghost_release (GowlClient *c);
+
 /* ── Closing ─────────────────────────────────────────────────────── */
 
 /*
@@ -436,12 +439,20 @@ gowl_animation_close_start(GowlCompositor *self, GowlClient *c)
 		return;
 	}
 
-	/* Where the window actually was, which mid-move is the animated
-	 * position rather than the one the layout last decided. */
-	a->x = c->scene->node.x + (gint)c->bw;
-	a->y = c->scene->node.y + (gint)c->bw;
-	a->w = c->geom.width - 2 * (gint)c->bw;
-	a->h = c->geom.height - 2 * (gint)c->bw;
+	/*
+	 * Where the window actually was.  Mid-morph that is the rect the
+	 * animation last drew, not the one the layout last decided --- a
+	 * window closed while it is still resizing would otherwise leave a
+	 * ghost at its destination size in its current position.
+	 */
+	{
+		struct wlr_box vis = c->anim_active ? c->anim_cur : c->geom;
+
+		a->x = c->scene->node.x + (gint)c->bw;
+		a->y = c->scene->node.y + (gint)c->bw;
+		a->w = vis.width - 2 * (gint)c->bw;
+		a->h = vis.height - 2 * (gint)c->bw;
+	}
 	if (a->w <= 0 || a->h <= 0) {
 		close_anim_free(a);
 		return;
@@ -564,50 +575,204 @@ close_tick(GowlCompositor *self, GowlMonitor *m, gint64 now_us,
 	return live;
 }
 
+/* Interpolate a whole rect, so position and size arrive together. */
+static struct wlr_box
+lerp_box(const struct wlr_box *a, const struct wlr_box *b, gdouble e)
+{
+	struct wlr_box out;
+
+	out.x = a->x + (gint)lround((gdouble)(b->x - a->x) * e);
+	out.y = a->y + (gint)lround((gdouble)(b->y - a->y) * e);
+	out.width = a->width
+		+ (gint)lround((gdouble)(b->width - a->width) * e);
+	out.height = a->height
+		+ (gint)lround((gdouble)(b->height - a->height) * e);
+
+	/* A zero or negative extent is not a window; wlr_scene_rect and
+	 * wlr_scene_buffer both reject it. */
+	out.width = MAX(1, out.width);
+	out.height = MAX(1, out.height);
+
+	return out;
+}
+
+/*
+ * Puts the window on screen at @box: the container where the rect says,
+ * the borders sized to it, and the frozen snapshot stretched to fill
+ * what is inside them.  Everything the eye reads as "the window" moves
+ * from one call.
+ */
+static void
+geometry_apply(GowlCompositor *self, GowlClient *c,
+               const struct wlr_box *box)
+{
+	wlr_scene_node_set_position(&c->scene->node, box->x, box->y);
+	gowl_compositor_apply_frame_geometry(self, c, box->width, box->height);
+
+	if (c->anim_ghost != NULL)
+		wlr_scene_buffer_set_dest_size(
+			c->anim_ghost,
+			MAX(1, box->width - 2 * (gint)c->bw),
+			MAX(1, box->height - 2 * (gint)c->bw));
+}
+
+/*
+ * Lands the window on its final rect and hands it back to the real
+ * surface, which has had the whole animation to render at that size.
+ */
+static void
+geometry_finish(GowlCompositor *self, GowlClient *c)
+{
+	c->anim_active = FALSE;
+	c->anim_cur = c->anim_to;
+
+	geometry_apply(self, c, &c->anim_to);
+	ghost_release(c);
+}
+
 /* ── Driving ─────────────────────────────────────────────────────── */
+
+/*
+ * Freezes how the client looks right now, so the animation has
+ * something it can resize.  Returns FALSE when there is nothing to
+ * freeze, in which case the caller falls back to moving without
+ * resizing.
+ */
+static gboolean
+ghost_capture(GowlClient *c)
+{
+	struct wlr_surface *surface;
+
+	/*
+	 * Never for an embedded client.  Under `emacs --gowl' that is the
+	 * editor's own frame, and the snapshot works by HIDING the real
+	 * surface for the duration --- a mechanism whose failure mode is
+	 * an invisible editor, on the one client whose embedding is
+	 * managed outside the compositor and which a headless test cannot
+	 * render to check.  It takes the instant path instead: its size
+	 * changes without animating, which is what every window did before
+	 * this existed.
+	 */
+	if (c->isembedded)
+		return FALSE;
+
+	surface = gowl_client_get_wlr_surface(c);
+	if (surface == NULL || surface->buffer == NULL)
+		return FALSE;
+
+	c->anim_ghost_buffer = wlr_buffer_lock(&surface->buffer->base);
+	c->anim_ghost = wlr_scene_buffer_create(c->scene,
+	                                        c->anim_ghost_buffer);
+	if (c->anim_ghost == NULL) {
+		g_clear_pointer(&c->anim_ghost_buffer, wlr_buffer_unlock);
+		return FALSE;
+	}
+
+	/* Inside the client's own tree, so it inherits the animated
+	 * container position and only its size has to be driven. */
+	wlr_scene_node_set_position(&c->anim_ghost->node, (gint)c->bw,
+	                            (gint)c->bw);
+	wlr_scene_node_raise_to_top(&c->anim_ghost->node);
+
+	/* The real surface is about to be configured to its final size.
+	 * Hide it until the ghost has finished morphing into that size,
+	 * so the two are never on screen disagreeing about how big the
+	 * window is. */
+	if (c->scene_surface != NULL)
+		wlr_scene_node_set_enabled(&c->scene_surface->node, FALSE);
+
+	return TRUE;
+}
+
+static void
+ghost_release(GowlClient *c)
+{
+	if (c->anim_ghost != NULL) {
+		wlr_scene_node_destroy(&c->anim_ghost->node);
+		c->anim_ghost = NULL;
+	}
+	g_clear_pointer(&c->anim_ghost_buffer, wlr_buffer_unlock);
+
+	if (c->scene_surface != NULL)
+		wlr_scene_node_set_enabled(&c->scene_surface->node, TRUE);
+}
 
 void
 gowl_animation_start(GowlCompositor *self, GowlClient *c,
-                      gint from_x, gint from_y, gint to_x, gint to_y)
+                      const struct wlr_box *from, const struct wlr_box *to)
 {
+	struct wlr_box start;
 	gint duration;
+	gboolean moved, resized;
 
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 	g_return_if_fail(c != NULL);
+	g_return_if_fail(from != NULL && to != NULL);
 
 	if (!gowl_animation_enabled(self) || c->scene == NULL)
 		return;
 
-	/* Nothing to slide.  Checked here rather than at every call site,
-	 * because a layout re-runs on every arrange and most clients do not
-	 * move. */
-	if (from_x == to_x && from_y == to_y) {
+	start = *from;
+
+	moved = start.x != to->x || start.y != to->y;
+	resized = start.width != to->width || start.height != to->height;
+
+	/* Nothing to animate.  Checked here rather than at every call
+	 * site, because a layout re-runs on every arrange and most clients
+	 * do not move on most of them. */
+	if (!moved && !resized) {
 		gowl_animation_cancel(c);
 		return;
 	}
 
 	duration = gowl_config_get_animation_duration(self->config);
+	if (duration <= 0) {
+		gowl_animation_cancel(c);
+		return;
+	}
 
-	/* Retarget from where the node actually is, not from the caller's
-	 * idea of "before".  A second layout change mid-flight should bend
-	 * the path, not teleport the window back to restart it. */
-	if (c->anim_active) {
-		from_x = c->anim_cur_x;
-		from_y = c->anim_cur_y;
+	/* Retarget from wherever the window actually is, not from the
+	 * caller's idea of "before".  A second layout change mid-flight
+	 * should bend the path, not teleport the window back to restart
+	 * it. */
+	if (c->anim_active)
+		start = c->anim_cur;
+
+	/*
+	 * A resize needs a snapshot to stretch; a pure move does not, and
+	 * skipping it there is worth doing --- it is the common case for a
+	 * window being pushed along a stack, it costs no locked buffer,
+	 * and it keeps the window's live content on screen instead of
+	 * freezing it.
+	 */
+	if (resized && c->anim_ghost == NULL && !ghost_capture(c)) {
+		/*
+		 * Nothing to stretch --- the client has not drawn yet.
+		 * Animating the size anyway would move the borders while the
+		 * live surface sat at its final size inside them, which is
+		 * precisely the mismatch this animation exists to remove.
+		 * Take the instant path instead.
+		 */
+		gowl_animation_cancel(c);
+		return;
 	}
 
 	c->anim_active = TRUE;
-	c->anim_from_x = from_x;
-	c->anim_from_y = from_y;
-	c->anim_to_x = to_x;
-	c->anim_to_y = to_y;
-	c->anim_cur_x = from_x;
-	c->anim_cur_y = from_y;
+	c->anim_from = start;
+	c->anim_to = *to;
+	c->anim_cur = start;
 	c->anim_start_us = g_get_monotonic_time();
 	c->anim_dur_us = (gint64)duration * 1000;
 
-	/* Hold the node at the start position; the frame loop moves it. */
-	wlr_scene_node_set_position(&c->scene->node, from_x, from_y);
+	/* Hold everything at the start rect; the frame loop walks it. */
+	wlr_scene_node_set_position(&c->scene->node, start.x, start.y);
+	gowl_compositor_apply_frame_geometry(self, c, start.width,
+	                                     start.height);
+	if (c->anim_ghost != NULL)
+		wlr_scene_buffer_set_dest_size(
+			c->anim_ghost,
+			MAX(1, start.width - 2 * (gint)c->bw),
+			MAX(1, start.height - 2 * (gint)c->bw));
 }
 
 void
@@ -615,7 +780,11 @@ gowl_animation_cancel(GowlClient *c)
 {
 	if (c == NULL)
 		return;
+
 	c->anim_active = FALSE;
+	/* The snapshot holds a client buffer and hides the real surface;
+	 * leaving either behind is a window that never comes back. */
+	ghost_release(c);
 }
 
 /*
@@ -667,32 +836,22 @@ gowl_animation_tick(GowlCompositor *self, GowlMonitor *m, gint64 now_us)
 			continue;
 
 		if (c->anim_dur_us <= 0) {
-			c->anim_active = FALSE;
-			wlr_scene_node_set_position(&c->scene->node,
-			                            c->anim_to_x, c->anim_to_y);
+			geometry_finish(self, c);
 			continue;
 		}
 
 		t = (gdouble)(now_us - c->anim_start_us) / (gdouble)c->anim_dur_us;
 		if (t >= 1.0) {
-			c->anim_active = FALSE;
-			c->anim_cur_x = c->anim_to_x;
-			c->anim_cur_y = c->anim_to_y;
-			wlr_scene_node_set_position(&c->scene->node,
-			                            c->anim_to_x, c->anim_to_y);
+			geometry_finish(self, c);
 			continue;
 		}
 		if (t < 0.0)
 			t = 0.0;
 
 		e = gowl_curve_eval(curve, t);
-		c->anim_cur_x = c->anim_from_x
-			+ (gint)lround((gdouble)(c->anim_to_x - c->anim_from_x) * e);
-		c->anim_cur_y = c->anim_from_y
-			+ (gint)lround((gdouble)(c->anim_to_y - c->anim_from_y) * e);
+		c->anim_cur = lerp_box(&c->anim_from, &c->anim_to, e);
+		geometry_apply(self, c, &c->anim_cur);
 
-		wlr_scene_node_set_position(&c->scene->node,
-		                            c->anim_cur_x, c->anim_cur_y);
 		if (client_on(c, m))
 			live = TRUE;
 	}

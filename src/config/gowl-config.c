@@ -43,18 +43,19 @@
 #define GOWL_CONFIG_DEFAULT_MFACT               (0.55)
 /* Two columns visible at a time, matching Omarchy's Hyprland default. */
 #define GOWL_CONFIG_DEFAULT_SCROLL_COLUMN_WIDTH (0.5)
-/* Short enough not to feel like waiting, long enough to read as motion.
- * Omarchy's Hyprland "speed 3.79" works out around here. */
-#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION  (150)
+/* Layout motion settles quickly; entrances get their own longer beat. */
+#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION  (260)
 /*
  * -1 means "use animation-duration".  Opening is an arrival rather
  * than a correction, so it can afford a longer beat than a re-tile.
  */
-#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_OPEN (190)
+#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_OPEN (360)
 /* Shorter than either: a closed window is finished, and holding its
  * ghost on screen is holding up the re-tile behind it. */
-#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_CLOSE (120)
+#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_CLOSE (180)
 #define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE     "ease-out-expo"
+#define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_OPEN "ease-out-back"
+#define GOWL_CONFIG_DEFAULT_ANIMATION_POPIN_SCALE (0.84)
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
 #define GOWL_CONFIG_DEFAULT_REPEAT_RATE         (25)
@@ -112,6 +113,9 @@ struct _GowlConfig {
 	gboolean animations;
 	gint     animation_duration;
 	gchar   *animation_curve;
+	gchar   *animation_curve_open;
+	gdouble  animation_popin_scale;
+	gdouble  animation_jiggle_strength;
 	gint     nmaster;
 	gint     tag_count;
 
@@ -516,6 +520,7 @@ gowl_config_finalize(GObject *object)
 	g_free(self->log_file);
 	g_free(self->input_recording_deny_apps);
 	g_free(self->animation_curve);
+	g_free(self->animation_curve_open);
 
 	if (self->keybinds != NULL)
 		g_array_unref(self->keybinds);
@@ -774,6 +779,9 @@ gowl_config_init(GowlConfig *self)
 	self->animation_duration_close =
 		GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_CLOSE;
 	self->animation_curve     = g_strdup(GOWL_CONFIG_DEFAULT_ANIMATION_CURVE);
+	self->animation_curve_open = g_strdup(GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_OPEN);
+	self->animation_popin_scale = GOWL_CONFIG_DEFAULT_ANIMATION_POPIN_SCALE;
+	self->animation_jiggle_strength = 1.0;
 	self->nmaster             = GOWL_CONFIG_DEFAULT_NMASTER;
 	self->tag_count           = GOWL_CONFIG_DEFAULT_TAG_COUNT;
 	self->repeat_rate         = GOWL_CONFIG_DEFAULT_REPEAT_RATE;
@@ -1016,6 +1024,28 @@ gowl_config_apply_mapping(
 			(gint)yaml_mapping_get_int_member(
 				mapping, "animation-duration-close");
 	}
+	if (yaml_mapping_has_member(mapping, "animation-curve-open")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "animation-curve-open");
+
+		if (v != NULL) {
+			g_free(self->animation_curve_open);
+			self->animation_curve_open = g_strdup(v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "animation-popin-scale")) {
+		gdouble v = yaml_mapping_get_double_member(mapping, "animation-popin-scale");
+
+		/* Keep invalid input from collapsing or inverting a window. */
+		if (v >= 0.5 && v <= 1.0)
+			self->animation_popin_scale = v;
+	}
+	if (yaml_mapping_has_member(mapping, "animation-jiggle-strength")) {
+		gdouble v = yaml_mapping_get_double_member(mapping, "animation-jiggle-strength");
+
+		if (v >= 0.0 && v <= 2.0)
+			self->animation_jiggle_strength = v;
+	}
+
 	if (yaml_mapping_has_member(mapping, "animation-curve")) {
 		const gchar *v = yaml_mapping_get_string_member(
 			mapping, "animation-curve");
@@ -2729,4 +2759,25 @@ gowl_config_get_animation_duration_close(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), -1);
 	return self->animation_duration_close;
+}
+
+const gchar *
+gowl_config_get_animation_curve_open(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_OPEN);
+	return self->animation_curve_open;
+}
+
+gdouble
+gowl_config_get_animation_popin_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_ANIMATION_POPIN_SCALE);
+	return self->animation_popin_scale;
+}
+
+gdouble
+gowl_config_get_animation_jiggle_strength(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 1.0);
+	return self->animation_jiggle_strength;
 }

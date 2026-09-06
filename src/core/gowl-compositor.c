@@ -3560,6 +3560,11 @@ gowl_compositor_apply_frame_geometry(
 	GowlClientDecorator *dec;
 	gint bi;
 
+	float color[4];
+
+	for (bi = 0; bi < 4; bi++)
+		color[bi] = c->border_color[bi] * c->anim_alpha;
+
 	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
 	          self->module_mgr);
 	if (dec != NULL) {
@@ -3572,8 +3577,7 @@ gowl_compositor_apply_frame_geometry(
 		/* Decorator renders the rounded frame */
 		gowl_client_decorator_render_decoration(
 			dec, c, width, height, c->bw,
-			(c == gowl_compositor_get_focused_client(self))
-				? self->focus_color : self->unfocus_color);
+			color);
 		return;
 	}
 
@@ -3587,9 +3591,9 @@ gowl_compositor_apply_frame_geometry(
 	wlr_scene_rect_set_size(c->border[0], width, c->bw);
 	wlr_scene_rect_set_size(c->border[1], width, c->bw);
 	wlr_scene_rect_set_size(c->border[2], c->bw,
-	                        height - 2 * (gint)c->bw);
+	                        MAX(0, height - 2 * (gint)c->bw));
 	wlr_scene_rect_set_size(c->border[3], c->bw,
-	                        height - 2 * (gint)c->bw);
+	                        MAX(0, height - 2 * (gint)c->bw));
 	wlr_scene_node_set_position(&c->border[1]->node, 0,
 	                            height - (gint)c->bw);
 	wlr_scene_node_set_position(&c->border[2]->node, 0, c->bw);
@@ -3655,48 +3659,19 @@ resize_client(
 		wlr_scene_node_set_position(&c->scene->node,
 		                            c->geom.x, c->geom.y);
 	}
-	/* Set after the branch, so the FIRST placement takes the instant
-	 * path and every one after it animates.  The first placement is
-	 * also where the open animation belongs: the layout has just
-	 * decided where the window goes, which is what the fade and rise
-	 * are relative to. */
+	/* First placement gets one entrance, after the layout chooses its
+	 * destination. Subsequent arrangements retain that animation. */
 	if (!c->anim_placed) {
 		c->anim_placed = TRUE;
-		if (!interact && !c->isembedded) {
-			struct wlr_box from;
-			gint dx, dy;
-
+		if (!interact && !c->isembedded)
 			gowl_animation_open_start(self, c);
-
-			/*
-			 * And grow into place.  This is the scale-up that was
-			 * not possible before the geometry animation existed:
-			 * what gets scaled is a snapshot, one buffer, which
-			 * scales cleanly where the live tree of them a window
-			 * is made of would come apart.
-			 *
-			 * Six percent.  Enough to read as arriving, small
-			 * enough that a window never appears to come from
-			 * somewhere it is not.  The open fade's rise stands
-			 * down while this runs --- growing and rising at once
-			 * is two ideas where one will do.
-			 */
-			from = c->geom;
-			dx = c->geom.width * 6 / 100;
-			dy = c->geom.height * 6 / 100;
-			from.x += dx / 2;
-			from.y += dy / 2;
-			from.width -= dx;
-			from.height -= dy;
-
-			gowl_animation_start(self, c, &from, &c->geom);
-		}
 	}
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 
-	/* Borders, sized to the geometry the layout just decided. */
+	/* Do not overwrite interpolated borders with the target size. */
 	gowl_compositor_apply_frame_geometry(self, c,
-	                                     c->geom.width, c->geom.height);
+		c->anim_active ? c->anim_cur.width : c->geom.width,
+		c->anim_active ? c->anim_cur.height : c->geom.height);
 
 	/* Send configure to the underlying surface */
 #ifdef GOWL_HAVE_XWAYLAND
@@ -3904,6 +3879,11 @@ xytonode(
 			if (pnode->data != NULL && GOWL_IS_CLIENT(pnode->data))
 				c = (GowlClient *)pnode->data;
 		}
+		/* A snapshot has no wlr_scene_surface addon. Resolve its input
+		 * through the live surface at the displayed scale, rather than
+		 * clearing focus or sending the click to a lower layer. */
+		if (surface == NULL && c != NULL && c->anim_ghost != NULL)
+			surface = gowl_animation_surface_at(c, x, y, &lx, &ly);
 	}
 
 	if (psurface != NULL) *psurface = surface;
@@ -3970,12 +3950,20 @@ client_set_border_color(
 	gint i;
 	GowlClientDecorator *dec;
 
+	float faded[4];
+
+	memcpy(c->border_color, color, sizeof(c->border_color));
+	for (i = 0; i < 4; i++)
+		faded[i] = color[i] * c->anim_alpha;
+	color = faded;
+
 	/* If a decorator module is active, delegate to it */
 	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
 	          self->module_mgr);
 	if (dec != NULL) {
 		gowl_client_decorator_render_decoration(
-			dec, c, c->geom.width, c->geom.height, c->bw, color);
+			dec, c, c->anim_active ? c->anim_cur.width : c->geom.width,
+			c->anim_active ? c->anim_cur.height : c->geom.height, c->bw, color);
 		return;
 	}
 
@@ -5501,6 +5489,12 @@ on_gamma_control_set_gamma(struct wl_listener *listener, void *data)
 }
 
 static void
+animation_frame_done(struct wlr_surface *surface, int sx, int sy, void *data)
+{
+	wlr_surface_send_frame_done(surface, data);
+}
+
+static void
 on_monitor_frame(struct wl_listener *listener, void *data)
 {
 	GowlMonitor *m;
@@ -5578,6 +5572,25 @@ frame_done:
 	/* Notify clients that a frame has been rendered */
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(m->scene_output, &now);
+	/* A snapshot hides the live scene tree, so the scene helper cannot
+	 * send its frame callbacks. Keep that client rendering its final
+	 * configure while we animate, ready for the handoff to live content. */
+	if (m->compositor != NULL) {
+		GList *l;
+
+		for (l = m->compositor->clients; l != NULL; l = l->next) {
+			GowlClient *c = l->data;
+			struct wlr_surface *surface;
+			gint x, y;
+
+			if (c->mon != m || c->anim_ghost == NULL || c->scene == NULL
+			    || !wlr_scene_node_coords(&c->scene->node, &x, &y))
+				continue;
+			surface = client_surface(c);
+			if (surface != NULL)
+				wlr_surface_for_each_surface(surface, animation_frame_done, &now);
+		}
+	}
 
 	/* Emit frame-rendered on the compositor so modules (e.g. recording)
 	 * can safely capture from the dispatch thread.  EGL is idle at
@@ -7777,6 +7790,8 @@ on_cursor_button(struct wl_listener *listener, void *data)
 				            self->wlr_cursor->y);
 				self->selmon = m;
 				setmon(self, self->grabbed_client, m, 0);
+				gowl_animation_settle(self, self->grabbed_client,
+				                       &self->grab_geobox);
 				self->grabbed_client = NULL;
 			}
 			return;
@@ -8167,7 +8182,7 @@ on_client_commit(struct wl_listener *listener, void *data)
 	 * we must re-apply our custom alpha after each frame.
 	 * Skip embedded clients — they render on top of their parent
 	 * and should stay fully opaque (alpha 1.0). */
-	if (c->alpha < 1.0f && !c->isembedded)
+	if ((c->alpha < 1.0f || c->anim_opening) && !c->isembedded)
 		gowl_client_set_alpha(c, c->alpha);
 }
 
@@ -8217,6 +8232,8 @@ on_client_map(struct wl_listener *listener, void *data)
 	}
 	c->scene->node.data = c;
 	c->scene_surface->node.data = c;
+
+	memcpy(c->border_color, self->unfocus_color, sizeof(c->border_color));
 
 	/* Get initial geometry from the surface */
 #ifdef GOWL_HAVE_XWAYLAND

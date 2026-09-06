@@ -36,6 +36,7 @@
 #include "core/gowl-compositor.h"
 #include "core/gowl-monitor.h"
 #include "core/gowl-client.h"
+#include "core/gowl-scene-snapshot.h"
 #include "core/gowl-seat.h"
 #include "core/gowl-keyboard-group.h"
 #include "core/gowl-cursor.h"
@@ -576,34 +577,17 @@ struct _GowlClient {
 	 * for the whole duration.
 	 */
 	gboolean anim_active;
+	gboolean anim_pop;  /* geometry uses the entrance curve and clock */
 	struct wlr_box anim_from;
 	struct wlr_box anim_to;
 	struct wlr_box anim_cur;
 	gint64   anim_start_us;
 	gint64   anim_dur_us;
 
-	/*
-	 * The frozen picture that does the resizing.
-	 *
-	 * A client cannot be resized every frame -- each size is a
-	 * configure it has to acknowledge and re-render for, so a 150ms
-	 * animation would be nine round trips per window and a slow client
-	 * would fall visibly behind its own frame.  So it is configured
-	 * once, to its final size, and what the animation stretches is a
-	 * snapshot of how the window looked before: its last buffer,
-	 * locked, hung inside the client's own scene tree, and scaled each
-	 * frame to the interpolated rect.
-	 *
-	 * The real surface is hidden while this runs and revealed at the
-	 * end, when the two are the same size and the only difference is
-	 * that the real one is crisp.
-	 *
-	 * Scaling is safe here for the same reason it is safe on close and
-	 * impossible on open: a snapshot is ONE buffer, and one buffer
-	 * scales cleanly where a live tree of them would come apart.
-	 */
-	struct wlr_scene_buffer *anim_ghost;
-	struct wlr_buffer       *anim_ghost_buffer;   /* locked */
+	/* Snapshot of the complete surface tree, with buffer crops and
+	 * relative positions preserved. The live tree is hidden until
+	 * geometry finishes; embedded clients remain on the instant path. */
+	GowlSceneSnapshot *anim_ghost;
 
 	/*
 	 * Whether this client has ever been placed.  A scene tree is
@@ -616,27 +600,11 @@ struct _GowlClient {
 	 */
 	gboolean anim_placed;
 
-	/*
-	 * The open animation: a fade from transparent plus a short rise
-	 * from just below the final spot.  Both are compositor-side --- the
-	 * opacity is a scene-buffer property and the rise is a node
-	 * position, so the client is never told and never re-renders.
-	 *
-	 * A scale-up would read better still, and is not possible here:
-	 * wlroots 0.20 can scale an individual scene BUFFER but has no
-	 * transform for a node, so a window with subsurfaces would come
-	 * apart into independently-scaled pieces.
-	 */
+	/* Opacity has a shorter, non-overshooting clock than the pop. */
 	gboolean anim_opening;
-	gint64   anim_open_start_us;
-	gint64   anim_open_dur_us;
-	/*
-	 * Whether that fade also rises.  A window opening does; a window
-	 * revealed by a tag switch does not --- a whole screen of them
-	 * rising in unison reads as the desktop lurching rather than as
-	 * anything arriving.
-	 */
-	gboolean anim_open_rise;
+	gint64 anim_open_start_us;
+	gint64 anim_open_dur_us;
+	gfloat border_color[4];  /* unfaded, premultiplied decoration color */
 
 	guint32  tags;
 	guint    bw;             /* border width in pixels */
@@ -712,6 +680,9 @@ struct _GowlClient {
 	 * layer calls the mirror API. */
 	GList   *mirrors;        /* GList of GowlMirror* (owned) */
 	guint64  next_mirror_id;
+
+	/* Centre x/y and width/height impulses, in pixels. */
+	gdouble anim_jiggle[4];
 };
 
 /**

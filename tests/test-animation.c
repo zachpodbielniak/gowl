@@ -3,11 +3,8 @@
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * The curve evaluator is the part of the animation layer that can be
- * wrong without looking wrong: a slide still happens, it just moves
- * with the wrong shape, or -- worse -- overshoots and lands a window
- * off its own position.  The tick loop needs a running compositor and
- * real clients, so it is exercised by driving a session instead.
+ * Curve math is checked here; test-animation-scene.c exercises the
+ * animation clocks, geometry, opacity and snapshot lifetime on scene nodes.
  */
 
 #include <glib.h>

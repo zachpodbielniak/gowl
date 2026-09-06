@@ -635,37 +635,34 @@ otherwise every focus change would scroll the strip.
 
 *** Animation
 
-Windows slide to new positions rather than snapping.  What is animated
-is the scene node's *position*, and only that.
+Geometry animations interpolate the whole rectangle. A snapshot of the
+client's surface tree preserves buffer source rectangles, transforms and
+relative offsets; each frame scales both positions and sizes together.
+The client receives only its final configure, then the snapshot gives
+way to the live tree. Frame callbacks keep that hidden tree rendering;
+hit-testing translates pointer coordinates through the displayed scale.
+Closing snapshots do not intercept input. Pure moves keep live content
+when jiggle strength is zero; squash/stretch otherwise uses a snapshot.
 
-Size is deliberately not animated.  The client is configured to its
-final size the moment the layout decides it, and the node slides to
-meet it.  Animating size means every intermediate size is a configure
-the client must acknowledge and re-render for --- a 200 ms resize
-becomes a dozen round trips per window per move, and a slow client
-falls visibly behind its own frame.  Position is a compositor-side
-transform of something already rendered, so it costs nothing.
+Openings use their own duration and curve. The opacity clock is shorter
+and cannot overshoot. Closings own a snapshot independently of the
+client, so teardown cannot invalidate the buffers being displayed.
+Closing during a morph transfers that snapshot at its current size and
+opacity. Embedded clients do not use snapshots.
 
-State lives on the client, not in a list on the compositor: a client
-destroyed mid-slide takes its animation with it, where a list would
-have to be told.
+=on_monitor_frame= advances animations before rendering and schedules
+another frame only while an animation is live on that output. Repeated
+arrangements with the same destination retain the current clock; a new
+destination retargets from the displayed rectangle. Interactive moves
+and resizes remain immediate while the pointer is held. Releasing a
+changed window starts a bounded, decaying squash/stretch impulse around
+its final rectangle. Openings and layout transitions apply the same
+two-cycle impulse on top of their easing; exits use one squeeze cycle.
+The impulse starts and ends at zero and never changes layout geometry.
+Embedded and fullscreen clients do not jiggle.
 
-Three details worth keeping:
-
-- =on_monitor_frame= calls =wlr_output_schedule_frame()= while any
-  slide is live.  An idle output stops redrawing, which would freeze a
-  window in mid-air.
-- An interactive move or resize is exempt.  A dragged window has to
-  track the pointer 1:1, or dragging feels like steering a boat.
-- Re-targeting mid-flight starts from where the node *is*, not from the
-  caller's idea of "before", so a second layout change bends the path
-  instead of teleporting the window back to restart.
-
-Curves are cubic Béziers with endpoints fixed at (0,0) and (1,1) ---
-the same definition CSS and Hyprland use, so a Hyprland =bezier= line
-translates directly.  Solving "y at x" needs the =t= whose x is that
-value first, and that is done by bisection rather than Newton: these
-curves have a near-zero derivative at the ends, where Newton diverges.
+Curves are cubic Béziers. Bisection solves the parameter for a given
+elapsed-time fraction before evaluating the curve's progress.
 
 *** Graphics tablets
 

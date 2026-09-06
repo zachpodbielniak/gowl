@@ -17,6 +17,7 @@
  */
 
 #include "gowl-core-private.h"
+#include "interfaces/gowl-client-decorator.h"
 
 #include <string.h>
 #include <unistd.h>
@@ -925,6 +926,8 @@ static void
 apply_alpha(GowlClient *self)
 {
 	gfloat effective;
+	gfloat color[4];
+	gint i;
 
 	effective = self->alpha * self->anim_alpha;
 	if (effective < 0.0f) effective = 0.0f;
@@ -941,6 +944,28 @@ apply_alpha(GowlClient *self)
 	else if (self->scene != NULL)
 		wlr_scene_node_for_each_buffer(&self->scene->node,
 		                                set_opacity_iter, &effective);
+	gowl_scene_snapshot_set_opacity(self->anim_ghost, effective);
+	for (i = 0; i < 4; i++)
+		color[i] = self->border_color[i] * self->anim_alpha;
+	for (i = 0; i < 4; i++) {
+		if (self->border[i] != NULL)
+			wlr_scene_rect_set_color(self->border[i], color);
+	}
+
+	/* A tag reveal changes only opacity, so there is no geometry tick
+	 * to repaint a decorator's separate frame. Update it here, including
+	 * the final/cancelled fade, or it stays transparent until focus moves.
+	 * Geometry animations paint it after applying their new dimensions;
+	 * avoid rendering it twice per frame while those are active. */
+	if (!self->anim_active && self->compositor != NULL
+	    && self->compositor->module_mgr != NULL) {
+		GowlClientDecorator *dec = gowl_module_manager_get_decorator(
+			self->compositor->module_mgr);
+
+		if (dec != NULL)
+			gowl_client_decorator_render_decoration(dec, self,
+				self->geom.width, self->geom.height, self->bw, color);
+	}
 }
 
 /**

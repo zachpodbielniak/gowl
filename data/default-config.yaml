@@ -57,20 +57,19 @@ nmaster: 1
 # Tags
 tag-count: 9
 
-# Motion.  Windows slide to their new positions instead of snapping.
-# Only POSITION is animated: animating size too would mean a configure
-# round-trip per intermediate frame per window.
-# Curves: linear, ease-out-quint, ease-in-out-cubic, almost-linear, quick.
+# Motion. Position and size animate together using a surface-tree snapshot.
+# Entrances pop from 84% with a small overshoot; layout moves do not overshoot.
 animations: true
-animation-duration: 150      # a move or resize; 0 disables
-animation-duration-open: 190  # a window opening gets its own beat
-animation-duration-close: 120 # and a closed one should not linger
-# linear | ease-out-quint | ease-in-out-cubic | almost-linear | quick
-#   | ease-out-expo | ease-out-back | spring
-# The last two OVERSHOOT: a window goes past its target and settles
-# back.  Lively with gaps configured; without them the overshoot puts
-# a window briefly on top of its neighbour.
+animation-duration: 260       # move/resize and release jiggle; 0 disables animations
+animation-duration-open: 360  # pop duration; opacity arrives within 120 ms
+animation-duration-close: 180 # squeeze/shrink with a separate opacity curve
+animation-popin-scale: 0.84   # opening/closing zoom, 0.5..1.0; 1 removes base zoom
+animation-jiggle-strength: 1.0 # 0..2; 0 removes jiggle, 2 doubles it
+animation-curve-open: "ease-out-back"
 animation-curve: "ease-out-expo"
+# Curves: linear, ease-out-quint, ease-in-out-cubic, almost-linear, quick,
+# ease-out-expo, ease-out-back, spring. The last two overshoot.
+# For Omarchy's more restrained entrance: scale 0.87, curve ease-out-quint.
 
 # Scrolling layout: column width as a fraction of the usable width.
 # 0.5 shows two columns at a time, 1.0 shows one.  Matches Hyprland's

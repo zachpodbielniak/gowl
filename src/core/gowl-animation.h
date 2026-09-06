@@ -71,8 +71,8 @@ gdouble gowl_curve_eval (const gchar *name, gdouble t);
  * The client is configured once, to @to.  What actually gets resized
  * each frame is a locked snapshot of its last buffer, so the animation
  * costs no round trips --- see the `anim_ghost' comment in
- * gowl-core-private.h.  A pure move (same size) skips the snapshot and
- * keeps the window's live content on screen.
+ * gowl-core-private.h. A move also uses a snapshot for squash/stretch;
+ * at zero jiggle strength, pure moves keep the window's live content.
  *
  * A client already animating is retargeted from wherever it currently
  * is rather than restarted from @from, so a second layout change
@@ -94,18 +94,25 @@ void gowl_animation_start (GowlCompositor       *self,
  */
 void gowl_animation_cancel (GowlClient *client);
 
+/* Settle after an interactive move/resize, using the grab's initial
+ * rectangle to choose the direction. Never changes layout geometry. */
+void gowl_animation_settle (GowlCompositor *self, GowlClient *client,
+                             const struct wlr_box *grab);
+
+/* Hit-test the live surface through a displayed geometry snapshot.
+ * Input coordinates are layout-local; outputs are surface-local. */
+struct wlr_surface *gowl_animation_surface_at (GowlClient *client,
+                                               gdouble x, gdouble y,
+                                               gdouble *sx, gdouble *sy);
+
 /**
  * gowl_animation_open_start:
  * @self: a #GowlCompositor
  * @client: a client that has just been mapped
  *
- * Begins a window's open animation: a fade from transparent, and a
- * short rise from just below where the layout put it.  Both are
- * compositor-side, so the client is never told and never re-renders.
- *
- * The rise is deliberately small.  A large one is a slide, and a slide
- * from anywhere but the window's own neighbourhood is a window flying
- * in across the display.
+ * Begins a centered scale-up with its own duration and curve, plus a
+ * shorter, non-overshooting fade. Falls back to fade-only without a
+ * capturable surface. Embedded clients are exempt.
  */
 void gowl_animation_open_start (GowlCompositor *self, GowlClient *client);
 
@@ -114,13 +121,8 @@ void gowl_animation_open_start (GowlCompositor *self, GowlClient *client);
  * @self: a #GowlCompositor
  * @client: a client that has just become visible
  *
- * Fades a client in without the rise that gowl_animation_open_start()
- * adds.  For a window revealed by a tag switch rather than opened: a
- * whole screen of windows rising in unison reads as the desktop
- * lurching rather than as anything arriving.
- *
- * Does nothing to a client that is already fading, so a fast run of tag
- * switches cannot leave one permanently half-transparent.
+ * Fades a client in without scaling it, for tag visibility changes.
+ * Does not restart a fade that is already running.
  */
 void gowl_animation_reveal_start (GowlCompositor *self, GowlClient *client);
 
@@ -142,19 +144,10 @@ void gowl_animation_open_cancel (GowlClient *client);
  * away.  Must be called while @client's surface still has its buffer
  * --- that is, from the unmap handler and before the scene tree goes.
  *
- * There is no node snapshot in wlroots 0.20, so what is kept is the
- * last buffer the client drew: locked, hung off the same scene layer as
- * a standalone node, and outliving the surface, the role object and the
- * client itself.
- *
- * The snapshot is the toplevel surface alone, so a window whose content
- * or decorations live in subsurfaces loses them for the duration.  That
- * is also what makes the shrink safe --- one buffer scales cleanly where
- * a tree of them would come apart.
- *
- * Does nothing when the surface has already dropped its buffer, which
- * is the case when unmap came from a committed NULL buffer rather than
- * from the window going away.  Such a window simply disappears.
+ * The snapshot preserves all surface buffers and their relative positions,
+ * crops and transforms. Mid-morph closes transfer the displayed snapshot
+ * without changing its geometry or opacity. Hidden clients do not animate.
+ * If the buffers have already been dropped, the window simply disappears.
  */
 void gowl_animation_close_start (GowlCompositor *self, GowlClient *client);
 

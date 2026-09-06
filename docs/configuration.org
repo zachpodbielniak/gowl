@@ -186,137 +186,62 @@ Layout engine settings.
 :CUSTOM_ID: animations
 :END:
 
-| Property                  | Type   | Default           | Description                          |
-|---------------------------+--------+-------------------+--------------------------------------|
-| =animations=              | bool   | =true=            | Animate windows                      |
-| =animation-duration=      | int    | =150=             | Milliseconds for a move or resize; =0= disables |
-| =animation-duration-open= | int    | =190=             | Milliseconds for an open             |
-| =animation-duration-close= | int   | =120=             | Milliseconds for a close             |
-| =animation-curve=         | string | ="ease-out-expo"= | Easing curve                         |
+| Property                   | Type   | Default           | Description |
+|----------------------------+--------+-------------------+-------------|
+| =animations=               | bool   | =true=            | Animate windows |
+| =animation-duration=       | int    | =260=             | Move/resize and release jiggle duration in ms; =0= disables all animation |
+| =animation-duration-open=  | int    | =360=             | Entrance duration in ms; =0= disables entrances |
+| =animation-duration-close= | int    | =180=             | Exit duration in ms; =0= disables exits |
+| =animation-popin-scale=    | float  | =0.84=            | Entrance starting / exit ending scale, from =0.5= to =1.0= |
+| =animation-jiggle-strength= | float | =1.0=             | Squash/stretch intensity, =0= off through =2= double strength |
+| =animation-curve-open=     | string | ="ease-out-back"= | Entrance geometry curve |
+| =animation-curve=          | string | ="ease-out-expo"= | Layout geometry curve |
 
-Each has its own duration because they are not the same gesture.  A
-re-tile is a correction and wants to be over; an open is an arrival and
-can afford the extra beat that makes it read as one; a close is
-finished, and its ghost is holding up the re-tile behind it.
+Open and close durations of =-1= inherit =animation-duration=.
+
+*Opening.* Windows grow from 84% around their center, with an overshoot
+and two diminishing squash/stretch bounces. Opacity uses =almost-linear= and reaches the
+client's configured alpha within 120 ms (or the entrance duration, if
+shorter). This makes the motion visible while the window settles. The
+fade applies to the snapshot and borders as well as the live surface.
+A client without a capturable buffer fades in without scaling.
+
+*Closing.* The last visible content shrinks toward 84% over 180 ms,
+with a quick squeeze and an =almost-linear= fade. It stays above
+retiling neighbours. Closing during an entrance preserves the picture,
+size and opacity already on screen. Hidden clients do not leave ghosts.
+If no buffer remains at unmap, the window disappears immediately.
+
+*Layout changes.* Position, size and borders interpolate together over
+260 ms, with a small directional jiggle. Repeating the same destination retains the current animation's
+clock; a new destination starts from the displayed rectangle. There is
+no vertical rise after a pop or resize completes. Interactive dragging
+tracks the pointer directly; releasing a moved or resized window adds a
+brief jiggle around its final bounds. Clicking without moving does not
+trigger it. Embedded and fullscreen clients do not jiggle, and embedded
+clients remain exempt from snapshot resizing.
+
+Snapshots preserve each surface buffer's crop, transform and relative
+position, including subsurfaces. The client receives the final size
+once; intermediate frames stretch the saved content. Content is frozen
+until the animation ends, then the live surface returns. At zero jiggle
+strength, a pure move keeps live content without a snapshot. Pointer coordinates are
+translated through the displayed scale, and hidden live surfaces continue
+receiving frame callbacks so they can render the final size. Closing
+snapshots let clicks pass through to surviving windows.
 
 Curves: =linear=, =ease-out-quint=, =ease-in-out-cubic=,
-=almost-linear=, =quick= --- the set Omarchy configures Hyprland with,
-by the same names in kebab-case --- plus =ease-out-expo=, =ease-out-back=
-and =spring=.
+=almost-linear=, =quick=, =ease-out-expo=, =ease-out-back= and =spring=.
+The last two overshoot. Layout movement uses =ease-out-expo= with a
+bounded jiggle layered on top, so the wobble does not grow with travel
+distance. Set =animation-jiggle-strength= to =0= for the original motion,
+=0.5= for a softer jiggle, or =2= for double intensity.
 
-=ease-out-expo= is the default.  It leaves almost the whole distance in
-the first third and then settles, which at these durations reads as
-decisive; =ease-out-quint=, the old default, spends longer in the middle
-and that middle feels like lag.
-
-=ease-out-back= and =spring= *overshoot* --- the window goes past its
-target and settles back.  That is the point of them and it is why
-neither is the default: in a tiling layout windows are adjacent, so an
-overshoot briefly puts one on top of its neighbour.  Configure gaps and
-they look great.
-
-*The whole rect is animated* --- position and size together.  A window
-being re-tiled grows or shrinks into its new slot instead of jumping to
-its final size and then sliding there.
-
-That distinction is the difference between motion that reads as motion
-and motion that reads as a bug, and it is measurable: with position-only
-animation, opening a second window took the first from 1272px wide to
-568px in a *single frame* and then spent the whole animation sliding it.
-The one change the eye actually tracks --- the size --- was the one that
-snapped, and the window sat at its final size in the wrong place until
-the animation ended.  In a tiling compositor almost every transition is
-a size change, so animating only position animates the wrong half.
-
-Nothing is resized by asking the client, though.  Each intermediate size
-would be a configure it has to acknowledge and re-render for, so a
-150 ms animation is nine round trips per window and a slow client falls
-visibly behind its own frame.  The client is configured once, to the
-final size.  What gets stretched each frame is a *snapshot*: its last
-buffer, locked, and scaled to the interpolated rect, with the real
-surface hidden until the end --- at which point the two are the same
-size and the only difference is that the real one is crisp.
-
-Consequences worth knowing:
-
-- The window's content is *frozen* for the duration.  At 150 ms this is
-  not perceptible; while a size keybind is held down it is, and the
-  content snaps back to live on release.
-- The snapshot is the toplevel surface alone, so a window whose content
-  lives in *subsurfaces* loses them for the duration.  This is also what
-  makes the stretch safe: one buffer scales cleanly where a live tree of
-  them comes apart.
-- A pure *move* --- same size, new position --- skips the snapshot
-  entirely, costs no locked buffer, and keeps the window's live content
-  on screen.
-- A window that has not drawn yet has nothing to snapshot, so its size
-  changes instantly rather than moving its borders around a
-  wrongly-sized surface.
-- An *embedded* client (the editor's own frame under =emacs --gowl=) is
-  exempt: the snapshot works by hiding the real surface, and that is not
-  a mechanism to apply untested to the window the user is typing in.
-- An interactive drag is exempt entirely --- a dragged window tracks the
-  pointer 1:1.
-
-*Opening.* A window fades in from transparent while *growing* into
-place from 94% of its final size.  The scale-up is the same snapshot
-trick as above, which is why it is possible at all: one buffer scales,
-a live tree of them does not.  Where no snapshot is available the fade
-falls back to a short rise --- 24 pixels --- instead.  Both halves are compositor-side:
-opacity is a scene-buffer property and the rise is a node position, so
-the client is never told and never re-renders.  The fade composes with
-whatever opacity the =alpha= module has set rather than replacing it, so
-a window that opens unfocused fades in *to* its dimmed opacity instead
-of snapping to full and back.
-
-*Closing.* A closed window stays on screen while it fades out, shrinks
-6% and sinks a few pixels.
-
-wlroots 0.20 has no =wlr_scene_node_snapshot=, so what is kept is the
-last buffer the client drew: locked with =wlr_buffer_lock=, hung off the
-scene as a standalone node, and outliving the surface, the role object
-and the client process itself.  A locked =wlr_client_buffer= keeps its
-/texture/ even once the client's own buffer is destroyed, which is the
-guarantee the whole thing rests on.
-
-The snapshot is the toplevel surface alone, so a window whose content
-or decorations live in *subsurfaces* loses them for the duration of the
-fade.  That is also what makes the shrink safe here and impossible on
-open: scaling one buffer is a supported operation, where scaling a tree
-of them pulls a window apart.
-
-The ghost goes in the *float* layer rather than among the tiles.  In a
-tiling layout, closing a window immediately re-tiles the others into
-the space it left --- so a ghost left among them animates perfectly and
-is painted over by the very window expanding into its place, which is
-exactly what happened the first time this was tested.
-
-A window whose surface has already dropped its buffer gets no
-animation and simply disappears.  That is the case when unmap came from
-a committed null buffer rather than from the window going away.
-
-The rise is deliberately small.  A large one is a slide, and a slide
-from anywhere but the window's own neighbourhood is a window flying in
-across the display.
-
-*Switching tags.* Windows revealed by a tag switch fade in, without the
-rise --- a whole screen of them rising in unison reads as the desktop
-lurching rather than as anything arriving.  Only on the transition from
-hidden to visible: arrange runs on every layout change, and re-fading
-an already-visible window on each of them would make the tag flicker
-whenever anything moved at all.
-
-A window's *first placement* is instant; only moves after it animate.
-A scene tree is created at the origin, so animating the first placement
-sends a newly opened window on a diagonal sweep from the top-left
-corner of the display to wherever the layout puts it --- an artifact of
-how the node is created rather than anything anyone chose, and a long
-one on a large screen.
-
-The =tile= layout also has a /vsplit/ orientation — master row on top, stack row on
-the bottom — toggled at runtime via the =set_split= action or the =gowl-set-vsplit=
-Elisp primitive (it is not a config property).  In vsplit mode =mfact= sizes the
-master area /height/ instead of its width.
+Omarchy's Hyprland config uses =popin 87%= with =easeOutQuint= on
+entrance and separate opacity timing. For a similar restrained entrance,
+set =animation-popin-scale= to =0.87= and =animation-curve-open= to
+="ease-out-quint"=, with =animation-jiggle-strength= at =0=. The default
+here adds a larger pop and a squash/stretch jiggle for more emphasis.
 
 **** tags
 :PROPERTIES:

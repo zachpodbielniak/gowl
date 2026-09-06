@@ -95,6 +95,7 @@ LIB_SRCS := \
 	src/core/gowl-tablet.c \
 	src/core/gowl-layout-registry.c \
 	src/core/gowl-animation.c \
+	src/core/gowl-scene-snapshot.c \
 	src/core/gowl-focus-rules.c \
 	src/core/gowl-monitor.c \
 	src/core/gowl-client.c \
@@ -364,6 +365,8 @@ test: lib $(TEST_BINS)
 	fi
 
 # Build individual test binaries
+$(OUTDIR)/test-animation-scene: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs pixman-1)
+
 $(OUTDIR)/test-%: $(OBJDIR)/tests/test-%.o $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(CC) -o $@ $< $(TEST_LDFLAGS)
 

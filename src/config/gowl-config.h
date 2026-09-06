@@ -379,7 +379,7 @@ gdouble gowl_config_get_scroll_column_width(GowlConfig *self);
  * @self: a #GowlConfig
  *
  * Returns: %TRUE when windows slide to new positions instead of
- *   snapping.  Only position is animated; see gowl-animation.c.
+ *   snapping. Position and size animate together; see gowl-animation.c.
  */
 gboolean gowl_config_get_animations(GowlConfig *self);
 
@@ -855,6 +855,11 @@ GList *gowl_config_get_monitor_names(GowlConfig *self);
 
 gint gowl_config_get_animation_duration_open  (GowlConfig *self);
 gint gowl_config_get_animation_duration_close (GowlConfig *self);
+const gchar *gowl_config_get_animation_curve_open (GowlConfig *self);
+gdouble gowl_config_get_animation_popin_scale (GowlConfig *self);
+/* Squash/stretch and settling motion: 0 disables jiggle, 1 is normal,
+ * 2 doubles it. Invalid YAML values leave the previous setting intact. */
+gdouble gowl_config_get_animation_jiggle_strength (GowlConfig *self);
 
 /* --- Palette --- */
 

@@ -483,6 +483,13 @@ struct _GowlMonitor {
 	 * carries the request from the protocol handler to the next
 	 * commit. */
 	gboolean gamma_dirty;
+
+	/*
+	 * Whether a client on this output was still animating as of the
+	 * last frame.  Per-monitor so that an animation on one screen does
+	 * not hold every other screen at full refresh for its duration.
+	 */
+	gboolean anim_live;
 	struct wlr_scene_rect   *fullscreen_bg;
 
 	struct wlr_box m;   /* monitor area, layout-relative */
@@ -558,6 +565,21 @@ struct _GowlClient {
 	 */
 	gboolean anim_placed;
 
+	/*
+	 * The open animation: a fade from transparent plus a short rise
+	 * from just below the final spot.  Both are compositor-side --- the
+	 * opacity is a scene-buffer property and the rise is a node
+	 * position, so the client is never told and never re-renders.
+	 *
+	 * A scale-up would read better still, and is not possible here:
+	 * wlroots 0.20 can scale an individual scene BUFFER but has no
+	 * transform for a node, so a window with subsurfaces would come
+	 * apart into independently-scaled pieces.
+	 */
+	gboolean anim_opening;
+	gint64   anim_open_start_us;
+	gint64   anim_open_dur_us;
+
 	guint32  tags;
 	guint    bw;             /* border width in pixels */
 	gboolean isfloating;
@@ -565,6 +587,17 @@ struct _GowlClient {
 	gboolean isfullscreen;
 	gboolean isembedded;     /* externally managed (skip arrange) */
 	gfloat   alpha;          /* opacity: 0.0 (transparent) to 1.0 (opaque) */
+
+	/*
+	 * A second opacity, multiplied with the one above rather than
+	 * replacing it.  The fade-in on open and the `alpha' module's
+	 * focus dimming both want to set a client's opacity, and a single
+	 * field means whichever writes last wins: a window that fades in
+	 * while unfocused would snap to full opacity, and the module's
+	 * next focus event would cut a fade short.  Two factors compose,
+	 * so neither has to know about the other.
+	 */
+	gfloat   anim_alpha;
 	guint32  resize;         /* pending configure serial */
 
 	gchar *title;

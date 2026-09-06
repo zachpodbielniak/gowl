@@ -186,15 +186,32 @@ Layout engine settings.
 :CUSTOM_ID: animations
 :END:
 
-| Property             | Type   | Default            | Description                        |
-|----------------------+--------+--------------------+------------------------------------|
-| =animations=         | bool   | =true=             | Slide windows to new positions     |
-| =animation-duration= | int    | =180=              | Milliseconds; =0= disables         |
-| =animation-curve=    | string | ="ease-out-quint"= | Easing curve                       |
+| Property                  | Type   | Default           | Description                          |
+|---------------------------+--------+-------------------+--------------------------------------|
+| =animations=              | bool   | =true=            | Animate windows                      |
+| =animation-duration=      | int    | =180=             | Milliseconds for a move; =0= disables |
+| =animation-duration-open= | int    | =220=             | Milliseconds for an open             |
+| =animation-curve=         | string | ="ease-out-expo"= | Easing curve                         |
+
+Opening has its own duration because it is not the same gesture as a
+re-tile.  A re-tile is a correction and wants to be over; an open is an
+arrival and can afford the extra beat that makes it read as one.
 
 Curves: =linear=, =ease-out-quint=, =ease-in-out-cubic=,
 =almost-linear=, =quick= --- the set Omarchy configures Hyprland with,
-by the same names in kebab-case.
+by the same names in kebab-case --- plus =ease-out-expo=, =ease-out-back=
+and =spring=.
+
+=ease-out-expo= is the default.  It leaves almost the whole distance in
+the first third and then settles, which at these durations reads as
+decisive; =ease-out-quint=, the old default, spends longer in the middle
+and that middle feels like lag.
+
+=ease-out-back= and =spring= *overshoot* --- the window goes past its
+target and settles back.  That is the point of them and it is why
+neither is the default: in a tiling layout windows are adjacent, so an
+overshoot briefly puts one on top of its neighbour.  Configure gaps and
+they look great.
 
 Only *position* is animated.  A window is configured to its final size
 the moment the layout decides it, and its node slides to meet it.
@@ -203,7 +220,26 @@ configure the client has to acknowledge and re-render for, which turns
 one move into a dozen round trips per window.  An interactive drag is
 exempt entirely --- a dragged window tracks the pointer 1:1.
 
-A window's *first* placement is instant; only moves after it animate.
+*Opening.* A window fades in from transparent while rising a short
+distance --- 24 pixels --- into place.  Both halves are compositor-side:
+opacity is a scene-buffer property and the rise is a node position, so
+the client is never told and never re-renders.  The fade composes with
+whatever opacity the =alpha= module has set rather than replacing it, so
+a window that opens unfocused fades in *to* its dimmed opacity instead
+of snapping to full and back.
+
+A scale-up would read better still and is not possible here: wlroots
+0.20 can scale an individual scene /buffer/ but has no transform for a
+/node/, so a window with subsurfaces would come apart into
+independently-scaled pieces.  There is no close animation for the same
+generation of reason --- it needs a snapshot of a surface that is
+already going away, and wlroots 0.20 has no =wlr_scene_node_snapshot=.
+
+The rise is deliberately small.  A large one is a slide, and a slide
+from anywhere but the window's own neighbourhood is a window flying in
+across the display.
+
+A window's *first placement* is instant; only moves after it animate.
 A scene tree is created at the origin, so animating the first placement
 sends a newly opened window on a diagonal sweep from the top-left
 corner of the display to wherever the layout puts it --- an artifact of

@@ -46,7 +46,12 @@
 /* Short enough not to feel like waiting, long enough to read as motion.
  * Omarchy's Hyprland "speed 3.79" works out around here. */
 #define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION  (180)
-#define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE     "ease-out-quint"
+/*
+ * -1 means "use animation-duration".  Opening is an arrival rather
+ * than a correction, so it can afford a longer beat than a re-tile.
+ */
+#define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_OPEN (220)
+#define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE     "ease-out-expo"
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
 #define GOWL_CONFIG_DEFAULT_REPEAT_RATE         (25)
@@ -97,6 +102,7 @@ struct _GowlConfig {
 	gchar       *palette_name;
 
 	/* Layout */
+	gint     animation_duration_open;
 	gdouble  mfact;
 	gdouble  scroll_column_width;
 	gboolean animations;
@@ -759,6 +765,8 @@ gowl_config_init(GowlConfig *self)
 	self->scroll_column_width = GOWL_CONFIG_DEFAULT_SCROLL_COLUMN_WIDTH;
 	self->animations          = TRUE;
 	self->animation_duration  = GOWL_CONFIG_DEFAULT_ANIMATION_DURATION;
+	self->animation_duration_open =
+		GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_OPEN;
 	self->animation_curve     = g_strdup(GOWL_CONFIG_DEFAULT_ANIMATION_CURVE);
 	self->nmaster             = GOWL_CONFIG_DEFAULT_NMASTER;
 	self->tag_count           = GOWL_CONFIG_DEFAULT_TAG_COUNT;
@@ -991,6 +999,11 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "animation-duration")) {
 		self->animation_duration = (gint)yaml_mapping_get_int_member(
 			mapping, "animation-duration");
+	}
+	if (yaml_mapping_has_member(mapping, "animation-duration-open")) {
+		self->animation_duration_open =
+			(gint)yaml_mapping_get_int_member(
+				mapping, "animation-duration-open");
 	}
 	if (yaml_mapping_has_member(mapping, "animation-curve")) {
 		const gchar *v = yaml_mapping_get_string_member(
@@ -2673,4 +2686,20 @@ gowl_config_resolve_color(GowlConfig *self, const gchar *spec)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), g_strdup(spec));
 	return gowl_palette_resolve(self->palette, spec);
+}
+
+/**
+ * gowl_config_get_animation_duration_open:
+ * @self: a #GowlConfig
+ *
+ * How long a window's open animation runs, in milliseconds.
+ *
+ * Returns: the duration, or -1 to mean "use the general
+ *   `animation-duration'".
+ */
+gint
+gowl_config_get_animation_duration_open(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), -1);
+	return self->animation_duration_open;
 }

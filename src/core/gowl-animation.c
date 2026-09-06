@@ -62,9 +62,35 @@ static const GowlCurveDef curves[] = {
 	{ "ease-in-out-cubic", 0.65, 0.05, 0.36, 1.00 },
 	{ "almost-linear",     0.50, 0.50, 0.75, 1.00 },
 	{ "quick",             0.15, 0.00, 0.10, 1.00 },
+
+	/*
+	 * Leaves almost the whole distance in the first third and then
+	 * settles, which at 180 ms reads as decisive rather than as a
+	 * window being dragged.  The default, because quint spends longer
+	 * in the middle and at these durations that middle feels like lag.
+	 */
+	{ "ease-out-expo",     0.16, 1.00, 0.30, 1.00 },
+
+	/*
+	 * These two overshoot: y1 above 1 carries the window PAST its
+	 * target before it comes back.  Not the default, and worth
+	 * knowing why --- in a tiling layout windows are adjacent, so an
+	 * overshoot briefly puts one on top of its neighbour.  It looks
+	 * great with gaps and wrong without them.
+	 */
+	{ "ease-out-back",     0.34, 1.56, 0.64, 1.00 },
+	{ "spring",            0.16, 1.24, 0.30, 1.00 },
 };
 
-#define GOWL_CURVE_DEFAULT 1        /* ease-out-quint */
+#define GOWL_CURVE_DEFAULT 5        /* ease-out-expo */
+
+/*
+ * How far below its final position a window starts.  Small on purpose:
+ * a big offset is a slide, and a slide from anywhere but the window's
+ * own neighbourhood is the corner-sweep bug wearing a different hat.
+ * This is a nudge that the fade does most of the work of hiding.
+ */
+#define GOWL_ANIM_OPEN_RISE (24)
 
 static gdouble
 bezier_axis(gdouble t, gdouble p1, gdouble p2)
@@ -148,6 +174,117 @@ gowl_animation_enabled(GowlCompositor *self)
 	return gowl_config_get_animation_duration(self->config) > 0;
 }
 
+/*
+ * How long a move should take, and how long an open should.  Opening
+ * gets its own duration because the two are not the same gesture: a
+ * re-tile is a correction and wants to be over quickly, while an open
+ * is an arrival and can afford the extra beat that makes it read as
+ * one.  Either falls back to the single `animation-duration'.
+ */
+static gint
+open_duration(GowlCompositor *self)
+{
+	gint d;
+
+	if (self->config == NULL)
+		return 0;
+
+	d = gowl_config_get_animation_duration_open(self->config);
+	if (d < 0)
+		d = gowl_config_get_animation_duration(self->config);
+
+	return d;
+}
+
+/* ── Opening ─────────────────────────────────────────────────────── */
+
+void
+gowl_animation_open_start(GowlCompositor *self, GowlClient *c)
+{
+	gint duration;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(c != NULL);
+
+	if (!gowl_animation_enabled(self) || c->scene == NULL)
+		return;
+
+	duration = open_duration(self);
+	if (duration <= 0)
+		return;
+
+	c->anim_opening = TRUE;
+	c->anim_open_start_us = g_get_monotonic_time();
+	c->anim_open_dur_us = (gint64)duration * 1000;
+
+	/* Start invisible.  Set here rather than left to the first tick so
+	 * that the frame between mapping and the first tick does not show
+	 * the window at full opacity --- one frame of pop is still a pop. */
+	gowl_client_set_anim_alpha(c, 0.0f);
+}
+
+void
+gowl_animation_open_cancel(GowlClient *c)
+{
+	if (c == NULL || !c->anim_opening)
+		return;
+
+	c->anim_opening = FALSE;
+	gowl_client_set_anim_alpha(c, 1.0f);
+}
+
+/*
+ * Advances one client's open animation.  Returns TRUE while it is
+ * still running.
+ */
+static gboolean
+open_tick(GowlCompositor *self, GowlClient *c, gint64 now_us,
+          const gchar *curve)
+{
+	gdouble t, e;
+	gint rise;
+
+	if (!c->anim_opening)
+		return FALSE;
+
+	if (c->anim_open_dur_us <= 0) {
+		gowl_animation_open_cancel(c);
+		return FALSE;
+	}
+
+	t = (gdouble)(now_us - c->anim_open_start_us)
+		/ (gdouble)c->anim_open_dur_us;
+	if (t < 0.0)
+		t = 0.0;
+	if (t >= 1.0) {
+		gowl_animation_open_cancel(c);
+		/* The rise is over, so put the node exactly where the layout
+		 * wants it --- unless a move animation has since taken over,
+		 * which owns the position from then on. */
+		if (!c->anim_active)
+			wlr_scene_node_set_position(&c->scene->node,
+			                            c->geom.x, c->geom.y);
+		return FALSE;
+	}
+
+	e = gowl_curve_eval(curve, t);
+	gowl_client_set_anim_alpha(c, (gfloat)e);
+
+	/*
+	 * The rise, in the same easing.  A move animation started
+	 * mid-open owns the position, so the rise steps aside rather than
+	 * fighting it for the same node --- the fade carries on either
+	 * way, which is the half that does most of the work.
+	 */
+	if (!c->anim_active) {
+		rise = (gint)lround((1.0 - e) * (gdouble)GOWL_ANIM_OPEN_RISE);
+		wlr_scene_node_set_position(&c->scene->node,
+		                            c->geom.x, c->geom.y + rise);
+	}
+
+	return TRUE;
+}
+
 /* ── Driving ─────────────────────────────────────────────────────── */
 
 void
@@ -202,13 +339,30 @@ gowl_animation_cancel(GowlClient *c)
 	c->anim_active = FALSE;
 }
 
+/*
+ * Whether a client counts towards the asking monitor's liveness.  Every
+ * client is still advanced on every tick --- the maths is time-based
+ * and idempotent, so two monitors asking gives one answer --- but only
+ * the ones actually on this output decide whether it keeps redrawing.
+ * A NULL monitor means "anywhere", which is what a test wants.
+ */
+static gboolean
+client_on(GowlClient *c, GowlMonitor *m)
+{
+	return m == NULL || c->mon == m;
+}
+
 gboolean
-gowl_animation_tick(GowlCompositor *self, gint64 now_us)
+gowl_animation_tick(GowlCompositor *self, GowlMonitor *m, gint64 now_us)
 {
 	GList *l;
 	gboolean live = FALSE;
 	const gchar *curve;
 
+	/* The frame handler runs before the compositor is fully torn down,
+	 * so a NULL here is a shutdown race rather than a caller bug. */
+	if (self == NULL)
+		return FALSE;
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
 
 	curve = self->config != NULL
@@ -219,7 +373,15 @@ gowl_animation_tick(GowlCompositor *self, gint64 now_us)
 		GowlClient *c = (GowlClient *)l->data;
 		gdouble t, e;
 
-		if (!c->anim_active || c->scene == NULL)
+		if (c->scene == NULL)
+			continue;
+
+		/* Opening runs alongside a move rather than instead of it: a
+		 * window can be re-tiled while it is still fading in. */
+		if (open_tick(self, c, now_us, curve) && client_on(c, m))
+			live = TRUE;
+
+		if (!c->anim_active)
 			continue;
 
 		if (c->anim_dur_us <= 0) {
@@ -249,7 +411,8 @@ gowl_animation_tick(GowlCompositor *self, gint64 now_us)
 
 		wlr_scene_node_set_position(&c->scene->node,
 		                            c->anim_cur_x, c->anim_cur_y);
-		live = TRUE;
+		if (client_on(c, m))
+			live = TRUE;
 	}
 
 	return live;

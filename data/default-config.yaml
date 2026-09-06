@@ -63,7 +63,13 @@ tag-count: 9
 # Curves: linear, ease-out-quint, ease-in-out-cubic, almost-linear, quick.
 animations: true
 animation-duration: 180      # milliseconds; 0 disables
-animation-curve: "ease-out-quint"
+animation-duration-open: 220 # a window opening gets its own beat
+# linear | ease-out-quint | ease-in-out-cubic | almost-linear | quick
+#   | ease-out-expo | ease-out-back | spring
+# The last two OVERSHOOT: a window goes past its target and settles
+# back.  Lively with gaps configured; without them the overshoot puts
+# a window briefly on top of its neighbour.
+animation-curve: "ease-out-expo"
 
 # Scrolling layout: column width as a fraction of the usable width.
 # 0.5 shows two columns at a time, 1.0 shows one.  Matches Hyprland's

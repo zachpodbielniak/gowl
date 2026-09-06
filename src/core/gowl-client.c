@@ -301,6 +301,9 @@ gowl_client_init(GowlClient *self)
 	self->tags          = 1;
 	self->bw            = 1;
 	self->alpha         = 1.0f;
+	/* Opaque until an animation says otherwise.  GObject zeroes the
+	 * instance, and a zero here is an invisible window. */
+	self->anim_alpha    = 1.0f;
 	self->isfloating    = FALSE;
 	self->isurgent      = FALSE;
 	self->isfullscreen  = FALSE;
@@ -914,6 +917,32 @@ set_opacity_iter(struct wlr_scene_buffer *buffer,
 	wlr_scene_buffer_set_opacity(buffer, *alpha);
 }
 
+/*
+ * Pushes the composed opacity --- the client's own, times the
+ * animation's --- down onto every buffer.
+ */
+static void
+apply_alpha(GowlClient *self)
+{
+	gfloat effective;
+
+	effective = self->alpha * self->anim_alpha;
+	if (effective < 0.0f) effective = 0.0f;
+	if (effective > 1.0f) effective = 1.0f;
+
+	/* Walk only the client's own surface tree, not the full scene
+	 * container.  The container (self->scene) may include reparented
+	 * child clients (embedded apps) whose opacity is managed
+	 * separately --- walking the container would overwrite their
+	 * alpha. */
+	if (self->scene_surface != NULL)
+		wlr_scene_node_for_each_buffer(&self->scene_surface->node,
+		                                set_opacity_iter, &effective);
+	else if (self->scene != NULL)
+		wlr_scene_node_for_each_buffer(&self->scene->node,
+		                                set_opacity_iter, &effective);
+}
+
 /**
  * gowl_client_get_alpha:
  */
@@ -922,6 +951,30 @@ gowl_client_get_alpha(GowlClient *self)
 {
 	g_return_val_if_fail(GOWL_IS_CLIENT(self), 1.0f);
 	return self->alpha;
+}
+
+/**
+ * gowl_client_set_anim_alpha:
+ * @self: a #GowlClient
+ * @alpha: an opacity multiplier, 0.0 to 1.0
+ *
+ * Sets the animation's opacity factor, which is multiplied with the
+ * client's own opacity rather than replacing it.  Used by the open
+ * fade; anything else setting a client's opacity is unaffected by it
+ * and unaffected BY it.
+ */
+void
+gowl_client_set_anim_alpha(
+	GowlClient *self,
+	gfloat      alpha
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	if (alpha < 0.0f) alpha = 0.0f;
+	if (alpha > 1.0f) alpha = 1.0f;
+
+	self->anim_alpha = alpha;
+	apply_alpha(self);
 }
 
 /**
@@ -938,17 +991,7 @@ gowl_client_set_alpha(
 	if (alpha > 1.0f) alpha = 1.0f;
 
 	self->alpha = alpha;
-
-	/* Walk only the client's own surface tree, not the full scene
-	 * container.  The container (self->scene) may include reparented
-	 * child clients (embedded apps) whose opacity is managed
-	 * separately — walking the container would overwrite their alpha. */
-	if (self->scene_surface != NULL)
-		wlr_scene_node_for_each_buffer(&self->scene_surface->node,
-		                                set_opacity_iter, &self->alpha);
-	else if (self->scene != NULL)
-		wlr_scene_node_for_each_buffer(&self->scene->node,
-		                                set_opacity_iter, &self->alpha);
+	apply_alpha(self);
 }
 
 /**

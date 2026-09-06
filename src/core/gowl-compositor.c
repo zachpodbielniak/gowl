@@ -3554,8 +3554,15 @@ resize_client(
 		                            c->geom.x, c->geom.y);
 	}
 	/* Set after the branch, so the FIRST placement takes the instant
-	 * path and every one after it animates. */
-	c->anim_placed = TRUE;
+	 * path and every one after it animates.  The first placement is
+	 * also where the open animation belongs: the layout has just
+	 * decided where the window goes, which is what the fade and rise
+	 * are relative to. */
+	if (!c->anim_placed) {
+		c->anim_placed = TRUE;
+		if (!interact && !c->isembedded)
+			gowl_animation_open_start(self, c);
+	}
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 
 	/* Borders: delegate to decorator module if active, else use rects */
@@ -5414,6 +5421,19 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 	if (m->scene_output == NULL)
 		return;
 
+	/*
+	 * Advance animations BEFORE the scene is built, so the positions
+	 * this tick computes are the ones this frame draws.
+	 *
+	 * Doing it after the commit --- which is where it was --- costs a
+	 * frame at each end: the first frame of a move still showed the
+	 * window at its old position, and the last computed position
+	 * needed one more frame to appear.  At 180 ms and 60 Hz that is
+	 * two frames of an eleven-frame animation spent on nothing.
+	 */
+	m->anim_live = gowl_animation_tick(m->compositor, m,
+	                                   g_get_monotonic_time());
+
 	/* Commit the scene graph to this output.
 	 *
 	 * Built into an explicit wlr_output_state rather than the one-shot
@@ -5455,11 +5475,11 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 
 frame_done:
 
-	/* Advance any sliding windows and ask for another frame while one
-	 * is still moving: an idle output stops redrawing, which would
-	 * freeze a slide halfway. */
-	if (gowl_animation_tick(m->compositor != NULL ? m->compositor : NULL,
-	                        g_get_monotonic_time()))
+	/* Keep asking for frames while something on THIS output is still
+	 * moving: an idle output stops redrawing, which would freeze an
+	 * animation halfway.  Per-output, so a window animating on one
+	 * monitor no longer holds every other monitor at full refresh. */
+	if (m->anim_live)
 		wlr_output_schedule_frame(m->wlr_output);
 
 	/* Notify clients that a frame has been rendered */
@@ -8411,6 +8431,14 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	c = wl_container_of(listener, c, unmap);
 	self = c->compositor;
 	(void)data;
+
+	/* Stop both animations before the scene tree goes.  A client that
+	 * unmaps and maps again --- which is normal for a splash window or
+	 * a toolkit rebuilding its surface --- would otherwise come back
+	 * carrying whatever partial opacity the fade had reached. */
+	gowl_animation_cancel(c);
+	gowl_animation_open_cancel(c);
+	c->anim_placed = FALSE;
 
 	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_REMOVED], 0, c);
 

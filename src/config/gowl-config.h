@@ -853,6 +853,8 @@ gowl_config_get_monitor_config(GowlConfig  *self,
  */
 GList *gowl_config_get_monitor_names(GowlConfig *self);
 
+gint gowl_config_get_animation_duration_open (GowlConfig *self);
+
 /* --- Palette --- */
 
 GowlPalette * gowl_config_get_palette       (GowlConfig  *self);

@@ -218,6 +218,18 @@ gfloat             gowl_client_get_alpha         (GowlClient  *self);
 void               gowl_client_set_alpha         (GowlClient  *self,
                                                    gfloat       alpha);
 
+/**
+ * gowl_client_set_anim_alpha:
+ * @self: a #GowlClient
+ * @alpha: an opacity multiplier, 0.0 to 1.0
+ *
+ * Sets the animation's opacity factor.  Multiplied with the client's
+ * own opacity rather than replacing it, so the open fade and the
+ * `alpha' module's focus dimming cannot cut each other short.
+ */
+void               gowl_client_set_anim_alpha    (GowlClient  *self,
+                                                   gfloat       alpha);
+
 /* -----------------------------------------------------------
  * Mirror views.  A mirror is an additional scene node that
  * displays this client's root surface buffer at a separate

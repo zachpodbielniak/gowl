@@ -3141,6 +3141,21 @@ gowl_compositor_start(
 		}
 	}
 
+	/*
+	 * Note whether we are inside another graphical session before
+	 * unsetting the evidence.  Both variables are about to be replaced
+	 * with gowl's own, so this is the last moment either can be read.
+	 *
+	 * A seat session --- gowl launched by a display manager on a VT ---
+	 * has neither.  Anything else (nested in GNOME, headless under a
+	 * desktop, run from a terminal for a quick test) has at least one,
+	 * and must keep its hands off the host's systemd session.
+	 */
+	self->inside_foreign_session =
+		!gowl_systemd_should_manage_session (FALSE,
+		                                     g_getenv("WAYLAND_DISPLAY"),
+		                                     g_getenv("DISPLAY"));
+
 	/* Unset any inherited parent DISPLAY before XWayland (if built)
 	 * sets its own.  Without XWayland this leaves X11 unavailable. */
 	unsetenv("DISPLAY");
@@ -3266,13 +3281,19 @@ gowl_compositor_start(
 	 * the right session instead of a stale prior one.  Best-effort; a
 	 * non-systemd host is a silent no-op.
 	 *
-	 * Pass seat_session = (not nested): nested_wl_backend is non-NULL
-	 * only when gowl runs inside another compositor (just gowl), where
-	 * the portal belongs to the host session.  In a real seat session
-	 * it is NULL, and gowl_systemd_start() additionally restarts a
-	 * stale xdg-desktop-portal frontend so screen-sharing backend
-	 * selection uses the current XDG_CURRENT_DESKTOP. */
-	gowl_systemd_start(self->nested_wl_backend == NULL);
+	 * Only when gowl IS the session.  A gowl nested in GNOME, or run
+	 * headless from a terminal, shares the user's systemd manager with
+	 * the desktop that launched it --- importing our WAYLAND_DISPLAY
+	 * into it would point every later D-Bus-activated app at our
+	 * socket, and stopping graphical-session.target on the way out
+	 * takes the whole host desktop down with us.
+	 *
+	 * nested_wl_backend alone is not enough to decide this: it is set
+	 * from the output handler, so it is still NULL here for a headless
+	 * backend, and headless under a desktop is just as foreign a
+	 * session as nested is. */
+	gowl_systemd_start(self->nested_wl_backend == NULL
+	                   && !self->inside_foreign_session);
 
 	return TRUE;
 }

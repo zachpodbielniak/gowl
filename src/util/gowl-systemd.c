@@ -11,6 +11,12 @@
  * _stop() is a cheap no-op rather than re-probing at quit time. */
 static gboolean	gowl_systemd_inactive = FALSE;
 
+/* Whether _start() actually took ownership of the user session.  _stop()
+ * consults it rather than re-deriving anything: the two must be exactly
+ * symmetric, because stopping targets we never started is how a nested
+ * gowl took down the desktop hosting it. */
+static gboolean	gowl_systemd_managing = FALSE;
+
 /* ------------------------------------------------------------------ */
 
 static gboolean
@@ -72,6 +78,33 @@ gowl_systemd_run_async (gchar **argv)
 
 /* ------------------------------------------------------------------ */
 
+gboolean
+gowl_systemd_should_manage_session (gboolean     nested,
+                                    const gchar *parent_wayland_display,
+                                    const gchar *parent_x_display)
+{
+	if (nested)
+		return FALSE;
+
+	/* An empty string is not a display.  Shells and .desktop files
+	 * export empty variables often enough that treating one as "a
+	 * session is present" would disable session management on a real
+	 * seat --- the opposite failure, and one that wedges the NEXT
+	 * login rather than the current desktop. */
+	if (parent_wayland_display != NULL && parent_wayland_display[0] != '\0')
+		return FALSE;
+	if (parent_x_display != NULL && parent_x_display[0] != '\0')
+		return FALSE;
+
+	return TRUE;
+}
+
+gboolean
+gowl_systemd_is_managing_session (void)
+{
+	return gowl_systemd_managing;
+}
+
 void
 gowl_systemd_start (gboolean seat_session)
 {
@@ -90,6 +123,33 @@ gowl_systemd_start (gboolean seat_session)
 
 	if (gowl_systemd_disabled ())
 		return;
+
+	/*
+	 * 0. Bail out entirely unless gowl IS the session.
+	 *
+	 * Everything below this point acts on the user's systemd manager,
+	 * which a nested or headless gowl SHARES with the desktop that
+	 * launched it.  There is no version of it that is safe there:
+	 * import-environment would repoint every later D-Bus-activated
+	 * application at our socket, and the session target we start here
+	 * is the one _stop() later stops --- together with
+	 * graphical-session.target, which under GNOME is GNOME's, and
+	 * stopping it ends the user's whole desktop.
+	 *
+	 * That is not hypothetical.  Closing a nested gowl's window took
+	 * down the host GNOME session, every application in it, and the
+	 * user's Emacs daemon with them; the journal showed
+	 * gowl-session.target stopping one second before
+	 * gnome-session@gnome.target.
+	 */
+	if (!seat_session)
+	{
+		g_debug ("gowl-systemd: not a seat session, leaving the "
+		         "user session alone");
+		return;
+	}
+
+	gowl_systemd_managing = TRUE;
 
 	/* 1. Import the live compositor environment into the user manager
 	 *    so DBus-activated services don't inherit a stale prior session
@@ -119,7 +179,9 @@ gowl_systemd_start (gboolean seat_session)
 	 *     steps, both relying on the WAYLAND_DISPLAY/XDG_CURRENT_DESKTOP
 	 *     we just imported.  Nested gowl skips this entirely: the portal
 	 *     is the host session's and must not be disturbed. */
-	if (seat_session)
+	/* Reached only in a seat session now (see step 0), so this is no
+	 * longer a condition --- but the portal work is what the flag was
+	 * originally for, and the reasoning is worth keeping next to it. */
 	{
 		gchar	*svc_argv[5];
 
@@ -192,6 +254,14 @@ gowl_systemd_stop (void)
 
 	if (gowl_systemd_disabled ())
 		return;
+
+	/* Never stop what we did not start.  A nested or headless gowl
+	 * shares the user manager with its host desktop, and the targets
+	 * below belong to that host. */
+	if (!gowl_systemd_managing)
+		return;
+
+	gowl_systemd_managing = FALSE;
 
 	/* Stop BOTH targets.  gowl-session.target only Wants=
 	 * graphical-session.target (a weak dep), so stopping gowl-session

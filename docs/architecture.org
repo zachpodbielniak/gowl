@@ -338,6 +338,10 @@ depend on (without it, flatpaks get no Settings portal and mis-theme).
 =gowl_compositor_quit= stops the target.  Best-effort: no-op where
 =systemctl= is absent, and =GOWL_DISABLE_SYSTEMD=1= opts out.
 
+Only in a seat session.  Nested or headless, gowl shares the user's
+systemd manager with the desktop hosting it and leaves the session
+entirely alone -- see [[file:building.org][building.org]].
+
 In a real seat session (not nested =just gowl=) it additionally
 =try-restart='s =xdg-desktop-portal= after importing the environment.  A
 portal frontend left running by a *previous* login keeps that login's

@@ -469,6 +469,18 @@ struct _GowlCompositor {
 	struct wlr_backend  *nested_wl_backend; /* Wayland sub-backend */
 	struct wlr_output   *default_wl_output; /* default output to destroy */
 	gchar               *parent_wl_display; /* parent $WAYLAND_DISPLAY */
+
+	/*
+	 * Whether gowl found itself inside somebody else's graphical
+	 * session: a parent WAYLAND_DISPLAY or DISPLAY at the moment it
+	 * started, before it overwrote either with its own.
+	 *
+	 * This decides whether gowl manages the systemd user session, and
+	 * getting it wrong is not subtle --- stopping graphical-session.target
+	 * on the way out of a NESTED session tears down the host's entire
+	 * desktop, every application in it included.
+	 */
+	gboolean             inside_foreign_session;
 #endif
 };
 

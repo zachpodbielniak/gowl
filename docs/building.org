@@ -311,6 +311,28 @@ on quit it stops the target.  Everything is best-effort -- a host
 without =systemctl= is a silent no-op, and =GOWL_DISABLE_SYSTEMD=1= opts
 out entirely.
 
+*Only a seat session does any of this.* gowl launched by a display
+manager on a VT owns the user's graphical session and may manage it.  A
+gowl nested inside another compositor, or run headless from a terminal,
+*shares the user's systemd manager with the desktop that started it*, and
+there is no version of the bootstrap that is safe there:
+=import-environment= would repoint every later D-Bus activation at gowl's
+socket, and stopping =graphical-session.target= on the way out ends the
+host desktop outright -- every application in it, and any Emacs daemon
+parented to the session.
+
+The test is whether =WAYLAND_DISPLAY= or =DISPLAY= was set before gowl
+replaced them (=gowl_systemd_should_manage_session=).  The nested-backend
+flag alone is not enough: it is set from the output handler, so it is
+still unset when the decision is made, and a headless run under a
+desktop is not nested but is just as foreign.
+
+Both directions are load-bearing and both are tested
+(=tests/test-systemd-session.c=).  Being too eager ends the host desktop;
+being too shy leaves =graphical-session.target= active after logout,
+which makes the next login abort with "A graphical session is already
+running!" and wedges every login until reboot.
+
 =make install= places =gowl-session.target= in =$PREFIX/lib/systemd/user=,
 which the user manager scans for both =$PREFIX=/usr= and =$PREFIX=/usr/local=.
 After installing, =systemctl --user daemon-reload= picks it up; the unit is

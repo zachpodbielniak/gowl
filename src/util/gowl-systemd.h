@@ -48,6 +48,42 @@ G_BEGIN_DECLS
  * is TRUE for a real display-manager seat session, FALSE when gowl is
  * nested inside another compositor (just gowl): the portal-restart step
  * is seat-only so a nested gowl never disturbs the host's portal. */
+/**
+ * gowl_systemd_should_manage_session:
+ * @nested: whether gowl runs inside another Wayland compositor
+ * @parent_wayland_display: (nullable): $WAYLAND_DISPLAY as it was
+ *   BEFORE gowl replaced it with its own
+ * @parent_x_display: (nullable): likewise $DISPLAY
+ *
+ * Whether gowl is the user's graphical session, and so may manage the
+ * systemd user session on its behalf.
+ *
+ * True only for a seat session --- gowl launched by a display manager
+ * on a VT, with no graphical session around it.  Anything else shares
+ * the user's systemd manager with the desktop that launched it, where
+ * importing our environment repoints later D-Bus activations at our
+ * socket and stopping graphical-session.target ends the host desktop
+ * outright.
+ *
+ * Both display names must be read before gowl overwrites them, which
+ * is why they are passed in rather than looked up here.
+ *
+ * Returns: %TRUE when gowl owns the session.
+ */
+gboolean gowl_systemd_should_manage_session (gboolean     nested,
+                                             const gchar *parent_wayland_display,
+                                             const gchar *parent_x_display);
+
+/**
+ * gowl_systemd_is_managing_session:
+ *
+ * Whether gowl_systemd_start() took ownership of the user session.
+ * gowl_systemd_stop() does nothing unless it did.
+ *
+ * Returns: %TRUE when gowl started the session targets.
+ */
+gboolean gowl_systemd_is_managing_session (void);
+
 void	gowl_systemd_start	(gboolean seat_session);
 
 /* Call from the quit/shutdown path.  Idempotent and best-effort. */

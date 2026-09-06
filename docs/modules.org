@@ -598,6 +598,13 @@ Gowl ships with several modules in the =modules/= directory:
 
 | Module           | Description                                           |
 |------------------+-------------------------------------------------------|
+| =tile=           | Master/stack tiling, including vertical split          |
+| =monocle=        | Full-area stacked windows                             |
+| =float=          | Free window placement                                 |
+| =scrolling=      | Horizontal scrolling columns                          |
+| =layout-indicator= | Brief, click-through layout-change toast            |
+| =dropdown=       | Fixed, toggleable shell overlay                       |
+| =animation=      | Window pops, focus wiggles, settling and overlay slides |
 | =autostart=      | Runs autostart commands from config                   |
 | =vanitygaps=     | Adds configurable inner/outer gaps to layouts         |
 | =pertag=         | Per-tag layout and mfact settings                     |
@@ -610,6 +617,51 @@ Gowl ships with several modules in the =modules/= directory:
 | =copyhighlight=  | Sync primary selection to clipboard on text highlight |
 | =alpha=          | Per-client window opacity with focus dimming          |
 | =bar=            | Compositor status bar with title and system info      |
+
+*** Layout plugins and switching
+
+All layout algorithms live in their respective =modules/= directories.
+Standalone Gowl loads =tile=, =monocle= and =float= unless explicitly
+configured with =enabled: false=. Enable =scrolling= in the =modules=
+mapping to add full-height horizontal columns. CMacs loads all four by
+default. Additional active layout providers join the same registry.
+
+Layout selection and scroll offset are independent for each monitor's
+tag view; combined tag masks have their own state. Focus changes reveal
+offscreen columns, and the viewport clips content to its own monitor.
+The layout-provider interface supports focus, scrolling and overflow
+policy without putting layout algorithms in the compositor.
+
+CMacs binds Super+< / Super+> to previous/next layout on the current tag.
+Super+Tab / Super+Shift+Tab remain aliases; Super+s selects scrolling,
+Super+t selects tile, and Super+[ / Super+] scroll the column strip.
+Monitor-moving shortcuts use Super+Ctrl+Shift+comma/period. Super+Shift+j/k
+swap the focused tiled client with the next/previous eligible client,
+wrapping at either end and keeping focus on the moved window. The
+=movestack= plugin supplies the same shortcuts to standalone Gowl;
+config-level =move-stack= actions take precedence.
+
+The =layout-indicator= plugin is loaded by default in CMacs and optional
+in standalone Gowl. It displays the effective layout name for 1.2 seconds
+at the active monitor's top center. Rapid changes replace one toast;
+ordinary rearrangements do not retrigger it. It never takes focus or
+intercepts clicks. Disable it in CMacs with
+=(gowl-disable-module "layout-indicator")=.
+
+*** Dropdown overlay
+
+The default dropdown spans the output width and two-thirds of its usable
+height. It is a fixed floating overlay, excluded from layout placement,
+window swapping, dragging, resizing and fullscreen toggles. Super+grave
+also accepts Super+Shift+grave/tilde. Toggling again or focusing another
+app dismisses it while preserving the shell process. Opening and hiding
+do not rearrange underlying tiles. Closing the shell allows a fresh
+instance on the next toggle.
+
+With =animation= enabled, the live shell slides from its configured edge
+and reverses from its current position on rapid toggles. A second toggle
+during startup keeps the shell hidden without a flash. Without animation,
+visibility changes immediately.
 
 *** Bar Module
 :PROPERTIES:
@@ -772,3 +824,33 @@ modules:
 - Use =g_autoptr()= and =g_steal_pointer()= for memory management.
 - Return =TRUE= from =handle_key= / =handle_button= only if you actually consumed the event; returning =TRUE= prevents other handlers from seeing it.
 - The module =.so= stays loaded for the lifetime of the compositor. Do not call =g_module_close()= on yourself.
+
+** Animation and native scene effects
+
+The =animation= module implements =GowlSceneEffect= and is opt-in in
+standalone Gowl (=modules.animation.enabled: true=). CMacs loads it by
+default before any clients map. Timing, curves, pop scale and jiggle
+strength retain their existing top-level configuration keys; see
+[[file:configuration.org::#animations][animation configuration]].
+
+=GowlSceneEffect= is a native compositor-thread interface. A single
+provider owns scene presentation, selected by module priority. Its
+=client_event= hook receives final bounded geometry before the client
+configure, visibility reveals, pointer releases, and unmap/destroy
+notifications before surface resources are released. A geometry event
+returns true only when the provider has placed the scene and borders;
+otherwise the core applies the final rectangle immediately.
+
+=get_geometry= and =alpha_changed= keep independent decorators and
+client opacity synchronized. =surface_at= translates input through
+replacement visuals. =frame= runs before the output commit and reports
+whether that output needs another frame. =frame_done= lets providers
+maintain callbacks for temporarily hidden live content. =monitor_removed=
+releases resources tied to an output, and =finish= runs before compositor
+scene/renderer teardown. Deactivation must also restore ordinary live
+presentation and release all held buffers. Providers own their state;
+there are no animation clocks or snapshots in the core client structure.
+
+Module shared objects remain resident after registering static GTypes,
+so restarting a compositor manager cannot leave GLib holding unloaded
+class vtables. Module instances and their resources are still disposed.

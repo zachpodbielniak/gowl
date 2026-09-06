@@ -19,7 +19,8 @@
 #ifndef GOWL_ANIMATION_H
 #define GOWL_ANIMATION_H
 
-#include <glib.h>
+#include <glib-object.h>
+#include "gowl-scene-snapshot.h"
 
 #include <wlr/util/box.h>
 
@@ -70,8 +71,7 @@ gdouble gowl_curve_eval (const gchar *name, gdouble t);
  *
  * The client is configured once, to @to.  What actually gets resized
  * each frame is a locked snapshot of its last buffer, so the animation
- * costs no round trips --- see the `anim_ghost' comment in
- * gowl-core-private.h. A move also uses a snapshot for squash/stretch;
+ * costs no round trips. A move also uses a snapshot for squash/stretch;
  * at zero jiggle strength, pure moves keep the window's live content.
  *
  * A client already animating is retargeted from wherever it currently
@@ -203,6 +203,28 @@ gboolean gowl_animation_tick (GowlCompositor *self,
  * Returns: %TRUE when animations are configured on and a duration is set.
  */
 gboolean gowl_animation_enabled (GowlCompositor *self);
+
+typedef struct {
+	gboolean anim_active;
+	gboolean anim_overlay; /* clipped live slide, no snapshot or jiggle */
+	gboolean anim_pop;
+	struct wlr_box anim_from;
+	struct wlr_box anim_to;
+	struct wlr_box anim_cur;
+	gint64   anim_start_us;
+	gint64   anim_dur_us;
+
+	GowlSceneSnapshot *anim_ghost;
+
+	gboolean anim_placed;
+
+	gboolean anim_opening;
+	gint64 anim_open_start_us;
+	gint64 anim_open_dur_us;
+	gdouble anim_jiggle[4];
+} GowlAnimationState;
+GowlAnimationState *gowl_animation_state(GowlClient *client);
+GList *gowl_animation_closing(GowlCompositor *self);
 
 G_END_DECLS
 

@@ -21,6 +21,9 @@
 
 #include <glib-object.h>
 #include <gmodule.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
+#include "core/gowl-compositor.h"
+#include "gowl-enums.h"
 
 #include "module/gowl-module.h"
 #include "interfaces/gowl-keybind-handler.h"
@@ -29,17 +32,10 @@
 /**
  * GowlModuleMovestack:
  *
- * Movestack module.  Provides key bindings to move the focused
- * client up or down in the tiling stack order.  The compositor
- * dispatches key events to this handler; if the configured
- * move-up or move-down keybind matches, the focused client is
- * swapped with its neighbour in the client list.
- *
- * This module registers as a GowlKeybindHandler so the compositor
- * can dispatch key events to it.  The actual stack reordering
- * requires compositor integration (accessing the client list and
- * calling arrange), which is performed when the compositor invokes
- * the keybind handler.
+ * Super+Shift+j/k move the focused tiled client through the visible
+ * stack, wrapping at either end. The compositor API swaps layout order
+ * without changing focus and arranges through the active animation effect.
+ * Config-level move-stack bindings take precedence over this handler.
  */
 
 #define GOWL_TYPE_MODULE_MOVESTACK (gowl_module_movestack_get_type())
@@ -115,9 +111,7 @@ movestack_startup_init(GowlStartupHandlerInterface *iface)
 /**
  * movestack_handle_key:
  *
- * Key event handler.  When the compositor integrates module-based
- * keybind dispatch, this handler will intercept the configured
- * move-up/move-down key combos and reorder the client list.
+ * Super+Shift+j/k reorder tiled clients through the compositor API.
  *
  * Returns: %TRUE if the key was consumed, %FALSE to pass through
  */
@@ -128,25 +122,16 @@ movestack_handle_key(
 	guint               keysym,
 	gboolean            pressed
 ){
-	(void)handler;
-	(void)modifiers;
-	(void)keysym;
-	(void)pressed;
-
-	/*
-	 * Movestack algorithm:
-	 * 1. Get focused client from compositor
-	 * 2. Find its position in self->compositor->clients GList
-	 * 3. Based on direction (+1/-1):
-	 *    - Swap the GList link with the next/prev visible tiling client
-	 * 4. Call gowl_compositor_arrange(self->compositor, client->mon)
-	 * 5. Return TRUE to consume the keybind
-	 *
-	 * Implementation deferred until compositor exposes keybind
-	 * dispatch through the module manager to this handler.
-	 */
-
-	return FALSE;
+	GowlModuleMovestack *self = GOWL_MODULE_MOVESTACK(handler);
+	if (!pressed || self->compositor == NULL
+	    || modifiers != (GOWL_KEY_MOD_LOGO | GOWL_KEY_MOD_SHIFT))
+		return FALSE;
+	if (keysym != XKB_KEY_j && keysym != XKB_KEY_J
+	    && keysym != XKB_KEY_k && keysym != XKB_KEY_K)
+		return FALSE;
+	gowl_compositor_move_stack(self->compositor,
+		keysym == XKB_KEY_j || keysym == XKB_KEY_J ? 1 : -1);
+	return TRUE;
 }
 
 static void

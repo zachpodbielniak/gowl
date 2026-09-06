@@ -32,6 +32,7 @@
 #include "interfaces/gowl-client-decorator.h"
 #include "interfaces/gowl-screenshot-provider.h"
 #include "interfaces/gowl-recording-provider.h"
+#include "interfaces/gowl-scene-effect.h"
 
 /**
  * GowlModuleManager:
@@ -60,6 +61,7 @@ struct _GowlModuleManager {
 	GPtrArray *bar_providers;      /* element-type GowlBarProvider*       */
 	GPtrArray *decorator_providers;   /* element-type GowlClientDecorator*    */
 	GPtrArray *screenshot_providers; /* element-type GowlScreenshotProvider* */
+	GPtrArray *scene_effects;
 	GPtrArray *recording_providers;  /* element-type GowlRecordingProvider*  */
 };
 
@@ -166,6 +168,7 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->decorator_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->screenshot_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->recording_providers, g_ptr_array_unref);
+	g_clear_pointer(&self->scene_effects, g_ptr_array_unref);
 
 	/* Unref all module instances */
 	g_clear_pointer(&self->modules, g_ptr_array_unref);
@@ -271,6 +274,7 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->decorator_providers   = g_ptr_array_new();
 	self->screenshot_providers  = g_ptr_array_new();
 	self->recording_providers   = g_ptr_array_new();
+	self->scene_effects = g_ptr_array_new();
 }
 
 /* --- Internal: classify a module into dispatch arrays --- */
@@ -289,6 +293,11 @@ classify_module(
 	GowlModuleManager *self,
 	GowlModule        *mod
 ){
+	if (GOWL_IS_SCENE_EFFECT(mod)) {
+		g_ptr_array_add(self->scene_effects, mod);
+		sort_dispatch_array(self->scene_effects);
+	}
+
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_LAYOUT_PROVIDER)) {
 		g_ptr_array_add(self->layout_providers, (gpointer)mod);
 		sort_dispatch_array(self->layout_providers);
@@ -420,6 +429,10 @@ gowl_module_manager_load_module(
 		g_module_close(gmod);
 		return FALSE;
 	}
+
+	/* Modules register static GTypes whose vtables live for the process.
+	 * Keep their code mapped even when a compositor manager is restarted. */
+	g_module_make_resident(gmod);
 
 	/* Call the registration function to get the GType */
 	module_type = register_func();
@@ -1353,4 +1366,18 @@ gowl_module_manager_get_decorator(GowlModuleManager *self)
 	}
 
 	return NULL;
+}
+
+/* A single presentation owner prevents competing scene transforms. */
+gpointer
+gowl_module_manager_get_scene_effect(GowlModuleManager *self)
+{
+ guint i;
+ g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+ for (i = 0; i < self->scene_effects->len; i++) {
+  GowlModule *mod = g_ptr_array_index(self->scene_effects, i);
+  if (gowl_module_get_is_active(mod))
+   return mod;
+ }
+ return NULL;
 }

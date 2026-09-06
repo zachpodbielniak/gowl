@@ -177,6 +177,9 @@ gpointer            gowl_module_manager_get_decorator (GowlModuleManager *self);
 GPtrArray          *gowl_module_manager_get_layout_providers (
                                                  GowlModuleManager *self);
 
+/* Returns the first active scene-effect provider, borrowed, or NULL. */
+gpointer gowl_module_manager_get_scene_effect(GowlModuleManager *self);
+
 G_END_DECLS
 
 #endif /* GOWL_MODULE_MANAGER_H */

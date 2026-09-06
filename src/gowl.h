@@ -84,14 +84,11 @@
 #include "config/gowl-keybind.h"
 
 /* Layouts */
-#include "layout/gowl-layout-tile.h"
-#include "layout/gowl-layout-monocle.h"
-#include "layout/gowl-layout-float.h"
 
 /* Core */
 #include "core/gowl-compositor.h"
 #include "core/gowl-layout-registry.h"
-#include "core/gowl-animation.h"
+#include "interfaces/gowl-scene-effect.h"
 #include "core/gowl-monitor.h"
 #include "core/gowl-client.h"
 #include "core/gowl-seat.h"

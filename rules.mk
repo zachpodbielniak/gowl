@@ -144,6 +144,7 @@ deps/crispy/src/crispy-version.h: deps/crispy/src/crispy-version.h.in
 # Static library creation
 $(OUTDIR)/$(LIB_STATIC): $(LIB_OBJS) $(YAMLGLIB_OBJS) $(CRISPY_OBJS)
 	@$(MKDIR_P) $(dir $@)
+	$(RM) $@
 	$(AR) rcs $@ $^
 
 # Shared library creation

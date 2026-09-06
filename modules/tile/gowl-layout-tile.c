@@ -1,3 +1,5 @@
+#undef G_LOG_DOMAIN
+#define G_LOG_DOMAIN "gowl-layout"
 /*
  * gowl - GObject Wayland Compositor
  * Copyright (C) 2026  Zach Podbielniak

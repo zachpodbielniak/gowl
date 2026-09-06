@@ -1313,7 +1313,7 @@ gowl_config_apply_mapping(
 	 *   spawn-cmd: "foot"            (required)
 	 *   keybind: "Super+grave"       (optional)
 	 *   width-pct: 1.0               (optional, default 1.0)
-	 *   height-pct: 0.4              (optional, default 0.4)
+	 *   height-pct: 0.666667              (optional, default two-thirds)
 	 *   width: 800                   (optional, absolute px)
 	 *   height: 600                  (optional, absolute px)
 	 *   anchor: "top"|"bottom"|"left"|"right"  (optional, default top)
@@ -1346,7 +1346,7 @@ gowl_config_apply_mapping(
 				keybind = NULL;
 				anchor_str = NULL;
 				width_pct = 1.0;
-				height_pct = 0.4;
+				height_pct = 2.0 / 3.0;
 				width_abs = 0;
 				height_abs = 0;
 				anchor = 0; /* top */

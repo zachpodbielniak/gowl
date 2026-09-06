@@ -32,6 +32,9 @@ struct _GowlLayoutProviderInterface {
 
 	void         (*arrange)    (GowlLayoutProvider *self, gpointer monitor, GList *clients, gpointer area);
 	const gchar *(*get_symbol) (GowlLayoutProvider *self);
+	void (*focus_client) (GowlLayoutProvider *self, gpointer client);
+	void (*scroll) (GowlLayoutProvider *self, gpointer monitor, gint dx);
+	gboolean (*allows_overflow) (GowlLayoutProvider *self);
 };
 
 /* Public dispatch functions */

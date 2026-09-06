@@ -59,6 +59,7 @@ tag-count: 9
 
 # Motion. Position and size animate together using a surface-tree snapshot.
 # Entrances pop from 84% with a small overshoot; layout moves do not overshoot.
+# These settings take effect only when modules.animation.enabled is true.
 animations: true
 animation-duration: 260       # move/resize and release jiggle; 0 disables animations
 animation-duration-open: 360  # pop duration; opacity arrives within 120 ms
@@ -306,7 +307,7 @@ dropdowns:
     spawn-cmd: "gst"
     keybind: "Super+grave"
     width-pct: 1.0
-    height-pct: 0.4
+    height-pct: 0.666667
     anchor: top
 
 # Autostart commands (executed once at compositor startup)
@@ -357,6 +358,18 @@ monitors: {}
 # Module configuration
 # Each key is a module name; nested values are passed to the module's configure() method.
 modules:
+  layout-indicator:
+    enabled: false  # CMacs enables the brief layout toast by default
+  tile:
+    enabled: true
+  monocle:
+    enabled: true
+  float:
+    enabled: true
+  scrolling:
+    enabled: false  # CMacs loads this layout by default
+  animation:
+    enabled: false  # opt in here; CMacs loads this module by default
   vanitygaps:
     enabled: true
     # Shorthand: inner-gap / outer-gap set both axes.

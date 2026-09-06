@@ -16,7 +16,7 @@ A GObject-based Wayland compositor built on wlroots (0.19 or 0.20). Gowl takes i
 - **wlroots 0.19 / 0.20** -- Builds against either; newest present wins, override with `make WLROOTS=0.19`. 0.20 adds per-window screencast capture.
 - **XWayland support** -- Optional X11 client compatibility (compile-time toggle).
 - **GObject Introspection** -- Optional GIR/typelib generation for language bindings.
-- **Layouts** -- tile (with optional vsplit), monocle, float, and a niri-style **scrolling** column layout, in a registry where module-provided layouts are peers of the built-ins.
+- **Layouts** -- tile (with optional vsplit), monocle, float, and a niri-style **scrolling** column layout, each implemented as a separate plugin. Layout selection and scroll offsets are remembered per tag view.
 - **Animations** -- springy window pops, squeezing exits, coordinated position/size transitions, and a settling jiggle after dragging. Configurable easing and jiggle strength.
 - **Screencast capture** -- Monitor capture (all versions) and per-window capture (wlroots 0.20+) for `xdg-desktop-portal-wlr`, behind the `GowlCaptureProvider` interface.
 - **InputCapture / RemoteDesktop** -- Native freedesktop portal backends (`xdg-desktop-portal-gowl`, libeis EIS server) so deskflow / input-leap software-KVM works under gowl. See [docs/input-capture.org](docs/input-capture.org).
@@ -77,6 +77,12 @@ gowl --generate-c-config > ~/.config/gowl/config.c
 ```
 
 ## Configuration
+
+Window animations are provided by the optional `animation.so` plugin.
+Standalone Gowl enables them only with `modules.animation.enabled: true`
+in YAML (or generate a config with `--modules animation`). CMacs loads
+this module by default. Existing `animation-*` settings keep their names
+and behavior.
 
 Gowl supports two configuration methods:
 

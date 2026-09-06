@@ -19,7 +19,7 @@
 #include <glib-object.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
-#include "core/gowl-compositor.h"
+#include "core/gowl-core-private.h"
 #include "config/gowl-config.h"
 #include "gowl-enums.h"
 
@@ -244,6 +244,56 @@ test_dispatch_without_config(void)
 	g_object_unref(c);
 }
 
+static void
+test_move_stack(void)
+{
+	GowlConfig *cfg;
+	GowlCompositor *comp = compositor_with_bind(GOWL_KEY_MOD_LOGO | GOWL_KEY_MOD_SHIFT,
+		XKB_KEY_j, GOWL_ACTION_MOVE_STACK, "+1", "Move next", &cfg);
+	GowlMonitor *mon = g_object_new(GOWL_TYPE_MONITOR, NULL);
+	GowlClient *clients[6];
+	gint i;
+
+	mon->tagset[mon->seltags] = 1;
+	comp->selmon = mon;
+	for (i = 0; i < 6; i++) {
+		clients[i] = gowl_client_new();
+		clients[i]->mon = mon;
+		clients[i]->tags = 1;
+		comp->clients = g_list_append(comp->clients, clients[i]);
+	}
+	comp->fstack = g_list_prepend(NULL, clients[0]);
+	clients[1]->isfloating = TRUE;
+	clients[2]->tags = 2;
+	clients[3]->isembedded = TRUE;
+	clients[4]->isfullscreen = TRUE;
+	g_assert_true(gowl_compositor_dispatch_keybind(comp,
+		GOWL_KEY_MOD_LOGO | GOWL_KEY_MOD_SHIFT, XKB_KEY_j));
+	g_assert_true(comp->clients->data == clients[5]);
+	g_assert_true(g_list_last(comp->clients)->data == clients[0]);
+	g_assert_true(comp->fstack->data == clients[0]);
+	/* Forward wrap and reverse wrap skip the same ineligible clients. */
+	gowl_compositor_move_stack(comp, 1);
+	g_assert_true(comp->clients->data == clients[0]);
+	gowl_compositor_move_stack(comp, -1);
+	g_assert_true(g_list_last(comp->clients)->data == clients[0]);
+	clients[0]->isfloating = TRUE;
+	gowl_compositor_move_stack(comp, -1);
+	g_assert_true(g_list_last(comp->clients)->data == clients[0]);
+	clients[0]->isfloating = FALSE;
+	clients[5]->tags = 2;
+	gowl_compositor_move_stack(comp, -1);
+	g_assert_true(g_list_last(comp->clients)->data == clients[0]);
+	for (i = 0; i < 6; i++) {
+		clients[i]->mon = NULL;
+		g_object_unref(clients[i]);
+	}
+	comp->selmon = NULL;
+	g_object_unref(comp);
+	g_object_unref(mon);
+	g_object_unref(cfg);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -266,5 +316,6 @@ main(int argc, char *argv[])
 	g_test_add_func("/keybind-dispatch/no-config",
 	                test_dispatch_without_config);
 
+	g_test_add_func("/keybind-dispatch/move-stack", test_move_stack);
 	return g_test_run();
 }

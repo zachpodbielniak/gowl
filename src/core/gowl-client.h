@@ -219,13 +219,23 @@ void               gowl_client_set_alpha         (GowlClient  *self,
                                                    gfloat       alpha);
 
 /**
+ * gowl_client_set_effect_alpha:
+ * @self: a #GowlClient
+ * @alpha: an opacity multiplier, 0.0 to 1.0
+ *
+ * Sets a scene effect's opacity factor.  Multiplied with the client's
+ * own opacity rather than replacing it, so the open fade and the
+ * `alpha' module's focus dimming cannot cut each other short.
+ */
+void               gowl_client_set_effect_alpha    (GowlClient  *self,
+                                                   gfloat       alpha);
+
+/**
  * gowl_client_set_anim_alpha:
  * @self: a #GowlClient
  * @alpha: an opacity multiplier, 0.0 to 1.0
  *
- * Sets the animation's opacity factor.  Multiplied with the client's
- * own opacity rather than replacing it, so the open fade and the
- * `alpha' module's focus dimming cannot cut each other short.
+ * Compatibility alias for gowl_client_set_effect_alpha().
  */
 void               gowl_client_set_anim_alpha    (GowlClient  *self,
                                                    gfloat       alpha);

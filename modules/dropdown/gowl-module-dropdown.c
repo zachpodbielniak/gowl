@@ -23,6 +23,10 @@
 #include <gmodule.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <wayland-server-core.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 #include "module/gowl-module.h"
 #include "interfaces/gowl-startup-handler.h"
@@ -43,7 +47,7 @@
  * Each entry is lazy-spawned on first keybind press, captured
  * via the compositor's prefloat-hint mechanism, and thereafter
  * toggled between a visible overlay position and a hidden stash
- * via wlr_scene_node_set_enabled().
+ * through the compositor overlay API and optional scene effects.
  *
  * Dropdowns always anchor to the currently focused output at
  * toggle-on, so they follow the user's focus across monitors.
@@ -89,6 +93,7 @@ typedef struct {
 
 	gboolean  visible;
 	GPid      pid;
+	struct wl_event_source *child_watch;
 	GowlClient *client;
 	gulong    destroy_handler_id;
 
@@ -98,6 +103,8 @@ typedef struct {
 struct _GowlModuleDropdown {
 	GowlModule      parent_instance;
 	GowlCompositor *compositor;
+	gulong focus_handler;
+	struct wl_listener display_destroy;
 	GPtrArray      *entries; /* DropdownState* owned */
 };
 
@@ -121,6 +128,7 @@ static void dd_on_client_mapped(GowlCompositor *compositor,
                                  gpointer        user_data);
 static void dd_on_client_destroy(GowlClient *c, gpointer user_data);
 static void dd_state_free(gpointer data);
+static void dd_present(GowlModuleDropdown *self, DropdownState *s, gboolean visible);
 
 /**
  * dd_compute_geometry:
@@ -151,10 +159,10 @@ dd_compute_geometry(
 		: (gint)(mw * (s->width_pct > 0 ? s->width_pct : 1.0));
 	h = s->height_abs > 0
 		? s->height_abs
-		: (gint)(mh * (s->height_pct > 0 ? s->height_pct : 0.4));
+		: (gint)(mh * (s->height_pct > 0 ? s->height_pct : (2.0 / 3.0)));
 
-	if (w < 1) w = 1;
-	if (h < 1) h = 1;
+	w = CLAMP(w, 1, MAX(1, mw));
+	h = CLAMP(h, 1, MAX(1, mh));
 
 	switch (s->anchor) {
 	case 1: /* bottom */
@@ -199,6 +207,10 @@ dd_state_free(gpointer data)
 		g_signal_handler_disconnect(s->client, s->destroy_handler_id);
 		s->destroy_handler_id = 0;
 	}
+	if (s->child_watch != NULL)
+		wl_event_source_remove(s->child_watch);
+	if (s->module != NULL && ((GowlModuleDropdown *)s->module)->compositor != NULL)
+		gowl_compositor_cancel_prefloat_hint(((GowlModuleDropdown *)s->module)->compositor, s->pid);
 	g_free(s->name);
 	g_free(s->spawn_cmd);
 	g_free(s);
@@ -252,6 +264,10 @@ dd_find_by_key(
 		    s->modifiers == modifiers &&
 		    s->keysym == keysym)
 			return s;
+		if (s->keysym == XKB_KEY_grave
+		    && (keysym == XKB_KEY_asciitilde || keysym == XKB_KEY_grave)
+		    && modifiers == (s->modifiers | GOWL_KEY_MOD_SHIFT))
+			return s;
 	}
 	return NULL;
 }
@@ -277,12 +293,12 @@ dd_on_client_mapped(
 	(void)compositor;
 	s = (DropdownState *)user_data;
 	s->client = c;
-	s->visible = TRUE;
 
 	s->destroy_handler_id = g_signal_connect(
 		c, "destroy",
 		G_CALLBACK(dd_on_client_destroy), s);
 
+	dd_present((GowlModuleDropdown *)s->module, s, s->visible);
 	g_debug("dropdown: captured client for '%s'", s->name);
 }
 
@@ -304,10 +320,66 @@ dd_on_client_destroy(
 	(void)c;
 	s = (DropdownState *)user_data;
 	s->client = NULL;
-	s->pid = 0;
 	s->visible = FALSE;
 	s->destroy_handler_id = 0;
 	g_debug("dropdown: '%s' client destroyed, ready to re-spawn", s->name);
+}
+
+static void
+dd_present(GowlModuleDropdown *self, DropdownState *s, gboolean visible)
+{
+	GowlMonitor *mon;
+	gint x = 0, y = 0, w = 0, h = 0;
+
+	s->visible = visible;
+	if (s->client == NULL || self->compositor == NULL)
+		return;
+	mon = gowl_compositor_get_selected_monitor(self->compositor);
+	if (visible) {
+		if (mon == NULL) {
+			s->visible = FALSE;
+			return;
+		}
+		dd_compute_geometry(s, mon, &x, &y, &w, &h);
+	}
+	gowl_compositor_present_overlay(self->compositor, s->client, mon,
+		x, y, w, h, s->anchor, visible);
+}
+
+/* Use the compositor loop: standalone Gowl does not run a GLib loop.
+ * ECHILD also covers an embedding application's SIGCHLD handler reaping it. */
+static int
+dd_child_exited(void *data)
+{
+	DropdownState *s = data;
+	GowlModuleDropdown *self = s->module;
+	gint status;
+	pid_t result = waitpid(s->pid, &status, WNOHANG);
+	if (result == 0 || (result < 0 && errno != ECHILD)) {
+		wl_event_source_timer_update(s->child_watch, 50);
+		return 0;
+	}
+	wl_event_source_remove(s->child_watch);
+	s->child_watch = NULL;
+	if (self->compositor != NULL)
+		gowl_compositor_cancel_prefloat_hint(self->compositor, s->pid);
+	g_spawn_close_pid(s->pid);
+	s->pid = 0;
+	if (s->client == NULL)
+		s->visible = FALSE;
+	return 0;
+}
+
+static void
+dd_focus_changed(GowlCompositor *compositor, GObject *focused, gpointer data)
+{
+	GowlModuleDropdown *self = data;
+	guint i;
+	for (i = 0; i < self->entries->len; i++) {
+		DropdownState *s = g_ptr_array_index(self->entries, i);
+		if (s->visible && s->client != NULL && G_OBJECT(s->client) != focused)
+			dd_present(self, s, FALSE);
+	}
 }
 
 /**
@@ -319,8 +391,7 @@ dd_on_client_destroy(
  * hint so the new client is captured and placed at the computed
  * geometry on the currently focused output.
  *
- * Subsequent presses: toggles visibility via
- * gowl_client_set_visible(), re-computing the geometry for the
+ * Subsequent presses: toggles fixed overlay visibility, re-computing the geometry for the
  * currently focused output each time it becomes visible so that
  * the dropdown follows focus across monitors.
  */
@@ -333,24 +404,7 @@ dd_entry_toggle(GowlModuleDropdown *self, DropdownState *s)
 	if (self->compositor == NULL)
 		return;
 
-	/* Find the focused monitor as the target output. */
-	{
-		GList *mons;
-		mon = NULL;
-		mons = gowl_compositor_get_monitors(self->compositor);
-		if (mons != NULL)
-			mon = (GowlMonitor *)mons->data;
-		/* Prefer the focused client's monitor if there is one. */
-		{
-			GowlClient *fc;
-			fc = gowl_compositor_get_focused_client(self->compositor);
-			if (fc != NULL) {
-				gpointer fm = gowl_client_get_monitor(fc);
-				if (fm != NULL)
-					mon = (GowlMonitor *)fm;
-			}
-		}
-	}
+	mon = gowl_compositor_get_selected_monitor(self->compositor);
 
 	if (mon == NULL) {
 		g_warning("dropdown: no monitor to place '%s'", s->name);
@@ -367,8 +421,8 @@ dd_entry_toggle(GowlModuleDropdown *self, DropdownState *s)
 		gboolean ok;
 
 		if (s->pid != 0) {
-			g_debug("dropdown: '%s' already spawning pid=%d",
-			        s->name, (gint)s->pid);
+			/* Remember a second press while the terminal is starting. */
+			s->visible = !s->visible;
 			return;
 		}
 
@@ -395,6 +449,11 @@ dd_entry_toggle(GowlModuleDropdown *self, DropdownState *s)
 			return;
 		}
 		s->pid = pid;
+		s->visible = TRUE;
+		s->child_watch = wl_event_loop_add_timer(
+			gowl_compositor_get_event_loop(self->compositor), dd_child_exited, s);
+		if (s->child_watch != NULL)
+			wl_event_source_timer_update(s->child_watch, 50);
 
 		gowl_compositor_prefloat_pid_with_hint(
 			self->compositor,
@@ -409,15 +468,7 @@ dd_entry_toggle(GowlModuleDropdown *self, DropdownState *s)
 		return;
 	}
 
-	/* Subsequent press: toggle visibility. */
-	if (s->visible) {
-		gowl_client_set_visible(s->client, FALSE);
-		s->visible = FALSE;
-	} else {
-		gowl_client_set_geometry(s->client, x, y, w, h);
-		gowl_client_set_visible(s->client, TRUE);
-		s->visible = TRUE;
-	}
+	dd_present(self, s, !s->visible);
 }
 
 /* --- GowlModule virtual methods --- */
@@ -432,7 +483,13 @@ dd_activate(GowlModule *mod)
 static void
 dd_deactivate(GowlModule *mod)
 {
-	(void)mod;
+	GowlModuleDropdown *self = GOWL_MODULE_DROPDOWN(mod);
+	guint i;
+	if (self->compositor != NULL && self->focus_handler != 0)
+		g_signal_handler_disconnect(self->compositor, self->focus_handler);
+	self->focus_handler = 0;
+	for (i = 0; i < self->entries->len; i++)
+		dd_present(self, g_ptr_array_index(self->entries, i), FALSE);
 }
 
 static const gchar *
@@ -487,7 +544,7 @@ dd_populate_entries_from_config(GowlModuleDropdown *self)
 		DropdownState     *s;
 
 		e = (GowlDropdownEntry *)g_ptr_array_index(arr, i);
-		if (e->name == NULL || e->spawn_cmd == NULL)
+		if (e->name == NULL || e->spawn_cmd == NULL || dd_find_by_name(self, e->name) != NULL)
 			continue;
 
 		s = g_new0(DropdownState, 1);
@@ -517,13 +574,37 @@ dd_populate_entries_from_config(GowlModuleDropdown *self)
 }
 
 static void
+dd_display_destroyed(struct wl_listener *listener, void *data)
+{
+	GowlModuleDropdown *self = wl_container_of(listener, self, display_destroy);
+	guint i;
+	for (i = 0; i < self->entries->len; i++) {
+		DropdownState *s = g_ptr_array_index(self->entries, i);
+		if (s->child_watch != NULL) {
+			wl_event_source_remove(s->child_watch);
+			s->child_watch = NULL;
+		}
+	}
+	wl_list_remove(&self->display_destroy.link);
+	wl_list_init(&self->display_destroy.link);
+}
+
+static void
 dd_on_startup(GowlStartupHandler *handler, gpointer compositor)
 {
 	GowlModuleDropdown *self;
 
 	self = GOWL_MODULE_DROPDOWN(handler);
-	self->compositor = GOWL_COMPOSITOR(compositor);
-
+	if (self->compositor == NULL) {
+		self->compositor = GOWL_COMPOSITOR(compositor);
+		g_object_add_weak_pointer(G_OBJECT(compositor), (gpointer *)&self->compositor);
+		self->display_destroy.notify = dd_display_destroyed;
+		wl_display_add_destroy_listener(gowl_compositor_get_wl_display(self->compositor),
+			&self->display_destroy);
+	}
+	if (self->focus_handler == 0)
+		self->focus_handler = g_signal_connect(compositor, "focus-changed",
+			G_CALLBACK(dd_focus_changed), self);
 	dd_populate_entries_from_config(self);
 	g_debug("dropdown: startup, %u entries", self->entries->len);
 }
@@ -712,7 +793,11 @@ gowl_module_dropdown_finalize(GObject *object)
 	GowlModuleDropdown *self;
 
 	self = GOWL_MODULE_DROPDOWN(object);
+	wl_list_remove(&self->display_destroy.link);
+	dd_deactivate(GOWL_MODULE(self));
 	g_clear_pointer(&self->entries, g_ptr_array_unref);
+	if (self->compositor != NULL)
+		g_object_remove_weak_pointer(G_OBJECT(self->compositor), (gpointer *)&self->compositor);
 
 	G_OBJECT_CLASS(gowl_module_dropdown_parent_class)->finalize(object);
 }
@@ -738,6 +823,7 @@ gowl_module_dropdown_class_init(GowlModuleDropdownClass *klass)
 static void
 gowl_module_dropdown_init(GowlModuleDropdown *self)
 {
+	wl_list_init(&self->display_destroy.link);
 	self->compositor = NULL;
 	self->entries = g_ptr_array_new_with_free_func(dd_state_free);
 }

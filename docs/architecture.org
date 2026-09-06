@@ -591,21 +591,11 @@ capture protocols this needs no entry in =gowl-wlroots-compat.h=.
 
 *** Layouts
 
-Layouts live in a registry keyed by name, in which a built-in and a
-module layout are peers.  Four ship: =tile=, =monocle=, =float= and
-=scrolling=.
-
-This replaced an =if (sellt == 0) tile else monocle=, and the
-consequences of that shape were all silent.  =GowlLayoutProvider= was
-one of the typed extension interfaces, the module manager collected
-every implementer into a priority-sorted array, and *nothing ever read
-it* --- so =centeredmaster= and =fibonacci= shipped as modules and did
-nothing when loaded.  =float= was unreachable, because =SET_LAYOUT=
-mapped every argument that was not ="monocle"= onto tile; selecting it
-gave tile with no complaint.  And =src/layout/*.c= is pure geometry
-with passing tests and no caller: the compositor's own =tile()=
-duplicates the maths with gaps and vsplit that the pure function does
-not have.
+Layouts live in a registry keyed by name. Each shipped layout is a
+plugin: =tile=, =monocle=, =float=, =scrolling=, =centeredmaster= and
+=fibonacci=. The compositor dispatches placement to the selected
+=GowlLayoutProvider=; layout algorithms and their geometry helpers
+reside in =modules/=, not =libgowl=.
 
 A monitor stores the *name* it selected, not an index.  A layout module
 loading or unloading therefore cannot leave a monitor pointing into a
@@ -633,7 +623,31 @@ so a config translates.
 reveals a window and does nothing when it is already visible ---
 otherwise every focus change would scroll the strip.
 
+Layout algorithms, including the traditional tile, monocle and float
+layouts, live in individual modules. The registry stores active provider
+references and selection per monitor/tag view. =GowlLayoutProvider=
+exposes arrange, focus-client, scroll and overflow hooks. Core placement
+and viewport clipping support those hooks; layout geometry is owned by
+the plugin. A change in effective layout emits monitor and compositor
+=layout-changed= signals after arrangement, which the optional
+=layout-indicator= plugin uses for its non-interactive toast.
+
 *** Animation
+
+The engine lives in =modules/animation/=, built as =animation.so=.
+=libgowl= contains only the generic =GowlSceneEffect= interface and
+=src/core/gowl-effects.c= dispatch bridge. The module owns all easing,
+clocks, impulses, surface snapshots, closing ghosts, and per-client
+animation state. Existing =GowlConfig= properties remain the settings
+API; they do not activate an engine without a loaded module.
+
+The first active scene-effect provider receives geometry, reveal,
+release, unmap, destroy, pre-frame, frame-done, and monitor-removal
+hooks. Opacity and displayed geometry queries keep decorators and
+input consistent with the provider. Without a provider, geometry is
+immediate. Disabling the animation module finishes motion, restores
+live content and opacity, and releases all closing buffers. Shutdown
+finishes effects before renderer teardown.
 
 Geometry animations interpolate the whole rectangle. A snapshot of the
 client's surface tree preserves buffer source rectangles, transforms and

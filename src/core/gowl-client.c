@@ -17,6 +17,8 @@
  */
 
 #include "gowl-core-private.h"
+#include "gowl-layout-registry.h"
+#include "gowl-effects.h"
 #include "interfaces/gowl-client-decorator.h"
 
 #include <string.h>
@@ -304,7 +306,7 @@ gowl_client_init(GowlClient *self)
 	self->alpha         = 1.0f;
 	/* Opaque until an animation says otherwise.  GObject zeroes the
 	 * instance, and a zero here is an invisible window. */
-	self->anim_alpha    = 1.0f;
+	self->effect_alpha  = 1.0f;
 	self->isfloating    = FALSE;
 	self->isurgent      = FALSE;
 	self->isfullscreen  = FALSE;
@@ -405,6 +407,9 @@ gowl_client_set_floating(
 ){
 	g_return_if_fail(GOWL_IS_CLIENT(self));
 
+	if (self->isoverlay)
+		return;
+
 	if (self->isfloating != floating) {
 		self->isfloating = floating;
 		g_signal_emit(self, client_signals[SIGNAL_STATE_CHANGED], 0);
@@ -442,6 +447,9 @@ gowl_client_set_fullscreen(
 	gboolean    fullscreen
 ){
 	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	if (self->isoverlay)
+		return;
 
 	if (self->isfullscreen != fullscreen) {
 		/* save geometry before going fullscreen */
@@ -611,6 +619,9 @@ gowl_client_set_geometry(
 ){
 	g_return_if_fail(GOWL_IS_CLIENT(self));
 
+	if (self->isoverlay)
+		return;
+
 	self->geom.x      = x;
 	self->geom.y      = y;
 	self->geom.width   = width;
@@ -646,6 +657,9 @@ gowl_client_set_monitor(
 	gpointer    monitor
 ){
 	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	if (self->isoverlay)
+		return;
 
 	self->mon = (GowlMonitor *)monitor;
 }
@@ -929,7 +943,7 @@ apply_alpha(GowlClient *self)
 	gfloat color[4];
 	gint i;
 
-	effective = self->alpha * self->anim_alpha;
+	effective = self->alpha * self->effect_alpha;
 	if (effective < 0.0f) effective = 0.0f;
 	if (effective > 1.0f) effective = 1.0f;
 
@@ -944,27 +958,33 @@ apply_alpha(GowlClient *self)
 	else if (self->scene != NULL)
 		wlr_scene_node_for_each_buffer(&self->scene->node,
 		                                set_opacity_iter, &effective);
-	gowl_scene_snapshot_set_opacity(self->anim_ghost, effective);
+	gowl_effects_alpha_changed(self, effective);
 	for (i = 0; i < 4; i++)
-		color[i] = self->border_color[i] * self->anim_alpha;
+		color[i] = self->border_color[i] * self->effect_alpha;
 	for (i = 0; i < 4; i++) {
 		if (self->border[i] != NULL)
 			wlr_scene_rect_set_color(self->border[i], color);
 	}
 
-	/* A tag reveal changes only opacity, so there is no geometry tick
-	 * to repaint a decorator's separate frame. Update it here, including
-	 * the final/cancelled fade, or it stays transparent until focus moves.
-	 * Geometry animations paint it after applying their new dimensions;
-	 * avoid rendering it twice per frame while those are active. */
-	if (!self->anim_active && self->compositor != NULL
+	/* Decorations are independent scene nodes. Repaint them with the
+	 * composed opacity and provider's displayed geometry, including the
+	 * final reset when an effect is disabled. */
+	if (!gowl_effects_has_geometry(self) && self->compositor != NULL
 	    && self->compositor->module_mgr != NULL) {
 		GowlClientDecorator *dec = gowl_module_manager_get_decorator(
 			self->compositor->module_mgr);
 
-		if (dec != NULL)
+		if (dec != NULL) {
+			struct wlr_box box = gowl_effects_geometry(self);
+			if (self->mon != NULL && !self->isfloating && !self->isfullscreen
+			    && gowl_layout_allows_overflow(self->compositor, self->mon)) {
+				struct wlr_box clipped;
+				if (!wlr_box_intersection(&clipped, &box, &self->mon->w)) return;
+				box = clipped;
+			}
 			gowl_client_decorator_render_decoration(dec, self,
-				self->geom.width, self->geom.height, self->bw, color);
+				box.width, box.height, self->bw, color);
+		}
 	}
 }
 
@@ -979,17 +999,17 @@ gowl_client_get_alpha(GowlClient *self)
 }
 
 /**
- * gowl_client_set_anim_alpha:
+ * gowl_client_set_effect_alpha:
  * @self: a #GowlClient
  * @alpha: an opacity multiplier, 0.0 to 1.0
  *
- * Sets the animation's opacity factor, which is multiplied with the
+ * Sets a scene effect's opacity factor, which is multiplied with the
  * client's own opacity rather than replacing it.  Used by the open
  * fade; anything else setting a client's opacity is unaffected by it
  * and unaffected BY it.
  */
 void
-gowl_client_set_anim_alpha(
+gowl_client_set_effect_alpha(
 	GowlClient *self,
 	gfloat      alpha
 ){
@@ -998,8 +1018,16 @@ gowl_client_set_anim_alpha(
 	if (alpha < 0.0f) alpha = 0.0f;
 	if (alpha > 1.0f) alpha = 1.0f;
 
-	self->anim_alpha = alpha;
+	self->effect_alpha = alpha;
 	apply_alpha(self);
+}
+
+/* Preserve the existing C/GI entry point while scene effects share
+ * the generic opacity multiplier. No animation engine lives here. */
+void
+gowl_client_set_anim_alpha(GowlClient *self, gfloat alpha)
+{
+	gowl_client_set_effect_alpha(self, alpha);
 }
 
 /**

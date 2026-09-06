@@ -582,6 +582,16 @@ void gowl_compositor_set_bar (GowlCompositor *self,
                                GowlBar        *bar);
 
 /**
+ * gowl_compositor_move_stack:
+ * @self: the compositor
+ * @direction: positive for next, negative for previous
+ *
+ * Swap the focused tiled client with its visible neighbour, wrapping at
+ * the ends. Floating, fullscreen, embedded and overlay clients are skipped.
+ */
+void gowl_compositor_move_stack (GowlCompositor *self, gint direction);
+
+/**
  * gowl_compositor_swap_clients:
  * @self: a #GowlCompositor
  * @c1: the first #GowlClient
@@ -1373,6 +1383,12 @@ void gowl_compositor_apply_frame_geometry (GowlCompositor *self,
                                             GowlClient     *client,
                                             gint            width,
                                             gint            height);
+
+void gowl_compositor_cancel_prefloat_hint(GowlCompositor *self, pid_t pid);
+GowlMonitor *gowl_compositor_get_selected_monitor(GowlCompositor *self);
+void gowl_compositor_present_overlay(GowlCompositor *self, GowlClient *client,
+                                     GowlMonitor *monitor, gint x, gint y,
+                                     gint width, gint height, gint anchor, gboolean visible);
 
 G_END_DECLS
 

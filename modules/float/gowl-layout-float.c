@@ -1,3 +1,5 @@
+#undef G_LOG_DOMAIN
+#define G_LOG_DOMAIN "gowl-layout"
 /*
  * gowl - GObject Wayland Compositor
  * Copyright (C) 2026  Zach Podbielniak
@@ -16,39 +18,15 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "gowl-layout-monocle.h"
+#include "gowl-layout-float.h"
 
 /*
- * gowl_layout_monocle:
- *
- * Monocle layout: every client occupies the full area.
+ * Float layout has no arrangement function.
+ * Windows maintain their user-set geometry.
  */
-void
-gowl_layout_monocle(
-	gint  n,
-	gint  x,
-	gint  y,
-	gint  w,
-	gint  h,
-	gint *positions
-){
-	gint i;
-
-	if (n <= 0)
-		return;
-
-	g_return_if_fail(positions != NULL);
-
-	for (i = 0; i < n; i++) {
-		positions[i * 4 + 0] = x;
-		positions[i * 4 + 1] = y;
-		positions[i * 4 + 2] = w;
-		positions[i * 4 + 3] = h;
-	}
-}
 
 const gchar *
-gowl_layout_monocle_symbol(void)
+gowl_layout_float_symbol(void)
 {
-	return "[M]";
+	return "><>";
 }

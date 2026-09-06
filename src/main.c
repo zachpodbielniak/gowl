@@ -47,6 +47,18 @@ typedef struct {
 } GowlBuiltinModule;
 
 static const GowlBuiltinModule builtin_modules[] = {
+	{ "tile", "Master/stack layout", "  tile: { enabled: true }\n", " *   - tile: master/stack layout\n" },
+	{ "monocle", "Full-area stacked layout", "  monocle: { enabled: true }\n", " *   - monocle: full-area layout\n" },
+	{ "float", "Free window placement", "  float: { enabled: true }\n", " *   - float: free placement\n" },
+	{ "scrolling", "Horizontal scrolling columns", "  scrolling: { enabled: true }\n", " *   - scrolling: horizontal columns\n" },
+
+	{
+		"animation",
+		"Window pops, fades, layout motion, and settling jiggles",
+		"  animation:\n"
+		"    enabled: true\n",
+		" *   - animation: optional window motion effects\n"
+	},
 	{
 		"autostart",
 		"Spawn configured commands on compositor startup",
@@ -299,6 +311,11 @@ static const gchar *default_yaml_config =
 	"monitors: {}\n"
 	"\n"
 	"modules:\n"
+	"  tile: { enabled: true }\n"
+	"  monocle: { enabled: true }\n"
+	"  float: { enabled: true }\n"
+	"  animation:\n"
+	"    enabled: false\n"
 	"  vanitygaps:\n"
 	"    enabled: false\n"
 	"  pertag:\n"
@@ -847,6 +864,17 @@ main(int argc, char *argv[])
 		enabled_modules = gowl_config_get_all_module_configs(config);
 
 		if (enabled_modules != NULL) {
+			const gchar *defaults[] = { "tile", "monocle", "float" };
+			guint d;
+			/* Preserve the normal layouts for existing configurations.
+			 * An explicit enabled:false still opts out of any one plugin. */
+			for (d = 0; d < G_N_ELEMENTS(defaults); d++) {
+				if (!g_hash_table_contains(enabled_modules, defaults[d])) {
+					GHashTable *settings = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+					g_hash_table_insert(settings, g_strdup("enabled"), g_strdup("true"));
+					g_hash_table_insert(enabled_modules, g_strdup(defaults[d]), settings);
+				}
+			}
 			g_hash_table_iter_init(&iter, enabled_modules);
 			while (g_hash_table_iter_next(&iter, &key, &value)) {
 				const gchar *mod_name = (const gchar *)key;

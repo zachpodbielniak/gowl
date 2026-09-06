@@ -16,30 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-/*
- * gowl-layout-registry.c -- one list of layouts, built-in and modular
- *
- * gowl advertised a GowlLayoutProvider interface as one of its typed
- * extension points, the module manager collected every module that
- * implemented it into a priority-sorted array -- and nothing ever read
- * that array.  arrange() called tile() or monocle() directly, chosen by
- * a `sellt' index that could only be 0 or 1.
- *
- * The consequences were all silent:
- *
- *   - `centeredmaster' and `fibonacci' shipped as modules and did
- *     nothing when loaded.
- *   - the `float' layout was unreachable: SET_LAYOUT mapped every arg
- *     that was not "monocle" onto tile, so selecting float gave tile.
- *   - arrange() overwrote layout_symbol with a hardcoded "[]=" on every
- *     pass, so the bar, gowl-get-layout and the IPC event all reported
- *     tile no matter what was running.
- *
- * This replaces the index with a registry keyed by name, in which a
- * built-in and a module layout are peers.  A monitor stores the name it
- * selected, so a layout module that loads later, or unloads, cannot
- * leave a monitor pointing at a stale index into a changed array.
- */
+/* Module-backed layout registry with independent state for each tag view. */
 
 #include "gowl-layout-registry.h"
 #include "gowl-core-private.h"
@@ -59,6 +36,7 @@ layout_entry_free(gpointer data)
 		return;
 	g_free(e->name);
 	g_free(e->symbol);
+	g_clear_object((GObject **)&e->provider);
 	g_free(e);
 }
 
@@ -72,16 +50,6 @@ gowl_layout_registry_init(GowlCompositor *self)
 
 	self->layouts = g_ptr_array_new_with_free_func(layout_entry_free);
 
-	/* The built-ins.  Registration order is cycle order, and the first
-	 * is the default a monitor starts in. */
-	gowl_layout_register(self, "tile", "[]=",
-	                      gowl_compositor_layout_tile, NULL);
-	gowl_layout_register(self, "monocle", "[M]",
-	                      gowl_compositor_layout_monocle, NULL);
-	gowl_layout_register(self, "float", "><>",
-	                      gowl_compositor_layout_float, NULL);
-	gowl_layout_register(self, "scrolling", "|||",
-	                      gowl_compositor_layout_scrolling, NULL);
 }
 
 void
@@ -120,7 +88,7 @@ gowl_layout_register(GowlCompositor        *self,
 			g_free(e->symbol);
 			e->symbol = g_strdup(symbol ? symbol : name);
 			e->arrange = arrange;
-			e->provider = provider;
+			g_set_object((GObject **)&e->provider, provider);
 			return TRUE;
 		}
 	}
@@ -129,7 +97,7 @@ gowl_layout_register(GowlCompositor        *self,
 	e->name = g_strdup(name);
 	e->symbol = g_strdup(symbol ? symbol : name);
 	e->arrange = arrange;
-	e->provider = provider;
+	e->provider = provider != NULL ? g_object_ref(provider) : NULL;
 	g_ptr_array_add(self->layouts, e);
 	return TRUE;
 }
@@ -212,7 +180,8 @@ gowl_layout_list(GowlCompositor *self)
 	for (i = 0; i < self->layouts->len; i++) {
 		GowlLayoutEntry *e = g_ptr_array_index(self->layouts, i);
 
-		out = g_list_prepend(out, e->name);
+		if (e->provider == NULL || gowl_module_get_is_active(e->provider))
+			out = g_list_prepend(out, e->name);
 	}
 	return g_list_reverse(out);
 }
@@ -225,6 +194,50 @@ resolve_monitor(GowlCompositor *self, GowlMonitor *monitor)
 	return monitor != NULL ? monitor : self->selmon;
 }
 
+typedef struct {
+ gchar *name;
+ gint scroll;
+} TagLayout;
+typedef struct {
+ guint32 current;
+ GHashTable *tags;
+} LayoutViews;
+static void tag_layout_free(gpointer data)
+{
+ TagLayout *tag = data;
+ g_free(tag->name);
+ g_free(tag);
+}
+static void layout_views_free(gpointer data)
+{
+ LayoutViews *views = data;
+ g_hash_table_unref(views->tags);
+ g_free(views);
+}
+static void sync_view(GowlMonitor *m)
+{
+ LayoutViews *views = g_object_get_data(G_OBJECT(m), "gowl-layout-views");
+ TagLayout *tag;
+ guint32 mask = m->tagset[m->seltags];
+ if (views == NULL) {
+  views = g_new0(LayoutViews, 1);
+  views->tags = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, tag_layout_free);
+  views->current = mask;
+  g_object_set_data_full(G_OBJECT(m), "gowl-layout-views", views, layout_views_free);
+  return;
+ }
+ if (views->current == mask) return;
+ tag = g_new0(TagLayout, 1);
+ tag->name = g_strdup(m->layout_name);
+ tag->scroll = m->scroll_x;
+ g_hash_table_replace(views->tags, GUINT_TO_POINTER(views->current), tag);
+ tag = g_hash_table_lookup(views->tags, GUINT_TO_POINTER(mask));
+ g_free(m->layout_name);
+ m->layout_name = tag != NULL ? g_strdup(tag->name) : NULL;
+ m->scroll_x = tag != NULL ? tag->scroll : 0;
+ views->current = mask;
+}
+
 GowlLayoutEntry *
 gowl_layout_get(GowlCompositor *self, GowlMonitor *monitor)
 {
@@ -233,16 +246,26 @@ gowl_layout_get(GowlCompositor *self, GowlMonitor *monitor)
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
 	m = resolve_monitor(self, monitor);
+	if (m != NULL) sync_view(m);
 	if (m == NULL || self->layouts == NULL || self->layouts->len == 0)
 		return NULL;
 
 	/* A monitor with no name yet uses the first registered layout,
 	 * which is how a freshly created monitor starts in tile without
 	 * every creation path having to say so. */
-	if (m->layout_name == NULL)
-		return g_ptr_array_index(self->layouts, 0);
+	/* A missing or disabled selection falls back to the first active plugin. */
 
-	return gowl_layout_lookup(self, m->layout_name);
+	{
+		GowlLayoutEntry *entry = gowl_layout_lookup(self, m->layout_name);
+		guint i;
+		if (entry != NULL && (entry->provider == NULL || gowl_module_get_is_active(entry->provider)))
+			return entry;
+		for (i = 0; i < self->layouts->len; i++) {
+			entry = g_ptr_array_index(self->layouts, i);
+			if (entry->provider == NULL || gowl_module_get_is_active(entry->provider)) return entry;
+		}
+		return NULL;
+	}
 }
 
 gboolean
@@ -257,8 +280,9 @@ gowl_layout_set(GowlCompositor *self, GowlMonitor *monitor, const gchar *name)
 	if (m == NULL)
 		return FALSE;
 
+	sync_view(m);
 	e = gowl_layout_lookup(self, name);
-	if (e == NULL) {
+	if (e == NULL || (e->provider != NULL && !gowl_module_get_is_active(e->provider))) {
 		/* Naming a layout that is not registered is a config or
 		 * keybind error, and silently doing tile is how `float'
 		 * looked like it worked for so long. */
@@ -306,9 +330,13 @@ gowl_layout_cycle(GowlCompositor *self, GowlMonitor *monitor, gint step)
 		GowlLayoutEntry *e = g_ptr_array_index(self->layouts,
 		                                        (guint)idx);
 
-		g_free(m->layout_name);
-		m->layout_name = g_strdup(e->name);
-		gowl_compositor_arrange(self, m);
+		guint tried = 0;
+		while (e->provider != NULL && !gowl_module_get_is_active(e->provider)) {
+			if (++tried >= n) return NULL;
+			idx = (idx + (step < 0 ? -1 : 1) + (gint)n) % (gint)n;
+			e = g_ptr_array_index(self->layouts, idx);
+		}
+		gowl_layout_set(self, m, e->name);
 		return e->name;
 	}
 }
@@ -319,17 +347,22 @@ void
 gowl_layout_apply(GowlCompositor *self, GowlMonitor *monitor)
 {
 	GowlLayoutEntry *e;
+	const gchar *previous;
+	gboolean changed;
 
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 	g_return_if_fail(monitor != NULL);
 
 	e = gowl_layout_get(self, monitor);
 	if (e == NULL) {
-		/* No registry (a compositor built but never started) --
-		 * fall back to tile so a monitor is never left unarranged. */
-		gowl_compositor_layout_tile(self, monitor);
+		g_free(monitor->layout_symbol);
+		monitor->layout_symbol = g_strdup("--");
 		return;
 	}
+
+	previous = g_object_get_data(G_OBJECT(monitor), "gowl-presented-layout");
+	changed = previous != NULL && g_strcmp0(previous, e->name) != 0;
+	g_object_set_data_full(G_OBJECT(monitor), "gowl-presented-layout", g_strdup(e->name), g_free);
 
 	/* The symbol comes from the layout that is about to run, rather
 	 * than being hardcoded.  That one line is why every surface
@@ -339,10 +372,9 @@ gowl_layout_apply(GowlCompositor *self, GowlMonitor *monitor)
 
 	if (e->arrange != NULL) {
 		e->arrange(self, monitor);
-		return;
 	}
 
-	if (e->provider != NULL) {
+	else if (e->provider != NULL) {
 		struct wlr_box area = monitor->w;
 		GList *clients = gowl_compositor_tiling_clients(self, monitor);
 
@@ -351,6 +383,11 @@ gowl_layout_apply(GowlCompositor *self, GowlMonitor *monitor)
 			(gpointer)monitor, clients, (gpointer)&area);
 		g_list_free(clients);
 	}
+	if (changed) {
+		g_signal_emit_by_name(monitor, "layout-changed");
+		g_signal_emit_by_name(self, "layout-changed", monitor, e->name);
+	}
+
 }
 
 /* ── Module providers ────────────────────────────────────────────── */
@@ -370,6 +407,16 @@ gowl_layout_adopt_providers(GowlCompositor *self)
 	if (providers == NULL)
 		return 0;
 
+	{
+		const gchar *defaults[] = { "tile", "monocle", "float", "scrolling" };
+		guint d;
+		for (d = 0; d < G_N_ELEMENTS(defaults); d++) {
+			GowlModule *mod = gowl_module_manager_find_module(self->module_mgr, defaults[d]);
+			if (mod != NULL && gowl_module_get_is_active(mod) && GOWL_IS_LAYOUT_PROVIDER(mod))
+				gowl_layout_register(self, defaults[d],
+					gowl_layout_provider_get_symbol(GOWL_LAYOUT_PROVIDER(mod)), NULL, mod);
+		}
+	}
 	for (i = 0; i < providers->len; i++) {
 		gpointer p = g_ptr_array_index(providers, i);
 		const gchar *name;
@@ -390,4 +437,14 @@ gowl_layout_adopt_providers(GowlCompositor *self)
 	}
 
 	return adopted;
+}
+
+gboolean
+gowl_layout_allows_overflow(GowlCompositor *self, GowlMonitor *m)
+{
+ GowlLayoutEntry *e = gowl_layout_get(self, m);
+ GowlLayoutProviderInterface *iface;
+ if (e == NULL || e->provider == NULL) return FALSE;
+ iface = GOWL_LAYOUT_PROVIDER_GET_IFACE(e->provider);
+ return iface->allows_overflow != NULL && iface->allows_overflow(e->provider);
 }

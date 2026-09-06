@@ -10,7 +10,7 @@
 #include <glib.h>
 #include <math.h>
 
-#include "core/gowl-animation.h"
+#include "../modules/animation/gowl-animation.h"
 
 /* Every curve is pinned at both ends: a window must start where it was
  * and finish exactly where the layout put it, whatever the shape in

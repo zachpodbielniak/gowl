@@ -36,7 +36,7 @@
 #include "core/gowl-compositor.h"
 #include "core/gowl-monitor.h"
 #include "core/gowl-client.h"
-#include "core/gowl-scene-snapshot.h"
+
 #include "core/gowl-seat.h"
 #include "core/gowl-keyboard-group.h"
 #include "core/gowl-cursor.h"
@@ -266,12 +266,6 @@ struct _GowlCompositor {
 	GList                        *monitors;   /* GList of GowlMonitor* */
 	GList                        *clients;    /* GList of GowlClient* (tiling) */
 
-	/*
-	 * Windows that have closed and are still fading out.  These outlive
-	 * the GowlClient they came from --- that is the whole point --- so
-	 * they cannot live on it the way the open and move animations do.
-	 */
-	GList                        *close_anims; /* GList of GowlCloseAnim* */
 	GList                        *fstack;     /* GList of GowlClient* (focus) */
 	GowlMonitor                  *selmon;     /* selected monitor */
 
@@ -509,7 +503,7 @@ struct _GowlMonitor {
 	 * last frame.  Per-monitor so that an animation on one screen does
 	 * not hold every other screen at full refresh for its duration.
 	 */
-	gboolean anim_live;
+	gboolean effect_live;
 	struct wlr_scene_rect   *fullscreen_bg;
 
 	struct wlr_box m;   /* monitor area, layout-relative */
@@ -563,47 +557,6 @@ struct _GowlClient {
 	struct wlr_box geom;    /* layout position including border */
 	struct wlr_box prev;    /* saved geometry for fullscreen restore */
 
-	/*
-	 * Geometry animation.  Lives on the client so that destroying one
-	 * mid-flight takes its animation with it; a list on the compositor
-	 * would have to be told.
-	 *
-	 * The whole RECT is animated, not just the position.  Position
-	 * alone is wrong in a tiling compositor and measurably so: opening
-	 * a second window took the first from 1272px wide to 568px in a
-	 * single frame and then spent the animation sliding it, so the one
-	 * change the eye actually tracks -- the size -- was the one that
-	 * snapped, and the window sat at its final size in the wrong place
-	 * for the whole duration.
-	 */
-	gboolean anim_active;
-	gboolean anim_pop;  /* geometry uses the entrance curve and clock */
-	struct wlr_box anim_from;
-	struct wlr_box anim_to;
-	struct wlr_box anim_cur;
-	gint64   anim_start_us;
-	gint64   anim_dur_us;
-
-	/* Snapshot of the complete surface tree, with buffer crops and
-	 * relative positions preserved. The live tree is hidden until
-	 * geometry finishes; embedded clients remain on the instant path. */
-	GowlSceneSnapshot *anim_ghost;
-
-	/*
-	 * Whether this client has ever been placed.  A scene tree is
-	 * created at the origin, so without this a newly mapped window
-	 * animates from the top-left corner of the display to wherever
-	 * the layout puts it --- a long diagonal sweep on a large screen,
-	 * and an artifact of how the node is created rather than anything
-	 * anyone chose.  The first placement is instant; every move after
-	 * it animates.
-	 */
-	gboolean anim_placed;
-
-	/* Opacity has a shorter, non-overshooting clock than the pop. */
-	gboolean anim_opening;
-	gint64 anim_open_start_us;
-	gint64 anim_open_dur_us;
 	gfloat border_color[4];  /* unfaded, premultiplied decoration color */
 
 	guint32  tags;
@@ -623,7 +576,7 @@ struct _GowlClient {
 	 * next focus event would cut a fade short.  Two factors compose,
 	 * so neither has to know about the other.
 	 */
-	gfloat   anim_alpha;
+	gfloat   effect_alpha;
 	guint32  resize;         /* pending configure serial */
 
 	gchar *title;
@@ -681,8 +634,12 @@ struct _GowlClient {
 	GList   *mirrors;        /* GList of GowlMirror* (owned) */
 	guint64  next_mirror_id;
 
-	/* Centre x/y and width/height impulses, in pixels. */
-	gdouble anim_jiggle[4];
+	/* Module-owned overlay: excluded from tiling, with explicit visibility
+	 * and geometry. User move/resize/fullscreen operations cannot alter it. */
+	gboolean isoverlay;
+	gboolean overlay_visible;
+	gint overlay_anchor; /* top, bottom, left, right */
+
 };
 
 /**
@@ -805,4 +762,7 @@ void gowl_compositor_motionnotify (GowlCompositor *self,
 /* colour parsing: "#rrggbb" or "#rrggbbaa" -> float[4] */
 void gowl_color_parse_to_floats   (const gchar *hex, float out[4]);
 
+/* Apply an output viewport to live content and decorations. */
+gboolean gowl_compositor_clip_client_geometry(GowlCompositor *self, GowlClient *client,
+                                               const struct wlr_box *box);
 #endif /* GOWL_CORE_PRIVATE_H */

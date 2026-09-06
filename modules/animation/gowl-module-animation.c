@@ -20,9 +20,13 @@
  * surface tree. The client receives only the final configure. Entrance,
  * exit and layout motion have separate timing; opacity never overshoots. */
 
+#undef G_LOG_DOMAIN
+#define G_LOG_DOMAIN "gowl-animation"
+
 #include "gowl-animation.h"
-#include "gowl-core-private.h"
-#include "gowl-compositor.h"
+#include "core/gowl-layout-registry.h"
+#include "core/gowl-core-private.h"
+#include "core/gowl-compositor.h"
 
 #include <math.h>
 
@@ -30,6 +34,48 @@
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_output.h>
+
+#include "core/gowl-effects.h"
+#include "interfaces/gowl-startup-handler.h"
+#include "interfaces/gowl-shutdown-handler.h"
+#include <gmodule.h>
+
+#define GOWL_TYPE_MODULE_ANIMATION (gowl_module_animation_get_type())
+G_DECLARE_FINAL_TYPE(GowlModuleAnimation, gowl_module_animation, GOWL, MODULE_ANIMATION, GowlModule)
+struct _GowlModuleAnimation {
+ GowlModule parent_instance;
+ GWeakRef compositor;
+ GList *close_anims;
+};
+static void animation_effect_init(GowlSceneEffectInterface *iface);
+static void animation_startup_init(GowlStartupHandlerInterface *iface);
+static void animation_shutdown_init(GowlShutdownHandlerInterface *iface);
+G_DEFINE_TYPE_WITH_CODE(GowlModuleAnimation, gowl_module_animation, GOWL_TYPE_MODULE,
+ G_IMPLEMENT_INTERFACE(GOWL_TYPE_SCENE_EFFECT, animation_effect_init)
+ G_IMPLEMENT_INTERFACE(GOWL_TYPE_STARTUP_HANDLER, animation_startup_init)
+ G_IMPLEMENT_INTERFACE(GOWL_TYPE_SHUTDOWN_HANDLER, animation_shutdown_init))
+
+static GowlModuleAnimation *animation_context(GowlCompositor *self)
+{
+ return self != NULL && self->module_mgr != NULL
+  ? (GowlModuleAnimation *)gowl_module_manager_find_module(self->module_mgr, "animation") : NULL;
+}
+
+GList *gowl_animation_closing(GowlCompositor *self)
+{
+ GowlModuleAnimation *mod = animation_context(self);
+ return mod != NULL ? mod->close_anims : NULL;
+}
+
+GowlAnimationState *gowl_animation_state(GowlClient *c)
+{
+ GowlAnimationState *state = g_object_get_data(G_OBJECT(c), "gowl-animation-state");
+ if (state == NULL) {
+  state = g_new0(GowlAnimationState, 1);
+  g_object_set_data_full(G_OBJECT(c), "gowl-animation-state", state, g_free);
+ }
+ return state;
+}
 
 /* ── Curves ──────────────────────────────────────────────────────── */
 
@@ -145,7 +191,8 @@ gowl_animation_enabled(GowlCompositor *self)
 {
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
 
-	if (self->config == NULL)
+	if (self->config == NULL || animation_context(self) == NULL
+	    || gowl_module_manager_get_scene_effect(self->module_mgr) != animation_context(self))
 		return FALSE;
 	if (!gowl_config_get_animations(self->config))
 		return FALSE;
@@ -180,7 +227,7 @@ open_duration(GowlCompositor *self)
 static gdouble
 jiggle_strength(GowlCompositor *self, GowlClient *c)
 {
-	if (c->isembedded || c->isfullscreen || self->config == NULL)
+	if (c->isembedded || c->isfullscreen || c->isoverlay || gowl_layout_allows_overflow(self, c->mon) || self->config == NULL)
 		return 0.0;
 	return gowl_config_get_animation_jiggle_strength(self->config);
 }
@@ -200,12 +247,12 @@ jiggle_configure(GowlCompositor *self, GowlClient *c,
 	gdouble amount = MIN(1.0, (fabs(dx) + fabs(dy) + fabs(dw) + fabs(dh)) / 100.0);
 	gboolean horizontal = fabs(dx) + fabs(dw) >= fabs(dy) + fabs(dh);
 
-	c->anim_jiggle[0] = CLAMP(dx * 0.08, -12.0, 12.0) * strength;
-	c->anim_jiggle[1] = CLAMP(dy * 0.08, -12.0, 12.0) * strength;
-	c->anim_jiggle[2] = c->anim_ghost != NULL
+	gowl_animation_state(c)->anim_jiggle[0] = CLAMP(dx * 0.08, -12.0, 12.0) * strength;
+	gowl_animation_state(c)->anim_jiggle[1] = CLAMP(dy * 0.08, -12.0, 12.0) * strength;
+	gowl_animation_state(c)->anim_jiggle[2] = gowl_animation_state(c)->anim_ghost != NULL
 		? MIN(24.0, to->width * 0.04) * amount * strength * (horizontal ? 1.0 : -0.7)
 		: 0.0;
-	c->anim_jiggle[3] = c->anim_ghost != NULL
+	gowl_animation_state(c)->anim_jiggle[3] = gowl_animation_state(c)->anim_ghost != NULL
 		? MIN(24.0, to->height * 0.04) * amount * strength * (horizontal ? -0.7 : 1.0)
 		: 0.0;
 }
@@ -245,14 +292,14 @@ fade_in_start(GowlCompositor *self, GowlClient *c)
 	if (duration <= 0)
 		return;
 
-	c->anim_opening = TRUE;
-	c->anim_open_start_us = g_get_monotonic_time();
-	c->anim_open_dur_us = (gint64)MIN(duration, 120) * 1000;
+	gowl_animation_state(c)->anim_opening = TRUE;
+	gowl_animation_state(c)->anim_open_start_us = g_get_monotonic_time();
+	gowl_animation_state(c)->anim_open_dur_us = (gint64)MIN(duration, 120) * 1000;
 
 	/* Start invisible.  Set here rather than left to the first tick so
 	 * that the frame between mapping and the first tick does not show
 	 * the window at full opacity --- one frame of pop is still a pop. */
-	gowl_client_set_anim_alpha(c, 0.0f);
+	gowl_client_set_effect_alpha(c, 0.0f);
 }
 
 void
@@ -264,7 +311,7 @@ gowl_animation_open_start(GowlCompositor *self, GowlClient *c)
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 	g_return_if_fail(c != NULL);
 
-	if (c->isembedded || open_duration(self) <= 0)
+	if (c->isembedded || c->isoverlay || gowl_layout_allows_overflow(self, c->mon) || open_duration(self) <= 0)
 		return;
 
 	/* A centered pop has no residual rise to reappear after the
@@ -276,13 +323,13 @@ gowl_animation_open_start(GowlCompositor *self, GowlClient *c)
 	from.x += (c->geom.width - from.width) / 2;
 	from.y += (c->geom.height - from.height) / 2;
 	gowl_animation_start(self, c, &from, &c->geom);
-	if (c->anim_active) {
-		c->anim_pop = TRUE;
-		c->anim_dur_us = (gint64)open_duration(self) * 1000;
+	if (gowl_animation_state(c)->anim_active) {
+		gowl_animation_state(c)->anim_pop = TRUE;
+		gowl_animation_state(c)->anim_dur_us = (gint64)open_duration(self) * 1000;
 		/* The entrance wobbles around its centre, without drifting. */
-		c->anim_jiggle[0] = c->anim_jiggle[1] = 0.0;
-		c->anim_jiggle[2] = MIN(24.0, c->geom.width * 0.04) * jiggle_strength(self, c);
-		c->anim_jiggle[3] = -MIN(24.0, c->geom.height * 0.04) * jiggle_strength(self, c);
+		gowl_animation_state(c)->anim_jiggle[0] = gowl_animation_state(c)->anim_jiggle[1] = 0.0;
+		gowl_animation_state(c)->anim_jiggle[2] = MIN(24.0, c->geom.width * 0.04) * jiggle_strength(self, c);
+		gowl_animation_state(c)->anim_jiggle[3] = -MIN(24.0, c->geom.height * 0.04) * jiggle_strength(self, c);
 	}
 	fade_in_start(self, c);
 }
@@ -296,7 +343,7 @@ gowl_animation_reveal_start(GowlCompositor *self, GowlClient *c)
 	/* Already fading for some other reason; leave it be rather than
 	 * restarting it from zero, which on a fast tag switch would keep
 	 * a window permanently half-transparent. */
-	if (c->anim_opening)
+	if (gowl_animation_state(c)->anim_opening)
 		return;
 
 	fade_in_start(self, c);
@@ -305,11 +352,11 @@ gowl_animation_reveal_start(GowlCompositor *self, GowlClient *c)
 void
 gowl_animation_open_cancel(GowlClient *c)
 {
-	if (c == NULL || !c->anim_opening)
+	if (c == NULL || !gowl_animation_state(c)->anim_opening)
 		return;
 
-	c->anim_opening = FALSE;
-	gowl_client_set_anim_alpha(c, 1.0f);
+	gowl_animation_state(c)->anim_opening = FALSE;
+	gowl_client_set_effect_alpha(c, 1.0f);
 }
 
 /*
@@ -321,16 +368,16 @@ open_tick(GowlClient *c, gint64 now_us)
 {
 	gdouble t;
 
-	if (!c->anim_opening)
+	if (!gowl_animation_state(c)->anim_opening)
 		return FALSE;
-	t = c->anim_open_dur_us > 0
-		? (gdouble)(now_us - c->anim_open_start_us) / c->anim_open_dur_us
+	t = gowl_animation_state(c)->anim_open_dur_us > 0
+		? (gdouble)(now_us - gowl_animation_state(c)->anim_open_start_us) / gowl_animation_state(c)->anim_open_dur_us
 		: 1.0;
 	if (t >= 1.0) {
 		gowl_animation_open_cancel(c);
 		return FALSE;
 	}
-	gowl_client_set_anim_alpha(c,
+	gowl_client_set_effect_alpha(c,
 		(gfloat)gowl_curve_eval("almost-linear", t));
 	return TRUE;
 }
@@ -401,7 +448,7 @@ gowl_animation_surface_at(GowlClient *c, gdouble x, gdouble y,
 	gint cx, cy, width, height;
 	gdouble local_x, local_y;
 
-	if (c->anim_ghost == NULL || c->scene == NULL
+	if (gowl_animation_state(c)->anim_ghost == NULL || c->scene == NULL
 	    || !wlr_scene_node_coords(&c->scene->node, &cx, &cy))
 		return NULL;
 	surface = gowl_client_get_wlr_surface(c);
@@ -409,9 +456,9 @@ gowl_animation_surface_at(GowlClient *c, gdouble x, gdouble y,
 		return NULL;
 	surface_size(c, &width, &height);
 	local_x = (x - cx - c->bw) * width
-		/ MAX(1, c->anim_cur.width - 2 * (gint)c->bw);
+		/ MAX(1, gowl_animation_state(c)->anim_cur.width - 2 * (gint)c->bw);
 	local_y = (y - cy - c->bw) * height
-		/ MAX(1, c->anim_cur.height - 2 * (gint)c->bw);
+		/ MAX(1, gowl_animation_state(c)->anim_cur.height - 2 * (gint)c->bw);
 	if (c->xdg_toplevel != NULL) {
 		local_x += c->xdg_toplevel->base->geometry.x;
 		local_y += c->xdg_toplevel->base->geometry.y;
@@ -445,7 +492,8 @@ gowl_animation_close_start(GowlCompositor *self, GowlClient *c)
 	g_return_if_fail(c != NULL);
 
 	if (!gowl_animation_enabled(self) || c->scene == NULL
-	    || !c->anim_placed || c->isembedded
+	    || !gowl_animation_state(c)->anim_placed || c->isembedded || c->isoverlay
+	    || gowl_layout_allows_overflow(self, c->mon)
 	    || !wlr_scene_node_coords(&c->scene->node, &x, &y))
 		return;
 	duration = close_duration(self);
@@ -459,15 +507,15 @@ gowl_animation_close_start(GowlCompositor *self, GowlClient *c)
 	if (parent == NULL)
 		return;
 
-	vis = c->anim_active ? c->anim_cur : c->geom;
+	vis = gowl_animation_state(c)->anim_active ? gowl_animation_state(c)->anim_cur : c->geom;
 	a = g_new0(GowlCloseAnim, 1);
 	a->w = vis.width - 2 * (gint)c->bw;
 	a->h = vis.height - 2 * (gint)c->bw;
-	if (c->anim_ghost != NULL) {
+	if (gowl_animation_state(c)->anim_ghost != NULL) {
 		/* Transfer exactly the picture currently on screen, including
 		 * a partially completed opening. No flash to a newer buffer. */
-		a->snapshot = c->anim_ghost;
-		c->anim_ghost = NULL;
+		a->snapshot = gowl_animation_state(c)->anim_ghost;
+		gowl_animation_state(c)->anim_ghost = NULL;
 		wlr_scene_node_reparent(&a->snapshot->tree->node, parent);
 	} else {
 		surface_size(c, &width, &height);
@@ -486,7 +534,7 @@ gowl_animation_close_start(GowlCompositor *self, GowlClient *c)
 	a->mon = c->mon;
 	a->start_us = g_get_monotonic_time();
 	a->dur_us = (gint64)duration * 1000;
-	a->alpha = c->alpha * c->anim_alpha;
+	a->alpha = c->alpha * c->effect_alpha;
 	a->target_scale = gowl_config_get_animation_popin_scale(self->config);
 	a->jiggle[2] = MIN(32.0, a->w * 0.06) * jiggle_strength(self, c);
 	a->jiggle[3] = -MIN(32.0, a->h * 0.06) * jiggle_strength(self, c);
@@ -497,7 +545,7 @@ gowl_animation_close_start(GowlCompositor *self, GowlClient *c)
 	/* A departing picture must not intercept clicks on surviving floaters. */
 	wlr_scene_node_for_each_buffer(&a->snapshot->tree->node,
 	                                close_disable_input, NULL);
-	self->close_anims = g_list_prepend(self->close_anims, a);
+	animation_context(self)->close_anims = g_list_prepend(animation_context(self)->close_anims, a);
 }
 
 void
@@ -505,8 +553,8 @@ gowl_animation_close_finish_all(GowlCompositor *self)
 {
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
-	g_list_free_full(self->close_anims, (GDestroyNotify)close_anim_free);
-	self->close_anims = NULL;
+	g_list_free_full(animation_context(self)->close_anims, (GDestroyNotify)close_anim_free);
+	animation_context(self)->close_anims = NULL;
 }
 
 void
@@ -522,14 +570,14 @@ gowl_animation_close_forget_monitor(GowlCompositor *self, GowlMonitor *m)
 	 * measured in milliseconds; ending them early on a screen that no
 	 * longer exists costs nothing.
 	 */
-	l = self->close_anims;
+	l = animation_context(self)->close_anims;
 	while (l != NULL) {
 		GowlCloseAnim *a = (GowlCloseAnim *)l->data;
 		GList *next = l->next;
 
 		if (a->mon == m) {
-			self->close_anims =
-				g_list_delete_link(self->close_anims, l);
+			animation_context(self)->close_anims =
+				g_list_delete_link(animation_context(self)->close_anims, l);
 			close_anim_free(a);
 		}
 		l = next;
@@ -546,7 +594,7 @@ close_tick(GowlCompositor *self, GowlMonitor *m, gint64 now_us)
 	gboolean live = FALSE;
 	GList *l;
 
-	l = self->close_anims;
+	l = animation_context(self)->close_anims;
 	while (l != NULL) {
 		GowlCloseAnim *a = (GowlCloseAnim *)l->data;
 		GList *next = l->next;
@@ -559,8 +607,8 @@ close_tick(GowlCompositor *self, GowlMonitor *m, gint64 now_us)
 			: 1.0;
 
 		if (t >= 1.0) {
-			self->close_anims =
-				g_list_delete_link(self->close_anims, l);
+			animation_context(self)->close_anims =
+				g_list_delete_link(animation_context(self)->close_anims, l);
 			close_anim_free(a);
 			l = next;
 			continue;
@@ -622,12 +670,14 @@ static void
 geometry_apply(GowlCompositor *self, GowlClient *c,
                const struct wlr_box *box)
 {
+	if (gowl_compositor_clip_client_geometry(self, c, box))
+		return;
 	wlr_scene_node_set_position(&c->scene->node, box->x, box->y);
 	gowl_compositor_apply_frame_geometry(self, c, box->width, box->height);
 
-	if (c->anim_ghost != NULL)
+	if (gowl_animation_state(c)->anim_ghost != NULL)
 		gowl_scene_snapshot_resize(
-			c->anim_ghost,
+			gowl_animation_state(c)->anim_ghost,
 			MAX(1, box->width - 2 * (gint)c->bw),
 			MAX(1, box->height - 2 * (gint)c->bw));
 }
@@ -639,10 +689,19 @@ geometry_apply(GowlCompositor *self, GowlClient *c,
 static void
 geometry_finish(GowlCompositor *self, GowlClient *c)
 {
-	c->anim_active = FALSE;
-	c->anim_cur = c->anim_to;
+	GowlAnimationState *state = gowl_animation_state(c);
+	if (state->anim_overlay) {
+		state->anim_active = state->anim_overlay = FALSE;
+		state->anim_cur = c->geom;
+		geometry_apply(self, c, &c->geom);
+		wlr_scene_node_set_enabled(&c->scene->node, c->overlay_visible);
+		return;
+	}
 
-	geometry_apply(self, c, &c->anim_to);
+	gowl_animation_state(c)->anim_active = FALSE;
+	gowl_animation_state(c)->anim_cur = gowl_animation_state(c)->anim_to;
+
+	geometry_apply(self, c, &gowl_animation_state(c)->anim_to);
 	ghost_release(c);
 }
 
@@ -662,12 +721,12 @@ ghost_capture(GowlClient *c)
 	if (c->isembedded || c->scene_surface == NULL)
 		return FALSE;
 	surface_size(c, &width, &height);
-	c->anim_ghost = gowl_scene_snapshot_new(c->scene, c->scene_surface,
+	gowl_animation_state(c)->anim_ghost = gowl_scene_snapshot_new(c->scene, c->scene_surface,
 	                                        width, height);
-	if (c->anim_ghost == NULL)
+	if (gowl_animation_state(c)->anim_ghost == NULL)
 		return FALSE;
-	wlr_scene_node_set_position(&c->anim_ghost->tree->node, c->bw, c->bw);
-	gowl_scene_snapshot_set_opacity(c->anim_ghost, c->alpha * c->anim_alpha);
+	wlr_scene_node_set_position(&gowl_animation_state(c)->anim_ghost->tree->node, c->bw, c->bw);
+	gowl_scene_snapshot_set_opacity(gowl_animation_state(c)->anim_ghost, c->alpha * c->effect_alpha);
 	wlr_scene_node_set_enabled(&c->scene_surface->node, FALSE);
 	return TRUE;
 }
@@ -675,12 +734,12 @@ ghost_capture(GowlClient *c)
 static void
 ghost_release(GowlClient *c)
 {
-	g_clear_pointer(&c->anim_ghost, gowl_scene_snapshot_free);
+	g_clear_pointer(&gowl_animation_state(c)->anim_ghost, gowl_scene_snapshot_free);
 	if (c->scene_surface != NULL) {
 		wlr_scene_node_set_enabled(&c->scene_surface->node, TRUE);
 		/* The live tree was disabled during the fade and could not be
 		 * reached by wlroots' visible-buffer iterator. */
-		gowl_client_set_anim_alpha(c, c->anim_alpha);
+		gowl_client_set_effect_alpha(c, c->effect_alpha);
 	}
 }
 
@@ -702,9 +761,9 @@ gowl_animation_start(GowlCompositor *self, GowlClient *c,
 	/* Arrange and configure acknowledgements may repeat a destination.
 	 * Keeping the original clock prevents a held key or busy client
 	 * from indefinitely extending the settling tail. */
-	if (c->anim_active && wlr_box_equal(&c->anim_to, to))
+	if (gowl_animation_state(c)->anim_active && wlr_box_equal(&gowl_animation_state(c)->anim_to, to))
 		return;
-	start = c->anim_active ? c->anim_cur : *from;
+	start = gowl_animation_state(c)->anim_active ? gowl_animation_state(c)->anim_cur : *from;
 
 	moved = start.x != to->x || start.y != to->y;
 	resized = start.width != to->width || start.height != to->height;
@@ -725,7 +784,8 @@ gowl_animation_start(GowlCompositor *self, GowlClient *c,
 
 	/* Resizing and squash/stretch both need a snapshot. With jiggle
 	 * disabled a pure move keeps the live surface instead. */
-	if (resized && c->anim_ghost == NULL && !ghost_capture(c)) {
+	if (resized && !gowl_layout_allows_overflow(self, c->mon)
+	    && gowl_animation_state(c)->anim_ghost == NULL && !ghost_capture(c)) {
 		/*
 		 * Nothing to stretch --- the client has not drawn yet.
 		 * Animating the size anyway would move the borders while the
@@ -736,27 +796,20 @@ gowl_animation_start(GowlCompositor *self, GowlClient *c,
 		gowl_animation_cancel(c);
 		return;
 	}
-	if (!resized && jiggle_strength(self, c) > 0.0 && c->anim_ghost == NULL)
+	if (!resized && jiggle_strength(self, c) > 0.0 && gowl_animation_state(c)->anim_ghost == NULL)
 		ghost_capture(c); /* No buffer: jiggle_configure keeps the size fixed. */
 
-	c->anim_active = TRUE;
-	c->anim_pop = FALSE;
-	c->anim_from = start;
-	c->anim_to = *to;
-	c->anim_cur = start;
-	c->anim_start_us = g_get_monotonic_time();
-	c->anim_dur_us = (gint64)duration * 1000;
+	gowl_animation_state(c)->anim_active = TRUE;
+	gowl_animation_state(c)->anim_pop = FALSE;
+	gowl_animation_state(c)->anim_from = start;
+	gowl_animation_state(c)->anim_to = *to;
+	gowl_animation_state(c)->anim_cur = start;
+	gowl_animation_state(c)->anim_start_us = g_get_monotonic_time();
+	gowl_animation_state(c)->anim_dur_us = (gint64)duration * 1000;
 	jiggle_configure(self, c, &start, to);
 
-	/* Hold everything at the start rect; the frame loop walks it. */
-	wlr_scene_node_set_position(&c->scene->node, start.x, start.y);
-	gowl_compositor_apply_frame_geometry(self, c, start.width,
-	                                     start.height);
-	if (c->anim_ghost != NULL)
-		gowl_scene_snapshot_resize(
-			c->anim_ghost,
-			MAX(1, start.width - 2 * (gint)c->bw),
-			MAX(1, start.height - 2 * (gint)c->bw));
+	/* Present the initial rectangle through the same viewport path as ticks. */
+	geometry_apply(self, c, &start);
 }
 
 void
@@ -769,7 +822,7 @@ gowl_animation_settle(GowlCompositor *self, GowlClient *c,
 	g_return_if_fail(c != NULL && grab != NULL);
 
 	if (!gowl_animation_enabled(self) || jiggle_strength(self, c) <= 0.0
-	    || c->scene == NULL || !c->anim_placed || c->anim_active
+	    || c->scene == NULL || !gowl_animation_state(c)->anim_placed || gowl_animation_state(c)->anim_active
 	    || wlr_box_equal(grab, &c->geom)
 	    || !wlr_scene_node_coords(&c->scene->node, &x, &y))
 		return;
@@ -778,11 +831,11 @@ gowl_animation_settle(GowlCompositor *self, GowlClient *c,
 
 	/* The pointer already placed the window. Only the visual impulse
 	 * rings down; no client configure or layout change accompanies it. */
-	c->anim_from = c->anim_to = c->anim_cur = c->geom;
-	c->anim_active = TRUE;
-	c->anim_pop = FALSE;
-	c->anim_start_us = g_get_monotonic_time();
-	c->anim_dur_us = (gint64)gowl_config_get_animation_duration(self->config) * 1000;
+	gowl_animation_state(c)->anim_from = gowl_animation_state(c)->anim_to = gowl_animation_state(c)->anim_cur = c->geom;
+	gowl_animation_state(c)->anim_active = TRUE;
+	gowl_animation_state(c)->anim_pop = FALSE;
+	gowl_animation_state(c)->anim_start_us = g_get_monotonic_time();
+	gowl_animation_state(c)->anim_dur_us = (gint64)gowl_config_get_animation_duration(self->config) * 1000;
 	jiggle_configure(self, c, grab, &c->geom);
 	geometry_apply(self, c, &c->geom);
 }
@@ -793,7 +846,13 @@ gowl_animation_cancel(GowlClient *c)
 	if (c == NULL)
 		return;
 
-	c->anim_active = FALSE;
+	if (gowl_animation_state(c)->anim_overlay && c->scene != NULL) {
+		gowl_animation_state(c)->anim_overlay = FALSE;
+		gowl_animation_state(c)->anim_cur = c->geom;
+		geometry_apply(c->compositor, c, &c->geom);
+		wlr_scene_node_set_enabled(&c->scene->node, c->overlay_visible);
+	}
+	gowl_animation_state(c)->anim_active = FALSE;
 	/* The snapshot holds a client buffer and hides the real surface;
 	 * leaving either behind is a window that never comes back. */
 	ghost_release(c);
@@ -844,15 +903,15 @@ gowl_animation_tick(GowlCompositor *self, GowlMonitor *m, gint64 now_us)
 		if (open_tick(c, now_us) && client_on(c, m))
 			live = TRUE;
 
-		if (!c->anim_active)
+		if (!gowl_animation_state(c)->anim_active)
 			continue;
 
-		if (c->anim_dur_us <= 0) {
+		if (gowl_animation_state(c)->anim_dur_us <= 0) {
 			geometry_finish(self, c);
 			continue;
 		}
 
-		t = (gdouble)(now_us - c->anim_start_us) / (gdouble)c->anim_dur_us;
+		t = (gdouble)(now_us - gowl_animation_state(c)->anim_start_us) / (gdouble)gowl_animation_state(c)->anim_dur_us;
 		if (t >= 1.0) {
 			geometry_finish(self, c);
 			continue;
@@ -860,15 +919,331 @@ gowl_animation_tick(GowlCompositor *self, GowlMonitor *m, gint64 now_us)
 		if (t < 0.0)
 			t = 0.0;
 
-		e = gowl_curve_eval(c->anim_pop
+		e = gowl_curve_eval(gowl_animation_state(c)->anim_overlay ? "ease-out-quint" : gowl_animation_state(c)->anim_pop
 			? gowl_config_get_animation_curve_open(self->config) : curve, t);
-		c->anim_cur = lerp_box(&c->anim_from, &c->anim_to, e);
-		jiggle_apply(&c->anim_cur, c->anim_jiggle, t, 2, c->bw);
-		geometry_apply(self, c, &c->anim_cur);
+		gowl_animation_state(c)->anim_cur = lerp_box(&gowl_animation_state(c)->anim_from, &gowl_animation_state(c)->anim_to, e);
+		jiggle_apply(&gowl_animation_state(c)->anim_cur, gowl_animation_state(c)->anim_jiggle, t, 2, c->bw);
+		geometry_apply(self, c, &gowl_animation_state(c)->anim_cur);
 
 		if (client_on(c, m))
 			live = TRUE;
 	}
 
 	return live;
+}
+
+/* A small focus acknowledgement, without changing layout, opacity or
+ * the focus border palette. Existing entrance/layout motion takes priority. */
+static void
+animation_focus(GowlCompositor *self, GowlClient *c)
+{
+	GowlAnimationState *state = gowl_animation_state(c);
+	gdouble strength;
+	gint x, y;
+
+	if (!gowl_animation_enabled(self))
+		return;
+	strength = jiggle_strength(self, c);
+	if (strength <= 0.0 || c->scene == NULL || !state->anim_placed
+	    || state->anim_active || state->anim_opening
+	    || !wlr_scene_node_coords(&c->scene->node, &x, &y)
+	    || !ghost_capture(c))
+		return;
+
+	state->anim_from = state->anim_to = state->anim_cur = c->geom;
+	state->anim_active = TRUE;
+	state->anim_pop = FALSE;
+	state->anim_start_us = g_get_monotonic_time();
+	state->anim_dur_us = (gint64)MIN(220,
+		gowl_config_get_animation_duration(self->config)) * 1000;
+	state->anim_jiggle[0] = 5.0 * strength;
+	state->anim_jiggle[1] = 0.0;
+	state->anim_jiggle[2] = MIN(8.0, c->geom.width * 0.015) * strength;
+	state->anim_jiggle[3] = -MIN(6.0, c->geom.height * 0.015) * strength;
+	geometry_apply(self, c, &c->geom);
+	if (c->mon != NULL && c->mon->wlr_output != NULL)
+		wlr_output_schedule_frame(c->mon->wlr_output);
+}
+
+static gboolean
+animation_overlay(GowlCompositor *self, GowlClient *c, gboolean showing)
+{
+	GowlAnimationState *state = gowl_animation_state(c);
+	struct wlr_box hidden, start, target;
+	gint duration;
+
+	if (!gowl_animation_enabled(self) || c->scene == NULL || c->mon == NULL) {
+		gowl_animation_cancel(c);
+		return FALSE;
+	}
+	duration = showing ? MIN(240, open_duration(self)) : MIN(180, close_duration(self));
+	if (duration <= 0) {
+		gowl_animation_cancel(c);
+		return FALSE;
+	}
+	hidden = c->geom;
+	switch (c->overlay_anchor) {
+	case 1: hidden.y = c->mon->w.y + c->mon->w.height; break;
+	case 2: hidden.x = c->mon->w.x - hidden.width; break;
+	case 3: hidden.x = c->mon->w.x + c->mon->w.width; break;
+	default: hidden.y = c->mon->w.y - hidden.height; break;
+	}
+	target = showing ? c->geom : hidden;
+	if (state->anim_active && state->anim_overlay && wlr_box_equal(&state->anim_to, &target))
+		return TRUE;
+	start = state->anim_active && state->anim_overlay
+		? state->anim_cur : (showing ? hidden : c->geom);
+	gowl_animation_open_cancel(c);
+	state->anim_overlay = state->anim_active = TRUE;
+	state->anim_pop = FALSE;
+	state->anim_from = state->anim_cur = start;
+	state->anim_to = target;
+	state->anim_start_us = g_get_monotonic_time();
+	state->anim_dur_us = (gint64)duration * 1000;
+	memset(state->anim_jiggle, 0, sizeof(state->anim_jiggle));
+	geometry_apply(self, c, &start);
+	if (c->mon->wlr_output != NULL)
+		wlr_output_schedule_frame(c->mon->wlr_output);
+	return TRUE;
+}
+
+/* Scene-effect hooks keep every animation decision inside this module. */
+static void
+animation_bind(GowlModuleAnimation *mod, GowlCompositor *self)
+{
+	g_weak_ref_set(&mod->compositor, self);
+}
+
+static gboolean
+animation_client_event(GowlSceneEffect *effect, GowlCompositor *self,
+                        GowlClient *c, GowlSceneEffectEvent event,
+                        const struct wlr_box *previous, gboolean interactive)
+{
+	GowlAnimationState *state = gowl_animation_state(c);
+	GowlModuleAnimation *mod = GOWL_MODULE_ANIMATION(effect);
+	struct wlr_box from, box;
+
+	animation_bind(mod, self);
+	switch (event) {
+	case GOWL_SCENE_EFFECT_OVERLAY_SHOW:
+	case GOWL_SCENE_EFFECT_OVERLAY_HIDE:
+		return animation_overlay(self, c, event == GOWL_SCENE_EFFECT_OVERLAY_SHOW);
+	case GOWL_SCENE_EFFECT_KEYBOARD_FOCUS:
+		animation_focus(self, c);
+		break;
+	case GOWL_SCENE_EFFECT_GEOMETRY:
+		if (c->isoverlay) {
+			gowl_animation_cancel(c);
+			gowl_animation_open_cancel(c);
+			state->anim_placed = TRUE;
+			return FALSE;
+		}
+		if (!interactive && state->anim_placed && gowl_animation_enabled(self)) {
+			from = state->anim_active ? state->anim_cur : *previous;
+			if (!gowl_layout_allows_overflow(self, c->mon)) {
+				from.x = c->scene->node.x;
+				from.y = c->scene->node.y;
+			}
+			gowl_animation_start(self, c, &from, &c->geom);
+		} else {
+			gowl_animation_cancel(c);
+		}
+		if (!state->anim_active)
+			wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
+		if (!state->anim_placed) {
+			state->anim_placed = TRUE;
+			if (!interactive && !c->isembedded)
+				gowl_animation_open_start(self, c);
+		}
+		box = state->anim_active ? state->anim_cur : c->geom;
+		gowl_compositor_apply_frame_geometry(self, c, box.width, box.height);
+		return TRUE;
+	case GOWL_SCENE_EFFECT_REVEAL:
+		if (state->anim_placed)
+			gowl_animation_reveal_start(self, c);
+		break;
+	case GOWL_SCENE_EFFECT_RELEASE:
+		gowl_animation_settle(self, c, previous);
+		break;
+	case GOWL_SCENE_EFFECT_UNMAP:
+		gowl_animation_close_start(self, c);
+		G_GNUC_FALLTHROUGH;
+	case GOWL_SCENE_EFFECT_DESTROY:
+		gowl_animation_cancel(c);
+		gowl_animation_open_cancel(c);
+		state->anim_placed = FALSE;
+		break;
+	}
+	return FALSE;
+}
+
+static gboolean
+animation_geometry(GowlSceneEffect *effect, GowlClient *c, struct wlr_box *box)
+{
+	GowlAnimationState *state = gowl_animation_state(c);
+	if (!state->anim_active)
+		return FALSE;
+	*box = state->anim_cur;
+	if (state->anim_overlay && c->mon != NULL)
+		wlr_box_intersection(box, &state->anim_cur, &c->mon->w);
+	return TRUE;
+}
+
+static void
+animation_alpha(GowlSceneEffect *effect, GowlClient *c, gfloat alpha)
+{
+	gowl_scene_snapshot_set_opacity(gowl_animation_state(c)->anim_ghost, alpha);
+}
+
+static struct wlr_surface *
+animation_surface_at(GowlSceneEffect *effect, GowlClient *c,
+                      gdouble x, gdouble y, gdouble *sx, gdouble *sy)
+{
+	return gowl_animation_surface_at(c, x, y, sx, sy);
+}
+
+static gboolean
+animation_frame(GowlSceneEffect *effect, GowlCompositor *self,
+                 GowlMonitor *m, gint64 now)
+{
+	animation_bind(GOWL_MODULE_ANIMATION(effect), self);
+	return gowl_animation_tick(self, m, now);
+}
+
+static void
+animation_surface_frame_done(struct wlr_surface *surface, int sx, int sy, void *now)
+{
+	wlr_surface_send_frame_done(surface, now);
+}
+
+static void
+animation_frame_done(GowlSceneEffect *effect, GowlCompositor *self,
+                      GowlMonitor *m, const struct timespec *now)
+{
+	GList *l;
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = l->data;
+		struct wlr_surface *surface;
+		gint x, y;
+		if (c->mon != m || gowl_animation_state(c)->anim_ghost == NULL
+		    || c->scene == NULL
+		    || !wlr_scene_node_coords(&c->scene->node, &x, &y))
+			continue;
+		surface = gowl_client_get_wlr_surface(c);
+		if (surface != NULL)
+			wlr_surface_for_each_surface(surface, animation_surface_frame_done, (void *)now);
+	}
+}
+
+static void
+animation_monitor_removed(GowlSceneEffect *effect, GowlCompositor *self, GowlMonitor *m)
+{
+	gowl_animation_close_forget_monitor(self, m);
+}
+
+static void
+animation_finish(GowlSceneEffect *effect, GowlCompositor *self)
+{
+	GList *l;
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = l->data;
+		GowlAnimationState *state = gowl_animation_state(c);
+		if (state->anim_active && c->scene != NULL)
+			geometry_finish(self, c);
+		else
+			gowl_animation_cancel(c);
+		gowl_animation_open_cancel(c);
+	}
+	gowl_animation_close_finish_all(self);
+	g_weak_ref_set(&GOWL_MODULE_ANIMATION(effect)->compositor, NULL);
+}
+
+static void
+animation_effect_init(GowlSceneEffectInterface *iface)
+{
+	iface->client_event = animation_client_event;
+	iface->get_geometry = animation_geometry;
+	iface->alpha_changed = animation_alpha;
+	iface->surface_at = animation_surface_at;
+	iface->frame = animation_frame;
+	iface->frame_done = animation_frame_done;
+	iface->monitor_removed = animation_monitor_removed;
+	iface->finish = animation_finish;
+}
+
+static void
+animation_startup(GowlStartupHandler *handler, gpointer compositor)
+{
+	GowlCompositor *self = compositor;
+	GList *l;
+	animation_bind(GOWL_MODULE_ANIMATION(handler), self);
+	/* Loading an effect at runtime must not replay entrances on windows
+	 * that are already placed. Startup before mapping has an empty list. */
+	for (l = self->clients; l != NULL; l = l->next)
+		gowl_animation_state(l->data)->anim_placed = TRUE;
+}
+
+static void
+animation_shutdown(GowlShutdownHandler *handler, gpointer compositor)
+{
+	animation_finish(GOWL_SCENE_EFFECT(handler), compositor);
+}
+
+static void animation_startup_init(GowlStartupHandlerInterface *iface)
+{
+	iface->on_startup = animation_startup;
+}
+static void animation_shutdown_init(GowlShutdownHandlerInterface *iface)
+{
+	iface->on_shutdown = animation_shutdown;
+}
+static gboolean animation_activate(GowlModule *mod) { return TRUE; }
+static const gchar *animation_name(GowlModule *mod) { return "animation"; }
+static const gchar *animation_description(GowlModule *mod)
+{
+	return "Window pops, fades, layout motion, and settling jiggles";
+}
+static const gchar *animation_version(GowlModule *mod) { return "0.1.0"; }
+
+static void
+animation_deactivate(GowlModule *base)
+{
+	GowlModuleAnimation *mod = GOWL_MODULE_ANIMATION(base);
+	GowlCompositor *self = g_weak_ref_get(&mod->compositor);
+	if (self != NULL) {
+		animation_finish(GOWL_SCENE_EFFECT(mod), self);
+		g_object_unref(self);
+	}
+	g_list_free_full(mod->close_anims, (GDestroyNotify)close_anim_free);
+	mod->close_anims = NULL;
+}
+
+static void
+animation_finalize(GObject *object)
+{
+	animation_deactivate(GOWL_MODULE(object));
+	g_weak_ref_clear(&GOWL_MODULE_ANIMATION(object)->compositor);
+	G_OBJECT_CLASS(gowl_module_animation_parent_class)->finalize(object);
+}
+
+static void
+gowl_module_animation_class_init(GowlModuleAnimationClass *klass)
+{
+	GowlModuleClass *mod = GOWL_MODULE_CLASS(klass);
+	mod->activate = animation_activate;
+	mod->deactivate = animation_deactivate;
+	mod->get_name = animation_name;
+	mod->get_description = animation_description;
+	mod->get_version = animation_version;
+	G_OBJECT_CLASS(klass)->finalize = animation_finalize;
+}
+
+static void gowl_module_animation_init(GowlModuleAnimation *mod)
+{
+	g_weak_ref_init(&mod->compositor, NULL);
+}
+
+G_MODULE_EXPORT GType gowl_module_register(void)
+{
+	return GOWL_TYPE_MODULE_ANIMATION;
 }

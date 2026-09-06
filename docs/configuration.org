@@ -181,10 +181,47 @@ Layout engine settings.
 | =nmaster= | int    | =1=      | Number of windows in the master area             |
 | =scroll-column-width= | float | =0.5= | Scrolling-layout column width, as a fraction of the usable width.  0.5 shows two columns, 1.0 shows one.  Matches Hyprland's =scrolling.column_width= |
 
+Layouts are plugins. The standalone defaults enable =tile=, =monocle=
+and =float=; enable scrolling and the optional layout toast in the
+existing module mapping:
+
+#+begin_src yaml
+modules:
+  scrolling:
+    enabled: true
+  layout-indicator:
+    enabled: true
+#+end_src
+
+CMacs loads these modules by default. Its Super+< / Super+> shortcuts
+cycle active layouts only on the current tag view. Super+s selects the
+scrolling row and Super+[ / Super+] scroll it. Each tag view remembers
+its layout independently.
+
 **** Motion
 :PROPERTIES:
 :CUSTOM_ID: animations
 :END:
+
+Standalone Gowl leaves the animation plugin unloaded by default. Opt in
+by adding this to the existing =modules= mapping:
+
+#+begin_src yaml
+modules:
+  animation:
+    enabled: true
+#+end_src
+
+=cmacs --gowl= bundles and loads =animation.so= by default, preserving
+its window motion. The existing top-level settings below remain valid
+for YAML, C config, and GObject/Elisp callers. =animations: true= alone
+does not load the plugin in standalone Gowl.
+
+Keyboard focus cycling with Super+j/k gives the newly active window a
+small 220 ms wiggle while retaining the focus border color. It does not
+change window placement or interrupt an entrance or layout transition.
+It follows =animation-jiggle-strength= (0 disables it), and skips
+fullscreen and embedded windows.
 
 | Property                   | Type   | Default           | Description |
 |----------------------------+--------+-------------------+-------------|

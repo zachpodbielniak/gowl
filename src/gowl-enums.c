@@ -262,6 +262,7 @@ gowl_action_get_type(void)
 			{ GOWL_ACTION_KILL_CLIENT,       "GOWL_ACTION_KILL_CLIENT",       "kill-client" },
 			{ GOWL_ACTION_TOGGLE_FLOAT,      "GOWL_ACTION_TOGGLE_FLOAT",      "toggle-float" },
 			{ GOWL_ACTION_TOGGLE_FULLSCREEN, "GOWL_ACTION_TOGGLE_FULLSCREEN", "toggle-fullscreen" },
+			{ GOWL_ACTION_MOVE_STACK,        "GOWL_ACTION_MOVE_STACK",        "move-stack" },
 			{ GOWL_ACTION_FOCUS_STACK,       "GOWL_ACTION_FOCUS_STACK",       "focus-stack" },
 			{ GOWL_ACTION_FOCUS_MONITOR,     "GOWL_ACTION_FOCUS_MONITOR",     "focus-monitor" },
 			{ GOWL_ACTION_TAG_VIEW,          "GOWL_ACTION_TAG_VIEW",          "tag-view" },

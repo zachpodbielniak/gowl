@@ -1,6 +1,9 @@
 /* Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later */
 
+#undef G_LOG_DOMAIN
+#define G_LOG_DOMAIN "gowl-animation"
+
 #include "gowl-scene-snapshot.h"
 #include "gowl-wlroots-compat.h"
 

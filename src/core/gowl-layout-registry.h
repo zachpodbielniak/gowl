@@ -31,7 +31,7 @@ typedef struct _GowlMonitor GowlMonitor;
  * @compositor: the compositor
  * @monitor: the monitor being arranged
  *
- * A built-in layout.  Called with the monitor's window area already
+ * A layout callback registered by an extension. Called with the monitor's window area already
  * computed and its gaps already applied by the caller's helpers; the
  * function walks the visible tiling clients and places them.
  */
@@ -42,14 +42,12 @@ typedef void (*GowlLayoutArrangeFunc) (GowlCompositor *compositor,
  * GowlLayoutEntry:
  * @name: the name a config or a keybind uses, e.g. "tile"
  * @symbol: the short indicator a bar renders, e.g. "[]="
- * @arrange: (nullable): a built-in arrange function
+ * @arrange: (nullable): an extension arrange callback
  * @provider: (nullable): a module implementing #GowlLayoutProvider
  *
  * One entry in the layout registry.  Exactly one of @arrange and
- * @provider is set: built-ins are plain functions inside the
- * compositor, module layouts are objects.  Both are peers here, which
- * is the point --- a module layout is selectable by name exactly like
- * `tile', rather than being a second-class thing bolted beside it.
+ * @provider is set. Shipped layouts use module providers; the callback
+ * form remains available to embedders.
  */
 typedef struct {
 	gchar                 *name;
@@ -58,19 +56,13 @@ typedef struct {
 	gpointer               provider;
 } GowlLayoutEntry;
 
-/* The built-in layouts.  Defined in gowl-compositor.c, where the client
- * list and resize path live; declared here because the registry is what
- * holds pointers to them. */
-void gowl_compositor_layout_tile      (GowlCompositor *self, GowlMonitor *m);
-void gowl_compositor_layout_monocle   (GowlCompositor *self, GowlMonitor *m);
-void gowl_compositor_layout_float     (GowlCompositor *self, GowlMonitor *m);
-void gowl_compositor_layout_scrolling (GowlCompositor *self, GowlMonitor *m);
+gboolean gowl_layout_allows_overflow (GowlCompositor *self, GowlMonitor *monitor);
 
 /**
  * gowl_layout_registry_init:
  * @self: a #GowlCompositor
  *
- * Creates the registry and adds the built-in layouts.  Called once
+ * Creates an empty registry for layout plugins.  Called once
  * during startup, before any monitor exists.
  */
 void gowl_layout_registry_init (GowlCompositor *self);
@@ -88,11 +80,11 @@ void gowl_layout_registry_finish (GowlCompositor *self);
  * @self: a #GowlCompositor
  * @name: the layout's name; must be unique
  * @symbol: the short indicator for a bar
- * @arrange: (nullable): a built-in arrange function
+ * @arrange: (nullable): an extension arrange callback
  * @provider: (nullable): a #GowlLayoutProvider module
  *
  * Adds a layout.  Re-registering an existing @name replaces it, so a
- * module can override a built-in by taking its name.
+ * module can override an existing layout by taking its name.
  *
  * Returns: %TRUE when the layout was added or replaced.
  */

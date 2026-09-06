@@ -46,7 +46,8 @@
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include "gowl-tablet.h"
 #include "gowl-layout-registry.h"
-#include "gowl-animation.h"
+#include "../interfaces/gowl-layout-provider.h"
+#include "gowl-effects.h"
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/backend/libinput.h>
@@ -293,12 +294,6 @@ static void constraint_check_surface  (GowlCompositor *self,
 
 
 /* layout helpers */
-/* Built-in layouts.  Non-static: the layout registry holds pointers to
- * them, alongside the module-provided ones. */
-void gowl_compositor_layout_tile      (GowlCompositor *self, GowlMonitor *m);
-void gowl_compositor_layout_monocle   (GowlCompositor *self, GowlMonitor *m);
-void gowl_compositor_layout_float     (GowlCompositor *self, GowlMonitor *m);
-void gowl_compositor_layout_scrolling (GowlCompositor *self, GowlMonitor *m);
 static void resize_client         (GowlCompositor *self, GowlClient *c,
                                    struct wlr_box geo, gboolean interact);
 static void applybounds           (GowlClient *c, struct wlr_box *bbox);
@@ -322,7 +317,8 @@ static GowlMonitor *xytomon       (GowlCompositor *self,
 
 /* Macros ported from dwl */
 #define VISIBLEON(C, M)  ((M) && (C)->mon == (M) && \
-	((C)->tags & (M)->tagset[(M)->seltags]))
+	((C)->isoverlay ? (C)->overlay_visible : \
+	 (((C)->tags & (M)->tagset[(M)->seltags]) != 0)))
 #define TAGMASK          ((1u << 9) - 1)
 
 /* -----------------------------------------------------------
@@ -339,7 +335,7 @@ gowl_compositor_dispose(GObject *object)
 
 	/* Release every closing window's held buffer while the renderer
 	 * that owns it is still alive. */
-	gowl_animation_close_finish_all(self);
+	gowl_effects_finish(self);
 
 	if (self->config != NULL)
 		g_signal_handlers_disconnect_by_func(
@@ -532,6 +528,10 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	object_class->finalize     = gowl_compositor_finalize;
 	object_class->set_property = gowl_compositor_set_property;
 	object_class->get_property = gowl_compositor_get_property;
+
+	/* Emitted after a monitor's effective layout changes, including tag views. */
+	g_signal_new("layout-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_MONITOR, G_TYPE_STRING);
 
 	/**
 	 * GowlCompositor:prefix-key-policy:
@@ -1181,7 +1181,7 @@ recording_note(GowlCompositor *self, const GowlRecordedEvent *event)
 	    || !gowl_input_recorder_is_active(self->input_recorder))
 		return;
 
-	focused = gowl_compositor_get_focused_client(self);
+	focused = focustop(self, self->selmon);
 	app_id  = focused != NULL ? gowl_client_get_app_id(focused) : NULL;
 	title   = focused != NULL ? gowl_client_get_title(focused) : NULL;
 
@@ -1782,10 +1782,15 @@ gowl_compositor_get_focused_client(GowlCompositor *self)
 {
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
-	if (self->fstack == NULL)
+	{
+		GList *link;
+		for (link = self->fstack; link != NULL; link = link->next) {
+			GowlClient *client = link->data;
+			if (!client->isoverlay || client->overlay_visible)
+				return client;
+		}
 		return NULL;
-
-	return GOWL_CLIENT(self->fstack->data);
+	}
 }
 
 /**
@@ -2202,6 +2207,36 @@ gowl_compositor_set_bar(
 
 	if (bar != NULL)
 		self->bar = g_object_ref(bar);
+}
+
+void
+gowl_compositor_move_stack(GowlCompositor *self, gint direction)
+{
+	GowlClient *focused, *candidate;
+	GList *start, *link;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	focused = focustop(self, self->selmon);
+	if (direction == 0 || focused == NULL || focused->isfloating
+	    || focused->isfullscreen || focused->isembedded || focused->isoverlay)
+		return;
+	start = g_list_find(self->clients, focused);
+	if (start == NULL)
+		return;
+	link = start;
+	for (;;) {
+		link = direction > 0 ? link->next : link->prev;
+		if (link == NULL)
+			link = direction > 0 ? self->clients : g_list_last(self->clients);
+		if (link == start)
+			return;
+		candidate = link->data;
+		if (VISIBLEON(candidate, focused->mon) && !candidate->isfloating
+		    && !candidate->isfullscreen && !candidate->isembedded && !candidate->isoverlay) {
+			gowl_compositor_swap_clients(self, focused, candidate);
+			return;
+		}
+	}
 }
 
 /**
@@ -3016,6 +3051,7 @@ gowl_compositor_start(
 	/* The layout registry, before any monitor exists so a monitor
 	 * created during backend start already has layouts to pick from. */
 	gowl_layout_registry_init(self);
+	gowl_layout_adopt_providers(self);
 
 	/* Gamma control, so gammastep / wlsunset can warm the screen at
 	 * night.  Without this global they refuse to start at all. */
@@ -3563,7 +3599,7 @@ gowl_compositor_apply_frame_geometry(
 	float color[4];
 
 	for (bi = 0; bi < 4; bi++)
-		color[bi] = c->border_color[bi] * c->anim_alpha;
+		color[bi] = c->border_color[bi] * c->effect_alpha;
 
 	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
 	          self->module_mgr);
@@ -3601,6 +3637,46 @@ gowl_compositor_apply_frame_geometry(
 	                            width - (gint)c->bw, c->bw);
 }
 
+gboolean
+gowl_compositor_clip_client_geometry(GowlCompositor *self, GowlClient *c, const struct wlr_box *box)
+{
+	struct wlr_box visible, content, clip;
+	gint gx = 0, gy = 0;
+	if (!c->isoverlay && (c->isfloating || c->isfullscreen
+	    || !gowl_layout_allows_overflow(self, c->mon)))
+		return FALSE;
+
+	if (c->mon == NULL || (!c->isoverlay && !VISIBLEON(c, c->mon))
+	    || !wlr_box_intersection(&visible, box, &c->mon->w)
+	    || visible.width <= 2 * (gint)c->bw || visible.height <= 2 * (gint)c->bw) {
+		wlr_scene_node_set_enabled(&c->scene->node, FALSE);
+		return TRUE;
+	}
+	wlr_scene_node_set_enabled(&c->scene->node, TRUE);
+	wlr_scene_node_set_position(&c->scene->node, visible.x, visible.y);
+	gowl_compositor_apply_frame_geometry(self, c, visible.width, visible.height);
+	content = (struct wlr_box){box->x + c->bw, box->y + c->bw,
+		box->width - 2 * (gint)c->bw, box->height - 2 * (gint)c->bw};
+	if (c->scene_surface == NULL)
+		return TRUE;
+	if (!wlr_box_intersection(&clip, &content, &c->mon->w)) {
+		wlr_scene_node_set_enabled(&c->scene_surface->node, FALSE);
+		return TRUE;
+	}
+	if (c->xdg_toplevel != NULL) {
+		gx = c->xdg_toplevel->base->geometry.x;
+		gy = c->xdg_toplevel->base->geometry.y;
+	}
+	clip.x += gx - content.x;
+	clip.y += gy - content.y;
+	wlr_scene_node_set_position(&c->scene_surface->node,
+		content.x - visible.x, content.y - visible.y);
+	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
+	wlr_scene_node_set_enabled(&c->scene_surface->node, TRUE);
+	return TRUE;
+}
+
+
 static void
 resize_client(
 	GowlCompositor *self,
@@ -3612,8 +3688,9 @@ resize_client(
 	struct wlr_box *bbox;
 	struct wlr_box sgeom;
 	struct wlr_box clip;
+	gboolean animated;
 
-	if (c->mon == NULL)
+	if (c->mon == NULL || (c->isoverlay && interact))
 		return;
 
 	if (interact) {
@@ -3628,50 +3705,19 @@ resize_client(
 	prev_geom = c->geom;
 
 	c->geom = geo;
-	applybounds(c, bbox);
+	if (!c->isoverlay && (interact || c->isfloating || c->isfullscreen
+	    || !gowl_layout_allows_overflow(self, c->mon)))
+		applybounds(c, bbox);
 
-	/* Update scene-graph geometry, borders included.
-	 *
-	 * With animations on the window is held at the rect it currently
-	 * occupies and the frame loop walks the whole rect --- position and
-	 * size together --- to the new one.  An interactive move/resize is
-	 * exempt: the window has to track the pointer 1:1 or dragging
-	 * feels like steering a boat. */
-	if (!interact && c->anim_placed && gowl_animation_enabled(self)) {
-		struct wlr_box from;
-
-		/*
-		 * Where the window IS, which mid-animation is the rect the
-		 * tick last drew rather than the one the layout last decided.
-		 * Taking `old geometry' from c->geom would be taking it from
-		 * a value this function overwrote four lines ago.
-		 */
-		from = c->anim_active ? c->anim_cur : prev_geom;
-		from.x = c->scene->node.x;
-		from.y = c->scene->node.y;
-
-		gowl_animation_start(self, c, &from, &c->geom);
-		if (!c->anim_active)
-			wlr_scene_node_set_position(&c->scene->node,
-			                            c->geom.x, c->geom.y);
-	} else {
-		gowl_animation_cancel(c);
-		wlr_scene_node_set_position(&c->scene->node,
-		                            c->geom.x, c->geom.y);
-	}
-	/* First placement gets one entrance, after the layout chooses its
-	 * destination. Subsequent arrangements retain that animation. */
-	if (!c->anim_placed) {
-		c->anim_placed = TRUE;
-		if (!interact && !c->isembedded)
-			gowl_animation_open_start(self, c);
+	/* A scene-effect provider may own presentation, while the client
+	 * still receives exactly one configure for the final layout size. */
+	animated = gowl_effects_client_event(self, c, GOWL_SCENE_EFFECT_GEOMETRY,
+	                                      &prev_geom, interact);
+	if (!animated) {
+		wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
+		gowl_compositor_apply_frame_geometry(self, c, c->geom.width, c->geom.height);
 	}
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
-
-	/* Do not overwrite interpolated borders with the target size. */
-	gowl_compositor_apply_frame_geometry(self, c,
-		c->anim_active ? c->anim_cur.width : c->geom.width,
-		c->anim_active ? c->anim_cur.height : c->geom.height);
 
 	/* Send configure to the underlying surface */
 #ifdef GOWL_HAVE_XWAYLAND
@@ -3713,6 +3759,13 @@ resize_client(
 	clip.width  = c->geom.width - (gint)c->bw;
 	clip.height = c->geom.height - (gint)c->bw;
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
+	{
+		struct wlr_box shown = animated ? gowl_effects_geometry(c) : c->geom;
+		if (c->isoverlay && !c->overlay_visible)
+			wlr_scene_node_set_enabled(&c->scene->node, FALSE);
+		else
+			gowl_compositor_clip_client_geometry(self, c, &shown);
+	}
 }
 
 /**
@@ -3728,6 +3781,8 @@ setfloating(
 	GowlClient     *c,
 	gboolean        floating
 ){
+	if (c->isoverlay)
+		return;
 	c->isfloating = floating;
 
 	if (c->mon == NULL)
@@ -3755,6 +3810,8 @@ setfullscreen(
 ){
 	gint border_width;
 
+	if (c->isoverlay)
+		return;
 	c->isfullscreen = fullscreen;
 
 	if (c->mon == NULL)
@@ -3879,11 +3936,16 @@ xytonode(
 			if (pnode->data != NULL && GOWL_IS_CLIENT(pnode->data))
 				c = (GowlClient *)pnode->data;
 		}
+		if (c != NULL && c->isoverlay && !c->overlay_visible) {
+			c = NULL;
+			surface = NULL;
+			continue;
+		}
 		/* A snapshot has no wlr_scene_surface addon. Resolve its input
 		 * through the live surface at the displayed scale, rather than
 		 * clearing focus or sending the click to a lower layer. */
-		if (surface == NULL && c != NULL && c->anim_ghost != NULL)
-			surface = gowl_animation_surface_at(c, x, y, &lx, &ly);
+		if (surface == NULL && c != NULL)
+			surface = gowl_effects_surface_at(c, x, y, &lx, &ly);
 	}
 
 	if (psurface != NULL) *psurface = surface;
@@ -3954,16 +4016,22 @@ client_set_border_color(
 
 	memcpy(c->border_color, color, sizeof(c->border_color));
 	for (i = 0; i < 4; i++)
-		faded[i] = color[i] * c->anim_alpha;
+		faded[i] = color[i] * c->effect_alpha;
 	color = faded;
 
 	/* If a decorator module is active, delegate to it */
 	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
 	          self->module_mgr);
 	if (dec != NULL) {
+		struct wlr_box box = gowl_effects_geometry(c);
+		if (c->mon != NULL && !c->isfloating && !c->isfullscreen
+		    && gowl_layout_allows_overflow(self, c->mon)) {
+			struct wlr_box clipped;
+			if (!wlr_box_intersection(&clipped, &box, &c->mon->w)) return;
+			box = clipped;
+		}
 		gowl_client_decorator_render_decoration(
-			dec, c, c->anim_active ? c->anim_cur.width : c->geom.width,
-			c->anim_active ? c->anim_cur.height : c->geom.height, c->bw, color);
+			dec, c, box.width, box.height, c->bw, color);
 		return;
 	}
 
@@ -3996,7 +4064,7 @@ gowl_compositor_arrange(
 	 * Embedded clients are externally managed — skip them. */
 	for (l = self->clients; l != NULL; l = l->next) {
 		c = (GowlClient *)l->data;
-		if (c->isembedded)
+		if (c->isembedded || c->isoverlay)
 			continue;
 		if (c->mon == m) {
 			gboolean vis = VISIBLEON(c, m);
@@ -4006,8 +4074,8 @@ gowl_compositor_arrange(
 			 * every layout change, and re-fading an already-visible
 			 * window on each of them would make the whole tag flicker
 			 * whenever anything moved. */
-			if (vis && !c->scene->node.enabled && c->anim_placed)
-				gowl_animation_reveal_start(self, c);
+			if (vis && !c->scene->node.enabled)
+				gowl_effects_client_event(self, c, GOWL_SCENE_EFFECT_REVEAL, NULL, FALSE);
 
 			wlr_scene_node_set_enabled(&c->scene->node, vis);
 		}
@@ -4023,7 +4091,7 @@ gowl_compositor_arrange(
 	 * Embedded clients are externally managed — skip them. */
 	for (l = self->clients; l != NULL; l = l->next) {
 		c = (GowlClient *)l->data;
-		if (c->isembedded)
+		if (c->isembedded || c->isoverlay)
 			continue;
 		if (c->mon != m)
 			continue;
@@ -4033,7 +4101,9 @@ gowl_compositor_arrange(
 		if (c->isfloating)
 			wlr_scene_node_reparent(&c->scene->node,
 			                        self->layers[GOWL_SCENE_LAYER_FLOAT]);
-		/* non-floating stays in current parent (tile) */
+		else
+			wlr_scene_node_reparent(&c->scene->node,
+			                        self->layers[GOWL_SCENE_LAYER_TILE]);
 	}
 
 	/* Run the monitor's selected layout, which also sets its symbol.
@@ -4161,6 +4231,87 @@ gowl_compositor_show_client(
 	if (mon != NULL) {
 		self->selmon = mon;
 		gowl_compositor_arrange(self, mon);
+	}
+}
+
+void
+gowl_compositor_cancel_prefloat_hint(GowlCompositor *self, pid_t pid)
+{
+	guint i;
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	for (i = 0; i < self->prefloat_hints->len;) {
+		if (g_array_index(self->prefloat_hints, GowlPrefloatHintEntry, i).pid == pid)
+			g_array_remove_index_fast(self->prefloat_hints, i);
+		else
+			i++;
+	}
+}
+
+/**
+ * gowl_compositor_get_selected_monitor:
+ * @self: the compositor
+ * Returns: (transfer none) (nullable): the currently selected output
+ */
+GowlMonitor *
+gowl_compositor_get_selected_monitor(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	return self->selmon;
+}
+
+/**
+ * gowl_compositor_present_overlay:
+ * @self: the compositor
+ * @c: a client owned by an overlay module
+ * @monitor: (nullable): destination output, required when showing
+ * @x: horizontal position
+ * @y: vertical position
+ * @width: outer width
+ * @height: outer height
+ * @anchor: 0 top, 1 bottom, 2 left, 3 right
+ * @visible: desired visibility
+ *
+ * Places a fixed overlay without arranging other clients. Its owner alone
+ * controls geometry and visibility. Effects may animate the transition;
+ * keyboard focus is transferred immediately and hidden overlays ignore input.
+ */
+void
+gowl_compositor_present_overlay(GowlCompositor *self, GowlClient *c,
+                                GowlMonitor *monitor, gint x, gint y,
+                                gint width, gint height, gint anchor, gboolean visible)
+{
+	struct wlr_box target = { x, y, width, height };
+	gboolean handled;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(c));
+	if (c->scene == NULL || (visible && monitor == NULL)
+	    || (!visible && !c->overlay_visible))
+		return;
+	if (visible) {
+		if (!c->isoverlay || c->mon != monitor || !wlr_box_equal(&c->geom, &target)) {
+			gowl_effects_client_event(self, c, GOWL_SCENE_EFFECT_DESTROY, NULL, FALSE);
+			c->isoverlay = TRUE;
+			c->isfloating = TRUE;
+			c->isfullscreen = FALSE;
+			c->mon = monitor;
+			c->tags = monitor->tagset[monitor->seltags];
+			resize_client(self, c, target, FALSE);
+		}
+		c->overlay_anchor = CLAMP(anchor, 0, 3);
+		wlr_scene_node_reparent(&c->scene->node, self->layers[GOWL_SCENE_LAYER_OVERLAY]);
+		wlr_scene_node_raise_to_top(&c->scene->node);
+	}
+	c->overlay_visible = visible;
+	handled = gowl_effects_client_event(self, c, visible
+		? GOWL_SCENE_EFFECT_OVERLAY_SHOW : GOWL_SCENE_EFFECT_OVERLAY_HIDE, NULL, FALSE);
+	if (!handled)
+		wlr_scene_node_set_enabled(&c->scene->node, visible);
+	if (visible) {
+		gowl_compositor_focus_client(self, c, TRUE);
+	} else if (self->wlr_seat != NULL
+	           && self->wlr_seat->keyboard_state.focused_surface == client_surface(c)) {
+		gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
 	}
 }
 
@@ -4426,6 +4577,9 @@ gowl_compositor_focus_client(
 		return;
 	}
 
+	if (c != NULL && c->isoverlay && !c->overlay_visible)
+		return;
+
 	/* Raise client in stacking order if requested */
 	if (c != NULL && lift)
 		wlr_scene_node_raise_to_top(&c->scene->node);
@@ -4548,6 +4702,9 @@ gowl_compositor_focus_client(
 	if (self->seat != NULL)
 		gowl_seat_set_focused_client(self->seat, c);
 
+	/* Let the selected layout reveal an offscreen focused client. */
+	gowl_compositor_scroll_to_client(self, c);
+
 	/* Emit compositor-level focus-changed signal */
 	g_signal_emit(self, compositor_signals[SIGNAL_FOCUS_CHANGED], 0, c);
 
@@ -4557,148 +4714,6 @@ gowl_compositor_focus_client(
 		                     c->title != NULL ? c->title : "");
 }
 
-/**
- * tile:
- *
- * Master-stack tiling layout with gap support.
- * Queries the module manager for gap values from GowlGapProvider
- * modules (e.g. vanitygaps).  Outer gaps shrink the usable area,
- * inner gaps add spacing between tiled windows.
- * Ported from dwl's tile().
- */
-void
-gowl_compositor_layout_tile(
-	GowlCompositor *self,
-	GowlMonitor    *m
-){
-	guint mw, my, ty;
-	gint i, n;
-	gint ih, iv, oh, ov;
-	gint aw, ah, ax, ay;
-	GList *l;
-
-	/* Count visible tiling clients */
-	n = 0;
-	for (l = self->clients; l != NULL; l = l->next) {
-		GowlClient *c = (GowlClient *)l->data;
-		if (VISIBLEON(c, m) && !c->isfloating && !c->isfullscreen)
-			n++;
-	}
-	if (n == 0)
-		return;
-
-	/* Query gap provider for gap values */
-	ih = iv = oh = ov = 0;
-	if (self->module_mgr != NULL)
-		gowl_module_manager_get_gaps(self->module_mgr, (gpointer)m,
-		                             &ih, &iv, &oh, &ov);
-
-	/* Compute usable area after outer gaps */
-	ax = m->w.x + oh;
-	ay = m->w.y + ov;
-	aw = m->w.width - 2 * oh;
-	ah = m->w.height - 2 * ov;
-
-	if (aw <= 0 || ah <= 0)
-		return;
-
-	if (m->vsplit) {
-		/* vsplit: master row on top, stack row on bottom, both
-		 * subdivided along X.  Transpose of the normal layout:
-		 * width and height swap roles, and the inner-gap roles
-		 * swap with them (iv -> gap between master/stack rows,
-		 * ih -> gap between side-by-side windows in a row).
-		 * mfact now sizes the master HEIGHT. */
-		guint mh, mx, tx;
-		if (n > m->nmaster)
-			mh = m->nmaster ? (guint)roundf((float)ah * (float)m->mfact) : 0;
-		else
-			mh = (guint)ah;
-		i = 0;
-		mx = tx = 0;
-		for (l = self->clients; l != NULL; l = l->next) {
-			GowlClient *c = (GowlClient *)l->data;
-			struct wlr_box geo;
-			gint remaining;
-			gint nmaster_count;
-
-			if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
-				continue;
-
-			nmaster_count = m->nmaster < n ? m->nmaster : n;
-
-			if (i < nmaster_count) {
-				/* master row (top) */
-				remaining = nmaster_count - i;
-				geo.x = ax + (gint)mx;
-				geo.y = ay;
-				geo.width = (aw - (gint)mx - (remaining - 1) * ih) / remaining;
-				geo.height = (gint)mh - (n > nmaster_count ? iv / 2 : 0);
-				resize_client(self, c, geo, FALSE);
-				mx += (guint)c->geom.width + (guint)ih;
-			} else {
-				/* stack row (bottom) */
-				remaining = n - i;
-				geo.x = ax + (gint)tx;
-				geo.y = ay + (gint)mh + (nmaster_count > 0 ? iv / 2 : 0);
-				geo.width = (aw - (gint)tx - (remaining - 1) * ih) / remaining;
-				geo.height = ah - (gint)mh - (nmaster_count > 0 ? iv / 2 : 0);
-				resize_client(self, c, geo, FALSE);
-				tx += (guint)c->geom.width + (guint)ih;
-			}
-			i++;
-		}
-		return;
-	}
-
-	if (n > m->nmaster)
-		mw = m->nmaster ? (guint)roundf((float)aw * (float)m->mfact) : 0;
-	else
-		mw = (guint)aw;
-
-	i = 0;
-	my = ty = 0;
-	for (l = self->clients; l != NULL; l = l->next) {
-		GowlClient *c = (GowlClient *)l->data;
-		struct wlr_box geo;
-		gint remaining;
-		gint nmaster_count;
-
-		if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
-			continue;
-
-		nmaster_count = m->nmaster < n ? m->nmaster : n;
-
-		if (i < nmaster_count) {
-			/* Master area (left side) */
-			remaining = nmaster_count - i;
-			geo.x = ax;
-			geo.y = ay + (gint)my;
-			geo.width = (gint)mw - (n > nmaster_count ? ih / 2 : 0);
-			geo.height = (ah - (gint)my - (remaining - 1) * iv) / remaining;
-			resize_client(self, c, geo, FALSE);
-			my += (guint)c->geom.height + (guint)iv;
-		} else {
-			/* Stack area (right side) */
-			remaining = n - i;
-			geo.x = ax + (gint)mw + (nmaster_count > 0 ? ih / 2 : 0);
-			geo.y = ay + (gint)ty;
-			geo.width = aw - (gint)mw - (nmaster_count > 0 ? ih / 2 : 0);
-			geo.height = (ah - (gint)ty - (remaining - 1) * iv) / remaining;
-			resize_client(self, c, geo, FALSE);
-			ty += (guint)c->geom.height + (guint)iv;
-		}
-		i++;
-	}
-}
-
-/**
- * monocle:
- *
- * Monocle layout with gap support: all tiled clients fill the
- * window area minus outer gaps.
- * Ported from dwl's monocle().
- */
 /*
  * gowl_compositor_tiling_clients:
  *
@@ -4737,236 +4752,6 @@ gowl_compositor_tiling_clients(GowlCompositor *self, GowlMonitor *m)
 			out = g_list_prepend(out, c);
 	}
 	return g_list_reverse(out);
-}
-
-/*
- * The float layout: leave every client where the user put it.
- *
- * Deliberately not a no-op.  Clients that were tiled have their scene
- * node in the tiling layer; float has to move them to the float layer
- * or they stay clipped below tiled windows.  Their geometry is left
- * alone -- that is what floating means.
- */
-void
-gowl_compositor_layout_float(GowlCompositor *self, GowlMonitor *m)
-{
-	GList *l;
-
-	for (l = self->clients; l != NULL; l = l->next) {
-		GowlClient *c = (GowlClient *)l->data;
-
-		if (!VISIBLEON(c, m) || c->isfullscreen || c->isembedded)
-			continue;
-		if (c->scene == NULL)
-			continue;
-		if (c->scene->node.parent == self->layers[GOWL_SCENE_LAYER_FS])
-			continue;
-
-		wlr_scene_node_reparent(&c->scene->node,
-		                        self->layers[GOWL_SCENE_LAYER_FLOAT]);
-	}
-}
-
-/*
- * The scrolling layout: a niri-style horizontal strip of columns.
- *
- * Every window is a full-height column of a fixed fractional width, laid
- * left to right in stack order, and the viewport scrolls along the strip
- * rather than the windows being squeezed to fit.  With the default
- * column width of 0.5 two are visible at a time; at 1.0 it is one window
- * per screen.
- *
- * The scroll offset is clamped so the strip cannot be dragged past
- * either end, and so a strip narrower than the screen sits at the left
- * rather than floating in the middle.
- */
-void
-gowl_compositor_layout_scrolling(GowlCompositor *self, GowlMonitor *m)
-{
-	GList *clients, *l;
-	gint ih, iv, oh, ov;
-	gint ax, ay, aw, ah;
-	gint col_w, strip_w, max_scroll;
-	gint n, i;
-	gdouble frac;
-
-	clients = gowl_compositor_tiling_clients(self, m);
-	n = (gint)g_list_length(clients);
-	if (n == 0) {
-		g_list_free(clients);
-		return;
-	}
-
-	ih = iv = oh = ov = 0;
-	if (self->module_mgr != NULL)
-		gowl_module_manager_get_gaps(self->module_mgr, (gpointer)m,
-		                             &ih, &iv, &oh, &ov);
-
-	ax = m->w.x + oh;
-	ay = m->w.y + ov;
-	aw = m->w.width - 2 * oh;
-	ah = m->w.height - 2 * ov;
-	if (aw <= 0 || ah <= 0) {
-		g_list_free(clients);
-		return;
-	}
-
-	frac = self->config != NULL
-		? gowl_config_get_scroll_column_width(self->config)
-		: 0.5;
-	if (frac <= 0.05) frac = 0.05;
-	if (frac > 1.0)  frac = 1.0;
-
-	col_w = (gint)((gdouble)aw * frac) - ih;
-	if (col_w < 1)
-		col_w = 1;
-
-	strip_w = n * (col_w + ih) - ih;
-	max_scroll = strip_w - aw;
-	if (max_scroll < 0)
-		max_scroll = 0;
-	if (m->scroll_x < 0)
-		m->scroll_x = 0;
-	if (m->scroll_x > max_scroll)
-		m->scroll_x = max_scroll;
-
-	i = 0;
-	for (l = clients; l != NULL; l = l->next, i++) {
-		GowlClient *c = (GowlClient *)l->data;
-		struct wlr_box geo;
-
-		geo.x = ax + i * (col_w + ih) - m->scroll_x;
-		geo.y = ay;
-		geo.width = col_w;
-		geo.height = ah;
-		resize_client(self, c, geo, FALSE);
-	}
-
-	g_list_free(clients);
-}
-
-/*
- * gowl_compositor_scroll_to_client:
- *
- * Bring a client into view in the scrolling layout, by the smallest
- * movement that does so.  A focus change that already has the window
- * on screen must not jump the strip, or every focus change becomes a
- * scroll.
- */
-void
-gowl_compositor_scroll_to_client(GowlCompositor *self, GowlClient *c)
-{
-	GowlMonitor *m;
-	GList *clients;
-	gint idx, ih, oh, aw, col_w, x0, x1;
-	gdouble frac;
-
-	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
-
-	if (c == NULL || c->mon == NULL)
-		return;
-	m = c->mon;
-
-	{
-		GowlLayoutEntry *e = gowl_layout_get(self, m);
-
-		if (e == NULL || g_strcmp0(e->name, "scrolling") != 0)
-			return;
-	}
-
-	clients = gowl_compositor_tiling_clients(self, m);
-	idx = g_list_index(clients, c);
-	g_list_free(clients);
-	if (idx < 0)
-		return;
-
-	ih = oh = 0;
-	if (self->module_mgr != NULL)
-		gowl_module_manager_get_gaps(self->module_mgr, (gpointer)m,
-		                             &ih, NULL, &oh, NULL);
-
-	aw = m->w.width - 2 * oh;
-	frac = self->config != NULL
-		? gowl_config_get_scroll_column_width(self->config)
-		: 0.5;
-	if (frac <= 0.05) frac = 0.05;
-	if (frac > 1.0)  frac = 1.0;
-
-	col_w = (gint)((gdouble)aw * frac) - ih;
-	if (col_w < 1)
-		col_w = 1;
-
-	x0 = idx * (col_w + ih);
-	x1 = x0 + col_w;
-
-	if (x0 < m->scroll_x)
-		m->scroll_x = x0;
-	else if (x1 > m->scroll_x + aw)
-		m->scroll_x = x1 - aw;
-	else
-		return;                 /* already fully visible */
-
-	gowl_compositor_arrange(self, m);
-}
-
-/*
- * gowl_compositor_scroll_by:
- *
- * Move the strip by @dx pixels.  Clamping happens in the layout, so a
- * caller can push past the end without having to know how long the
- * strip is.
- */
-void
-gowl_compositor_scroll_by(GowlCompositor *self, GowlMonitor *m, gint dx)
-{
-	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
-
-	if (m == NULL)
-		m = self->selmon;
-	if (m == NULL)
-		return;
-
-	m->scroll_x += dx;
-	gowl_compositor_arrange(self, m);
-}
-
-void
-gowl_compositor_layout_monocle(
-	GowlCompositor *self,
-	GowlMonitor    *m
-){
-	GList *l;
-	GowlClient *top;
-	gint n;
-	gint oh, ov;
-	struct wlr_box area;
-
-	/* Query gap provider for outer gaps only (monocle has no inner gaps) */
-	oh = ov = 0;
-	if (self->module_mgr != NULL)
-		gowl_module_manager_get_gaps(self->module_mgr, (gpointer)m,
-		                             NULL, NULL, &oh, &ov);
-
-	area.x = m->w.x + oh;
-	area.y = m->w.y + ov;
-	area.width = m->w.width - 2 * oh;
-	area.height = m->w.height - 2 * ov;
-
-	n = 0;
-	for (l = self->clients; l != NULL; l = l->next) {
-		GowlClient *c = (GowlClient *)l->data;
-		if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
-			continue;
-		resize_client(self, c, area, FALSE);
-		n++;
-	}
-	if (n > 0) {
-		g_free(m->layout_symbol);
-		m->layout_symbol = g_strdup_printf("[%d]", n);
-	}
-	top = focustop(self, m);
-	if (top != NULL)
-		wlr_scene_node_raise_to_top(&top->scene->node);
 }
 
 /* -----------------------------------------------------------
@@ -5489,12 +5274,6 @@ on_gamma_control_set_gamma(struct wl_listener *listener, void *data)
 }
 
 static void
-animation_frame_done(struct wlr_surface *surface, int sx, int sy, void *data)
-{
-	wlr_surface_send_frame_done(surface, data);
-}
-
-static void
 on_monitor_frame(struct wl_listener *listener, void *data)
 {
 	GowlMonitor *m;
@@ -5518,7 +5297,7 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 	 * needed one more frame to appear.  At 180 ms and 60 Hz that is
 	 * two frames of an eleven-frame animation spent on nothing.
 	 */
-	m->anim_live = gowl_animation_tick(m->compositor, m,
+	m->effect_live = gowl_effects_frame(m->compositor, m,
 	                                   g_get_monotonic_time());
 
 	/* Commit the scene graph to this output.
@@ -5566,31 +5345,13 @@ frame_done:
 	 * moving: an idle output stops redrawing, which would freeze an
 	 * animation halfway.  Per-output, so a window animating on one
 	 * monitor no longer holds every other monitor at full refresh. */
-	if (m->anim_live)
+	if (m->effect_live)
 		wlr_output_schedule_frame(m->wlr_output);
 
 	/* Notify clients that a frame has been rendered */
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(m->scene_output, &now);
-	/* A snapshot hides the live scene tree, so the scene helper cannot
-	 * send its frame callbacks. Keep that client rendering its final
-	 * configure while we animate, ready for the handoff to live content. */
-	if (m->compositor != NULL) {
-		GList *l;
-
-		for (l = m->compositor->clients; l != NULL; l = l->next) {
-			GowlClient *c = l->data;
-			struct wlr_surface *surface;
-			gint x, y;
-
-			if (c->mon != m || c->anim_ghost == NULL || c->scene == NULL
-			    || !wlr_scene_node_coords(&c->scene->node, &x, &y))
-				continue;
-			surface = client_surface(c);
-			if (surface != NULL)
-				wlr_surface_for_each_surface(surface, animation_frame_done, &now);
-		}
-	}
+	gowl_effects_frame_done(m->compositor, m, &now);
 
 	/* Emit frame-rendered on the compositor so modules (e.g. recording)
 	 * can safely capture from the dispatch thread.  EGL is idle at
@@ -5624,7 +5385,7 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 	/* Snapshots of windows that closed on this output would otherwise
 	 * outlive the monitor they point at. */
 	if (self != NULL)
-		gowl_animation_close_forget_monitor(self, m);
+		gowl_effects_monitor_removed(self, m);
 
 	/* Remove event listeners */
 	wl_list_remove(&m->frame.link);
@@ -6379,6 +6140,9 @@ gowl_compositor_dispatch_keybind(
 					gowl_client_close(sel);
 				return TRUE;
 			}
+			case GOWL_ACTION_MOVE_STACK:
+				gowl_compositor_move_stack(self, kb->arg != NULL ? atoi(kb->arg) : 1);
+				return TRUE;
 			case GOWL_ACTION_FOCUS_STACK: {
 				GowlClient *sel, *found;
 				GList *start, *l;
@@ -6418,6 +6182,12 @@ gowl_compositor_dispatch_keybind(
 				}
 				found = (GowlClient *)l->data;
 				gowl_compositor_focus_client(self, found, TRUE);
+				/* Notify effects only after focus actually changes. Focus
+				 * guards and cycling a single window must stay quiet. */
+				if (found != sel && client_surface(found) != NULL
+				    && self->wlr_seat->keyboard_state.focused_surface == client_surface(found))
+					gowl_effects_client_event(self, found,
+						GOWL_SCENE_EFFECT_KEYBOARD_FOCUS, NULL, FALSE);
 				return TRUE;
 			}
 			case GOWL_ACTION_SET_MFACT: {
@@ -6596,7 +6366,7 @@ gowl_compositor_dispatch_keybind(
 				gint dir;
 
 				sel = focustop(self, self->selmon);
-				if (sel == NULL || self->selmon == NULL || kb->arg == NULL)
+				if (sel == NULL || sel->isoverlay || self->selmon == NULL || kb->arg == NULL)
 					return TRUE;
 
 				dir = atoi(kb->arg);
@@ -7790,8 +7560,8 @@ on_cursor_button(struct wl_listener *listener, void *data)
 				            self->wlr_cursor->y);
 				self->selmon = m;
 				setmon(self, self->grabbed_client, m, 0);
-				gowl_animation_settle(self, self->grabbed_client,
-				                       &self->grab_geobox);
+				gowl_effects_client_event(self, self->grabbed_client, GOWL_SCENE_EFFECT_RELEASE,
+				                       &self->grab_geobox, FALSE);
 				self->grabbed_client = NULL;
 			}
 			return;
@@ -7980,7 +7750,7 @@ static void
 begin_interactive(GowlCompositor *self, GowlClient *c, gint mode,
                   guint32 edges)
 {
-	if (c == NULL || gowl_client_get_embedded(c) || c->isfullscreen)
+	if (c == NULL || gowl_client_get_embedded(c) || c->isfullscreen || c->isoverlay)
 		return;
 	/* Only one grab at a time. */
 	if (self->cursor_mode != GOWL_CURSOR_MODE_NORMAL
@@ -8165,10 +7935,10 @@ on_client_commit(struct wl_listener *listener, void *data)
 	 * geometry is unchanged leaves the scene correct; genuine layout
 	 * changes and client-initiated floating resizes still configure
 	 * because c->geom then differs from the client's current size. */
-	if (c->geom.width  - 2 * (gint)c->bw
+	if (!c->isoverlay && (c->geom.width  - 2 * (gint)c->bw
 	        != (gint)c->xdg_toplevel->current.width ||
 	    c->geom.height - 2 * (gint)c->bw
-	        != (gint)c->xdg_toplevel->current.height)
+	        != (gint)c->xdg_toplevel->current.height))
 		resize_client(self, c, c->geom,
 		              c->isfloating && !c->isfullscreen);
 
@@ -8182,7 +7952,7 @@ on_client_commit(struct wl_listener *listener, void *data)
 	 * we must re-apply our custom alpha after each frame.
 	 * Skip embedded clients — they render on top of their parent
 	 * and should stay fully opaque (alpha 1.0). */
-	if ((c->alpha < 1.0f || c->anim_opening) && !c->isembedded)
+	if ((c->alpha < 1.0f || c->effect_alpha < 1.0f) && !c->isembedded)
 		gowl_client_set_alpha(c, c->alpha);
 }
 
@@ -8199,6 +7969,9 @@ on_client_map(struct wl_listener *listener, void *data)
 	GowlClient *c;
 	GowlCompositor *self;
 	gint i;
+
+	GowlPrefloatHintEntry mapped_hint = { 0 };
+	gboolean has_hint = FALSE;
 
 	c = wl_container_of(listener, c, map);
 	self = c->compositor;
@@ -8349,6 +8122,34 @@ on_client_map(struct wl_listener *listener, void *data)
 	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_PRE_MAP],
 	              0, c);
 
+	/* Resolve placement hints BEFORE setmon can run a layout. An overlay
+	 * must never spend even one configure as a tile and squeeze neighbours. */
+	if (self->prefloat_hints != NULL) {
+		guint hi;
+		pid_t pid = gowl_client_get_pid(c);
+		for (hi = 0; hi < self->prefloat_hints->len; hi++) {
+			GowlPrefloatHintEntry *hint = &g_array_index(self->prefloat_hints,
+				GowlPrefloatHintEntry, hi);
+			if (hint->pid != pid)
+				continue;
+			mapped_hint = *hint;
+			has_hint = TRUE;
+			g_array_remove_index_fast(self->prefloat_hints, hi);
+			c->isfloating = TRUE;
+			c->isfullscreen = FALSE;
+			c->geom = mapped_hint.geom;
+			c->pending_rule_geom_set = TRUE;
+			if (mapped_hint.layer == GOWL_SCENE_LAYER_OVERLAY) {
+				c->isoverlay = TRUE;
+				c->overlay_visible = FALSE; /* owner reveals after capture */
+				wlr_scene_node_set_enabled(&c->scene->node, FALSE);
+			}
+			if (mapped_hint.layer >= 0 && mapped_hint.layer < GOWL_SCENE_LAYER_COUNT)
+				wlr_scene_node_reparent(&c->scene->node, self->layers[mapped_hint.layer]);
+			break;
+		}
+	}
+
 	{
 		GowlMonitor *target_mon;
 		guint32      target_tags;
@@ -8422,7 +8223,7 @@ on_client_map(struct wl_listener *listener, void *data)
 		}
 	}
 	if (c->pending_rule_geom_set) {
-		resize_client(self, c, c->geom, TRUE);
+		resize_client(self, c, c->geom, !c->isoverlay);
 		c->pending_rule_geom_set = FALSE;
 	}
 
@@ -8453,63 +8254,9 @@ on_client_map(struct wl_listener *listener, void *data)
 		}
 	}
 
-	/* New-style prefloat hints (dropdown-module path).
-	 * Matches a pid and reparents to the caller's chosen scene
-	 * layer at an explicit geometry, then floats the client and
-	 * invokes the on_mapped callback so the module can capture
-	 * the client pointer.  Unlike the embedder path above, this
-	 * does NOT mark the client embedded and does NOT hide it —
-	 * the dropdown module toggles visibility itself. */
-	if (self->prefloat_hints != NULL && self->prefloat_hints->len > 0) {
-		pid_t cpid;
-		guint hi;
-
-		cpid = gowl_client_get_pid(c);
-		for (hi = 0; hi < self->prefloat_hints->len; hi++) {
-			GowlPrefloatHintEntry *hint;
-
-			hint = &g_array_index(self->prefloat_hints,
-			                       GowlPrefloatHintEntry, hi);
-			if (hint->pid != cpid)
-				continue;
-
-			/* Copy the callback + payload before removing the
-			 * entry, since g_array_remove_index_fast may
-			 * relocate memory. */
-			{
-				GowlPrefloatHintEntry saved;
-				struct wlr_box target_geom;
-
-				saved = *hint;
-				g_array_remove_index_fast(self->prefloat_hints, hi);
-
-				target_geom = saved.geom;
-				c->isfloating = TRUE;
-				c->geom = target_geom;
-
-				if (saved.layer >= 0 &&
-				    saved.layer < GOWL_SCENE_LAYER_COUNT &&
-				    self->layers[saved.layer] != NULL) {
-					wlr_scene_node_reparent(&c->scene->node,
-					                         self->layers[saved.layer]);
-				}
-				resize_client(self, c, target_geom, TRUE);
-
-				/* Re-arrange so tile() drops this client from
-				 * the layout and the remaining tiled clients
-				 * reclaim the space.  setmon() above ran arrange
-				 * while isfloating was still FALSE, so the
-				 * dropdown got counted as a tile and squeezed
-				 * its neighbours. */
-				if (c->mon != NULL)
-					gowl_compositor_arrange(self, c->mon);
-
-				if (saved.on_mapped != NULL)
-					saved.on_mapped(self, c, saved.user_data);
-			}
-			break;
-		}
-	}
+	/* Classification and placement happened before the first arrange. */
+	if (has_hint && mapped_hint.on_mapped != NULL)
+		mapped_hint.on_mapped(self, c, mapped_hint.user_data);
 
 	/* Notify embedder callback (if registered). */
 	if (self->client_map_func != NULL)
@@ -8547,19 +8294,8 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	self = c->compositor;
 	(void)data;
 
-	/* Take the closing snapshot first: it needs the surface's buffer,
-	 * which is gone once the scene tree is, and it wants the node's
-	 * current position, which cancelling the move animation would
-	 * leave mid-slide. */
-	gowl_animation_close_start(self, c);
-
-	/* Stop both animations before the scene tree goes.  A client that
-	 * unmaps and maps again --- which is normal for a splash window or
-	 * a toolkit rebuilding its surface --- would otherwise come back
-	 * carrying whatever partial opacity the fade had reached. */
-	gowl_animation_cancel(c);
-	gowl_animation_open_cancel(c);
-	c->anim_placed = FALSE;
+	/* Let effects release surface resources before unmapping. */
+	gowl_effects_client_event(self, c, GOWL_SCENE_EFFECT_UNMAP, NULL, FALSE);
 
 	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_REMOVED], 0, c);
 
@@ -8656,15 +8392,10 @@ on_client_destroy(struct wl_listener *listener, void *data)
 	c = wl_container_of(listener, c, destroy_surface);
 	(void)data;
 
-	/* Release the animation's locked buffer before the client goes.
-	 * The snapshot NODE is a child of the client's scene tree and dies
-	 * with it, but the wlr_buffer it holds is reference-counted and
-	 * would simply never be unlocked --- an invisible leak of one full
-	 * window buffer per client that died mid-animation.  Unmap
-	 * normally gets here first; a client destroyed without one does
-	 * not. */
-	gowl_animation_cancel(c);
-	gowl_animation_open_cancel(c);
+	/* Modules must release captured client pointers before the object dies. */
+	g_signal_emit_by_name(c, "destroy");
+
+	gowl_effects_client_event(c->compositor, c, GOWL_SCENE_EFFECT_DESTROY, NULL, FALSE);
 
 	/* Remove all listeners.  The registered set differs between XDG
 	 * and X11 clients (see on_new_xdg_toplevel / on_new_xwayland_surface),
@@ -9668,4 +9399,28 @@ on_session_unlock(struct wl_listener *listener, void *data)
 	gowl_compositor_motionnotify(self, 0);
 
 	g_debug("Session unlocked");
+}
+
+void
+gowl_compositor_scroll_to_client(GowlCompositor *self, GowlClient *c)
+{
+ GowlLayoutEntry *e;
+ GowlLayoutProviderInterface *iface;
+ if (c == NULL || c->mon == NULL) return;
+ e = gowl_layout_get(self, c->mon);
+ if (e == NULL || e->provider == NULL) return;
+ iface = GOWL_LAYOUT_PROVIDER_GET_IFACE(e->provider);
+ if (iface->focus_client != NULL) iface->focus_client(e->provider, c);
+}
+
+void
+gowl_compositor_scroll_by(GowlCompositor *self, GowlMonitor *m, gint dx)
+{
+ GowlLayoutEntry *e;
+ GowlLayoutProviderInterface *iface;
+ if (m == NULL) m = self->selmon;
+ e = gowl_layout_get(self, m);
+ if (e == NULL || e->provider == NULL) return;
+ iface = GOWL_LAYOUT_PROVIDER_GET_IFACE(e->provider);
+ if (iface->scroll != NULL) iface->scroll(e->provider, m, dx);
 }

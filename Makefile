@@ -79,9 +79,6 @@ LIB_SRCS := \
 	src/config/gowl-config.c \
 	src/config/gowl-config-compiler.c \
 	src/config/gowl-keybind.c \
-	src/layout/gowl-layout-tile.c \
-	src/layout/gowl-layout-monocle.c \
-	src/layout/gowl-layout-float.c \
 	src/ipc/gowl-ipc.c \
 	src/util/gowl-log.c \
 	src/util/gowl-systemd.c \
@@ -94,8 +91,8 @@ LIB_SRCS := \
 	src/core/gowl-lid-policy.c \
 	src/core/gowl-tablet.c \
 	src/core/gowl-layout-registry.c \
-	src/core/gowl-animation.c \
-	src/core/gowl-scene-snapshot.c \
+	src/core/gowl-effects.c \
+	src/interfaces/gowl-scene-effect.c \
 	src/core/gowl-focus-rules.c \
 	src/core/gowl-monitor.c \
 	src/core/gowl-client.c \
@@ -142,6 +139,7 @@ LIB_HDRS := \
 	src/interfaces/gowl-keybind-handler.h \
 	src/interfaces/gowl-mouse-handler.h \
 	src/interfaces/gowl-client-decorator.h \
+	src/interfaces/gowl-scene-effect.h \
 	src/interfaces/gowl-client-placer.h \
 	src/interfaces/gowl-focus-policy.h \
 	src/interfaces/gowl-monitor-configurator.h \
@@ -166,9 +164,6 @@ LIB_HDRS := \
 	src/config/gowl-config.h \
 	src/config/gowl-config-compiler.h \
 	src/config/gowl-keybind.h \
-	src/layout/gowl-layout-tile.h \
-	src/layout/gowl-layout-monocle.h \
-	src/layout/gowl-layout-float.h \
 	src/ipc/gowl-ipc.h \
 	src/util/gowl-log.h \
 	src/util/gowl-systemd.h \
@@ -227,9 +222,9 @@ TEST_SRCS := $(wildcard tests/test-*.c)
 TEST_GUARDS := $(sort $(wildcard tests/test-*.sh))
 
 # Module directories
-MODULE_DIRS := $(wildcard modules/*)
+MODULE_DIRS := $(wildcard modules/*/)
 ifneq ($(MCP_AVAILABLE),1)
-MODULE_DIRS := $(filter-out modules/mcp,$(MODULE_DIRS))
+MODULE_DIRS := $(filter-out modules/mcp/,$(MODULE_DIRS))
 endif
 
 # Bar source files (standalone Wayland client)
@@ -331,12 +326,12 @@ modules: lib $(OUTDIR)/modules
 	@for dir in $(MODULE_DIRS); do \
 		if [ -d "$$dir" ] && [ -f "$$dir/Makefile" ]; then \
 			echo "Building module: $$(basename $$dir)"; \
-			$(MAKE) -C "$$dir" \
+			$(MAKE) -C "$$dir" -f Makefile -f ../dependencies.mk \
 				OUTDIR=$(abspath $(OUTDIR)/modules) \
 				LIBDIR=$(abspath $(OUTDIR)) \
 				WLROOTS_PC=$(WLROOTS_PC) \
 				CFLAGS="$(MODULE_CFLAGS)" \
-				LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"; \
+				LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))" || exit $$?; \
 		fi \
 	done
 
@@ -363,6 +358,14 @@ test: lib $(TEST_BINS)
 	else \
 		echo "All tests passed"; \
 	fi
+
+# Build the actual plugin for animation tests; libgowl contains no engine.
+$(OUTDIR)/modules/animation.so: $(filter-out $(OUTDIR)/modules/animation.so,$(wildcard modules/animation/*)) $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+	$(MAKE) -C modules/animation OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
+
+$(OUTDIR)/test-animation $(OUTDIR)/test-animation-scene: $(OUTDIR)/modules/animation.so
+$(OUTDIR)/test-animation $(OUTDIR)/test-animation-scene: TEST_LDFLAGS += -L$(OUTDIR)/modules -l:animation.so -Wl,-rpath,$(abspath $(OUTDIR)/modules)
+$(OBJDIR)/tests/test-animation-scene.o: TEST_CFLAGS += -DGOWL_TEST_ANIMATION_MODULE='"$(abspath $(OUTDIR)/modules/animation.so)"'
 
 # Build individual test binaries
 $(OUTDIR)/test-animation-scene: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs pixman-1)
@@ -487,3 +490,10 @@ help:
 # Dependency tracking
 -include $(LIB_OBJS:.o=.d)
 -include $(MAIN_OBJ:.o=.d)
+
+$(OUTDIR)/modules/tile.so $(OUTDIR)/modules/monocle.so $(OUTDIR)/modules/float.so $(OUTDIR)/modules/scrolling.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
+$(OUTDIR)/test-layout: $(addprefix $(OUTDIR)/modules/,tile.so monocle.so float.so scrolling.so)
+$(OUTDIR)/test-layout: TEST_LDFLAGS += -L$(OUTDIR)/modules -l:tile.so -l:monocle.so -l:float.so -Wl,-rpath,$(abspath $(OUTDIR)/modules)
+
+$(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

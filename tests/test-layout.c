@@ -16,9 +16,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "layout/gowl-layout-tile.h"
-#include "layout/gowl-layout-monocle.h"
-#include "layout/gowl-layout-float.h"
+#include "core/gowl-core-private.h"
+#include "core/gowl-layout-registry.h"
+#include "../modules/tile/gowl-layout-tile.h"
+#include "../modules/monocle/gowl-layout-monocle.h"
+#include "../modules/float/gowl-layout-float.h"
 
 /* ---- Tile layout tests ---- */
 
@@ -186,6 +188,64 @@ test_float_symbol(void)
 	g_assert_cmpstr(gowl_layout_float_symbol(), ==, "><>");
 }
 
+static void
+layout_changed_count(GowlMonitor *monitor, gpointer data)
+{
+ guint *count = data;
+ (*count)++;
+}
+
+static void
+test_layout_plugins_and_tags(void)
+{
+ GowlCompositor *comp = gowl_compositor_new();
+ GowlMonitor *mon = g_object_new(GOWL_TYPE_MONITOR, NULL);
+ const gchar *names[] = { "tile", "monocle", "float", "scrolling" };
+ guint i, notifications = 0;
+ comp->module_mgr = gowl_module_manager_new();
+ comp->selmon = mon;
+ mon->tagset[mon->seltags] = 1;
+ gowl_layout_registry_init(comp);
+ g_assert_null(gowl_layout_get(comp, mon));
+ for (i = 0; i < G_N_ELEMENTS(names); i++) {
+  gchar *path = g_strdup_printf("%s/%s.so", GOWL_TEST_LAYOUT_MODULE_DIR, names[i]);
+  g_assert_true(gowl_module_manager_load_module(comp->module_mgr, path, NULL));
+  g_free(path);
+ }
+ gowl_module_manager_activate_all(comp->module_mgr);
+ gowl_layout_adopt_providers(comp);
+ g_assert_cmpstr(gowl_layout_get(comp, mon)->name, ==, "tile");
+ g_signal_connect(mon, "layout-changed", G_CALLBACK(layout_changed_count), &notifications);
+ gowl_layout_apply(comp, mon);
+ g_assert_cmpuint(notifications, ==, 0);
+ g_assert_true(gowl_layout_set(comp, mon, "scrolling"));
+ gowl_layout_apply(comp, mon);
+ g_assert_cmpuint(notifications, ==, 1);
+ gowl_layout_apply(comp, mon);
+ g_assert_cmpuint(notifications, ==, 1);
+ mon->scroll_x = 450;
+ mon->tagset[mon->seltags] = 2;
+ g_assert_cmpstr(gowl_layout_get(comp, mon)->name, ==, "tile");
+ g_assert_cmpint(mon->scroll_x, ==, 0);
+ g_assert_cmpstr(gowl_layout_cycle(comp, mon, 1), ==, "monocle");
+ mon->tagset[mon->seltags] = 1;
+ g_assert_cmpstr(gowl_layout_get(comp, mon)->name, ==, "scrolling");
+ g_assert_cmpint(mon->scroll_x, ==, 450);
+ gowl_module_deactivate(gowl_module_manager_find_module(comp->module_mgr, "scrolling"));
+ g_assert_cmpstr(gowl_layout_get(comp, mon)->name, ==, "tile");
+ gowl_module_activate(gowl_module_manager_find_module(comp->module_mgr, "scrolling"));
+ g_assert_cmpstr(gowl_layout_get(comp, mon)->name, ==, "scrolling");
+ g_assert_cmpstr(gowl_layout_cycle(comp, mon, 1), ==, "tile");
+ g_assert_cmpstr(gowl_layout_cycle(comp, mon, -1), ==, "scrolling");
+ mon->tagset[mon->seltags] = 2;
+ g_assert_cmpstr(gowl_layout_get(comp, mon)->name, ==, "monocle");
+ gowl_layout_registry_finish(comp);
+ g_clear_object(&comp->module_mgr);
+ comp->selmon = NULL;
+ g_object_unref(mon);
+ g_object_unref(comp);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -208,5 +268,6 @@ main(int argc, char *argv[])
 	/* Float */
 	g_test_add_func("/layout/float/symbol", test_float_symbol);
 
+	g_test_add_func("/layout/plugins-and-tags", test_layout_plugins_and_tags);
 	return g_test_run();
 }

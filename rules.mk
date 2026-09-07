@@ -41,10 +41,6 @@ $(OBJDIR)/barkit/%.o: src/barkit/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OBJDIR)/layout/%.o: src/layout/%.c | $(OBJDIR)
-	@$(MKDIR_P) $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(OBJDIR)/ipc/%.o: src/ipc/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -245,7 +241,6 @@ $(OBJDIR): | $(BUILDDIR)/include/gowl
 	@$(MKDIR_P) $(OBJDIR)/module
 	@$(MKDIR_P) $(OBJDIR)/boxed
 	@$(MKDIR_P) $(OBJDIR)/interfaces
-	@$(MKDIR_P) $(OBJDIR)/layout
 	@$(MKDIR_P) $(OBJDIR)/ipc
 	@$(MKDIR_P) $(OBJDIR)/util
 	@$(MKDIR_P) $(OBJDIR)/bar
@@ -353,8 +348,12 @@ install-headers:
 	$(INSTALL_DATA) src/module/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/module/
 	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/interfaces
 	$(INSTALL_DATA) src/interfaces/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/interfaces/
-	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/layout
-	$(INSTALL_DATA) src/layout/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/layout/
+	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/barkit
+	$(INSTALL_DATA) src/barkit/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/barkit/
+	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/fx
+	$(INSTALL_DATA) src/fx/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/fx/
+	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/protocols
+	$(INSTALL_DATA) src/protocols/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/protocols/
 	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/ipc
 	$(INSTALL_DATA) src/ipc/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/ipc/
 	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/util

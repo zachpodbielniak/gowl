@@ -24,6 +24,8 @@
  * and expensive to notice by eye.
  */
 
+#include <stdarg.h>
+
 #include "barkit/gowl-bar-layout.h"
 
 #define BAR_W 1000
@@ -257,6 +259,78 @@ test_a_bar_too_narrow_drops_the_centre(void)
 	g_assert_false(slots[1].visible);
 }
 
+/* ---- Which era a configuration was written for ---- */
+
+static GHashTable *
+settings_new(const gchar *first_key, ...)
+{
+	GHashTable *table;
+	va_list args;
+	const gchar *key;
+
+	table = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+	                              g_free);
+	if (first_key == NULL)
+		return table;
+
+	va_start(args, first_key);
+	key = first_key;
+	while (key != NULL) {
+		const gchar *value = va_arg(args, const gchar *);
+
+		g_hash_table_insert(table, g_strdup(key), g_strdup(value));
+		key = va_arg(args, const gchar *);
+	}
+	va_end(args);
+	return table;
+}
+
+static void
+test_config_kind(void)
+{
+	g_autoptr(GHashTable) none = NULL;
+	g_autoptr(GHashTable) legacy = NULL;
+	g_autoptr(GHashTable) regions = NULL;
+	g_autoptr(GHashTable) centre = NULL;
+	g_autoptr(GHashTable) both = NULL;
+
+	/*
+	 * This is the duplicate-clock regression.  The bar ships a layout
+	 * with a clock in the centre; a configuration written before
+	 * regions puts its own clock at the end of `widgets'.  Unless the
+	 * shipped layout is recognised as replaceable, the bar shows the
+	 * time twice -- which is exactly what happened on the first
+	 * upgrade.
+	 */
+	g_assert_cmpint(gowl_bar_layout_config_kind(NULL), ==,
+	                GOWL_BAR_CONFIG_NONE);
+
+	none = settings_new("height", "30", "bg-color", "base", NULL);
+	g_assert_cmpint(gowl_bar_layout_config_kind(none), ==,
+	                GOWL_BAR_CONFIG_NONE);
+
+	legacy = settings_new("widgets", "cpu memory disk battery clock",
+	                      NULL);
+	g_assert_cmpint(gowl_bar_layout_config_kind(legacy), ==,
+	                GOWL_BAR_CONFIG_LEGACY);
+
+	regions = settings_new("widgets-right", "cpu memory", NULL);
+	g_assert_cmpint(gowl_bar_layout_config_kind(regions), ==,
+	                GOWL_BAR_CONFIG_REGIONS);
+
+	/* Both spellings of the middle. */
+	centre = settings_new("widgets-centre", "clock", NULL);
+	g_assert_cmpint(gowl_bar_layout_config_kind(centre), ==,
+	                GOWL_BAR_CONFIG_REGIONS);
+
+	/* A config carrying both is one mid-migration; the region keys
+	   are the half that was updated deliberately. */
+	both = settings_new("widgets", "cpu clock",
+	                    "widgets-center", "clock", NULL);
+	g_assert_cmpint(gowl_bar_layout_config_kind(both), ==,
+	                GOWL_BAR_CONFIG_REGIONS);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -283,6 +357,7 @@ main(int argc, char *argv[])
 	g_test_add_func("/bar-layout/region-names", test_region_names_round_trip);
 	g_test_add_func("/bar-layout/narrow-drops-centre",
 	                test_a_bar_too_narrow_drops_the_centre);
+	g_test_add_func("/bar-layout/config-kind", test_config_kind);
 
 	return g_test_run();
 }

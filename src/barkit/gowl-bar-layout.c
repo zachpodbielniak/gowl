@@ -32,6 +32,33 @@
  */
 
 /**
+ * gowl_bar_layout_config_kind:
+ * @settings: (element-type utf8 utf8) (nullable): a bar settings map
+ *
+ * Returns: which era @settings was written for
+ */
+GowlBarConfigKind
+gowl_bar_layout_config_kind(GHashTable *settings)
+{
+	if (settings == NULL)
+		return GOWL_BAR_CONFIG_NONE;
+
+	/* A region key wins even when `widgets' is also present: a config
+	   carrying both is one mid-migration, and the region keys are the
+	   half that was updated deliberately. */
+	if (g_hash_table_lookup(settings, "widgets-left") != NULL ||
+	    g_hash_table_lookup(settings, "widgets-center") != NULL ||
+	    g_hash_table_lookup(settings, "widgets-centre") != NULL ||
+	    g_hash_table_lookup(settings, "widgets-right") != NULL)
+		return GOWL_BAR_CONFIG_REGIONS;
+
+	if (g_hash_table_lookup(settings, "widgets") != NULL)
+		return GOWL_BAR_CONFIG_LEGACY;
+
+	return GOWL_BAR_CONFIG_NONE;
+}
+
+/**
  * gowl_bar_layout_region_from_string:
  * @name: a region name
  * @out: (out): the parsed region

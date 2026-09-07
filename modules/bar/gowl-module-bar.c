@@ -200,6 +200,12 @@ typedef struct {
 	gboolean        visible;
 	gint            bar_height;
 
+	/* TRUE while the slot still carries the layout the module ships
+	   rather than one the user asked for.  The first configuration
+	   that names any widget list clears it --- see
+	   bar_configure_slot(). */
+	gboolean        defaults_pending;
+
 	GowlBarTheme   *theme;
 
 	GPtrArray      *items;      /* BarItem*, owned */
@@ -2341,6 +2347,42 @@ bar_configure_slot(GowlModuleBar *self, GowlBarInstance *bar,
 		gowl_bar_theme_apply_setting(bar->theme, (const gchar *)k,
 		                             (const gchar *)v);
 
+	/*
+	 * The shipped layout is what a bar nobody has configured looks
+	 * like, not a base to add to.  The first configuration naming any
+	 * widget list replaces it wholesale.
+	 *
+	 * Without this, a configuration written before regions existed --
+	 * which sets only `widgets' -- keeps the shipped centre clock
+	 * alongside the clock at the end of its own list, and the bar
+	 * shows the time twice.
+	 */
+	if (bar->defaults_pending) {
+		GowlBarConfigKind kind;
+
+		kind = gowl_bar_layout_config_kind(settings);
+		if (kind != GOWL_BAR_CONFIG_NONE) {
+			bar_set_region(self, bar, GOWL_BAR_REGION_LEFT, NULL);
+			bar_set_region(self, bar, GOWL_BAR_REGION_CENTER, NULL);
+			bar_set_region(self, bar, GOWL_BAR_REGION_RIGHT, NULL);
+			g_clear_pointer(&bar->anchor_id, g_free);
+
+			/*
+			 * A `widgets' key with no region describes the bar as
+			 * it was before regions: the tag row and the window
+			 * title on the left, the status list on the right.
+			 * Put the left back, or upgrading would silently cost
+			 * every such configuration its tags and its title.
+			 */
+			if (kind == GOWL_BAR_CONFIG_LEGACY) {
+				bar_set_region(self, bar,
+				               GOWL_BAR_REGION_LEFT,
+				               "tags title");
+			}
+			bar->defaults_pending = FALSE;
+		}
+	}
+
 	/* Widget lists.  `widgets' without a region keeps its historical
 	   meaning: the right-hand status list. */
 	val = g_hash_table_lookup(settings, "widgets-left");
@@ -3589,6 +3631,7 @@ bar_instance_init(GowlBarInstance *bar, GowlBarPosition position)
 	bar->visible    = TRUE;
 	bar->bar_height = 30;
 	bar->anchor     = -1;
+	bar->defaults_pending = FALSE;
 	bar->theme      = gowl_bar_theme_new();
 	bar->items      = g_ptr_array_new_with_free_func(bar_item_free);
 	bar->surfaces   = g_hash_table_new_full(g_str_hash, g_str_equal,
@@ -3674,6 +3717,7 @@ gowl_module_bar_init(GowlModuleBar *self)
 	               "cpu memory disk battery");
 	top->anchor_id = g_strdup("clock");
 	bar_resolve_anchor(top);
+	top->defaults_pending = TRUE;
 }
 
 /* ----------------------------------------------------------------

@@ -101,6 +101,41 @@ gint gowl_bar_layout_run (gint                 bar_width,
 gint gowl_bar_layout_hit (const GowlBarSlot *slots, gint n_items, gint x);
 
 /**
+ * GowlBarConfigKind:
+ * @GOWL_BAR_CONFIG_NONE: the settings name no widget list at all, so
+ *   whatever layout the bar already has stands.
+ * @GOWL_BAR_CONFIG_REGIONS: the settings use `widgets-left',
+ *   `widgets-center'/`widgets-centre' or `widgets-right' --- a
+ *   configuration written against regions.
+ * @GOWL_BAR_CONFIG_LEGACY: the settings use `widgets' with no region
+ *   --- a configuration written before regions existed, describing a
+ *   bar whose whole widget list was the right-hand status list.
+ *
+ * Which era of configuration a settings map was written for.
+ *
+ * This is not cosmetic.  The shipped layout has to be replaced by the
+ * first configuration that names any widget list, or a legacy
+ * configuration keeps the shipped centre clock alongside the clock at
+ * the end of its own list and the bar shows the time twice.  And a
+ * legacy configuration has to have the tag row and the window title
+ * put back on its left, because the bar it was written for drew those
+ * unconditionally rather than listing them.
+ */
+typedef enum {
+	GOWL_BAR_CONFIG_NONE = 0,
+	GOWL_BAR_CONFIG_REGIONS,
+	GOWL_BAR_CONFIG_LEGACY
+} GowlBarConfigKind;
+
+/**
+ * gowl_bar_layout_config_kind:
+ * @settings: (element-type utf8 utf8) (nullable): a bar settings map
+ *
+ * Returns: which era @settings was written for
+ */
+GowlBarConfigKind gowl_bar_layout_config_kind (GHashTable *settings);
+
+/**
  * gowl_bar_layout_region_from_string:
  * @name: `left', `center'/`centre', or `right'
  * @out: (out): the parsed region

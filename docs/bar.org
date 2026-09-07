@@ -51,6 +51,21 @@ Each list is space separated and in order. The *right* region reads outward: the
 
 A =widgets:= key with no region keeps its historical meaning --- the right-hand status list --- so a configuration written before regions existed needs no changes.
 
+*** What happens to the shipped layout
+:PROPERTIES:
+:CUSTOM_ID: shipped-layout
+:END:
+
+With no configuration at all the bar shows a shipped layout: the tag row and window title on the left, the clock anchored dead centre, and =cpu memory disk battery= on the right.
+
+That layout is a starting point, not a base to add to. *The first configuration that names any widget list replaces it wholesale* --- including the regions that configuration does not mention.
+
+This matters on upgrade. A configuration written before regions existed sets only =widgets:=, and its list usually ends with a clock. If the shipped centre clock survived that, the bar would show the time twice. It does not: the shipped layout is cleared first.
+
+A pre-regions configuration additionally gets =tags title= put back on its left, because the bar it was written for drew the tag row and the window title unconditionally rather than listing them. So an untouched old configuration comes out looking exactly as it did, plus panels and toasts.
+
+After that first configuration the bar behaves incrementally: a later call setting only =widgets-right= leaves the left and centre alone.
+
 *** Widget specs
 :PROPERTIES:
 :CUSTOM_ID: widget-specs

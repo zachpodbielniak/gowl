@@ -64,7 +64,18 @@ for f in modules/bar/bar-plugins-*.c; do
 	fi
 done
 
-# 5. Blocking work stays off the compositor's dispatch thread.
+# 5. The shipped layout is replaced, not added to.
+#
+# A configuration written before regions existed sets only `widgets'.
+# If the shipped centre clock survives that, the bar shows the time
+# twice -- and if the left is cleared without putting the tag row and
+# title back, upgrading silently costs every such configuration both.
+grep -q "gowl_bar_layout_config_kind" modules/bar/gowl-module-bar.c ||
+	fail "the bar no longer replaces its shipped layout on first configure"
+grep -q 'GOWL_BAR_CONFIG_LEGACY' modules/bar/gowl-module-bar.c ||
+	fail "the bar no longer restores tags+title for a pre-regions config"
+
+# 6. Blocking work stays off the compositor's dispatch thread.
 #
 # That thread holds the lock every editor primitive needs, so a
 # subprocess spawned from a poll, a draw or a panel action freezes the

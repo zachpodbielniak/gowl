@@ -191,6 +191,42 @@ test_sweep_never_escapes(void)
 	}
 }
 
+/*
+ * When the cached backdrop has to be captured again.
+ *
+ * The backdrop is the wallpaper with every client layer hidden, so
+ * windows moving or opening do not change it -- which is why it is
+ * cached at all.  Tags do change it (wallpapers are per-tag), and so
+ * does the output size.
+ */
+static void
+test_stale_rebuilds_on_tag_change(void)
+{
+	/* The reported case: leave tag 2 for tag 4, come back. */
+	g_assert_true(gowl_blur_backdrop_stale(TRUE, 1u << 1, 1u << 3,
+	                                       2880, 1920, 2880, 1920));
+	g_assert_true(gowl_blur_backdrop_stale(TRUE, 1u << 3, 1u << 1,
+	                                       2880, 1920, 2880, 1920));
+	/* Same tag, nothing else moved: keep the cache. */
+	g_assert_false(gowl_blur_backdrop_stale(TRUE, 1u << 1, 1u << 1,
+	                                        2880, 1920, 2880, 1920));
+	/* A multi-tag view is its own tag set. */
+	g_assert_true(gowl_blur_backdrop_stale(TRUE, 1u << 1,
+	                                       (1u << 1) | (1u << 3),
+	                                       2880, 1920, 2880, 1920));
+}
+
+static void
+test_stale_rebuilds_on_resize_or_empty(void)
+{
+	g_assert_true(gowl_blur_backdrop_stale(FALSE, 1, 1,
+	                                       2880, 1920, 2880, 1920));
+	g_assert_true(gowl_blur_backdrop_stale(TRUE, 1, 1,
+	                                       2880, 1920, 1920, 1080));
+	g_assert_true(gowl_blur_backdrop_stale(TRUE, 1, 1,
+	                                       2880, 1920, 2880, 1200));
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -205,5 +241,9 @@ main(int argc, char *argv[])
 	g_test_add_func("/blur-geom/degenerate", test_degenerate);
 	g_test_add_func("/blur-geom/sweep-never-escapes",
 	                test_sweep_never_escapes);
+	g_test_add_func("/blur-geom/stale-on-tag-change",
+	                test_stale_rebuilds_on_tag_change);
+	g_test_add_func("/blur-geom/stale-on-resize",
+	                test_stale_rebuilds_on_resize_or_empty);
 	return g_test_run();
 }

@@ -69,4 +69,32 @@ gboolean gowl_blur_backdrop_box (const struct wlr_box *frame,
                                   struct wlr_fbox      *src_out,
                                   struct wlr_box       *vis_out);
 
+/**
+ * gowl_blur_backdrop_stale:
+ * @have_buffer: whether a backdrop buffer already exists
+ * @cached_tags: the tag set the cached backdrop was captured under
+ * @current_tags: the monitor's visible tag set now
+ * @cached_w: cached buffer width
+ * @cached_h: cached buffer height
+ * @out_w: the output's current pixel width
+ * @out_h: the output's current pixel height
+ *
+ * Whether the cached backdrop has to be captured again.
+ *
+ * The backdrop is the monitor's wallpaper, blurred, with every client
+ * layer hidden -- so windows opening, closing or moving do NOT change
+ * it, and it is cached rather than rebuilt per frame.  What does change
+ * it is the tag set, because wallpapers are per-tag, and the output
+ * size.
+ *
+ * Returns: %TRUE when the backdrop must be rebuilt
+ */
+gboolean gowl_blur_backdrop_stale (gboolean have_buffer,
+                                    guint32  cached_tags,
+                                    guint32  current_tags,
+                                    gint     cached_w,
+                                    gint     cached_h,
+                                    gint     out_w,
+                                    gint     out_h);
+
 #endif /* GOWL_BLUR_GEOM_H */

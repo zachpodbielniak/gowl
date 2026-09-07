@@ -139,6 +139,41 @@ gowl_fx_vis_show_only(GowlFxVis      *vis,
 	}
 }
 
+/*
+ * gowl_fx_vis_hide_sheets:
+ * @vis: a #GowlFxVis
+ *
+ * Hides every effect sheet currently parked in the scene.
+ *
+ * Hiding "every client layer" does not hide these: a #GowlFxSheet is a
+ * direct child of scene->tree, a SIBLING of the layer trees, so that it
+ * can sit above or below whole layers.  And a sheet is not decoration --
+ * it is an opaque, monitor-sized picture of the desktop WITH its windows
+ * in it, parked there by the cube, expo and switcher while they own the
+ * output.
+ *
+ * So any capture meant to see past the windows has to hide these too.
+ * Blur rebuilding its wallpaper backdrop during a tag switch, while the
+ * cube's sheet was up, otherwise blurred the tag being LEFT into the
+ * backdrop and cached it as the current one -- a translucent terminal on
+ * tag 2 showing ghosts of the chat window from tag 4.
+ */
+void
+gowl_fx_vis_hide_sheets(GowlFxVis *vis)
+{
+	GList *l;
+
+	if (vis == NULL)
+		return;
+
+	for (l = gowl_fx_sheet_live(); l != NULL; l = l->next) {
+		struct wlr_scene_tree *tree = gowl_fx_sheet_tree(l->data);
+
+		if (tree != NULL)
+			gowl_fx_vis_set(vis, &tree->node, FALSE);
+	}
+}
+
 void
 gowl_fx_vis_hide_layer(GowlFxVis      *vis,
                        GowlCompositor *compositor,

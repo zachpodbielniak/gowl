@@ -59,7 +59,11 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-blur-shadow` -- The analytic drop shadow: falloff, rounded
   corners, and premultiplied output (straight colour gives every shadow a
   bright halo)
-- `test-blur-geom` -- Where the blur backdrop crops the wallpaper, and
+- `test-fx-sheet-guard.sh` -- a capture that hides the client layers also
+  hides the effect sheets (a sheet is a sibling of the layer trees and
+  holds a picture of the desktop *with* its windows)
+- `test-blur-geom` -- Where the blur backdrop crops the wallpaper, when it
+  is rebuilt, and
   the one invariant that matters: the source box must lie inside the
   texture. `wlr_render_pass_add_texture()` asserts it, which aborts the
   compositor mid page-flip -- under `cmacs --gowl` that is the user's
@@ -117,6 +121,20 @@ tests. These assert invariants no unit test can reach:
 > must reach the EIS device regardless of which portal is in use: a
 > RemoteDesktop-only client never calls `GetZones`, and a device with no
 > region cannot be positioned absolutely. See `docs/input-capture.org`.
+
+> **A `GowlFxSheet` is NOT in a layer, so hiding the layers does not hide it.**
+> A sheet's tree is a direct child of `scene->tree`, a sibling of the layer
+> trees, so it can sit above or below whole layers. It is also an opaque,
+> monitor-sized picture of the desktop *with its windows in it*, parked by
+> the cube/expo/switcher. So any capture that hides the client layers to see
+> past the windows must also call `gowl_fx_vis_hide_sheets(vis)` — blur's
+> wallpaper backdrop, rebuilt during a tag switch while the cube's sheet was
+> up, otherwise captured the tag being *left* and cached it as current (a
+> translucent terminal on tag 2 showing the chat window from tag 4).
+> `tests/test-fx-sheet-guard.sh` enforces it. Related ordering rule:
+> `gowl_compositor_arrange()` applies tag visibility to the whole monitor
+> *before* announcing `REVEAL`, because an effect handling REVEAL may
+> capture, and a one-pass loop would let it see a half-switched monitor.
 
 > **A source box outside its texture aborts the whole session.**
 > `wlr_render_pass_add_texture()` asserts `src.x >= 0 && src.y >= 0 &&

@@ -95,4 +95,18 @@ gboolean gowl_fx_texture_alloc (GowlFxTexture *tex, gint width, gint height);
 
 G_END_DECLS
 
+/*
+ * Every GowlFxSheet currently parked in a scene.
+ *
+ * A sheet is a direct child of scene->tree -- a SIBLING of the layer
+ * trees, not inside one -- so gowl_fx_vis_hide_layer() cannot reach it.
+ * Anything capturing the output has to be able to, because a sheet is an
+ * opaque monitor-sized picture of the desktop WITH its windows in it.
+ * Compositor thread only; no locking.
+ */
+GList *gowl_fx_sheet_live (void);
+
+/* The sheet's scene tree, so a capture can switch it off. */
+struct wlr_scene_tree *gowl_fx_sheet_tree (GowlFxSheet *sheet);
+
 #endif /* GOWL_FX_PRIVATE_H */

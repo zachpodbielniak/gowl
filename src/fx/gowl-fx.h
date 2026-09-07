@@ -363,6 +363,17 @@ void gowl_fx_vis_show_only (GowlFxVis      *vis,
  * effect blanks the other screen.  An effect that needs the layers below
  * it out of the way covers them with a sheet instead.
  */
+/**
+ * gowl_fx_vis_hide_sheets:
+ * @vis: a #GowlFxVis
+ *
+ * Hides every effect sheet parked in the scene.  Hiding the client
+ * layers does not cover these -- a sheet hangs off scene->tree beside
+ * them -- and a sheet holds a picture of the desktop WITH its windows,
+ * so any capture that means to see past the windows must call this too.
+ */
+void gowl_fx_vis_hide_sheets (GowlFxVis *vis);
+
 void gowl_fx_vis_hide_layer (GowlFxVis      *vis,
                              GowlCompositor *compositor,
                              GowlSceneLayer  layer,

@@ -4144,12 +4144,27 @@ gowl_compositor_arrange(
 ){
 	GowlClient *c, *top;
 	GList *l;
+	GList *revealed = NULL;
 
 	if (m == NULL || m->wlr_output == NULL)
 		return;
 
-	/* Enable/disable client scene nodes based on tag visibility.
-	 * Embedded clients are externally managed — skip them. */
+	/*
+	 * Enable/disable client scene nodes based on tag visibility, in TWO
+	 * passes: settle the whole monitor first, announce afterwards.
+	 *
+	 * The announcement must not happen while other clients still carry
+	 * their previous visibility.  An effect handling REVEAL may capture
+	 * the output -- the blur module does exactly that, to build the
+	 * frosted backdrop a translucent window shows through -- and a
+	 * capture taken mid-loop contains whichever windows the loop has not
+	 * reached yet.  Switching from tag 4 back to tag 2 then blurred
+	 * tag 4's windows into tag 2's backdrop, and only when the stale
+	 * client sorted after the revealed one in self->clients, which made
+	 * it look intermittent.
+	 *
+	 * Embedded clients are externally managed --- skip them.
+	 */
 	for (l = self->clients; l != NULL; l = l->next) {
 		c = (GowlClient *)l->data;
 		if (c->isembedded || c->isoverlay)
@@ -4163,11 +4178,16 @@ gowl_compositor_arrange(
 			 * window on each of them would make the whole tag flicker
 			 * whenever anything moved. */
 			if (vis && !c->scene->node.enabled)
-				gowl_effects_client_event(self, c, GOWL_SCENE_EFFECT_REVEAL, NULL, FALSE);
+				revealed = g_list_prepend(revealed, c);
 
 			wlr_scene_node_set_enabled(&c->scene->node, vis);
 		}
 	}
+	for (l = revealed; l != NULL; l = l->next)
+		gowl_effects_client_event(self, (GowlClient *)l->data,
+		                          GOWL_SCENE_EFFECT_REVEAL, NULL, FALSE);
+	g_list_free(revealed);
+	revealed = NULL;
 
 	/* Fullscreen background */
 	top = focustop(self, m);

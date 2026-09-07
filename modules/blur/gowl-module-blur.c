@@ -247,6 +247,14 @@ blur_build_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m,
 	gowl_fx_vis_hide_layer(vis, self, GOWL_SCENE_LAYER_FS, FALSE);
 	gowl_fx_vis_hide_layer(vis, self, GOWL_SCENE_LAYER_OVERLAY, FALSE);
 	gowl_fx_vis_hide_layer(vis, self, GOWL_SCENE_LAYER_BLOCK, FALSE);
+	/*
+	 * And the effect sheets, which the layer sweep above cannot reach:
+	 * they hang off scene->tree beside the layers, and one holds an
+	 * opaque picture of the desktop WITH its windows.  Without this a
+	 * backdrop rebuilt during a cube or expo animation captured the tag
+	 * being left and cached it as the current one.
+	 */
+	gowl_fx_vis_hide_sheets(vis);
 	for (i = 0; i < 4; i++) {
 		if (self->rec_indicator[i] != NULL)
 			gowl_fx_vis_set(vis, &self->rec_indicator[i]->node, FALSE);
@@ -323,10 +331,11 @@ blur_ensure_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m)
 		mod->backdrops = g_list_prepend(mod->backdrops, bd);
 	}
 
-	stale = bd->buffer == NULL
-	        || bd->tags != m->tagset[m->seltags]
-	        || bd->width != m->wlr_output->width
-	        || bd->height != m->wlr_output->height;
+	stale = gowl_blur_backdrop_stale(bd->buffer != NULL,
+	                                 bd->tags, m->tagset[m->seltags],
+	                                 bd->width, bd->height,
+	                                 m->wlr_output->width,
+	                                 m->wlr_output->height);
 
 	if (stale && !blur_build_backdrop(mod, self, m, bd))
 		return NULL;

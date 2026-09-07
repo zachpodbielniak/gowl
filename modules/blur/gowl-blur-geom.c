@@ -94,3 +94,22 @@ gowl_blur_backdrop_box(
 		*vis_out = vis;
 	return TRUE;
 }
+
+gboolean
+gowl_blur_backdrop_stale(
+	gboolean have_buffer,
+	guint32  cached_tags,
+	guint32  current_tags,
+	gint     cached_w,
+	gint     cached_h,
+	gint     out_w,
+	gint     out_h
+){
+	if (!have_buffer)
+		return TRUE;
+	if (cached_tags != current_tags)
+		return TRUE;
+	if (cached_w != out_w || cached_h != out_h)
+		return TRUE;
+	return FALSE;
+}

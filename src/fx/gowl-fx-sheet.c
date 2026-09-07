@@ -68,6 +68,33 @@ sheet_swapchain_init(GowlFxSheet *sheet)
 	return sheet->swapchain != NULL;
 }
 
+/*
+ * Live sheets, so a capture can hide them.
+ *
+ * A sheet hangs off scene->tree beside the layer trees rather than
+ * inside one, which is deliberate -- it has to be able to sit above or
+ * below whole layers.  The cost is that hiding "every client layer" does
+ * not hide it, and a sheet holds a picture of the desktop WITH windows.
+ * Blur rebuilding its wallpaper backdrop while a cube or expo sheet was
+ * parked therefore blurred the OUTGOING tag's windows into the backdrop
+ * and cached the result as current.
+ *
+ * Compositor thread only, so a plain list needs no locking.
+ */
+static GList *fx_live_sheets = NULL;
+
+GList *
+gowl_fx_sheet_live(void)
+{
+	return fx_live_sheets;
+}
+
+struct wlr_scene_tree *
+gowl_fx_sheet_tree(GowlFxSheet *sheet)
+{
+	return sheet != NULL ? sheet->tree : NULL;
+}
+
 GowlFxSheet *
 gowl_fx_sheet_new(GowlCompositor   *compositor,
                   GowlMonitor      *monitor,
@@ -164,6 +191,7 @@ gowl_fx_sheet_new(GowlCompositor   *compositor,
 		sheet->hid_fullscreen_bg = TRUE;
 	}
 
+	fx_live_sheets = g_list_prepend(fx_live_sheets, sheet);
 	return sheet;
 }
 
@@ -174,6 +202,8 @@ gowl_fx_sheet_free(GowlFxSheet *sheet)
 
 	if (sheet == NULL)
 		return;
+
+	fx_live_sheets = g_list_remove(fx_live_sheets, sheet);
 
 	monitor = sheet->monitor;
 

@@ -725,6 +725,62 @@ Three invariants hold across all five callers:
 rounding against a real GLES2 renderer, and skips when there is no DRM
 render node.
 
+*** A sheet is not in a layer, and a capture must hide it
+:PROPERTIES:
+:CUSTOM_ID: fx-sheet-capture
+:END:
+
+=GowlFxSheet= parks its tree as a *direct child of =scene->tree=* --- a
+sibling of the layer trees, not inside one --- so an effect can place it
+above or below whole layers.  That placement has a consequence which is
+easy to miss and produces a convincing-looking rendering bug.
+
+An effect that wants to see *past* the windows hides the client layers:
+
+#+begin_example
+gowl_fx_vis_hide_layer(vis, self, GOWL_SCENE_LAYER_TILE,  FALSE);
+gowl_fx_vis_hide_layer(vis, self, GOWL_SCENE_LAYER_FLOAT, FALSE);
+...
+#+end_example
+
+That sweep cannot reach a sheet, because a sheet is not in any of them.
+And a sheet is not decoration: it is an *opaque, monitor-sized picture
+of the desktop with its windows in it*, left in the scene by the cube,
+expo or switcher for as long as that effect owns the output.
+
+So a capture taken while one is parked captures the sheet.  The blur
+module builds its frosted backdrop exactly this way --- wallpaper only,
+every client layer hidden --- and caches the result per monitor, keyed
+on the tag set.  Rebuild it during a tag switch, while the cube's sheet
+is up, and the backdrop becomes a blurred picture of *the tag being
+left*, stamped as current for the tag being entered.  On screen: a
+translucent terminal on tag 2 showing ghosts of a chat window from
+tag 4, persisting until something else invalidated the cache.
+
+Every such capture must therefore also call:
+
+#+begin_example
+gowl_fx_vis_hide_sheets(vis);
+#+end_example
+
+which walks the live-sheet registry (=gowl_fx_sheet_live()=, maintained
+in =gowl_fx_sheet_new()= / =_free()=) and switches each tree off for the
+duration of the capture.  =tests/test-fx-sheet-guard.sh= fails the build
+if a file that hides =GOWL_SCENE_LAYER_TILE= does not also hide sheets.
+
+**** Announce visibility changes only once the monitor has settled
+
+A related ordering rule, in =gowl_compositor_arrange()=.  Tag visibility
+is applied in *two* passes: first every client's scene node is enabled
+or disabled, and only then is =GOWL_SCENE_EFFECT_REVEAL= announced for
+the ones that appeared.
+
+One pass would announce a reveal while clients later in =self->clients=
+still carried their previous visibility --- and an effect handling
+REVEAL may capture the output, which would then contain whichever
+windows the loop had not reached yet.  The failure depends on list
+order, so it presents as intermittent.
+
 *** A source box outside its texture aborts the session
 :PROPERTIES:
 :CUSTOM_ID: fx-source-box-invariant

@@ -725,6 +725,51 @@ Three invariants hold across all five callers:
 rounding against a real GLES2 renderer, and skips when there is no DRM
 render node.
 
+*** Injected input takes the same path as real input
+:PROPERTIES:
+:CUSTOM_ID: injected-input-path
+:END:
+
+=gowl_compositor_inject_key()= and =gowl_compositor_inject_button()= go
+through =compositor_handle_key()= and =compositor_handle_button()= ---
+the same functions the physical devices reach --- and *not* through
+=wlr_seat_*_notify_*=.
+
+This is not tidiness.  A key handed straight to the seat arrives at the
+focused client and at nothing else: no configured keybind, no module
+keybind, no embedder intercept.  A click handed straight to the seat
+reaches whatever surface is under the cursor, which never includes the
+bar, because a bar draws scene buffers the compositor hit-tests itself.
+
+Both used to do exactly that, and the result was a software KVM
+(deskflow driving this machine through the RemoteDesktop portal) that
+could type into applications and click inside them, while *every*
+compositor binding and the whole bar were dead --- from the remote
+keyboard and mouse only.  From the physical ones everything worked, so
+it read as a deskflow fault rather than a gowl one.  Nothing is logged:
+the input arrives, applications respond, and only the compositor's own
+surfaces are inert.
+
+Three things are skipped for synthetic input, and they are the only
+differences:
+
+- *the recorder tap*, so gowl never records its own injections --- a
+  synthesiser reading that trace would be replaying its own output;
+- *the InputCapture diversion*, which would send a key or click we were
+  just handed straight back out to whoever sent it;
+- *key repeat*, because the sender is already repeating, and adding ours
+  double-fires the binding for as long as the remote holds the key.
+
+Injected *motion* needed no change: it already moved the real cursor
+through =gowl_compositor_motionnotify()=, which is why hover worked from
+the remote pointer while clicking did not, and why the hit tests are
+looking in the right place by the time a button arrives.
+
+=tests/test-inject-routing.sh= fails the build if an injector talks to
+the seat directly again.  =tests/test-record-guard.sh= enforces the
+recorder half at the tap now rather than by keeping injection away from
+it --- the old arrangement relied on the bypass that *was* the bug.
+
 *** A sheet is not in a layer, and a capture must hide it
 :PROPERTIES:
 :CUSTOM_ID: fx-sheet-capture

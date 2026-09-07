@@ -62,6 +62,13 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-fx-sheet-guard.sh` -- a capture that hides the client layers also
   hides the effect sheets (a sheet is a sibling of the layer trees and
   holds a picture of the desktop *with* its windows)
+- `test-inject-routing.sh` -- injected input goes through the compositor's
+  own decision, not straight to the seat
+- `test-bar-wifi-scan` -- nmcli output to a network list: one entry per
+  NETWORK (nmcli emits one row per BSS, so a dual-band router or a mesh
+  repeats an SSID), ranked before truncation, escaped colons, hidden
+  networks dropped. Runs against real `nmcli` output via
+  `GOWL_TEST_NMCLI_WIFI`
 - `test-blur-geom` -- Where the blur backdrop crops the wallpaper, when it
   is rebuilt, and
   the one invariant that matters: the source box must lie inside the
@@ -121,6 +128,17 @@ tests. These assert invariants no unit test can reach:
 > must reach the EIS device regardless of which portal is in use: a
 > RemoteDesktop-only client never calls `GetZones`, and a device with no
 > region cannot be positioned absolutely. See `docs/input-capture.org`.
+
+> **Injected input must take the same path as real input.** The injectors
+> call `compositor_handle_key()` / `compositor_handle_button()`, never
+> `wlr_seat_*_notify_*`. Straight to the seat means the focused client and
+> nothing else: no keybinds, no module keybinds, no embedder intercept, no
+> bar hit test. That was the bug behind "deskflow can type but no gowl
+> keybind works, and the bar is unclickable from the remote mouse but fine
+> from the real one". Synthetic input skips exactly three things — the
+> recorder tap (never record our own injections), the InputCapture
+> diversion (would echo input back to its sender) and key repeat (the
+> sender repeats already). `tests/test-inject-routing.sh` enforces it.
 
 > **A `GowlFxSheet` is NOT in a layer, so hiding the layers does not hide it.**
 > A sheet's tree is a direct child of `scene->tree`, a sibling of the layer

@@ -232,6 +232,18 @@ GowlBarHost *gowl_bar_plugin_get_host (GowlBarPlugin *self);
 
 /* Shorthands over the host, safe to call with no host attached. */
 void gowl_bar_plugin_request_redraw (GowlBarPlugin *self);
+
+/**
+ * gowl_bar_plugin_request_panel_refresh:
+ * @self: a plugin
+ *
+ * Asks for this plugin's open panel to be rebuilt, if it is the one
+ * showing.  A redraw is not enough: a panel is built once when it opens,
+ * so data that arrives afterwards -- a wifi scan finishing on a worker
+ * thread -- would otherwise not appear until the panel was closed and
+ * opened again.
+ */
+void gowl_bar_plugin_request_panel_refresh (GowlBarPlugin *self);
 void gowl_bar_plugin_refresh_panel  (GowlBarPlugin *self);
 void gowl_bar_plugin_spawn          (GowlBarPlugin *self,
                                       const gchar   *cmdline);

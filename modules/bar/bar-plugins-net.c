@@ -26,6 +26,7 @@
 #include "barkit/gowl-bar-json.h"
 
 #include "bar-internal.h"
+#include "bar-wifi-scan.h"
 
 /**
  * SECTION:bar-plugins-net
@@ -144,9 +145,9 @@ net_measure_ping(NetData *nd, const gchar *host)
 	}
 }
 
-/* Pull the visible networks out of nmcli.  The terse output is
-   colon-separated with escaped colons inside fields, so the split has
-   to respect the backslash escape nmcli emits. */
+/* Pull the visible networks out of nmcli.  The parsing lives in
+   bar-wifi-scan.c so it can be tested against real output: that is
+   where the duplicate-SSID and ranking bugs were. */
 static void
 net_scan_wifi(NetData *nd)
 {
@@ -155,68 +156,14 @@ net_scan_wifi(NetData *nd)
 		"device", "wifi", "list", NULL
 	};
 	g_autofree gchar *out = NULL;
-	g_auto(GStrv) lines = NULL;
-	gint i;
 
-	g_ptr_array_set_size(nd->scan, 0);
-
-	if (!nd->have_nmcli)
+	if (!nd->have_nmcli) {
+		g_ptr_array_set_size(nd->scan, 0);
 		return;
+	}
 
 	out = bar_run_argv(argv);
-	if (out == NULL)
-		return;
-
-	lines = g_strsplit(out, "\n", -1);
-	for (i = 0; lines[i] != NULL; i++) {
-		GString *field;
-		GPtrArray *fields;
-		const gchar *p;
-
-		if (lines[i][0] == '\0')
-			continue;
-
-		fields = g_ptr_array_new_with_free_func(g_free);
-		field  = g_string_new(NULL);
-		for (p = lines[i]; *p != '\0'; p++) {
-			if (*p == '\\' && p[1] != '\0') {
-				p++;
-				g_string_append_c(field, *p);
-				continue;
-			}
-			if (*p == ':') {
-				g_ptr_array_add(fields,
-					g_string_free(field, FALSE));
-				field = g_string_new(NULL);
-				continue;
-			}
-			g_string_append_c(field, *p);
-		}
-		g_ptr_array_add(fields, g_string_free(field, FALSE));
-
-		if (fields->len >= 4) {
-			const gchar *ssid;
-
-			ssid = g_ptr_array_index(fields, 1);
-			if (ssid != NULL && ssid[0] != '\0') {
-				g_ptr_array_add(nd->scan,
-					g_strdup_printf("%s\t%s\t%s\t%s",
-						ssid,
-						(const gchar *)
-							g_ptr_array_index(fields, 2),
-						(const gchar *)
-							g_ptr_array_index(fields, 3),
-						(const gchar *)
-							g_ptr_array_index(fields, 0)));
-			}
-		}
-		g_ptr_array_unref(fields);
-
-		/* A long scan list makes the panel unusable; the strongest
-		   twenty is more than anyone picks from. */
-		if (nd->scan->len >= 20)
-			break;
-	}
+	bar_wifi_scan_parse(nd->scan, out, 20);
 }
 
 static void
@@ -313,6 +260,20 @@ net_poll_async(GowlBarPlugin *plugin, gpointer data)
 		                       : GOWL_BAR_COLOR_PEACH);
 }
 
+/* Runs on the host's worker thread; see net_panel_opened(). */
+static void
+net_scan_work(GowlBarPlugin *plugin, gpointer user_data)
+{
+	NetData *nd = user_data;
+
+	if (nd == NULL)
+		return;
+	net_scan_wifi(nd);
+	/* A panel is built once when it opens, so a scan finishing later
+	   has to ask for it to be rebuilt or the list never appears. */
+	gowl_bar_plugin_request_panel_refresh(plugin);
+}
+
 static void
 net_panel_opened(GowlBarPlugin *plugin, gpointer data)
 {
@@ -323,6 +284,18 @@ net_panel_opened(GowlBarPlugin *plugin, gpointer data)
 	   here rather than scanning inline keeps the scan off the
 	   compositor thread. */
 	gowl_bar_plugin_set_setting(plugin, "panel-open", "true");
+
+	/*
+	 * Scan NOW, off the compositor thread, rather than waiting for the
+	 * next poll.
+	 *
+	 * The poll interval is 30 seconds, so setting the flag and leaving
+	 * it there meant the panel could sit on "scanning" for half a
+	 * minute -- long enough to read as broken rather than slow.
+	 * queue_work runs on the host's worker, so nmcli still never
+	 * blocks the compositor.
+	 */
+	gowl_bar_plugin_queue_work(plugin, net_scan_work, nd, NULL);
 	gowl_bar_plugin_request_redraw(plugin);
 }
 

@@ -689,6 +689,18 @@ gowl_bar_plugin_refresh_panel(GowlBarPlugin *self)
  * @cmdline: a shell command line
  */
 void
+gowl_bar_plugin_request_panel_refresh(GowlBarPlugin *self)
+{
+	GowlBarHost *host;
+
+	g_return_if_fail(GOWL_IS_BAR_PLUGIN(self));
+
+	host = PRIV(self)->host;
+	if (host != NULL)
+		gowl_bar_host_request_panel_refresh(host, self);
+}
+
+void
 gowl_bar_plugin_spawn(GowlBarPlugin *self, const gchar *cmdline)
 {
 	GowlBarHost *host;

@@ -13,13 +13,20 @@
 # clicks stop being recorded -- a recorder that is correct in isolation
 # and connected to nobody.
 #
-# The second half is the more important one.  The taps live on the
-# wlr_cursor and keyboard listeners precisely because the injection
-# helpers bypass those and drive wlr_seat_*_notify_* directly.  A tap
-# added to gowl_compositor_motionnotify() -- which both the real and the
-# synthetic path call -- would start recording gowl's own synthetic
-# input, and a synthesiser reading that trace would be replaying its own
-# output.  It would look like it worked.
+# The second half is the more important one, and it changed shape.
+#
+# The taps used to live on the wlr_cursor and keyboard listeners because
+# the injection helpers bypassed those entirely.  That bypass WAS the
+# bug: a software KVM could type and click, but never reach a compositor
+# keybind or the bar, because neither was consulted for injected input.
+# Injection now goes through the same compositor_handle_key() and
+# compositor_handle_button() the real devices do.
+#
+# So "injection is untapped" can no longer be enforced by keeping it away
+# from the tap.  It is enforced at the tap: every recording_note() in a
+# shared decision function must be guarded by !synthetic.  Without that
+# gowl records its own injected input, and a synthesiser reading the
+# trace replays its own output -- which looks exactly like it worked.
 
 set -e
 # An inherited CDPATH makes `cd' echo the resolved directory.
@@ -31,6 +38,23 @@ fail=0
 # Body of a static function, comments stripped, from its definition to
 # the closing brace in column 1.  Prose mentioning a call must not count
 # as one.
+# A name that does not exist yields an empty body, and every check on it
+# then passes vacuously.  That is not hypothetical: this guard spent its
+# whole life checking gowl_compositor_inject_pointer_button,
+# _inject_pointer_axis and _inject_keyboard_key, none of which have ever
+# existed -- the functions are _inject_button, _inject_axis and
+# _inject_key.  Half the second half was testing nothing.
+require_fn() {
+	if ! grep -qE "^$1\\(" "$comp"; then
+		echo "FAIL: no function named $1 in gowl-compositor.c"
+		echo "      A guard that names a function which does not exist"
+		echo "      passes on an empty body and checks nothing."
+		fail=1
+		return 1
+	fi
+	return 0
+}
+
 body() {
 	awk -v fn="$1" '
 		$0 ~ "^" fn "\\(" { inside = 1 }
@@ -54,23 +78,38 @@ check_tap() {
 	fi
 }
 
-check_tap on_kb_key            recording_note
-check_tap on_kb_modifiers      recording_note
-check_tap on_cursor_button     recording_note
-check_tap on_cursor_axis       recording_note
-check_tap on_cursor_motion     recording_note_motion
-check_tap on_cursor_motion_abs recording_note_motion
+check_tap compositor_handle_key    recording_note
+check_tap on_kb_modifiers          recording_note
+check_tap compositor_handle_button recording_note
+check_tap on_cursor_axis           recording_note
+check_tap on_cursor_motion         recording_note_motion
+check_tap on_cursor_motion_abs     recording_note_motion
+
+# A tap in a function injection also flows through must be conditional on
+# !synthetic, or gowl records what it just injected.
+for fn in compositor_handle_key compositor_handle_button
+do
+	require_fn "$fn" || continue
+	if ! body "$fn" | grep -qE 'input_recorder != NULL && !synthetic'; then
+		echo "FAIL: $fn taps the recorder without checking !synthetic."
+		echo "      Injected input reaches this function, so gowl would"
+		echo "      record its own injections and a synthesiser reading"
+		echo "      the trace would replay its own output."
+		fail=1
+	fi
+done
 
 # The injection helpers must stay untapped.  Checked by function rather
 # than by counting call sites, because the point is *which* functions
 # record, not how many calls exist.
 for fn in gowl_compositor_inject_pointer_motion \
 	  gowl_compositor_inject_pointer_motion_absolute \
-	  gowl_compositor_inject_pointer_button \
-	  gowl_compositor_inject_pointer_axis \
-	  gowl_compositor_inject_keyboard_key \
+	  gowl_compositor_inject_button \
+	  gowl_compositor_inject_axis \
+	  gowl_compositor_inject_key \
 	  gowl_compositor_motionnotify
 do
+	require_fn "$fn" || continue
 	if body "$fn" | grep -qE '\brecording_note(_motion)?[[:space:]]*\('; then
 		echo "FAIL: $fn records."
 		echo "      Both the real and the synthetic path reach it, so"
@@ -83,8 +122,9 @@ done
 
 # The escape hatch is the only way out for somebody who did not start
 # the recording and has no token.  It is not reachable from any test.
-if ! body on_kb_key | grep -q 'gowl_input_recorder_force_stop'; then
-	echo "FAIL: on_kb_key no longer force-stops a recording."
+require_fn compositor_handle_key
+if ! body compositor_handle_key | grep -q 'gowl_input_recorder_force_stop'; then
+	echo "FAIL: compositor_handle_key no longer force-stops a recording."
 	echo "      Super+Shift+Escape is the guaranteed way out of being"
 	echo "      recorded; without it the only way to stop is to hold"
 	echo "      the token."

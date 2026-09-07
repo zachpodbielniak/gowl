@@ -1313,6 +1313,17 @@ inject_now_msec(void)
 	return (guint32)(now.tv_sec * 1000 + now.tv_nsec / 1000000);
 }
 
+static void compositor_handle_button (GowlCompositor *self,
+                                      guint32 button,
+                                      guint32 state,
+                                      guint32 time_msec,
+                                      gboolean synthetic);
+static void compositor_handle_key (GowlCompositor *self,
+                                   guint32 raw_keycode,
+                                   guint32 state,
+                                   guint32 time_msec,
+                                   gboolean synthetic);
+
 void
 gowl_compositor_inject_pointer_motion(
 	GowlCompositor *self,
@@ -1401,11 +1412,22 @@ gowl_compositor_inject_button(
 	if (self->wlr_seat == NULL)
 		return;
 
-	wlr_seat_pointer_notify_button(self->wlr_seat, inject_now_msec(),
-		button,
+	/*
+	 * Through the compositor's own decision, NOT straight to the seat.
+	 *
+	 * Sending it to the seat delivers the click to whatever surface is
+	 * under the cursor and nothing else -- so a bar, which draws scene
+	 * buffers the compositor hit-tests itself, was simply not clickable
+	 * from a software KVM.  Tag boxes, widgets and dropdowns all live
+	 * behind that hit test, as does focus-follows-click.
+	 *
+	 * compositor_handle_button() forwards to the seat itself when
+	 * nothing claims the click, so the pass-through case is unchanged.
+	 */
+	compositor_handle_button(self, button,
 		pressed ? WL_POINTER_BUTTON_STATE_PRESSED
-		        : WL_POINTER_BUTTON_STATE_RELEASED);
-	wlr_seat_pointer_notify_frame(self->wlr_seat);
+		        : WL_POINTER_BUTTON_STATE_RELEASED,
+		inject_now_msec(), TRUE);
 }
 
 void
@@ -1483,9 +1505,25 @@ gowl_compositor_inject_key(
 	/* Modifiers first, so a shifted letter is already shifted when it
 	 * lands rather than a frame later. */
 	wlr_seat_keyboard_notify_modifiers(self->wlr_seat, &kb->modifiers);
-	wlr_seat_keyboard_notify_key(self->wlr_seat, inject_now_msec(), keycode,
+
+	/*
+	 * Through the compositor's own decision, NOT straight to the seat.
+	 *
+	 * Sending it to the seat forwards it to the focused client and
+	 * nothing else: no configured keybind, no module keybind, no
+	 * embedder intercept.  A software KVM driving this machine could
+	 * therefore type into applications but could not use a single
+	 * compositor binding -- Super+Return, the tag keys, the switcher --
+	 * because they were never consulted.  The keys were not lost, they
+	 * went to the app.
+	 *
+	 * compositor_handle_key() forwards to the client itself when
+	 * nothing claims the key, so the pass-through case is unchanged.
+	 */
+	compositor_handle_key(self, keycode,
 		pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
-		        : WL_KEYBOARD_KEY_STATE_RELEASED);
+		        : WL_KEYBOARD_KEY_STATE_RELEASED,
+		inject_now_msec(), TRUE);
 }
 
 void
@@ -6809,19 +6847,31 @@ gowl_compositor_dispatch_keybind(
 	return FALSE;
 }
 
-/**
- * on_kb_key:
+/*
+ * The whole keyboard decision, shared by the real keyboard and by
+ * injected input.
  *
- * Called when a key is pressed or released.  Extracts keysyms,
- * checks against configured keybinds, and forwards unconsumed
- * events to the focused client via the seat.
- * Ported from dwl's keypress().
+ * @synthetic marks a key that did not come from a physical keyboard --
+ * a software KVM driving this machine through the RemoteDesktop portal,
+ * or gowl_compositor_inject_key().  It reaches every decision a real key
+ * does, because a remote keyboard that cannot use the compositor's own
+ * keybinds is not a keyboard, it is a typewriter pointed at whatever
+ * happens to be focused.  Three things are deliberately skipped for it,
+ * and they are the only differences:
+ *
+ *   - the recorder tap, so gowl never records its own injections;
+ *   - the InputCapture diversion, which would send a key we were just
+ *     handed straight back out to whoever sent it;
+ *   - key repeat, because the sender repeats for itself.
  */
 static void
-on_kb_key(struct wl_listener *listener, void *data)
-{
-	GowlCompositor *self;
-	struct wlr_keyboard_key_event *event;
+compositor_handle_key(
+	GowlCompositor *self,
+	guint32         raw_keycode,
+	guint32         state,
+	guint32         time_msec,
+	gboolean        synthetic
+){
 	struct wlr_keyboard *kb;
 	const xkb_keysym_t *syms;
 	guint32 mods;
@@ -6829,10 +6879,10 @@ on_kb_key(struct wl_listener *listener, void *data)
 	gboolean handled;
 	xkb_keycode_t keycode;
 
-	self = wl_container_of(listener, self, kb_key);
-	event = (struct wlr_keyboard_key_event *)data;
+	if (self->wlr_kb_group == NULL)
+		return;
 	kb = &self->wlr_kb_group->keyboard;
-	keycode = event->keycode + 8;
+	keycode = raw_keycode + 8;
 
 	/* Translate keycode to keysyms using XKB state
 	 * (includes Shift / layout transforms).
@@ -6846,20 +6896,20 @@ on_kb_key(struct wl_listener *listener, void *data)
 	 * the suppression policy in recording_note(), not the position of
 	 * this call, that keeps lock-screen keystrokes out -- and it
 	 * counts what it withheld, so the trace says so. */
-	if (self->input_recorder != NULL) {
+	if (self->input_recorder != NULL && !synthetic) {
 		GowlRecordedEvent rec;
 
 		memset(&rec, 0, sizeof rec);
 		rec.type    = GOWL_RECORDED_EVENT_KEY;
-		rec.keycode = event->keycode;
+		rec.keycode = raw_keycode;
 		rec.keysym  = nsyms > 0 ? (guint32)syms[0] : 0;
-		rec.state   = (event->state == WL_KEYBOARD_KEY_STATE_PRESSED)
+		rec.state   = (state == WL_KEYBOARD_KEY_STATE_PRESSED)
 		              ? 1 : 0;
 		rec.mods    = mods;
 		recording_note(self, &rec);
 	}
 
-	if (nsyms > 0 && event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+	if (nsyms > 0 && state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		g_info("on_kb_key: keycode=%u sym=0x%04x mods=0x%x clean=0x%x",
 		       keycode, (guint)syms[0], mods, GOWL_CLEANMASK(mods));
 	}
@@ -6873,7 +6923,7 @@ on_kb_key(struct wl_listener *listener, void *data)
 	 * events are forwarded to clients.
 	 */
 	if (self->locked) {
-		if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+		if (state == WL_KEYBOARD_KEY_STATE_PRESSED &&
 		    self->module_mgr != NULL) {
 			guint32 codepoint;
 
@@ -6897,7 +6947,7 @@ on_kb_key(struct wl_listener *listener, void *data)
 	handled = FALSE;
 
 	/* Only check keybinds on press events */
-	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		/* First try the state-resolved keysyms (handles things
 		 * like XKB_KEY_Return that don't change with Shift).
 		 */
@@ -6970,7 +7020,7 @@ on_kb_key(struct wl_listener *listener, void *data)
 	if (!handled && self->module_mgr != NULL) {
 		guint clean_mods;
 		gboolean down =
-			event->state == WL_KEYBOARD_KEY_STATE_PRESSED;
+			state == WL_KEYBOARD_KEY_STATE_PRESSED;
 
 		clean_mods = GOWL_CLEANMASK(mods);
 		for (i = 0; i < nsyms; i++) {
@@ -7006,8 +7056,8 @@ on_kb_key(struct wl_listener *listener, void *data)
 		for (i = 0; i < nsyms; i++) {
 			if (self->key_intercept_func(
 				    self, mods, (guint)syms[i],
-				    event->keycode,
-				    event->state == WL_KEYBOARD_KEY_STATE_PRESSED,
+				    raw_keycode,
+				    state == WL_KEYBOARD_KEY_STATE_PRESSED,
 				    self->key_intercept_data)) {
 				handled = TRUE;
 				break;
@@ -7021,7 +7071,7 @@ on_kb_key(struct wl_listener *listener, void *data)
 	 * a way out of being recorded.  Checked here, on the same footing
 	 * as the InputCapture hatch below, and consumed. */
 	if (self->input_recorder != NULL
-	    && event->state == WL_KEYBOARD_KEY_STATE_PRESSED
+	    && state == WL_KEYBOARD_KEY_STATE_PRESSED
 	    && (mods & WLR_MODIFIER_LOGO) && (mods & WLR_MODIFIER_SHIFT)
 	    && gowl_input_recorder_is_active(self->input_recorder)) {
 		for (i = 0; i < nsyms; i++) {
@@ -7044,7 +7094,7 @@ on_kb_key(struct wl_listener *listener, void *data)
 	 * and consumed (not forwarded anywhere) so it can always break out. */
 	if (self->input_capture != NULL
 	    && gowl_input_capture_is_active(self->input_capture)
-	    && event->state == WL_KEYBOARD_KEY_STATE_PRESSED
+	    && state == WL_KEYBOARD_KEY_STATE_PRESSED
 	    && (mods & WLR_MODIFIER_LOGO)) {
 		for (i = 0; i < nsyms; i++) {
 			if (syms[i] == XKB_KEY_Escape) {
@@ -7060,15 +7110,15 @@ on_kb_key(struct wl_listener *listener, void *data)
 	 * it (so it is not forwarded to a client).  Runs AFTER compositor and
 	 * module keybinds + the embedder intercept + the escape hatch above,
 	 * so Super+Escape can always break capture. */
-	if (!handled && self->input_capture != NULL
+	if (!handled && !synthetic && self->input_capture != NULL
 	    && gowl_input_capture_is_active(self->input_capture)) {
 		GowlInputEvent ev;
 
 		memset(&ev, 0, sizeof ev);
 		ev.type = GOWL_INPUT_EVENT_KEY;
-		ev.time_msec = event->time_msec;
-		ev.keycode = event->keycode;
-		ev.state = (event->state == WL_KEYBOARD_KEY_STATE_PRESSED)
+		ev.time_msec = time_msec;
+		ev.keycode = raw_keycode;
+		ev.state = (state == WL_KEYBOARD_KEY_STATE_PRESSED)
 		           ? 1 : 0;
 		gowl_input_capture_emit(self->input_capture, &ev);
 		handled = TRUE;
@@ -7078,13 +7128,15 @@ on_kb_key(struct wl_listener *listener, void *data)
 		/* Forward to the focused client */
 		wlr_seat_set_keyboard(self->wlr_seat, kb);
 		wlr_seat_keyboard_notify_key(self->wlr_seat,
-		                             event->time_msec,
-		                             event->keycode,
-		                             event->state);
+		                             time_msec,
+		                             raw_keycode,
+		                             state);
 	}
 
-	/* Set up key repeat state */
-	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED && handled) {
+	/* Set up key repeat state.  Not for injected keys: the sender is
+	 * already repeating, and adding ours on top double-fires the
+	 * keybind for as long as the remote holds the key down. */
+	if (!synthetic && state == WL_KEYBOARD_KEY_STATE_PRESSED && handled) {
 		self->kb_nsyms   = nsyms;
 		self->kb_keysyms = syms;
 		self->kb_mods    = mods;
@@ -7096,6 +7148,26 @@ on_kb_key(struct wl_listener *listener, void *data)
 		self->kb_nsyms = 0;
 		wl_event_source_timer_update(self->key_repeat_source, 0);
 	}
+}
+/**
+ * on_kb_key:
+ *
+ * Called when a key is pressed or released on a real keyboard.  The
+ * decision itself lives in compositor_handle_key(), which injected
+ * input goes through too.
+ * Ported from dwl's keypress().
+ */
+static void
+on_kb_key(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+	struct wlr_keyboard_key_event *event;
+
+	self = wl_container_of(listener, self, kb_key);
+	event = (struct wlr_keyboard_key_event *)data;
+
+	compositor_handle_key(self, event->keycode, event->state,
+	                      event->time_msec, FALSE);
 }
 
 /**
@@ -7676,34 +7748,47 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 	recording_note_motion(self, self->cap_motion_dx, self->cap_motion_dy);
 }
 
-/**
- * on_cursor_button:
+/*
+ * The whole pointer-button decision, shared by the real pointer and by
+ * injected input.
  *
- * Handles mouse button events.  On press: focuses the client under
- * the cursor.  On release: ends interactive move/resize.
- * Ported from dwl's buttonpress().
+ * @synthetic marks a click that did not come from a physical pointer --
+ * a software KVM driving this machine, or
+ * gowl_compositor_inject_button().  It reaches every decision a real
+ * click does, because a remote mouse that cannot press the bar is not a
+ * mouse, it is a pointer that only applications can see.  Two things are
+ * skipped for it:
+ *
+ *   - the recorder tap, so gowl never records its own injections;
+ *   - the InputCapture diversion, which would send a click we were just
+ *     handed straight back out to whoever sent it.
+ *
+ * The cursor position needs no special handling: injected motion goes
+ * through gowl_compositor_motionnotify() and moves the real cursor, so
+ * by the time a button arrives the hit tests below are already looking
+ * in the right place.
  */
 static void
-on_cursor_button(struct wl_listener *listener, void *data)
-{
-	GowlCompositor *self;
-	struct wlr_pointer_button_event *event;
+compositor_handle_button(
+	GowlCompositor *self,
+	guint32         button,
+	guint32         state,
+	guint32         time_msec,
+	gboolean        synthetic
+){
 	GowlClient *c;
-
-	self = wl_container_of(listener, self, cursor_button);
-	event = (struct wlr_pointer_button_event *)data;
 
 	wlr_idle_notifier_v1_notify_activity(self->idle_notifier,
 	                                     self->wlr_seat);
 
-	if (self->input_recorder != NULL) {
+	if (self->input_recorder != NULL && !synthetic) {
 		GowlRecordedEvent    rec;
 		struct wlr_keyboard *rkbd;
 
 		memset(&rec, 0, sizeof rec);
 		rec.type   = GOWL_RECORDED_EVENT_POINTER_BUTTON;
-		rec.button = event->button;
-		rec.state  = (event->state == WL_POINTER_BUTTON_STATE_PRESSED)
+		rec.button = button;
+		rec.state  = (state == WL_POINTER_BUTTON_STATE_PRESSED)
 		             ? 1 : 0;
 		if (self->wlr_cursor != NULL) {
 			rec.x = self->wlr_cursor->x;
@@ -7715,22 +7800,24 @@ on_cursor_button(struct wl_listener *listener, void *data)
 	}
 
 	/* InputCapture: while active, divert the button to the sink and do
-	 * not forward it to any client (and skip the focus/grab logic). */
-	if (self->input_capture != NULL
+	 * not forward it to any client (and skip the focus/grab logic).
+	 * Never for an injected click: that would hand a click we were just
+	 * given straight back to whoever sent it. */
+	if (!synthetic && self->input_capture != NULL
 	    && gowl_input_capture_is_active(self->input_capture)) {
 		GowlInputEvent ev;
 
 		memset(&ev, 0, sizeof ev);
 		ev.type = GOWL_INPUT_EVENT_BUTTON;
-		ev.time_msec = event->time_msec;
-		ev.button = event->button;
-		ev.state = (event->state == WL_POINTER_BUTTON_STATE_PRESSED)
+		ev.time_msec = time_msec;
+		ev.button = button;
+		ev.state = (state == WL_POINTER_BUTTON_STATE_PRESSED)
 		           ? 1 : 0;
 		gowl_input_capture_emit(self->input_capture, &ev);
 		return;
 	}
 
-	switch (event->state) {
+	switch (state) {
 	case WL_POINTER_BUTTON_STATE_PRESSED: {
 		struct wlr_keyboard *kbd;
 		uint32_t             kmods;
@@ -7765,7 +7852,7 @@ on_cursor_button(struct wl_listener *listener, void *data)
 
 				if (gowl_module_manager_bar_button(
 					    self->module_mgr, bm, lx, ly,
-					    event->button, TRUE, bmods)) {
+					    button, TRUE, bmods)) {
 					self->selmon = bm;
 					return;
 				}
@@ -7776,7 +7863,7 @@ on_cursor_button(struct wl_listener *listener, void *data)
 		 * views (left) or toggles (right) that tag on the monitor
 		 * under the cursor, then focuses that monitor.  Consumed
 		 * here so it is not treated as a client interaction. */
-		if (event->button == BTN_LEFT || event->button == BTN_RIGHT) {
+		if (button == BTN_LEFT || button == BTN_RIGHT) {
 			GowlMonitor *bm;
 
 			bm = xytomon(self, self->wlr_cursor->x,
@@ -7794,7 +7881,7 @@ on_cursor_button(struct wl_listener *listener, void *data)
 					guint32 mask = (guint32)1u << tag;
 
 					self->selmon = bm;
-					if (event->button == BTN_RIGHT)
+					if (button == BTN_RIGHT)
 						gowl_monitor_toggle_tag(bm, mask);
 					else
 						gowl_monitor_set_tags(bm, mask);
@@ -7828,12 +7915,12 @@ on_cursor_button(struct wl_listener *listener, void *data)
 		if (!(kmods & WLR_MODIFIER_LOGO))
 			break;
 
-		if (event->button == BTN_LEFT) {
+		if (button == BTN_LEFT) {
 			begin_interactive(self, c, GOWL_CURSOR_MODE_MOVE, 0);
 			return;
 		}
 
-		if (event->button == BTN_RIGHT) {
+		if (button == BTN_RIGHT) {
 			/* Super+RMB resizes from whichever quadrant of the
 			 * window the cursor is in, so the nearest corner
 			 * follows the pointer (dwl behaviour) instead of always
@@ -7872,7 +7959,7 @@ on_cursor_button(struct wl_listener *listener, void *data)
 					    self->module_mgr, bm,
 					    (gint)(self->wlr_cursor->x - gx),
 					    (gint)(self->wlr_cursor->y - gy),
-					    event->button, FALSE, 0)) {
+					    button, FALSE, 0)) {
 					self->cursor_mode =
 						GOWL_CURSOR_MODE_NORMAL;
 					return;
@@ -7907,9 +7994,28 @@ on_cursor_button(struct wl_listener *listener, void *data)
 
 	/* Forward button event to the focused client */
 	wlr_seat_pointer_notify_button(self->wlr_seat,
-	                               event->time_msec,
-	                               event->button,
-	                               event->state);
+	                               time_msec,
+	                               button,
+	                               state);
+}
+/**
+ * on_cursor_button:
+ *
+ * Called on a real pointer button.  The decision itself lives in
+ * compositor_handle_button(), which injected input goes through too.
+ * Ported from dwl's buttonpress().
+ */
+static void
+on_cursor_button(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+	struct wlr_pointer_button_event *event;
+
+	self = wl_container_of(listener, self, cursor_button);
+	event = (struct wlr_pointer_button_event *)data;
+
+	compositor_handle_button(self, event->button, event->state,
+	                         event->time_msec, FALSE);
 }
 
 static void

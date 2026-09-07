@@ -497,7 +497,11 @@ modules:
     # ~/.config/gowl/bar-plugins/.
     widgets-left: "tags title"
     widgets-center: "clock"
-    widgets-right: "cpu memory disk battery"
+    # `tailscale' decides for itself whether it belongs on this host:
+    # it stays hidden unless the machine has actually joined a tailnet,
+    # and appears on its own the first time one is joined.  Override
+    # with tailscale:always or tailscale:never.
+    widgets-right: "cpu memory disk battery tailscale"
     #
     # Which centre widget sits dead centre on the monitor.  Without an
     # anchor the whole centre group is centred, so the clock slides

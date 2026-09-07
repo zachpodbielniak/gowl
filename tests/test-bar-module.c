@@ -144,6 +144,13 @@ test_the_shipped_layout(void)
 	g_assert_cmpint(count_widget(listing, "title"), ==, 1);
 	g_assert_cmpint(count_widget(listing, "cpu"), ==, 1);
 
+	/* The Tailscale widget ships in the default layout because it can
+	   answer for itself whether it belongs: it stays invisible until
+	   this host has joined a tailnet.  A widget that can decide that
+	   should not have to be configured, and dropping it from the
+	   shipped list would silently take that away. */
+	g_assert_cmpint(count_widget(listing, "tailscale"), ==, 1);
+
 	g_object_unref(module);
 }
 
@@ -353,6 +360,45 @@ test_aliases_and_specs(void)
 	g_object_unref(module);
 }
 
+/* A widget that reports itself invisible is marked [off], which is a
+   different answer from [hidden]: the first is the plugin saying it has
+   nothing to show here, the second is the layout saying it did not fit.
+   Confusing the two sends you looking in the wrong place. */
+static void
+test_a_widget_with_nothing_to_show_is_marked_off(void)
+{
+	GowlModule *module;
+	g_autoptr(GHashTable) settings = NULL;
+	g_autofree gchar *listing = NULL;
+	g_auto(GStrv) lines = NULL;
+	gint i;
+	gboolean saw_tailscale;
+
+	module = load_bar_module();
+	if (module == NULL)
+		return;
+
+	/* `never' is the one answer that does not depend on this machine's
+	   tailnet membership, so it is what a test can pin. */
+	settings = settings_new("widgets-right", "tailscale:never", NULL);
+	gowl_module_configure(module, settings);
+
+	listing = layout_of(module);
+	g_assert_nonnull(listing);
+
+	saw_tailscale = FALSE;
+	lines = g_strsplit(listing, "\n", -1);
+	for (i = 0; lines[i] != NULL; i++) {
+		if (strstr(lines[i], "tailscale:never") == NULL)
+			continue;
+		saw_tailscale = TRUE;
+		g_assert_nonnull(strstr(lines[i], "[off]"));
+	}
+	g_assert_true(saw_tailscale);
+
+	g_object_unref(module);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -373,6 +419,8 @@ main(int argc, char *argv[])
 	                test_unknown_widgets_are_skipped_not_fatal);
 	g_test_add_func("/bar-module/aliases-and-specs",
 	                test_aliases_and_specs);
+	g_test_add_func("/bar-module/nothing-to-show-is-off",
+	                test_a_widget_with_nothing_to_show_is_marked_off);
 
 	return g_test_run();
 }

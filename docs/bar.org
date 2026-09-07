@@ -56,7 +56,9 @@ A =widgets:= key with no region keeps its historical meaning --- the right-hand 
 :CUSTOM_ID: shipped-layout
 :END:
 
-With no configuration at all the bar shows a shipped layout: the tag row and window title on the left, the clock anchored dead centre, and =cpu memory disk battery= on the right.
+With no configuration at all the bar shows a shipped layout: the tag row and window title on the left, the clock anchored dead centre, and =cpu memory disk battery tailscale= on the right.
+
+=tailscale= is in that list because it can answer for itself whether it belongs --- see [[#tailscale][Tailscale]]. A widget that can decide that should not have to be configured.
 
 That layout is a starting point, not a base to add to. *The first configuration that names any widget list replaces it wholesale* --- including the regions that configuration does not mention.
 
@@ -204,7 +206,43 @@ Colour is computed from pressure --- text, then peach past 75%, then red past 90
 
 The network panel reads what the kernel already knows, and uses =nmcli= only for the parts that genuinely need it --- so the readings still work on a machine with no NetworkManager, and only the actions disappear.
 
-The Tailscale widget is off by default and hides itself entirely when Tailscale is not installed. It reads =tailscale status --json= directly rather than shelling out per field. A device that has Tailscale but has never signed in raises a toast saying so, once.
+**** Tailscale
+:PROPERTIES:
+:CUSTOM_ID: tailscale
+:END:
+
+The =tailscale= widget ships in the default layout and decides for itself whether it belongs on this host.
+
+"Is Tailscale installed" is the wrong question --- on an image that ships it, such as Immutablue, the answer is always yes, and a widget keyed on it sits permanently grey on every machine that does not use Tailscale. The question is whether *this host has joined a tailnet*, which =tailscale status --json= answers with =HaveNodeKey=. That stays true across a =tailscale down= and goes false only on a host that never joined or was logged out.
+
+So, by default:
+
+| Host                          | Widget                      |
+|-------------------------------+-----------------------------|
+| Tailscale not installed       | hidden                      |
+| Installed, never joined       | hidden                      |
+| Joined, tailnet down          | shown, dimmed               |
+| Joined, running               | shown                       |
+
+A host that uses Tailscale wants to see that it is *down* --- that is actionable, and the switch to fix it is one click away in the panel. A host that never joined wants nothing.
+
+The widget keeps polling while hidden, so running =tailscale up= on a fresh host makes it appear on its own within a poll --- no restart, no configuration.
+
+Override with the widget's parameter or its =show= setting:
+
+#+begin_src yaml
+widgets-right: "tailscale:always cpu memory"   # or tailscale:never
+#+end_src
+
+| Mode      | Means                                          |
+|-----------+------------------------------------------------|
+| =auto=    | the default: shown only on a tailnet member    |
+| =always=  | always shown, whatever the host                |
+| =never=   | never shown                                    |
+
+A host that *is* a member but whose session has expired raises a toast saying so, once. A host that never joined does not: the widget is not in the bar there, so a toast pointing at its panel would point at nothing.
+
+The widget reads =tailscale status --json= once per refresh and pulls every field out of that one reply rather than shelling out per value.
 
 *** Desktop
 | Widget     | Shows                        | Panel                                 |
@@ -484,7 +522,8 @@ top     enabled visible anchor=clock
   center clock                        Mon Sep 07  11:27
   right  cpu                          CPU 31%
   right  memory                       MEM 11.9G
-  right  battery              [hidden]
+  right  battery                [off]
+  right  tailscale
 bottom  enabled visible anchor=-
   right  ip                           10.0.5.239
 #+end_example
@@ -492,7 +531,8 @@ bottom  enabled visible anchor=-
 "Why is my widget missing" has three plausible answers, and this is what tells them apart:
 
 - *It is not in the list at all.* The spec did not resolve to a registered plugin --- a typo, or a plugin that failed to load. Check =gowl bar-plugins= and =gowl bar-quarantined=.
-- *It is listed but marked =[hidden]=.* It measured to nothing, which for most widgets means it has nothing to show: no battery on a desktop, no swap on a machine without any, no wireless interface. That is deliberate --- an empty widget would leave a hole in the bar.
+- *It is listed but marked =[off]=.* The plugin is saying it has nothing to show on this host: no battery on a desktop, no swap, no wireless interface, no tailnet. That is deliberate --- most widgets hide rather than show a blank.
+- *It is listed but marked =[hidden]=.* It has something to show but did not fit; the bar dropped it rather than drawing it over its neighbour.
 - *It is in the wrong region.* Usually a configuration that set only some regions on top of a layout it expected to be cleared. See [[#shipped-layout][What happens to the shipped layout]].
 
 From Elisp, =M-x cmacs-gowl-bar-widgets=.

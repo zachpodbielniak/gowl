@@ -3274,13 +3274,27 @@ bar_handle_command(GowlIpcHandler *handler, const gchar *command,
 				BarItem *item;
 				g_autofree gchar *label = NULL;
 
+				const gchar *mark;
+
 				item = g_ptr_array_index(bar->items, i);
 				label = gowl_bar_plugin_dup_label(item->plugin);
+
+				/* Two different problems wear the same
+				   symptom.  `[off]' is the plugin saying it
+				   has nothing to show here -- no battery, no
+				   tailnet.  `[hidden]' is the layout saying
+				   it did not fit. */
+				if (!gowl_bar_plugin_get_visible(item->plugin))
+					mark = "[off] ";
+				else if (!item->slot.visible)
+					mark = "[hidden] ";
+				else
+					mark = "";
+
 				g_string_append_printf(out,
 					"  %-6s %-28s %s%s\n",
 					gowl_bar_layout_region_name(item->region),
-					item->spec,
-					item->slot.visible ? "" : "[hidden] ",
+					item->spec, mark,
 					(label != NULL) ? label : "");
 			}
 		}
@@ -3751,8 +3765,13 @@ gowl_module_bar_init(GowlModuleBar *self)
 	top->enabled = TRUE;
 	bar_set_region(self, top, GOWL_BAR_REGION_LEFT, "tags title");
 	bar_set_region(self, top, GOWL_BAR_REGION_CENTER, "clock");
+	/* tailscale is in the shipped list because it decides for itself
+	   whether it belongs: it stays invisible unless this host has
+	   actually joined a tailnet, and appears on its own the first
+	   time one is joined.  A widget that can answer that question
+	   should not have to be configured. */
 	bar_set_region(self, top, GOWL_BAR_REGION_RIGHT,
-	               "cpu memory disk battery");
+	               "cpu memory disk battery tailscale");
 	top->anchor_id = g_strdup("clock");
 	bar_resolve_anchor(top);
 	top->defaults_pending = TRUE;

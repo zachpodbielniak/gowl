@@ -148,7 +148,7 @@ See [docs/modules.org](docs/modules.org) for the module development guide.
 
 ## Status Bar
 
-The bar is a host for **widget plugins**. Two bars (top and bottom), each with left/centre/right regions and a centre anchor so one widget stays dead centre. Clicking a widget opens its **dropdown panel** -- sliders, toggles, lists, graphs, a calendar -- which the plugin describes and the bar renders, hit-tests, scrolls and navigates. **Toasts** are drawn above fullscreen windows, and a toast can name a panel, so a notification is one click from the thing that resolves it.
+The bar is a host for **widget plugins**. Two bars (top and bottom), each with left/centre/right regions and a centre anchor so one widget stays dead centre. Widgets that can tell whether they apply to a host hide themselves there -- no battery widget on a desktop, no Tailscale widget on a machine that has never joined a tailnet -- so the shipped layout is usable unconfigured. Clicking a widget opens its **dropdown panel** -- sliders, toggles, lists, graphs, a calendar -- which the plugin describes and the bar renders, hit-tests, scrolls and navigates. **Toasts** are drawn above fullscreen windows, and a toast can name a panel, so a notification is one click from the thing that resolves it.
 
 Plugins load from `~/.config/gowl/bar-plugins/` as a compiled `.so` **or as a plain `.c` file**, compiled on demand through crispy -- no build system, no install step, and `gowl bar-plugin-reload` to pick up an edit without restarting. Every colour is a palette role, so one `palette:` setting restyles the bar, its panels, its toasts and every third-party widget in it.
 

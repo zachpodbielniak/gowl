@@ -734,6 +734,11 @@ typedef struct {
 	gboolean installed;
 	gboolean active;
 	gboolean needs_login;
+	/* Whether this host has ever joined a tailnet.  Installed is not
+	   the same question --- Immutablue ships Tailscale on every host,
+	   so a widget keyed on the binary being present would sit grey
+	   and permanent on machines that do not use it. */
+	gboolean joined;
 	gboolean busy;
 	gchar   *self_name;
 	gchar   *self_ip;
@@ -867,6 +872,62 @@ ts_parse_peers(TailscaleData *td, const gchar *json)
 	gowl_bar_json_foreach_object(json, "Peer", ts_collect_peer, td);
 }
 
+/*
+ * Whether the widget belongs in this bar at all.
+ *
+ * `show' is `auto' (the default), `always' or `never'.  Under `auto'
+ * the widget appears only on a host that has actually joined a
+ * tailnet, because the alternative --- keying on the binary being
+ * installed --- puts a permanently grey icon on every Immutablue
+ * machine, Tailscale being part of the image.
+ *
+ * A host that has joined keeps the widget whether the tailnet is up or
+ * down: down is a state worth seeing on a machine that uses Tailscale,
+ * and it is one click from the switch that fixes it.
+ *
+ * The plugin keeps polling while invisible, so a `tailscale up' on a
+ * fresh host makes the widget appear on the next poll rather than at
+ * the next login.
+ */
+static void
+ts_apply_visibility(GowlBarPlugin *plugin, TailscaleData *td)
+{
+	const gchar *show;
+	gboolean visible;
+
+	show = gowl_bar_plugin_get_setting(plugin, "show");
+	if (show == NULL) {
+		/* `tailscale:always' reads better than a separate setting
+		   for a three-value switch, so the spec's parameter is
+		   accepted as the mode too. */
+		show = gowl_bar_plugin_get_setting(plugin, "param");
+	}
+	if (g_strcmp0(show, "always") == 0)
+		visible = TRUE;
+	else if (g_strcmp0(show, "never") == 0)
+		visible = FALSE;
+	else
+		visible = (td->installed && td->joined);
+
+	gowl_bar_plugin_set_visible(plugin, visible);
+
+	if (!visible) {
+		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_icon(plugin, NULL);
+	}
+}
+
+/* Apply the visibility rule as soon as the setting arrives, rather
+   than waiting for a poll: `show: never' should take effect at once,
+   and under `auto' this keeps the widget out of the bar until a poll
+   confirms membership instead of showing it and taking it away. */
+static void
+ts_configure(GowlBarPlugin *plugin, gpointer data, GHashTable *settings)
+{
+	(void)settings;
+	ts_apply_visibility(plugin, data);
+}
+
 static void
 ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 {
@@ -877,26 +938,43 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 
 	td->installed = bar_have_command("tailscale");
 	if (!td->installed) {
-		gowl_bar_plugin_set_label(plugin, NULL);
-		gowl_bar_plugin_set_icon(plugin, NULL);
+		td->joined = FALSE;
+		ts_apply_visibility(plugin, td);
 		return;
 	}
 
 	json = bar_run_argv(argv);
 	if (json == NULL) {
+		/* The daemon is not answering.  Whether that is worth a
+		   widget depends on whether this host uses Tailscale at
+		   all, which the last successful poll already told us. */
 		td->active = FALSE;
-		gowl_bar_plugin_set_icon(plugin, "\xef\x95\x82");
-		gowl_bar_plugin_set_label(plugin,
-			gowl_bar_plugin_get_setting_bool(plugin, "labels",
-			                                 FALSE)
-			? "tailscale" : NULL);
-		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+		ts_apply_visibility(plugin, td);
+		if (gowl_bar_plugin_get_visible(plugin)) {
+			gowl_bar_plugin_set_icon(plugin, "\xef\x95\x82");
+			gowl_bar_plugin_set_label(plugin,
+				gowl_bar_plugin_get_setting_bool(plugin,
+					"labels", FALSE)
+				? "tailscale" : NULL);
+			gowl_bar_plugin_set_color(plugin,
+			                          GOWL_BAR_COLOR_MUTED);
+		}
 		return;
 	}
 
 	state = gowl_bar_json_string(json, "BackendState");
 	td->active      = (g_strcmp0(state, "Running") == 0);
 	td->needs_login = (g_strcmp0(state, "NeedsLogin") == 0);
+
+	/* HaveNodeKey is the honest "is this a tailnet member" flag: it
+	   stays true across `tailscale down' and goes false only on a
+	   host that has never joined or has been logged out. */
+	td->joined = gowl_bar_json_bool(json, "HaveNodeKey", FALSE) ||
+	             td->active;
+
+	ts_apply_visibility(plugin, td);
+	if (!gowl_bar_plugin_get_visible(plugin))
+		return;
 
 	g_free(td->status_text);
 	td->status_text = g_strdup((state != NULL) ? state : "Unknown");
@@ -960,17 +1038,18 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 		: td->needs_login ? GOWL_BAR_COLOR_YELLOW
 		: GOWL_BAR_COLOR_MUTED);
 
-	/* Immutablue ships Tailscale, so a machine that has it installed
-	   but never logged in is worth saying once rather than leaving
-	   the user to wonder why the icon is grey. */
-	if (td->needs_login &&
+	/* Say it once when a host that *is* a tailnet member has lapsed --
+	   an expired session is actionable and easy to miss.  A host that
+	   never joined gets nothing: the widget is not even shown there,
+	   so a toast pointing at its panel would point at nothing. */
+	if (td->needs_login && td->joined &&
 	    !gowl_bar_plugin_get_setting_bool(plugin, "login-notified",
 	                                      FALSE)) {
 		gowl_bar_plugin_set_setting(plugin, "login-notified", "true");
 		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
-			"Tailscale is not signed in",
-			"This device has Tailscale installed but has not "
-			"joined a tailnet.");
+			"Tailscale needs signing in again",
+			"This device is a tailnet member but its session has "
+			"expired.");
 	}
 }
 
@@ -990,6 +1069,16 @@ ts_panel(GowlBarPlugin *plugin, gpointer data)
 		                        "Not installed");
 		gowl_bar_panel_add_label(panel,
 			"Install the tailscale package to use this widget.");
+		return panel;
+	}
+	if (!td->joined) {
+		/* Reachable only with `show: always' --- under `auto' the
+		   widget is not in the bar to be clicked. */
+		gowl_bar_panel_add_hero(panel, "\xef\x95\x82", "Tailscale",
+		                        "Not on a tailnet");
+		gowl_bar_panel_add_label(panel,
+			"Run `tailscale up' to join one. The widget appears "
+			"on its own once you have.");
 		return panel;
 	}
 
@@ -1190,7 +1279,7 @@ ts_click(GowlBarPlugin *plugin, gpointer data, guint button, gint x, gint y,
 static const GowlBarPluginVTable tailscale_vtable = {
 	sizeof(GowlBarPluginVTable),
 	ts_create, ts_destroy,
-	NULL, NULL, NULL,
+	NULL, NULL, ts_configure,
 	ts_interval, NULL, ts_poll_async,
 	NULL, NULL,
 	ts_click, NULL,

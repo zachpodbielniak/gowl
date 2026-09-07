@@ -25,7 +25,7 @@ INCLUDEDIR ?= $(PREFIX)/include
 # API.  install-headers walks this list and skips any that has no .h
 # today, so adding a subsystem means adding one word here -- and
 # forgetting to is what left src/fx and src/barkit uninstalled.
-HEADER_SUBDIRS := core boxed config module interfaces layout ipc util \
+HEADER_SUBDIRS := core boxed config module interfaces ipc util \
                   barkit fx protocols
 DATADIR ?= $(PREFIX)/share
 PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig
@@ -235,6 +235,12 @@ GIR_NAMESPACE := Gowl
 GIR_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR)
 GIR_FILE := $(GIR_NAMESPACE)-$(GIR_VERSION).gir
 TYPELIB_FILE := $(GIR_NAMESPACE)-$(GIR_VERSION).typelib
+
+# g-ir-scanner runs its own cpp pass over the public headers, so it needs the
+# same include dirs and defines the compiler gets: the barkit headers pull in
+# cairo.h, and every wlroots header #errors out without -DWLR_USE_UNSTABLE.
+# Only -I/-D survive the filter -- the scanner chokes on flags like -pthread.
+GIR_CPPFLAGS := $(filter -I% -D%,$(CFLAGS_BASE) $(CFLAGS_INC) $(CFLAGS_DEPS))
 
 # Test framework
 TEST_CFLAGS := $(CFLAGS) $(shell $(PKG_CONFIG) --cflags glib-2.0)

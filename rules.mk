@@ -41,10 +41,6 @@ $(OBJDIR)/barkit/%.o: src/barkit/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OBJDIR)/layout/%.o: src/layout/%.c | $(OBJDIR)
-	@$(MKDIR_P) $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(OBJDIR)/ipc/%.o: src/ipc/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -219,6 +215,7 @@ $(OUTDIR)/$(GIR_FILE): $(LIB_SRCS) $(LIB_HDRS) | $(OUTDIR)/$(LIB_SHARED_FULL)
 		--pkg=gio-2.0 \
 		--output=$@ \
 		--warn-all \
+		$(GIR_CPPFLAGS) \
 		-Isrc \
 		$(LIB_HDRS) $(LIB_SRCS)
 
@@ -244,7 +241,6 @@ $(OBJDIR): | $(BUILDDIR)/include/gowl
 	@$(MKDIR_P) $(OBJDIR)/module
 	@$(MKDIR_P) $(OBJDIR)/boxed
 	@$(MKDIR_P) $(OBJDIR)/interfaces
-	@$(MKDIR_P) $(OBJDIR)/layout
 	@$(MKDIR_P) $(OBJDIR)/ipc
 	@$(MKDIR_P) $(OBJDIR)/util
 	@$(MKDIR_P) $(OBJDIR)/bar
@@ -345,11 +341,11 @@ install-headers:
 	@# One loop over every source subdirectory rather than a line
 	@# apiece.  Two reasons, both learned the hard way:
 	@#
-	@#   * A subdirectory with no headers -- src/layout, whose layouts
-	@#     are .c only -- made `install -m 644 src/layout/*.h' fail on
-	@#     the unexpanded glob, and install-headers died there.  Every
-	@#     directory listed AFTER it was therefore never installed:
-	@#     src/ipc and src/util silently went missing from
+	@#   * A directory that no longer has headers -- src/layout, whose
+	@#     layouts became modules -- made `install src/layout/*.h' fail
+	@#     on the unexpanded glob, and install-headers died there.
+	@#     Every directory listed AFTER it was therefore never
+	@#     installed: src/ipc and src/util silently went missing from
 	@#     /usr/include/gowl for as long as the rule existed.
 	@#   * A new subdirectory used to need its own two lines.  src/fx
 	@#     and src/barkit did not get them, so a bar plugin built

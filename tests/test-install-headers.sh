@@ -84,12 +84,16 @@ for h in gowl-bar-plugin.h gowl-bar-plugin-proxy.h gowl-bar-registry.h \
 	fi
 done
 
-# 3. A subdirectory with no headers must be skipped, not turned into an
-#    empty directory -- and must not stop the rule.
-if [ -d "$inc/layout" ] && [ -z "$(ls -A "$inc/layout" 2>/dev/null)" ]; then
-	echo "FAIL: empty directory created for a headerless subdir (layout)"
-	fail=1
-fi
+# 3. A subdirectory that has no headers any more must be skipped, not
+#    turned into an empty directory -- and must not stop the rule.
+#    src/layout is the one that bit: its layouts became modules and the
+#    glob it left behind took install-headers down with it.
+for d in "$inc"/*/; do
+	if [ -z "$(ls -A "$d" 2>/dev/null)" ]; then
+		echo "FAIL: empty directory installed: $(basename "$d")"
+		fail=1
+	fi
+done
 
 if [ "$fail" -eq 0 ]; then
 	n=$(find "$inc" -name '*.h' | wc -l)

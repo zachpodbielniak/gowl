@@ -27,6 +27,7 @@ capture_tree(GowlSceneSnapshot *snapshot, struct wlr_scene_tree *tree,
 		struct wlr_scene_buffer *source;
 		struct wlr_scene_surface *surface;
 		struct wlr_buffer *buffer;
+		struct wlr_fbox src;
 		SnapshotPart part = { 0 };
 
 		if (!node->enabled)
@@ -67,8 +68,45 @@ capture_tree(GowlSceneSnapshot *snapshot, struct wlr_scene_tree *tree,
 
 		/* In particular, keep the cropped source rectangle: copying a
 		 * raw GTK buffer includes invisible CSD shadows and shifts the
-		 * content when we hand back to the real window. */
-		wlr_scene_buffer_set_source_box(part.node, &source->src_box);
+		 * content when we hand back to the real window.
+		 *
+		 * Clamped to the buffer we are ACTUALLY copying, which is not
+		 * always the one the source box was measured against: the
+		 * branch above prefers the surface's current buffer when the
+		 * scene node has already released its own, and a client that
+		 * committed a smaller buffer since then would leave us handing
+		 * wlroots a source box past its edge.  That is not a bad
+		 * frame, it is an assert inside wlr_render_pass_add_texture()
+		 * -- which aborts the compositor, i.e. the whole session under
+		 * `cmacs --gowl'.  An all-zero box means "the whole texture"
+		 * and must be passed through untouched. */
+		src = source->src_box;
+		if (src.width > 0.0 || src.height > 0.0) {
+			gdouble bw = (gdouble)buffer->width;
+			gdouble bh = (gdouble)buffer->height;
+
+			if (src.x < 0.0) {
+				src.width += src.x;
+				src.x = 0.0;
+			}
+			if (src.y < 0.0) {
+				src.height += src.y;
+				src.y = 0.0;
+			}
+			if (src.x > bw)
+				src.x = bw;
+			if (src.y > bh)
+				src.y = bh;
+			if (src.width < 0.0)
+				src.width = 0.0;
+			if (src.height < 0.0)
+				src.height = 0.0;
+			if (src.x + src.width > bw)
+				src.width = bw - src.x;
+			if (src.y + src.height > bh)
+				src.height = bh - src.y;
+		}
+		wlr_scene_buffer_set_source_box(part.node, &src);
 		wlr_scene_buffer_set_transform(part.node, source->transform);
 		wlr_scene_buffer_set_filter_mode(part.node, source->filter_mode);
 		wlr_scene_buffer_set_opacity(part.node, source->opacity);

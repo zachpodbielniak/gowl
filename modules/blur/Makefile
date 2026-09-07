@@ -5,7 +5,7 @@ PKG_LIBS = $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0 pixman-1 $
 PKG_CFLAGS = $(shell pkg-config --cflags pixman-1 libdrm $(WLROOTS_PC))
 OUTDIR ?= .
 LIBDIR ?= .
-SRC = gowl-module-blur.c gowl-blur-shadow.c
+SRC = gowl-module-blur.c gowl-blur-shadow.c gowl-blur-geom.c
 OUT = $(OUTDIR)/$(MODULE_NAME).so
 all: $(OUT)
 $(OUT): $(SRC) $(wildcard *.h ../../src/core/*.h ../../src/interfaces/*.h) $(LIBDIR)/libgowl.so

@@ -725,6 +725,70 @@ Three invariants hold across all five callers:
 rounding against a real GLES2 renderer, and skips when there is no DRM
 render node.
 
+*** A source box outside its texture aborts the session
+:PROPERTIES:
+:CUSTOM_ID: fx-source-box-invariant
+:END:
+
+=wlr_render_pass_add_texture()= asserts that the source rectangle lies
+inside the texture:
+
+#+begin_example
+src.x >= 0 && src.y >= 0 &&
+src.x + src.width  <= texture->width &&
+src.y + src.height <= texture->height
+#+end_example
+
+An assert here is not a debug aid.  It aborts the process, on the
+compositor thread, in the middle of a page flip.  Under =cmacs --gowl=
+that process is the user's entire desktop session, and because Emacs
+re-raises the fatal signal on its main thread the crash is reported with
+an *idle pselect backtrace* that names nothing to do with rendering.
+Diagnosing one costs a core dump.
+
+So anything calling =wlr_scene_buffer_set_source_box()= owns that
+invariant.  Two rules follow.
+
+**** Never derive a source box from =c->geom=
+
+=GowlClient.geom= is the *layout's* idea of where a window is, and it is
+routinely not on the output:
+
+- a layout that allows overflow (scrolling) leaves it unclipped on
+  purpose --- it is the window's place in a strip wider than the screen,
+  and =gowl_compositor_clip_client_geometry()= moves the *scene node* to
+  the on-screen intersection while =geom= keeps the full rectangle;
+- a floating window dragged half off the monitor is never clipped at
+  all.
+
+Use =GowlClient.frame=, which =gowl_compositor_apply_frame_geometry()=
+records: the frame as actually drawn, in layout coordinates.  This is
+exactly the bug that killed a session --- the blur module cropped its
+backdrop with =c->geom=, and a window at x=2848 with width 1376 on a
+2880-wide output asked for pixels 4224 columns in.
+
+**** Intersect, then clamp
+
+Intersect the frame with the monitor before scaling into buffer pixels,
+and clamp the result to the texture afterwards.  The intersection makes
+the invariant true in exact arithmetic; the clamp absorbs what a
+fractional output scale leaves behind.  Clamping the width alone is not
+enough --- a window scrolled off the *left* edge fails the =src.x >= 0=
+clause instead.
+
+=modules/blur/gowl-blur-geom.c= is that calculation, deliberately split
+into a pure translation unit so =tests/test-blur-geom.c= can assert the
+invariant directly, including a sweep over every position a window can
+take relative to a monitor.  Scale each axis from its own extent: a
+width-derived vertical scale is only correct while the output's pixels
+are square.
+
+The other place a source box crosses a boundary is
+=modules/animation/gowl-scene-snapshot.c=, which copies one verbatim ---
+and may be copying the *surface's* current buffer rather than the scene
+node's, which can be a different size.  It clamps to the buffer it
+actually uses.
+
 *** Touchpad gestures
 
 =GowlGestureHandler= offers swipes and pinches to modules BEFORE they are

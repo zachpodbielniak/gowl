@@ -567,6 +567,22 @@ struct _GowlClient {
 
 	struct wlr_box geom;    /* layout position including border */
 	struct wlr_box prev;    /* saved geometry for fullscreen restore */
+	/*
+	 * The frame as it is actually DRAWN, in layout coordinates: where
+	 * @scene sits and how big the decoration was made.  Not the same as
+	 * @geom, and that difference is load-bearing.
+	 *
+	 * A layout that allows overflow (scrolling) keeps @geom unclipped on
+	 * purpose -- it is the window's logical place in a strip wider than
+	 * the screen -- while gowl_compositor_clip_client_geometry() puts the
+	 * scene node at the on-screen intersection instead.  Anything that
+	 * reads @geom to decide where the window is on the OUTPUT is then
+	 * wrong by however far the window hangs off, and the blur module
+	 * reading it handed wlroots a source box past the end of its
+	 * backdrop texture, tripping an assert that took the whole session
+	 * down.  Effects want this; @geom is for layout.
+	 */
+	struct wlr_box frame;
 
 	gfloat border_color[4];  /* unfaded, premultiplied decoration color */
 

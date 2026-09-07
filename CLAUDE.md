@@ -59,6 +59,13 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-blur-shadow` -- The analytic drop shadow: falloff, rounded
   corners, and premultiplied output (straight colour gives every shadow a
   bright halo)
+- `test-blur-geom` -- Where the blur backdrop crops the wallpaper, and
+  the one invariant that matters: the source box must lie inside the
+  texture. `wlr_render_pass_add_texture()` asserts it, which aborts the
+  compositor mid page-flip -- under `cmacs --gowl` that is the user's
+  whole session, reported with an idle pselect backtrace naming nothing
+  to do with blur. Carries the crash from the core dump as a regression
+  case, plus a sweep over every window position
 - `test-inject-keyboard` -- Injected keys and the modifiers they carry:
   the evdev-to-xkb `+8` offset (getting it wrong types a *different
   letter*, silently), Shift/Ctrl/Alt actually modifying, and local and
@@ -110,6 +117,21 @@ tests. These assert invariants no unit test can reach:
 > must reach the EIS device regardless of which portal is in use: a
 > RemoteDesktop-only client never calls `GetZones`, and a device with no
 > region cannot be positioned absolutely. See `docs/input-capture.org`.
+
+> **A source box outside its texture aborts the whole session.**
+> `wlr_render_pass_add_texture()` asserts `src.x >= 0 && src.y >= 0 &&
+> src.x + src.width <= texture->width && src.y + src.height <=
+> texture->height`. That assert is not a debug aid: it aborts the process,
+> on the compositor thread, during a page flip. So never derive a source
+> box from `GowlClient.geom` -- that is the *layout's* idea of the window
+> and is routinely off-output (a scrolling layout leaves it unclipped on
+> purpose; a floating window dragged half off screen is never clipped at
+> all). Use `GowlClient.frame`, the frame as drawn, which
+> `gowl_compositor_apply_frame_geometry()` records. Intersect with the
+> monitor, then clamp to the texture -- clamping the width alone misses
+> the window scrolled off the *left* edge, which fails `src.x >= 0`
+> instead. See *A source box outside its texture aborts the session* in
+> `docs/architecture.org`.
 
 > **Input *recording* is not input *injection*, and they must never share a
 > switch.** `GowlInputRecorder` (`src/core/gowl-input-recorder.c`) observes

@@ -3673,6 +3673,19 @@ gowl_compositor_apply_frame_geometry(
 
 	float color[4];
 
+	/*
+	 * Record the frame as drawn before anything can return early.  This
+	 * is the only place that knows both the position the scene node was
+	 * given and the size the decoration was built at, and effect modules
+	 * need it: c->geom is the layout's idea of the window and can hang
+	 * off the output entirely.  The decorator branch below returns, so
+	 * this cannot live further down.
+	 */
+	c->frame.width  = width;
+	c->frame.height = height;
+	c->frame.x      = c->scene != NULL ? c->scene->node.x : c->geom.x;
+	c->frame.y      = c->scene != NULL ? c->scene->node.y : c->geom.y;
+
 	for (bi = 0; bi < 4; bi++)
 		color[bi] = c->border_color[bi] * c->effect_alpha;
 

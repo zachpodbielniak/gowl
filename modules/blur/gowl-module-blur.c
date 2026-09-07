@@ -50,6 +50,7 @@
 #define G_LOG_DOMAIN "gowl-blur"
 
 #include "gowl-blur-shadow.h"
+#include "gowl-blur-geom.h"
 
 #include "core/gowl-core-private.h"
 #include "core/gowl-compositor.h"
@@ -434,7 +435,7 @@ blur_apply_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 {
 	GowlBlurBackdrop *bd;
 	struct wlr_fbox   src;
-	gdouble           scale;
+	struct wlr_box    frame, vis;
 
 	if (!gowl_config_get_blur(self->config)
 	    || c->alpha >= GOWL_BLUR_MIN_TRANSPARENCY
@@ -459,28 +460,34 @@ blur_apply_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 	}
 
 	/*
-	 * The window shows the part of the blurred wallpaper it is standing
-	 * on.  The source box is in BUFFER pixels while the geometry is
-	 * logical, so it is scaled by the output's ratio -- on a HiDPI screen
-	 * the two differ by a factor of two and the crop would otherwise be
-	 * from the top-left quarter of the wallpaper.
+	 * Work from the frame as DRAWN, not from c->geom.
+	 *
+	 * A layout that allows overflow (scrolling) leaves c->geom
+	 * unclipped on purpose -- it is the window's place in a strip wider
+	 * than the screen -- and a floating window dragged half off the
+	 * monitor is never clipped at all.  Either way c->geom can describe
+	 * a rectangle that is largely not on this output, while c->frame is
+	 * where the compositor actually put the scene node.  Handing the
+	 * former to wlroots as a source box is what aborted the session.
 	 */
-	scale = c->mon->m.width > 0
-		? (gdouble)bd->width / (gdouble)c->mon->m.width : 1.0;
+	frame = (c->frame.width > 0 && c->frame.height > 0) ? c->frame : c->geom;
 
-	src.x      = ((gdouble)c->geom.x - (gdouble)c->mon->m.x) * scale;
-	src.y      = ((gdouble)c->geom.y - (gdouble)c->mon->m.y) * scale;
-	src.width  = (gdouble)c->geom.width * scale;
-	src.height = (gdouble)c->geom.height * scale;
+	if (!gowl_blur_backdrop_box(&frame, &c->mon->m, bd->width, bd->height,
+	                            &src, &vis)) {
+		wlr_scene_node_set_enabled(&nodes->backdrop->node, FALSE);
+		return;
+	}
+	wlr_scene_node_set_enabled(&nodes->backdrop->node, TRUE);
 
 	wlr_scene_buffer_set_source_box(nodes->backdrop, &src);
-	wlr_scene_buffer_set_dest_size(nodes->backdrop,
-	                               c->geom.width, c->geom.height);
+	wlr_scene_buffer_set_dest_size(nodes->backdrop, vis.width, vis.height);
 	wlr_scene_node_lower_to_bottom(&nodes->backdrop->node);
 	/* Above the shadow, which is outside the window's rectangle anyway. */
 	if (nodes->shadow != NULL)
 		wlr_scene_node_lower_to_bottom(&nodes->shadow->node);
-	wlr_scene_node_set_position(&nodes->backdrop->node, 0, 0);
+	/* The node is a child of c->scene, which sits at the frame origin. */
+	wlr_scene_node_set_position(&nodes->backdrop->node,
+	                            vis.x - frame.x, vis.y - frame.y);
 }
 
 static void

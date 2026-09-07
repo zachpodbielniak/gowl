@@ -20,6 +20,13 @@ BINDIR ?= $(PREFIX)/bin
 LIBSUFFIX := $(shell [ -d /usr/lib64 ] && echo lib64 || echo lib)
 LIBDIR ?= $(PREFIX)/$(LIBSUFFIX)
 INCLUDEDIR ?= $(PREFIX)/include
+
+# Source subdirectories whose headers are part of the installed public
+# API.  install-headers walks this list and skips any that has no .h
+# today, so adding a subsystem means adding one word here -- and
+# forgetting to is what left src/fx and src/barkit uninstalled.
+HEADER_SUBDIRS := core boxed config module interfaces layout ipc util \
+                  barkit fx protocols
 DATADIR ?= $(PREFIX)/share
 PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig
 GIRDIR ?= $(DATADIR)/gir-1.0

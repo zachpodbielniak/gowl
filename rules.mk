@@ -342,22 +342,29 @@ install-headers:
 	$(INSTALL_DATA) src/gowl-types.h $(DESTDIR)$(INCLUDEDIR)/gowl/
 	$(INSTALL_DATA) src/gowl-enums.h $(DESTDIR)$(INCLUDEDIR)/gowl/
 	$(INSTALL_DATA) src/gowl-version.h $(DESTDIR)$(INCLUDEDIR)/gowl/
-	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/core
-	$(INSTALL_DATA) src/core/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/core/
-	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/boxed
-	$(INSTALL_DATA) src/boxed/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/boxed/
-	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/config
-	$(INSTALL_DATA) src/config/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/config/
-	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/module
-	$(INSTALL_DATA) src/module/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/module/
-	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/interfaces
-	$(INSTALL_DATA) src/interfaces/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/interfaces/
-	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/layout
-	$(INSTALL_DATA) src/layout/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/layout/
-	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/ipc
-	$(INSTALL_DATA) src/ipc/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/ipc/
-	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/util
-	$(INSTALL_DATA) src/util/*.h $(DESTDIR)$(INCLUDEDIR)/gowl/util/
+	@# One loop over every source subdirectory rather than a line
+	@# apiece.  Two reasons, both learned the hard way:
+	@#
+	@#   * A subdirectory with no headers -- src/layout, whose layouts
+	@#     are .c only -- made `install -m 644 src/layout/*.h' fail on
+	@#     the unexpanded glob, and install-headers died there.  Every
+	@#     directory listed AFTER it was therefore never installed:
+	@#     src/ipc and src/util silently went missing from
+	@#     /usr/include/gowl for as long as the rule existed.
+	@#   * A new subdirectory used to need its own two lines.  src/fx
+	@#     and src/barkit did not get them, so a bar plugin built
+	@#     against an INSTALLED gowl could not find gowl/barkit/*.h --
+	@#     which is the whole contract a plugin compiles against.
+	@#
+	@# Empty directories are skipped, so this stays correct whether or
+	@# not a given subdirectory has headers today.
+	@set -e; \
+	for d in $(HEADER_SUBDIRS); do \
+		set -- src/$$d/*.h; \
+		[ -e "$$1" ] || continue; \
+		$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gowl/$$d; \
+		$(INSTALL_DATA) "$$@" $(DESTDIR)$(INCLUDEDIR)/gowl/$$d/; \
+	done
 
 install-pc: $(OUTDIR)/gowl.pc
 	$(MKDIR_P) $(DESTDIR)$(PKGCONFIGDIR)

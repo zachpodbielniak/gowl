@@ -84,6 +84,14 @@ in YAML (or generate a config with `--modules animation`). CMacs loads
 this module by default. Existing `animation-*` settings keep their names
 and behavior.
 
+The desktop cube is the optional `cube.so` plugin: a tag switch turns the
+desktop as one side of a solid, one turn per tag crossed, showing each tag
+on the way past. Standalone Gowl enables it only with
+`modules.cube.enabled: true`; CMacs loads it by default. It runs
+alongside `animation.so` rather than instead of it, and needs the GLES2
+renderer -- under any other one it stands down and tag switches stay
+instant. Settings are the `cube-*` keys.
+
 Gowl supports two configuration methods:
 
 ### YAML Config

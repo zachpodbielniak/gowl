@@ -712,12 +712,164 @@ test_config_monitors_names_iter(void)
 	g_object_unref(config);
 }
 
+/*
+ * The cube's settings, which live in GowlConfig alongside the animation
+ * keys because a gowl module has no config schema of its own.
+ *
+ * Two things are worth a test here rather than trust.  The defaults are
+ * a contract with the documentation and with cmacs, which ships no cube
+ * configuration at all and so gets exactly these.  And the clamping is
+ * what stands between a fat-fingered YAML file and a compositor drawing
+ * a two-sided solid or turning the camera inside out --- these are hand-
+ * edited files, and a value out of range must bend rather than break.
+ */
+static void
+test_config_cube_defaults(void)
+{
+	GowlConfig *config = gowl_config_new();
+
+	g_assert_true(gowl_config_get_cube(config));
+	g_assert_cmpint(gowl_config_get_cube_duration(config), ==, 520);
+	g_assert_cmpint(gowl_config_get_cube_step_duration(config), ==, 150);
+	g_assert_cmpstr(gowl_config_get_cube_curve(config), ==,
+	                "ease-in-out-cubic");
+	g_assert_cmpint(gowl_config_get_cube_faces(config), ==, 4);
+	g_assert_cmpfloat(gowl_config_get_cube_zoom(config), ==, 1.45);
+	g_assert_cmpfloat(gowl_config_get_cube_pitch(config), ==, 14.0);
+	g_assert_cmpfloat(gowl_config_get_cube_shading(config), ==, 0.78);
+	g_assert_cmpfloat(gowl_config_get_cube_reflection(config), ==, 0.32);
+	g_assert_cmpfloat(gowl_config_get_cube_motion_blur(config), ==, 0.35);
+	g_assert_true(gowl_config_get_cube_caps(config));
+	g_assert_false(gowl_config_get_cube_all_monitors(config));
+	g_assert_cmpstr(gowl_config_get_cube_backdrop_color(config), ==,
+	                "#12141f");
+
+	g_object_unref(config);
+}
+
+static void
+test_config_cube_yaml(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+	const gchar *yaml =
+		"cube: false\n"
+		"cube-duration: 300\n"
+		"cube-step-duration: 90\n"
+		"cube-curve: \"ease-out-quint\"\n"
+		"cube-faces: 6\n"
+		"cube-zoom: 2.0\n"
+		"cube-pitch: -5\n"
+		"cube-shading: 0.5\n"
+		"cube-reflection: 0.0\n"
+		"cube-motion-blur: 1.0\n"
+		"cube-caps: false\n"
+		"cube-all-monitors: true\n"
+		"cube-backdrop-color: \"#101020\"\n";
+
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+
+	g_assert_false(gowl_config_get_cube(config));
+	g_assert_cmpint(gowl_config_get_cube_duration(config), ==, 300);
+	g_assert_cmpint(gowl_config_get_cube_step_duration(config), ==, 90);
+	g_assert_cmpstr(gowl_config_get_cube_curve(config), ==, "ease-out-quint");
+	g_assert_cmpint(gowl_config_get_cube_faces(config), ==, 6);
+	g_assert_cmpfloat(gowl_config_get_cube_zoom(config), ==, 2.0);
+	g_assert_cmpfloat(gowl_config_get_cube_pitch(config), ==, -5.0);
+	g_assert_cmpfloat(gowl_config_get_cube_shading(config), ==, 0.5);
+	g_assert_cmpfloat(gowl_config_get_cube_reflection(config), ==, 0.0);
+	g_assert_cmpfloat(gowl_config_get_cube_motion_blur(config), ==, 1.0);
+	g_assert_false(gowl_config_get_cube_caps(config));
+	g_assert_true(gowl_config_get_cube_all_monitors(config));
+	g_assert_cmpstr(gowl_config_get_cube_backdrop_color(config), ==,
+	                "#101020");
+
+	g_object_unref(config);
+}
+
+static void
+test_config_cube_clamps_nonsense(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+	const gchar *yaml =
+		"cube-faces: 1\n"
+		"cube-zoom: 99\n"
+		"cube-pitch: 400\n"
+		"cube-shading: 5\n"
+		"cube-reflection: -3\n"
+		"cube-motion-blur: 12\n";
+
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+
+	/* Fewer than three sides is not a solid; more than a dozen and the
+	 * sides are too narrow to read on the way past. */
+	g_assert_cmpint(gowl_config_get_cube_faces(config), ==, 3);
+	g_assert_cmpfloat(gowl_config_get_cube_zoom(config), ==, 3.0);
+	g_assert_cmpfloat(gowl_config_get_cube_pitch(config), ==, 30.0);
+	g_assert_cmpfloat(gowl_config_get_cube_shading(config), ==, 1.0);
+	g_assert_cmpfloat(gowl_config_get_cube_reflection(config), ==, 0.0);
+	g_assert_cmpfloat(gowl_config_get_cube_motion_blur(config), ==, 1.0);
+
+	g_object_unref(config);
+}
+
+/*
+ * A negative duration would run the rotation backwards through time, and
+ * unlike the ratios above there is no sensible nearest value to bend it
+ * to --- so those two keys reject instead of clamping, leaving whatever
+ * was configured before.
+ */
+static void
+test_config_cube_rejects_negative_durations(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+	const gchar *yaml =
+		"cube-duration: -100\n"
+		"cube-step-duration: -1\n";
+
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+
+	g_assert_cmpint(gowl_config_get_cube_duration(config), ==, 520);
+	g_assert_cmpint(gowl_config_get_cube_step_duration(config), ==, 150);
+
+	g_object_unref(config);
+}
+
+/* An unknown curve name is a typo, and easing falls back rather than
+ * refusing --- but the config must keep the string, so `gowl --debug'
+ * shows what was actually asked for. */
+static void
+test_config_cube_keeps_an_unknown_curve(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+
+	g_assert_true(load_yaml_from_string(config, "cube-curve: \"wobble\"\n",
+	                                    &err));
+	g_assert_no_error(err);
+	g_assert_cmpstr(gowl_config_get_cube_curve(config), ==, "wobble");
+
+	g_object_unref(config);
+}
+
 int
 main(int argc, char *argv[])
 {
 	g_test_init(&argc, &argv, NULL);
 
 	g_test_add_func("/config/new", test_config_new);
+	g_test_add_func("/config/cube-defaults", test_config_cube_defaults);
+	g_test_add_func("/config/cube-yaml", test_config_cube_yaml);
+	g_test_add_func("/config/cube-clamps", test_config_cube_clamps_nonsense);
+	g_test_add_func("/config/cube-negative-durations",
+	                test_config_cube_rejects_negative_durations);
+	g_test_add_func("/config/cube-unknown-curve",
+	                test_config_cube_keeps_an_unknown_curve);
 	g_test_add_func("/config/defaults", test_config_defaults);
 	g_test_add_func("/config/manage-lid", test_config_manage_lid);
 	g_test_add_func("/config/set-properties", test_config_set_properties);

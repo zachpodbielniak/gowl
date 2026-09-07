@@ -1381,3 +1381,38 @@ gowl_module_manager_get_scene_effect(GowlModuleManager *self)
  }
  return NULL;
 }
+
+/*
+ * The owner may delegate, but only downwards.
+ *
+ * "One owner" exists so two modules cannot both move the same scene node.
+ * It does not mean only one module may ever be loaded: a module that owns
+ * the OUTPUT for 400 ms (the cube, mid-rotation) still wants the module
+ * that owns per-client geometry to keep doing its job the rest of the
+ * time.  Searching strictly after @module in the same priority order
+ * makes that a chain rather than a free-for-all --- delegation can only
+ * go to a lower-priority provider, so it cannot loop.
+ */
+gpointer
+gowl_module_manager_get_scene_effect_after(GowlModuleManager *self,
+                                            gpointer           module)
+{
+ guint i;
+ gboolean seen = FALSE;
+
+ g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+
+ if (module == NULL)
+  return gowl_module_manager_get_scene_effect(self);
+
+ for (i = 0; i < self->scene_effects->len; i++) {
+  GowlModule *mod = g_ptr_array_index(self->scene_effects, i);
+  if (mod == (GowlModule *)module) {
+   seen = TRUE;
+   continue;
+  }
+  if (seen && gowl_module_get_is_active(mod))
+   return mod;
+ }
+ return NULL;
+}

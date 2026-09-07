@@ -81,6 +81,7 @@ LIB_SRCS := \
 	src/config/gowl-keybind.c \
 	src/ipc/gowl-ipc.c \
 	src/util/gowl-log.c \
+	src/util/gowl-easing.c \
 	src/util/gowl-systemd.c \
 	src/util/gowl-wallpaper-scale.c \
 	src/core/gowl-compositor.c \
@@ -166,6 +167,7 @@ LIB_HDRS := \
 	src/config/gowl-keybind.h \
 	src/ipc/gowl-ipc.h \
 	src/util/gowl-log.h \
+	src/util/gowl-easing.h \
 	src/util/gowl-systemd.h \
 	src/core/gowl-compositor.h \
 	src/core/gowl-monitor.h \
@@ -363,6 +365,21 @@ test: lib $(TEST_BINS)
 $(OUTDIR)/modules/animation.so: $(filter-out $(OUTDIR)/modules/animation.so,$(wildcard modules/animation/*)) $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/animation OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 
+# The cube's GL path is only testable against a real renderer, and the
+# renderer only exists at run time -- so the test links the plugin itself
+# rather than a copy of its objects.
+$(OUTDIR)/modules/cube.so: $(filter-out $(OUTDIR)/modules/cube.so,$(wildcard modules/cube/*)) $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+	$(MAKE) -C modules/cube OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
+
+$(OUTDIR)/test-cube-render: $(OUTDIR)/modules/cube.so
+$(OUTDIR)/test-cube-render: TEST_LDFLAGS += -L$(OUTDIR)/modules -l:cube.so -Wl,-rpath,$(abspath $(OUTDIR)/modules)
+
+# The chain test dlopens the two real plugins rather than linking them:
+# what it is checking is how the module manager orders and delegates
+# between them, which only means anything for the shipped .so files.
+$(OUTDIR)/test-cube-chain: $(OUTDIR)/modules/cube.so $(OUTDIR)/modules/animation.so
+$(OBJDIR)/tests/test-cube-chain.o: TEST_CFLAGS += -DGOWL_TEST_CUBE_MODULE='"$(abspath $(OUTDIR)/modules/cube.so)"' -DGOWL_TEST_ANIMATION_MODULE='"$(abspath $(OUTDIR)/modules/animation.so)"'
+
 $(OUTDIR)/test-animation $(OUTDIR)/test-animation-scene: $(OUTDIR)/modules/animation.so
 $(OUTDIR)/test-animation $(OUTDIR)/test-animation-scene: TEST_LDFLAGS += -L$(OUTDIR)/modules -l:animation.so -Wl,-rpath,$(abspath $(OUTDIR)/modules)
 $(OBJDIR)/tests/test-animation-scene.o: TEST_CFLAGS += -DGOWL_TEST_ANIMATION_MODULE='"$(abspath $(OUTDIR)/modules/animation.so)"'
@@ -490,6 +507,16 @@ help:
 # Dependency tracking
 -include $(LIB_OBJS:.o=.d)
 -include $(MAIN_OBJ:.o=.d)
+# Test objects too.  Without this a test that #includes a pure translation
+# unit from a module -- test-cube.c does, so the planner can be checked
+# without loading a plugin -- keeps its stale object after that unit
+# changes, and reports the OLD behaviour as passing.
+-include $(TEST_OBJS:.o=.d)
+
+# ... and the objects have to survive to be compared against those
+# dependencies.  make treats them as intermediate and deletes them after
+# linking, which throws away the very timestamps the .d files describe.
+.PRECIOUS: $(OBJDIR)/tests/%.o
 
 $(OUTDIR)/modules/tile.so $(OUTDIR)/modules/monocle.so $(OUTDIR)/modules/float.so $(OUTDIR)/modules/scrolling.so $(OUTDIR)/modules/centeredmaster.so $(OUTDIR)/modules/fibonacci.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"

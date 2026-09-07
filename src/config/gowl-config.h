@@ -861,6 +861,66 @@ gdouble gowl_config_get_animation_popin_scale (GowlConfig *self);
  * 2 doubles it. Invalid YAML values leave the previous setting intact. */
 gdouble gowl_config_get_animation_jiggle_strength (GowlConfig *self);
 
+/* --- Desktop cube (modules/cube) ---
+ *
+ * A tag switch rotates the desktop as one face of a solid instead of
+ * cutting to it.  These live here, next to the animation keys, for the
+ * same reason those do: they are user-facing presentation settings and
+ * a module has no config schema of its own.  The `cube' module is what
+ * reads them, and with the module unloaded they are inert. */
+
+/* Master switch.  Defaults to TRUE, so loading the module is the whole
+ * opt-in; set FALSE to keep the module loaded but silent. */
+gboolean gowl_config_get_cube (GowlConfig *self);
+
+/* Duration of a ONE-face rotation, in milliseconds.  A longer jump does
+ * not multiply this --- see `cube-step-duration'.  0 disables the cube. */
+gint gowl_config_get_cube_duration (GowlConfig *self);
+
+/* Added per EXTRA face beyond the first, in milliseconds.  Tag 1 -> 4 is
+ * three faces, so it runs cube-duration + 2 * cube-step-duration.  Scaling
+ * the whole duration by the step count instead would make a four-tag jump
+ * feel like a stall; adding a fraction keeps every intermediate tag
+ * legible without the trip outstaying its welcome. */
+gint gowl_config_get_cube_step_duration (GowlConfig *self);
+
+/* Easing curve name, from the shared set in gowl-easing.h. */
+const gchar *gowl_config_get_cube_curve (GowlConfig *self);
+
+/* Sides of the prism, 3..12.  4 is a cube.  Tags are mapped onto the
+ * sides as it turns, so this is independent of how many tags exist. */
+gint gowl_config_get_cube_faces (GowlConfig *self);
+
+/* Camera pull-back at mid-rotation, 1.0..3.0.  1.0 keeps the front face
+ * screen-filling throughout, which hides the corner; the default pulls
+ * back far enough to show the solid and returns before it lands. */
+gdouble gowl_config_get_cube_zoom (GowlConfig *self);
+
+/* Camera elevation in degrees, -30..30.  A few degrees above the equator
+ * shows the top cap, which is most of what makes it read as a solid. */
+gdouble gowl_config_get_cube_pitch (GowlConfig *self);
+
+/* How far faces darken as they turn away, 0..1.  0 is flat and unreadable
+ * as 3D; 1 takes the edge-on face to black. */
+gdouble gowl_config_get_cube_shading (GowlConfig *self);
+
+/* Floor reflection strength, 0..1.  0 disables the second pass. */
+gdouble gowl_config_get_cube_reflection (GowlConfig *self);
+
+/* Directional blur at speed, 0..1, scaled by angular velocity. */
+gdouble gowl_config_get_cube_motion_blur (GowlConfig *self);
+
+/* Backdrop behind the solid, as a colour spec or palette name. */
+const gchar *gowl_config_get_cube_backdrop_color (GowlConfig *self);
+
+/* Draw top and bottom caps.  Cheap, and the difference between a solid
+ * and two floating rectangles. */
+gboolean gowl_config_get_cube_caps (GowlConfig *self);
+
+/* Rotate on a monitor other than the one whose tags changed.  Off by
+ * default: a cube on an unrelated screen is a distraction, not feedback. */
+gboolean gowl_config_get_cube_all_monitors (GowlConfig *self);
+
 /* --- Palette --- */
 
 GowlPalette * gowl_config_get_palette       (GowlConfig  *self);

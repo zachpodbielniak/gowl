@@ -180,6 +180,14 @@ GPtrArray          *gowl_module_manager_get_layout_providers (
 /* Returns the first active scene-effect provider, borrowed, or NULL. */
 gpointer gowl_module_manager_get_scene_effect(GowlModuleManager *self);
 
+/* Returns the next active scene-effect provider after @module in priority
+ * order, borrowed, or NULL.  A provider that only owns presentation some
+ * of the time (the `cube' module, during a tag rotation) uses this to hand
+ * every other call down to the provider it outranks, so "one owner" stays
+ * true per event without costing the lower provider its whole job. */
+gpointer gowl_module_manager_get_scene_effect_after(GowlModuleManager *self,
+                                                    gpointer           module);
+
 G_END_DECLS
 
 #endif /* GOWL_MODULE_MANAGER_H */

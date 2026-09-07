@@ -669,6 +669,50 @@ immediate. Disabling the animation module finishes motion, restores
 live content and opacity, and releases all closing buffers. Shutdown
 finishes effects before renderer teardown.
 
+One provider is DISPATCHED; that is not the same as one being loaded.
+=gowl_module_manager_get_scene_effect_after()= returns the next active
+provider strictly after a given one in the same priority order, so a
+module that owns presentation only some of the time can hand down what
+it does not answer. The search never looks backwards, so a chain cannot
+loop, and a hook a provider leaves =NULL= is skipped by the core rather
+than passed on --- a delegating provider must therefore implement every
+hook it intends to forward. =modules/cube/= is the worked example; see
+[[file:modules.org::#bundled-modules][Bundled Modules]].
+
+*** Desktop cube
+
+=modules/cube/= turns the desktop as one side of a solid when the tag
+changes, one face-step per tag crossed. It splits three ways:
+=gowl-cube-plan.c= decides what turns and for how long and links no
+wlroots or GL, so the arithmetic is testable headless;
+=gowl-cube-gl.c= draws a frame and knows nothing of the compositor; the
+module file connects them and owns every side effect.
+
+It adds no renderer. =libgowl= must remain free of one
+(=tests/test-no-libregnum.sh=), and the cube stays inside that rule by
+borrowing the EGL context wlroots' own GLES2 renderer already owns:
+=wlr_gles2_renderer_get_egl()= for the context,
+=wlr_gles2_renderer_get_buffer_fbo()= for a target, both bracketed by
+make-current and restore because the current context is global state
+shared with wlroots. Under any other renderer =gowl_cube_gl_supported()=
+is false and the module declines, leaving tag switches instant.
+
+Sides are captured with =wlr_scene_output_build_state()= after the
+scene's client visibility has been set to each tag in turn --- once,
+when the rotation starts, and restored immediately. There is no depth
+buffer: a wlr_buffer framebuffer has colour only, and a convex solid
+with back faces rejected on the CPU does not need one, provided the draw
+order stays backdrop, reflection, cap, sides.
+
+The rotation is presented as a single opaque monitor-sized
+=wlr_scene_buffer= placed above =GOWL_SCENE_LAYER_FLOAT=, so it hides the
+layers below by covering them rather than by disabling them --- the
+layers are global while tags are per-monitor, and disabling one would
+blank a second output. Clients gowl stacks ABOVE that point (fullscreen,
+and embedder-pinned overlay clients) are hidden individually for the
+duration and restored from a held reference, so a window closed
+mid-rotation cannot leave a dangling one.
+
 Geometry animations interpolate the whole rectangle. A snapshot of the
 client's surface tree preserves buffer source rectangles, transforms and
 relative offsets; each frame scales both positions and sizes together.

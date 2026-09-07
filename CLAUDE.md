@@ -36,6 +36,16 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-layout` -- Layout provider interface tests
 - `test-module` -- Module lifecycle and registration tests
 - `test-focus-rules` -- Keyboard-focus arbitration + client close routing
+- `test-cube` -- Desktop cube planner: step count and itinerary, no
+  wrap-around, duration growth and cap, slot window, and the envelope's
+  flatness at both ends (the property that makes a rotation cut-free)
+- `test-cube-render` -- The cube's GL path against a real GLES2 renderer:
+  which way is up, that the flat frame fills the viewport corner to
+  corner, and that a quarter turn actually changes the picture. Skips
+  itself when there is no DRM render node
+- `test-cube-chain` -- The cube and animation plugins loaded together:
+  priority order, delegation to the next provider, chain termination, and
+  that the cube implements every hook the animation module does
 - `test-input-recorder` -- Input recording: consent gate, bounded ring,
   motion coalescing, self-stop deadline, secret-suppression policy,
   payload shape, and the config-to-recorder wiring
@@ -43,6 +53,10 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 `make test` also runs every `tests/*.sh` **source guard** before the compiled
 tests. These assert invariants no unit test can reach:
 - `test-no-libregnum.sh` -- gowl links no rendering engine (see below)
+- `test-cube-guard.sh` -- the `cube` module still delegates every
+  scene-effect hook to the provider below it (so loading the cube does not
+  silently switch window animations off) and still takes an output with an
+  opaque sheet rather than by disabling a shared, cross-monitor scene layer
 - `test-close-guard.sh` -- `wlr_xdg_toplevel_send_close` /
   `wlr_xwayland_surface_close` have exactly one call site each (inside
   `gowl_client_close()`), `gowl_compositor_focus_client()` still consults

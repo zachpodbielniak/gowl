@@ -60,6 +60,13 @@ static const GowlBuiltinModule builtin_modules[] = {
 		" *   - animation: optional window motion effects\n"
 	},
 	{
+		"cube",
+		"Turns the desktop as a solid when the tag changes",
+		"  cube:\n"
+		"    enabled: true\n",
+		" *   - cube: rotate the desktop on a tag switch\n"
+	},
+	{
 		"autostart",
 		"Spawn configured commands on compositor startup",
 		"  autostart:\n"

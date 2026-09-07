@@ -291,6 +291,92 @@ set =animation-popin-scale= to =0.87= and =animation-curve-open= to
 ="ease-out-quint"=, with =animation-jiggle-strength= at =0=. The default
 here adds a larger pop and a squash/stretch jiggle for more emphasis.
 
+**** Desktop cube
+:PROPERTIES:
+:CUSTOM_ID: cube
+:END:
+
+A tag switch turns the desktop as one side of a solid rather than cutting
+to it. Crossing several tags turns several times and shows each tag on
+the way past, so tag 1 to tag 4 is three turns through tags 2 and 3.
+
+Standalone Gowl leaves the plugin unloaded. Opt in through the =modules=
+mapping:
+
+#+begin_src yaml
+modules:
+  cube:
+    enabled: true
+#+end_src
+
+=cmacs --gowl= bundles and loads =cube.so= by default. The cube and the
+[[#animations][animation]] module are designed to run together: the cube owns the
+output for the length of a rotation and hands every other decision to the
+animation module, so window entrances, exits, layout motion and jiggles
+are unchanged with both loaded.
+
+The plugin borrows the compositor's GLES2 context. Under any other
+renderer (Vulkan, pixman) it logs a message, stands down, and tag
+switches stay instant; nothing else changes. A rotated output also sits
+rotations out, because the projection assumes screen-aligned axes.
+
+| Property               | Type   | Default               | Description |
+|------------------------+--------+-----------------------+-------------|
+| =cube=                 | bool   | =true=                | Master switch; =false= keeps the plugin loaded but silent |
+| =cube-duration=        | int    | =520=                 | One turn, in ms; =0= disables the cube |
+| =cube-step-duration=   | int    | =150=                 | Added per EXTRA turn, capped at three times =cube-duration= |
+| =cube-curve=           | string | ="ease-in-out-cubic"= | Rotation curve, from the same set as =animation-curve= |
+| =cube-faces=           | int    | =4=                   | Sides of the solid, =3= to =12=; =4= is a cube |
+| =cube-zoom=            | float  | =1.45=                | Camera pull-back mid-turn, =1.0= to =3.0= |
+| =cube-pitch=           | float  | =14=                  | Camera elevation in degrees, =-30= to =30=; =0= hides the lid |
+| =cube-shading=         | float  | =0.78=                | How dark a side gets as it turns away, =0= to =1= |
+| =cube-reflection=      | float  | =0.32=                | Floor reflection strength, =0= to =1=; =0= skips the pass |
+| =cube-motion-blur=     | float  | =0.35=                | Directional blur at speed, =0= to =1= |
+| =cube-caps=            | bool   | =true=                | Draw the top and bottom of the solid |
+| =cube-backdrop-color=  | string | ="#12141f"=           | Colour behind the solid; palette names resolve |
+| =cube-all-monitors=    | bool   | =false=               | Also turn outputs that are not the focused one |
+
+*How far it turns.* The distance is the difference between the two tag
+numbers, with no wrap-around: 9 to 1 is the eight-step trip, because tags
+read as a row in the bar and in the head, not as a ring. A tag view
+holding several tags at once uses its lowest tag as the ordinal, so
+replacing a view turns and merely adding a tag to one does not.
+
+*How long it takes.* =cube-duration= plus =cube-step-duration= for each
+extra turn, capped at three times =cube-duration=. A longer journey feels
+longer without an eight-tag jump becoming a wait.
+
+*Why it does not cut.* At both ends of the rotation the pull-back, the
+pitch, the backdrop and the reflection are all exactly zero, and the
+leading side then projects to precisely the viewport --- so the first and
+last frames ARE the flat desktop.
+
+*What the camera does in between.* Two things, and only one of them is
+=cube-zoom=. The camera is held a fixed distance from the NEAREST SURFACE
+of the solid rather than from its axis, so the picture does not swell
+every time a corner comes round; =cube-zoom= is the extra pull-back on
+top of that. Separately, the rotation pulls back as far as it needs to
+keep the whole solid in frame, because tilting the camera over the lid
+swings the near bottom edge down the screen. So =cube-zoom: 1.0= is the
+tightest framing available rather than literally no camera move, and it
+gets tighter again with =cube-pitch: 0= or =cube-reflection: 0=, which
+remove the two things that need the room.
+
+*What is on the sides.* Each side is that tag's wallpaper and windows,
+captured once when the rotation starts. Layer-shell surfaces above the
+tiling layers --- the bar, notifications --- stay live and on top of the
+rotation rather than being baked into every side. Clients the embedder
+pins over its own surface --- the in-buffer views of =cmacs --gowl=, and
+module overlays such as a dropdown terminal --- are not on a tag at all,
+so they go onto EVERY side and their live copies come down for the
+rotation; gowl parks them above the sheet, so left alone they would hang
+motionless in mid-air while the desktop turned underneath.
+
+*Cost.* One scene render per tag in the journey, once, at the start; the
+two ends are stored at full resolution and the tags passed through at
+half, since they are only ever seen turning and blurred. After that it is
+a handful of textured quads a frame.
+
 **** tags
 :PROPERTIES:
 :CUSTOM_ID: tags

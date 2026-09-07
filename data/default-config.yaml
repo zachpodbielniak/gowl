@@ -72,6 +72,25 @@ animation-curve: "ease-out-expo"
 # ease-out-expo, ease-out-back, spring. The last two overshoot.
 # For Omarchy's more restrained entrance: scale 0.87, curve ease-out-quint.
 
+# Desktop cube (modules.cube.enabled).  A tag switch turns the desktop as
+# one side of a solid instead of cutting to it, one turn per tag crossed --
+# tag 1 to tag 4 is three turns and shows tags 2 and 3 on the way past.
+# Needs the GLES2 renderer; with any other one the module stands down and
+# tag switches stay instant.
+cube: true
+cube-duration: 520        # one turn, in ms; 0 disables the cube
+cube-step-duration: 150   # added per EXTRA turn, capped at 3x cube-duration
+cube-curve: "ease-in-out-cubic"   # any curve from the animation-curve set
+cube-faces: 4             # sides of the solid, 3..12; 4 is a cube
+cube-zoom: 1.45           # camera pull-back mid-turn; 1.0 keeps it filling
+cube-pitch: 14            # camera elevation in degrees; 0 hides the lid
+cube-shading: 0.78        # 0..1, how dark a side gets as it turns away
+cube-reflection: 0.32     # 0..1 floor reflection; 0 skips the second pass
+cube-motion-blur: 0.35    # 0..1, scaled by how fast it is turning
+cube-caps: true           # draw the top and bottom of the solid
+cube-backdrop-color: "#12141f"
+cube-all-monitors: false  # true also turns outputs that are not focused
+
 # Scrolling layout: column width as a fraction of the usable width.
 # 0.5 shows two columns at a time, 1.0 shows one.  Matches Hyprland's
 # scrolling.column_width so a config translates.
@@ -369,6 +388,8 @@ modules:
   scrolling:
     enabled: false  # CMacs loads this layout by default
   animation:
+    enabled: false  # opt in here; CMacs loads this module by default
+  cube:
     enabled: false  # opt in here; CMacs loads this module by default
   vanitygaps:
     enabled: true

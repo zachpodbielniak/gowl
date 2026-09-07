@@ -11,6 +11,7 @@
 #include <math.h>
 
 #include "../modules/animation/gowl-animation.h"
+#include "util/gowl-easing.h"
 
 /* Every curve is pinned at both ends: a window must start where it was
  * and finish exactly where the layout put it, whatever the shape in
@@ -161,12 +162,60 @@ test_default_leaves_faster_than_quint(void)
 	}
 }
 
+/*
+ * The curve table lives in the core now, because the cube needed the same
+ * names to mean the same thing and two tables would have drifted the
+ * first time one of them gained a curve.  The animation module keeps
+ * `gowl_curve_eval' as its own spelling of it; this asserts the two have
+ * not come apart, which is the only way that refactor can go wrong
+ * quietly -- windows and the cube would simply ease differently.
+ */
+static void
+test_module_curve_matches_core_easing(void)
+{
+	const char *names[] = { "linear", "ease-out-quint", "ease-in-out-cubic",
+	                        "almost-linear", "quick", "ease-out-expo",
+	                        "ease-out-back", "spring",
+	                        "no-such-curve", NULL };
+	int i;
+	gdouble t;
+
+	for (i = 0; names[i] != NULL; i++) {
+		for (t = 0.0; t <= 1.0001; t += 0.05) {
+			g_assert_cmpfloat(fabs(gowl_curve_eval(names[i], t)
+			                       - gowl_easing_eval(names[i], t)),
+			                  <, 1e-12);
+		}
+	}
+
+	/* Including the NULL case, which is how a caller asks for the
+	 * default rather than for a named curve. */
+	g_assert_cmpfloat(fabs(gowl_curve_eval(NULL, 0.4)
+	                       - gowl_easing_eval(NULL, 0.4)), <, 1e-12);
+}
+
+/* A typo in a config file eases with the default rather than refusing,
+ * so the only way a user finds out is by asking. */
+static void
+test_curve_names_are_reportable(void)
+{
+	g_assert_true(gowl_easing_name_is_known("ease-out-expo"));
+	/* Case-insensitively, matching how the evaluator matches. */
+	g_assert_true(gowl_easing_name_is_known("Ease-Out-Expo"));
+	g_assert_false(gowl_easing_name_is_known("wobble"));
+	g_assert_false(gowl_easing_name_is_known(NULL));
+}
+
 int
 main(int argc, char *argv[])
 {
 	g_test_init(&argc, &argv, NULL);
 
 	g_test_add_func("/animation/endpoints-exact", test_endpoints_are_exact);
+	g_test_add_func("/animation/curve-matches-core-easing",
+	                test_module_curve_matches_core_easing);
+	g_test_add_func("/animation/curve-names-known",
+	                test_curve_names_are_reportable);
 	g_test_add_func("/animation/out-of-range-clamped",
 	                test_out_of_range_is_clamped);
 	g_test_add_func("/animation/linear-identity", test_linear_is_identity);

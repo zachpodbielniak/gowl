@@ -56,6 +56,21 @@
 #define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE     "ease-out-expo"
 #define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_OPEN "ease-out-back"
 #define GOWL_CONFIG_DEFAULT_ANIMATION_POPIN_SCALE (0.84)
+
+/* Desktop cube.  260 ms of animation is right for a window sliding a few
+ * hundred pixels; a whole desktop turning through 90 degrees needs longer
+ * or it reads as a cut.  The step add-on is deliberately much less than
+ * the base: three faces should take about twice one face, not three times. */
+#define GOWL_CONFIG_DEFAULT_CUBE_DURATION       (520)
+#define GOWL_CONFIG_DEFAULT_CUBE_STEP_DURATION  (150)
+#define GOWL_CONFIG_DEFAULT_CUBE_CURVE          "ease-in-out-cubic"
+#define GOWL_CONFIG_DEFAULT_CUBE_FACES          (4)
+#define GOWL_CONFIG_DEFAULT_CUBE_ZOOM           (1.45)
+#define GOWL_CONFIG_DEFAULT_CUBE_PITCH          (14.0)
+#define GOWL_CONFIG_DEFAULT_CUBE_SHADING        (0.78)
+#define GOWL_CONFIG_DEFAULT_CUBE_REFLECTION     (0.32)
+#define GOWL_CONFIG_DEFAULT_CUBE_MOTION_BLUR    (0.35)
+#define GOWL_CONFIG_DEFAULT_CUBE_BACKDROP_COLOR "#12141f"
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
 #define GOWL_CONFIG_DEFAULT_REPEAT_RATE         (25)
@@ -116,6 +131,20 @@ struct _GowlConfig {
 	gchar   *animation_curve_open;
 	gdouble  animation_popin_scale;
 	gdouble  animation_jiggle_strength;
+
+	gboolean cube;
+	gint     cube_duration;
+	gint     cube_step_duration;
+	gchar   *cube_curve;
+	gint     cube_faces;
+	gdouble  cube_zoom;
+	gdouble  cube_pitch;
+	gdouble  cube_shading;
+	gdouble  cube_reflection;
+	gdouble  cube_motion_blur;
+	gchar   *cube_backdrop_color;
+	gboolean cube_caps;
+	gboolean cube_all_monitors;
 	gint     nmaster;
 	gint     tag_count;
 
@@ -521,6 +550,8 @@ gowl_config_finalize(GObject *object)
 	g_free(self->input_recording_deny_apps);
 	g_free(self->animation_curve);
 	g_free(self->animation_curve_open);
+	g_free(self->cube_curve);
+	g_free(self->cube_backdrop_color);
 
 	if (self->keybinds != NULL)
 		g_array_unref(self->keybinds);
@@ -782,6 +813,21 @@ gowl_config_init(GowlConfig *self)
 	self->animation_curve_open = g_strdup(GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_OPEN);
 	self->animation_popin_scale = GOWL_CONFIG_DEFAULT_ANIMATION_POPIN_SCALE;
 	self->animation_jiggle_strength = 1.0;
+
+	self->cube                = TRUE;
+	self->cube_duration       = GOWL_CONFIG_DEFAULT_CUBE_DURATION;
+	self->cube_step_duration  = GOWL_CONFIG_DEFAULT_CUBE_STEP_DURATION;
+	self->cube_curve          = g_strdup(GOWL_CONFIG_DEFAULT_CUBE_CURVE);
+	self->cube_faces          = GOWL_CONFIG_DEFAULT_CUBE_FACES;
+	self->cube_zoom           = GOWL_CONFIG_DEFAULT_CUBE_ZOOM;
+	self->cube_pitch          = GOWL_CONFIG_DEFAULT_CUBE_PITCH;
+	self->cube_shading        = GOWL_CONFIG_DEFAULT_CUBE_SHADING;
+	self->cube_reflection     = GOWL_CONFIG_DEFAULT_CUBE_REFLECTION;
+	self->cube_motion_blur    = GOWL_CONFIG_DEFAULT_CUBE_MOTION_BLUR;
+	self->cube_backdrop_color =
+		g_strdup(GOWL_CONFIG_DEFAULT_CUBE_BACKDROP_COLOR);
+	self->cube_caps           = TRUE;
+	self->cube_all_monitors   = FALSE;
 	self->nmaster             = GOWL_CONFIG_DEFAULT_NMASTER;
 	self->tag_count           = GOWL_CONFIG_DEFAULT_TAG_COUNT;
 	self->repeat_rate         = GOWL_CONFIG_DEFAULT_REPEAT_RATE;
@@ -1044,6 +1090,75 @@ gowl_config_apply_mapping(
 
 		if (v >= 0.0 && v <= 2.0)
 			self->animation_jiggle_strength = v;
+	}
+
+	/* Desktop cube.  Every numeric key clamps rather than rejecting so a
+	 * plausible-but-out-of-range value still does something sensible ---
+	 * except the durations, where a negative would run the rotation
+	 * backwards in time, so those are rejected outright. */
+	if (yaml_mapping_has_member(mapping, "cube")) {
+		self->cube = yaml_mapping_get_boolean_member(mapping, "cube");
+	}
+	if (yaml_mapping_has_member(mapping, "cube-duration")) {
+		gint v = (gint)yaml_mapping_get_int_member(mapping,
+		                                           "cube-duration");
+		if (v >= 0)
+			self->cube_duration = v;
+	}
+	if (yaml_mapping_has_member(mapping, "cube-step-duration")) {
+		gint v = (gint)yaml_mapping_get_int_member(mapping,
+		                                           "cube-step-duration");
+		if (v >= 0)
+			self->cube_step_duration = v;
+	}
+	if (yaml_mapping_has_member(mapping, "cube-curve")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "cube-curve");
+		if (v != NULL) {
+			g_free(self->cube_curve);
+			self->cube_curve = g_strdup(v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "cube-faces")) {
+		gint v = (gint)yaml_mapping_get_int_member(mapping, "cube-faces");
+		self->cube_faces = CLAMP(v, 3, 12);
+	}
+	if (yaml_mapping_has_member(mapping, "cube-zoom")) {
+		self->cube_zoom = CLAMP(yaml_mapping_get_double_member(
+			mapping, "cube-zoom"), 1.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "cube-pitch")) {
+		self->cube_pitch = CLAMP(yaml_mapping_get_double_member(
+			mapping, "cube-pitch"), -30.0, 30.0);
+	}
+	if (yaml_mapping_has_member(mapping, "cube-shading")) {
+		self->cube_shading = CLAMP(yaml_mapping_get_double_member(
+			mapping, "cube-shading"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "cube-reflection")) {
+		self->cube_reflection = CLAMP(yaml_mapping_get_double_member(
+			mapping, "cube-reflection"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "cube-motion-blur")) {
+		self->cube_motion_blur = CLAMP(yaml_mapping_get_double_member(
+			mapping, "cube-motion-blur"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "cube-backdrop-color")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "cube-backdrop-color");
+		if (v != NULL) {
+			g_free(self->cube_backdrop_color);
+			self->cube_backdrop_color =
+				gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "cube-caps")) {
+		self->cube_caps = yaml_mapping_get_boolean_member(mapping,
+		                                                  "cube-caps");
+	}
+	if (yaml_mapping_has_member(mapping, "cube-all-monitors")) {
+		self->cube_all_monitors = yaml_mapping_get_boolean_member(
+			mapping, "cube-all-monitors");
 	}
 
 	if (yaml_mapping_has_member(mapping, "animation-curve")) {
@@ -2780,4 +2895,107 @@ gowl_config_get_animation_jiggle_strength(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), 1.0);
 	return self->animation_jiggle_strength;
+}
+
+/* --- Desktop cube --- */
+
+gboolean
+gowl_config_get_cube(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->cube;
+}
+
+gint
+gowl_config_get_cube_duration(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CUBE_DURATION);
+	return self->cube_duration;
+}
+
+gint
+gowl_config_get_cube_step_duration(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CUBE_STEP_DURATION);
+	return self->cube_step_duration;
+}
+
+const gchar *
+gowl_config_get_cube_curve(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CUBE_CURVE);
+	return self->cube_curve;
+}
+
+gint
+gowl_config_get_cube_faces(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CUBE_FACES);
+	return self->cube_faces;
+}
+
+gdouble
+gowl_config_get_cube_zoom(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CUBE_ZOOM);
+	return self->cube_zoom;
+}
+
+gdouble
+gowl_config_get_cube_pitch(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CUBE_PITCH);
+	return self->cube_pitch;
+}
+
+gdouble
+gowl_config_get_cube_shading(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CUBE_SHADING);
+	return self->cube_shading;
+}
+
+gdouble
+gowl_config_get_cube_reflection(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CUBE_REFLECTION);
+	return self->cube_reflection;
+}
+
+gdouble
+gowl_config_get_cube_motion_blur(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CUBE_MOTION_BLUR);
+	return self->cube_motion_blur;
+}
+
+const gchar *
+gowl_config_get_cube_backdrop_color(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CUBE_BACKDROP_COLOR);
+	return self->cube_backdrop_color;
+}
+
+gboolean
+gowl_config_get_cube_caps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), TRUE);
+	return self->cube_caps;
+}
+
+gboolean
+gowl_config_get_cube_all_monitors(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->cube_all_monitors;
 }

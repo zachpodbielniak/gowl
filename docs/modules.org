@@ -605,6 +605,7 @@ Gowl ships with several modules in the =modules/= directory:
 | =layout-indicator= | Brief, click-through layout-change toast            |
 | =dropdown=       | Fixed, toggleable shell overlay                       |
 | =animation=      | Window pops, focus wiggles, settling and overlay slides |
+| =cube=           | Turns the desktop as a solid when the tag changes      |
 | =autostart=      | Runs autostart commands from config                   |
 | =vanitygaps=     | Adds configurable inner/outer gaps to layouts         |
 | =pertag=         | Per-tag layout and mfact settings                     |
@@ -869,6 +870,44 @@ releases resources tied to an output, and =finish= runs before compositor
 scene/renderer teardown. Deactivation must also restore ordinary live
 presentation and release all held buffers. Providers own their state;
 there are no animation clocks or snapshots in the core client structure.
+
+** The desktop cube, and how two effects share one owner
+
+The =cube= module implements =GowlSceneEffect= as well, and is opt-in in
+standalone Gowl (=modules.cube.enabled: true=). CMacs loads it by
+default. See [[file:configuration.org::#cube][cube configuration]] for the settings and for what
+each side of the solid contains.
+
+It exists as a worked example of the rule above, because "a single
+provider owns scene presentation" reads at first like "only one effect
+module may be loaded". It is not: it means one provider is DISPATCHED,
+and what that provider does with a call is its own business.
+
+The cube registers at priority =-10=, ahead of the animation module's
+default =0=, and every one of its hooks ends by handing the call to
+=gowl_module_manager_get_scene_effect_after()= --- the next active
+provider in the same priority order. So:
+
+- the cube is asked first, which is the only way it can DECLINE (wrong
+  renderer, rotated output, no tag change) and get out of the way;
+- everything it declines reaches the animation module unchanged, so
+  window entrances, exits, layout motion and jiggles behave exactly as
+  they do without the cube loaded;
+- the search runs strictly after the asking module, so delegation can
+  only travel down the priority order and cannot loop.
+
+The one call the cube answers on its own is a visibility reveal on a
+monitor whose tags have just changed: the rotation's first captured side
+already shows those windows, so letting them ALSO fade in would fade the
+desktop up after the rotation had landed.
+
+The cube owns the output only for the length of a rotation, and it takes
+it by parking one opaque, monitor-sized buffer just under the top layer
+--- not by switching scene layers off. The layers are global while tags
+are per-monitor, so switching one off to make room on one screen would
+blank the other. =tests/test-cube-guard.sh= fails the build if either
+that or the delegation is lost, because both fail silently: the symptom
+is an absence, not a crash.
 
 Module shared objects remain resident after registering static GTypes,
 so restarting a compositor manager cannot leave GLib holding unloaded

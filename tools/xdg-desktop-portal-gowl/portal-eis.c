@@ -464,13 +464,25 @@ handle_event(PortalEis *self, struct eis_event *event)
 		break;
 
 	case EIS_EVENT_SEAT_BIND:
+#ifdef GOWL_HAVE_EIS_SEAT_DEVICE_REQUESTED
 	case EIS_EVENT_SEAT_DEVICE_REQUESTED:
+#endif
 		/*
 		 * The client bound a capability (or, since libei 1.6, asked for
 		 * a device outright): create the device it will use.  Both
 		 * events are handled because which one arrives depends on the
 		 * client's libei version, and a portal that only understood one
 		 * would work with some deskflow builds and not others.
+		 *
+		 * EIS_EVENT_SEAT_DEVICE_REQUESTED is itself a libeis 1.6
+		 * addition, so naming it unconditionally does not compile on
+		 * 1.5 -- which is what Fedora 43 ships, and Immutablue still
+		 * builds there.  Losing the label costs nothing on 1.5: the
+		 * enum value does not exist because the protocol version that
+		 * produces it does not either, so a 1.6 client negotiating
+		 * with a 1.5 server falls back to SEAT_BIND and takes the same
+		 * branch.  The Makefile sets the define from
+		 * `pkg-config --atleast-version=1.6 libeis-1.0'.
 		 */
 		if (is_tx_event(self, event)) {
 			if (self->tx_device == NULL)

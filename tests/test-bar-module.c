@@ -167,6 +167,7 @@ test_the_shipped_layout(void)
 	g_assert_cmpint(count_widget(listing, "git"), ==, 1);
 	g_assert_cmpint(count_widget(listing, "podman"), ==, 1);
 	g_assert_cmpint(count_widget(listing, "ip"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "display"), ==, 1);
 
 	/* Exactly one tag row, on the top bar. */
 	g_assert_cmpint(count_widget(listing, "tags"), ==, 1);

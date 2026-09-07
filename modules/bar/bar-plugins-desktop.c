@@ -423,8 +423,17 @@ audio_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 
 			cmd = gowl_bar_plugin_get_setting(plugin,
 			                                  "mixer-command");
-			gowl_bar_plugin_spawn(plugin,
-				(cmd != NULL) ? cmd : "pavucontrol");
+			if (cmd != NULL) {
+				gowl_bar_plugin_spawn(plugin, cmd);
+			} else {
+				/* Native pavucontrol, else the flatpak --
+				   which is how it is usually installed. */
+				g_autofree gchar *line = NULL;
+
+				line = bar_app_command("pavucontrol",
+					"org.pulseaudio.pavucontrol", NULL);
+				gowl_bar_plugin_spawn(plugin, line);
+			}
 			break;
 		}
 		default:

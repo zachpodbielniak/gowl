@@ -490,6 +490,44 @@ bar_spawn_shell(const gchar *cmdline)
 	}
 }
 
+gchar *
+bar_app_command(const gchar *binary, const gchar *flatpak_id,
+                const gchar *args)
+{
+	const gchar *extra = (args != NULL) ? args : "";
+
+	if (binary == NULL)
+		return NULL;
+
+	if (flatpak_id == NULL)
+		return g_strdup_printf("%s %s", binary, extra);
+
+	/*
+	 * Native first, then the user flatpak, then the system one.
+	 *
+	 * The choice is made by the SHELL at launch rather than probed
+	 * here, on purpose: a panel button runs on the compositor's
+	 * dispatch thread while it holds cmacs_gowl_mutex, so asking
+	 * `flatpak info' which form is installed would block the editor
+	 * for the length of a subprocess -- the same mistake that stopped
+	 * windows mapping.  The spawn is already detached, so the test
+	 * costs nothing here and stays right if the user installs or
+	 * removes either form later.
+	 *
+	 * `flatpak run' on an id that is not installed fails rather than
+	 * hanging, so chaining with || needs no probe of its own.  The
+	 * --user attempt comes first because that is how these desktop
+	 * helpers are normally installed.
+	 */
+	return g_strdup_printf(
+		"sh -c 'if command -v %s >/dev/null 2>&1; then exec %s %s; fi; "
+		"flatpak run --user %s %s 2>/dev/null || "
+		"exec flatpak run %s %s'",
+		binary, binary, extra,
+		flatpak_id, extra,
+		flatpak_id, extra);
+}
+
 /**
  * bar_have_command:
  * @name: an executable name

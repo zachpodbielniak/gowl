@@ -124,6 +124,32 @@ void bar_spawn_shell (const gchar *cmdline);
 gboolean bar_have_command (const gchar *name);
 
 /**
+ * bar_app_command:
+ * @binary: the native command name, e.g. "pavucontrol"
+ * @flatpak_id: (nullable): its flatpak application id
+ * @args: (nullable): arguments appended to whichever form is used
+ *
+ * Builds a command line that runs @binary if it is installed natively
+ * and falls back to its flatpak if it is not.
+ *
+ * The choice is made by the SHELL, at launch, rather than probed here
+ * on purpose.  A panel button runs on the compositor's dispatch thread
+ * while it holds cmacs_gowl_mutex, so asking `flatpak info' which form
+ * is present would block the editor for the length of a subprocess --
+ * the same mistake that stopped windows mapping.  gowl_bar_plugin_spawn
+ * is already detached, so the test costs nothing and stays correct if
+ * the user installs or removes either form later.
+ *
+ * A user installation is preferred over a system one, matching how
+ * these desktop helpers are normally installed.
+ *
+ * Returns: (transfer full): a command line for bar_spawn_shell()
+ */
+gchar *bar_app_command (const gchar *binary,
+                        const gchar *flatpak_id,
+                        const gchar *args);
+
+/**
  * bar_expand_tilde:
  * @path: a path that may start with `~/'
  *

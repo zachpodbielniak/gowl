@@ -6,6 +6,9 @@ PROTO_HDRS := \
 	xdg-shell-protocol.h \
 	wlr-layer-shell-unstable-v1-protocol.h \
 	cursor-shape-v1-protocol.h \
+	pointer-constraints-unstable-v1-protocol.h \
+	tablet-v2-protocol.h \
+	ext-image-copy-capture-v1-protocol.h \
 	ext-workspace-v1-protocol.h \
 	gowl-input-capture-v1-protocol.h
 
@@ -173,6 +176,49 @@ wlr-layer-shell-unstable-v1-protocol.h:
 cursor-shape-v1-protocol.h:
 	$(WAYLAND_SCANNER) enum-header \
 		$(WAYLAND_PROTOCOLS_DIR)/staging/cursor-shape/cursor-shape-v1.xml $@
+
+# The next three exist for wlroots 0.19 ONLY, and their absence is
+# invisible on a machine that also has 0.20 installed.
+#
+# 0.19's public headers pull generated protocol headers in by bare
+# name -- wlr_pointer_constraints_v1.h does
+# `#include "pointer-constraints-unstable-v1-protocol.h"' -- so every
+# consumer has to run wayland-scanner over the XML itself.  0.20
+# replaced those with `#include <wayland-protocols/...-enum.h>', a
+# header wayland-protocols now installs, so the includes resolve with
+# no generation step and these rules are dead weight there.
+#
+# gowl picks the newest wlroots present, so a developer box carrying
+# both versions never compiles the 0.19 path.  This surfaced only on
+# Fedora 43, which has 0.19 and nothing else:
+#
+#   wlr_pointer_constraints_v1.h:17:10: fatal error:
+#       pointer-constraints-unstable-v1-protocol.h: No such file
+#
+# tests/test-protocol-headers.sh checks every INSTALLED wlroots
+# version rather than the selected one, so the next such divergence
+# fails here instead of in a container on a distro nobody builds on.
+#
+# server-header rather than enum-header because these headers name
+# interface structs as well as enums.  Generating them under 0.20 is
+# harmless -- nothing includes them there.
+pointer-constraints-unstable-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		$(WAYLAND_PROTOCOLS_DIR)/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml $@
+
+# tablet-v2 graduated from unstable/ to stable/ in wayland-protocols
+# 1.41, under a different file name.  Take whichever this machine has
+# rather than pinning a path that breaks on one side of that release.
+TABLET_V2_XML := $(firstword $(wildcard \
+	$(WAYLAND_PROTOCOLS_DIR)/stable/tablet/tablet-v2.xml \
+	$(WAYLAND_PROTOCOLS_DIR)/unstable/tablet/tablet-unstable-v2.xml))
+
+tablet-v2-protocol.h:
+	$(WAYLAND_SCANNER) server-header $(TABLET_V2_XML) $@
+
+ext-image-copy-capture-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		$(WAYLAND_PROTOCOLS_DIR)/staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml $@
 
 # ext-workspace-v1: staging protocol for workspace discovery /
 # activation by external bars.  Generates BOTH a server header and

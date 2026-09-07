@@ -151,10 +151,48 @@ DEPS_REQUIRED += xkbcommon libinput
 DEPS_REQUIRED += yaml-0.1 json-glib-1.0 cairo pangocairo egl gl glesv2
 
 # Optional XWayland dependencies
+#
+# Two independent things must both be true, and testing only the second is how
+# this broke on Ubuntu 24.04.  xcb/xcb-icccm are gowl's OWN X11-side deps and
+# say nothing about whether wlroots itself was built with XWayland.  Debian and
+# Ubuntu ship wlroots with XWayland disabled while xcb is present as usual, so
+# the old test defined -DGOWL_HAVE_XWAYLAND=1 and the link then failed on every
+# wlr_xwayland_* symbol.  Arch enables it, which is why it built there and the
+# difference looked like a gowl bug rather than a wlroots build option.
+#
+# wlroots advertises the answer in its own pkg-config file as have_xwayland
+# (the string "true" or "false").  Older wlroots defines no such variable, so
+# fall back to the WLR_HAS_XWAYLAND define in wlr/config.h, which predates it.
 ifeq ($(BUILD_XWAYLAND),1)
 DEPS_XWAYLAND := xcb xcb-icccm
-XWAYLAND_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_XWAYLAND) 2>/dev/null && echo 1 || echo 0)
+XWAYLAND_XCB := $(shell $(PKG_CONFIG) --exists $(DEPS_XWAYLAND) 2>/dev/null && echo 1 || echo 0)
+
+WLROOTS_XWAYLAND_PC := $(shell $(PKG_CONFIG) --variable=have_xwayland $(WLROOTS_PC) 2>/dev/null)
+ifeq ($(WLROOTS_XWAYLAND_PC),true)
+WLROOTS_HAS_XWAYLAND := 1
+else ifeq ($(WLROOTS_XWAYLAND_PC),false)
+WLROOTS_HAS_XWAYLAND := 0
 else
+# No have_xwayland variable: read the header wlroots installs.  The include
+# directory comes from pkg-config rather than being guessed, because the
+# versioned path (wlroots-0.19/) differs per distro and per version.
+WLROOTS_INCDIRS := $(patsubst -I%,%,$(filter -I%,$(shell $(PKG_CONFIG) --cflags-only-I $(WLROOTS_PC) 2>/dev/null)))
+WLROOTS_HAS_XWAYLAND := $(shell for d in $(WLROOTS_INCDIRS) /usr/include; do \
+	if [ -f "$$d/wlr/config.h" ] && \
+	   grep -qE '^[[:space:]]*#define[[:space:]]+WLR_HAS_XWAYLAND[[:space:]]+1' "$$d/wlr/config.h"; then \
+		echo 1; exit 0; \
+	fi; \
+done; echo 0)
+endif
+
+ifeq ($(XWAYLAND_XCB)$(WLROOTS_HAS_XWAYLAND),11)
+XWAYLAND_AVAILABLE := 1
+else
+XWAYLAND_AVAILABLE := 0
+endif
+else
+XWAYLAND_XCB := 0
+WLROOTS_HAS_XWAYLAND := 0
 XWAYLAND_AVAILABLE := 0
 endif
 
@@ -289,6 +327,8 @@ show-config:
 	@echo "BUILD_MODULES:   $(BUILD_MODULES)"
 	@echo "BUILD_XWAYLAND:  $(BUILD_XWAYLAND)"
 	@echo "XWAYLAND_AVAILABLE: $(XWAYLAND_AVAILABLE)"
+	@echo "  wlroots has xwayland: $(WLROOTS_HAS_XWAYLAND)"
+	@echo "  xcb + xcb-icccm:      $(XWAYLAND_XCB)"
 	@echo "MCP:             $(MCP)"
 	@echo "MCP_AVAILABLE:   $(MCP_AVAILABLE)"
 	@echo "LIBDECOR_AVAILABLE: $(LIBDECOR_AVAILABLE)"

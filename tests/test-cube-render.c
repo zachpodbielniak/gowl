@@ -39,6 +39,7 @@
 #include <wlr/types/wlr_buffer.h>
 
 #include "../modules/cube/gowl-cube-gl.h"
+#include "fx/gowl-fx.h"
 
 #define TEST_W 128
 #define TEST_H 64
@@ -49,7 +50,7 @@ typedef struct {
 	struct wlr_renderer  *renderer;
 	struct wlr_allocator *allocator;
 	struct wlr_swapchain *swapchain;
-	GowlCubeGl           *gl;
+	GowlFxGl             *gl;
 } Fixture;
 
 static gboolean
@@ -73,7 +74,7 @@ fixture_open(Fixture *f)
 		return FALSE;
 
 	/* Exactly the check the module makes before it offers to run. */
-	if (!gowl_cube_gl_supported(f->renderer))
+	if (!gowl_fx_gl_supported(f->renderer))
 		return FALSE;
 
 	f->allocator = wlr_allocator_autocreate(f->backend, f->renderer);
@@ -91,7 +92,7 @@ fixture_open(Fixture *f)
 	if (f->swapchain == NULL)
 		return FALSE;
 
-	f->gl = gowl_cube_gl_new(f->renderer);
+	f->gl = gowl_fx_gl_new(f->renderer);
 	return f->gl != NULL;
 }
 
@@ -99,7 +100,7 @@ static void
 fixture_close(Fixture *f)
 {
 	if (f->gl != NULL)
-		gowl_cube_gl_free(f->gl);
+		gowl_fx_gl_free(f->gl);
 	if (f->swapchain != NULL)
 		wlr_swapchain_destroy(f->swapchain);
 	if (f->allocator != NULL)
@@ -141,7 +142,7 @@ make_striped_desktop(struct wlr_renderer *renderer)
 }
 
 static void
-frame_defaults(GowlCubeFrame *frame, const GowlCubeFace *face)
+frame_defaults(GowlCubeFrame *frame, const GowlFxTexture *face)
 {
 	memset(frame, 0, sizeof(*frame));
 	frame->faces       = 4;
@@ -206,7 +207,7 @@ static void
 test_flat_frame_is_the_desktop(void)
 {
 	Fixture             f;
-	GowlCubeFace        face;
+	GowlFxTexture       face;
 	GowlCubeFrame       frame;
 	struct wlr_texture *source;
 	struct wlr_buffer  *buffer;
@@ -222,7 +223,7 @@ test_flat_frame_is_the_desktop(void)
 	memset(&face, 0, sizeof(face));
 	source = make_striped_desktop(f.renderer);
 	g_assert_nonnull(source);
-	g_assert_true(gowl_cube_gl_store_face(f.gl, &face, source,
+	g_assert_true(gowl_fx_texture_store(f.gl, &face, source,
 	                                      TEST_W, TEST_H));
 	wlr_texture_destroy(source);
 
@@ -230,12 +231,12 @@ test_flat_frame_is_the_desktop(void)
 
 	buffer = wlr_swapchain_acquire(f.swapchain);
 	g_assert_nonnull(buffer);
-	g_assert_true(gowl_cube_gl_render(f.gl, buffer, &frame));
+	g_assert_true(gowl_cube_draw(f.gl, buffer, &frame));
 
 	pixels = read_back(f.renderer, buffer);
 	if (pixels == NULL) {
 		wlr_buffer_unlock(buffer);
-		gowl_cube_gl_drop_face(f.gl, &face);
+		gowl_fx_texture_drop(f.gl, &face);
 		fixture_close(&f);
 		g_test_skip("cannot read pixels back from this renderer");
 		return;
@@ -260,7 +261,7 @@ test_flat_frame_is_the_desktop(void)
 
 	g_free(pixels);
 	wlr_buffer_unlock(buffer);
-	gowl_cube_gl_drop_face(f.gl, &face);
+	gowl_fx_texture_drop(f.gl, &face);
 	fixture_close(&f);
 }
 
@@ -274,7 +275,7 @@ static void
 test_flat_frame_fills_the_viewport(void)
 {
 	Fixture             f;
-	GowlCubeFace        face;
+	GowlFxTexture       face;
 	GowlCubeFrame       frame;
 	struct wlr_texture *source;
 	struct wlr_buffer  *buffer;
@@ -290,7 +291,7 @@ test_flat_frame_fills_the_viewport(void)
 	memset(&face, 0, sizeof(face));
 	source = make_striped_desktop(f.renderer);
 	g_assert_nonnull(source);
-	g_assert_true(gowl_cube_gl_store_face(f.gl, &face, source,
+	g_assert_true(gowl_fx_texture_store(f.gl, &face, source,
 	                                      TEST_W, TEST_H));
 	wlr_texture_destroy(source);
 
@@ -298,12 +299,12 @@ test_flat_frame_fills_the_viewport(void)
 
 	buffer = wlr_swapchain_acquire(f.swapchain);
 	g_assert_nonnull(buffer);
-	g_assert_true(gowl_cube_gl_render(f.gl, buffer, &frame));
+	g_assert_true(gowl_cube_draw(f.gl, buffer, &frame));
 
 	pixels = read_back(f.renderer, buffer);
 	if (pixels == NULL) {
 		wlr_buffer_unlock(buffer);
-		gowl_cube_gl_drop_face(f.gl, &face);
+		gowl_fx_texture_drop(f.gl, &face);
 		fixture_close(&f);
 		g_test_skip("cannot read pixels back from this renderer");
 		return;
@@ -325,7 +326,7 @@ test_flat_frame_fills_the_viewport(void)
 
 	g_free(pixels);
 	wlr_buffer_unlock(buffer);
-	gowl_cube_gl_drop_face(f.gl, &face);
+	gowl_fx_texture_drop(f.gl, &face);
 	fixture_close(&f);
 }
 
@@ -340,7 +341,7 @@ static void
 test_mid_rotation_shows_a_corner(void)
 {
 	Fixture             f;
-	GowlCubeFace        faces[2];
+	GowlFxTexture       faces[2];
 	GowlCubeFrame       frame;
 	struct wlr_texture *source;
 	struct wlr_buffer  *buffer;
@@ -357,9 +358,9 @@ test_mid_rotation_shows_a_corner(void)
 	memset(faces, 0, sizeof(faces));
 	source = make_striped_desktop(f.renderer);
 	g_assert_nonnull(source);
-	g_assert_true(gowl_cube_gl_store_face(f.gl, &faces[0], source,
+	g_assert_true(gowl_fx_texture_store(f.gl, &faces[0], source,
 	                                      TEST_W, TEST_H));
-	g_assert_true(gowl_cube_gl_store_face(f.gl, &faces[1], source,
+	g_assert_true(gowl_fx_texture_store(f.gl, &faces[1], source,
 	                                      TEST_W, TEST_H));
 	wlr_texture_destroy(source);
 
@@ -368,7 +369,7 @@ test_mid_rotation_shows_a_corner(void)
 
 	buffer = wlr_swapchain_acquire(f.swapchain);
 	g_assert_nonnull(buffer);
-	g_assert_true(gowl_cube_gl_render(f.gl, buffer, &frame));
+	g_assert_true(gowl_cube_draw(f.gl, buffer, &frame));
 	flat = read_back(f.renderer, buffer);
 	wlr_buffer_unlock(buffer);
 
@@ -377,15 +378,15 @@ test_mid_rotation_shows_a_corner(void)
 
 	buffer = wlr_swapchain_acquire(f.swapchain);
 	g_assert_nonnull(buffer);
-	g_assert_true(gowl_cube_gl_render(f.gl, buffer, &frame));
+	g_assert_true(gowl_cube_draw(f.gl, buffer, &frame));
 	turned = read_back(f.renderer, buffer);
 	wlr_buffer_unlock(buffer);
 
 	if (flat == NULL || turned == NULL) {
 		g_free(flat);
 		g_free(turned);
-		gowl_cube_gl_drop_face(f.gl, &faces[0]);
-		gowl_cube_gl_drop_face(f.gl, &faces[1]);
+		gowl_fx_texture_drop(f.gl, &faces[0]);
+		gowl_fx_texture_drop(f.gl, &faces[1]);
 		fixture_close(&f);
 		g_test_skip("cannot read pixels back from this renderer");
 		return;
@@ -409,8 +410,8 @@ test_mid_rotation_shows_a_corner(void)
 
 	g_free(flat);
 	g_free(turned);
-	gowl_cube_gl_drop_face(f.gl, &faces[0]);
-	gowl_cube_gl_drop_face(f.gl, &faces[1]);
+	gowl_fx_texture_drop(f.gl, &faces[0]);
+	gowl_fx_texture_drop(f.gl, &faces[1]);
 	fixture_close(&f);
 }
 

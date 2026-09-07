@@ -857,6 +857,164 @@ test_config_cube_keeps_an_unknown_curve(void)
 	g_object_unref(config);
 }
 
+/*
+ * The new effect modules' settings.
+ *
+ * Defaults are a contract with the documentation and with cmacs, which
+ * ships none of these and therefore gets exactly what is here.  The
+ * clamps are what stands between a hand-edited YAML file and a
+ * compositor that magnifies four hundred times or blurs with zero
+ * passes.
+ */
+static void
+test_config_effect_defaults(void)
+{
+	GowlConfig *config = gowl_config_new();
+
+	g_assert_true(gowl_config_get_cube_gesture(config));
+
+	g_assert_true(gowl_config_get_magnifier(config));
+	g_assert_cmpfloat(gowl_config_get_magnifier_max(config), ==, 8.0);
+	g_assert_cmpfloat(gowl_config_get_magnifier_step(config), ==, 1.25);
+	g_assert_cmpint(gowl_config_get_magnifier_smoothing(config), ==, 120);
+	g_assert_true(gowl_config_get_magnifier_follow_cursor(config));
+	g_assert_true(gowl_config_get_magnifier_smooth(config));
+	g_assert_cmpstr(gowl_config_get_magnifier_modifier(config), ==, "Super");
+
+	g_assert_true(gowl_config_get_expo(config));
+	g_assert_cmpint(gowl_config_get_expo_duration(config), ==, 340);
+	g_assert_cmpstr(gowl_config_get_expo_curve(config), ==, "ease-out-expo");
+	g_assert_cmpint(gowl_config_get_expo_tags(config), ==, 9);
+	g_assert_cmpint(gowl_config_get_expo_columns(config), ==, 0);
+	g_assert_false(gowl_config_get_expo_hide_empty(config));
+
+	g_assert_true(gowl_config_get_switcher(config));
+	g_assert_cmpint(gowl_config_get_switcher_duration(config), ==, 220);
+	g_assert_cmpfloat(gowl_config_get_switcher_scale(config), ==, 0.52);
+	g_assert_cmpfloat(gowl_config_get_switcher_angle(config), ==, 52.0);
+	g_assert_false(gowl_config_get_switcher_all_tags(config));
+
+	g_assert_true(gowl_config_get_blur(config));
+	g_assert_cmpint(gowl_config_get_blur_downscale(config), ==, 4);
+	g_assert_cmpint(gowl_config_get_blur_passes(config), ==, 3);
+	g_assert_true(gowl_config_get_shadow(config));
+	g_assert_cmpint(gowl_config_get_shadow_radius(config), ==, 28);
+	g_assert_cmpfloat(gowl_config_get_shadow_opacity(config), ==, 0.42);
+	g_assert_cmpstr(gowl_config_get_shadow_color(config), ==, "#000000");
+
+	g_assert_cmpint(gowl_config_get_wallpaper_fade(config), ==, 320);
+	g_assert_false(gowl_config_has_tag_wallpapers(config));
+
+	g_object_unref(config);
+}
+
+static void
+test_config_effect_clamps(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+	const gchar *yaml =
+		"magnifier-max: 500\n"
+		"magnifier-step: 100\n"
+		"expo-tags: 99\n"
+		"expo-gap: 9\n"
+		"expo-dim: -1\n"
+		"switcher-scale: 0.01\n"
+		"switcher-angle: 999\n"
+		"blur-downscale: 99\n"
+		"blur-passes: 0\n"
+		"shadow-radius: 9999\n"
+		"shadow-opacity: 4\n";
+
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+
+	g_assert_cmpfloat(gowl_config_get_magnifier_max(config), ==, 32.0);
+	g_assert_cmpfloat(gowl_config_get_magnifier_step(config), ==, 4.0);
+	g_assert_cmpint(gowl_config_get_expo_tags(config), ==, 9);
+	g_assert_cmpfloat(gowl_config_get_expo_gap(config), ==, 0.4);
+	g_assert_cmpfloat(gowl_config_get_expo_dim(config), ==, 0.0);
+	g_assert_cmpfloat(gowl_config_get_switcher_scale(config), ==, 0.2);
+	g_assert_cmpfloat(gowl_config_get_switcher_angle(config), ==, 80.0);
+	g_assert_cmpint(gowl_config_get_blur_downscale(config), ==, 8);
+	g_assert_cmpint(gowl_config_get_blur_passes(config), ==, 1);
+	g_assert_cmpint(gowl_config_get_shadow_radius(config), ==, 128);
+	g_assert_cmpfloat(gowl_config_get_shadow_opacity(config), ==, 1.0);
+
+	g_object_unref(config);
+}
+
+/*
+ * Per-tag wallpapers are ADDITIVE.  `wallpaper' keeps meaning "the one
+ * every tag uses", a tag with an entry overrides it, and a tag without
+ * one is left alone -- so an existing config gains nothing it did not
+ * ask for.
+ */
+static void
+test_config_wallpaper_tags(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+	const gchar *yaml =
+		"wallpaper-fade: 500\n"
+		"wallpaper-tags:\n"
+		"  1: \"/tmp/one.png\"\n"
+		"  4: \"/tmp/four.png\"\n";
+
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+
+	g_assert_true(gowl_config_has_tag_wallpapers(config));
+	g_assert_cmpint(gowl_config_get_wallpaper_fade(config), ==, 500);
+	g_assert_cmpstr(gowl_config_get_wallpaper_for_tag(config, 1), ==,
+	                "/tmp/one.png");
+	g_assert_cmpstr(gowl_config_get_wallpaper_for_tag(config, 4), ==,
+	                "/tmp/four.png");
+	/* Untouched tags say nothing, which the module reads as "use the
+	 * default wallpaper" rather than as "show no wallpaper". */
+	g_assert_null(gowl_config_get_wallpaper_for_tag(config, 2));
+	g_assert_null(gowl_config_get_wallpaper_for_tag(config, 9));
+
+	/* Out of range in either direction is refused rather than wrapped. */
+	g_assert_null(gowl_config_get_wallpaper_for_tag(config, 0));
+	g_assert_null(gowl_config_get_wallpaper_for_tag(config, 10));
+
+	g_object_unref(config);
+}
+
+/* A tag number outside 1..9 is a typo; it must not silently land on
+ * tag 1. */
+static void
+test_config_wallpaper_tags_rejects_bad_keys(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+	GLogLevelFlags fatal;
+	const gchar *yaml =
+		"wallpaper-tags:\n"
+		"  0: \"/tmp/zero.png\"\n"
+		"  12: \"/tmp/twelve.png\"\n"
+		"  banana: \"/tmp/fruit.png\"\n";
+
+	/*
+	 * Each bad key warns, which is the point -- a typo should be
+	 * reported rather than silently dropped.  gowl logs through
+	 * G_LOG_USE_STRUCTURED, which neither g_test_expect_message() nor
+	 * the test framework's fatal handler intercepts, so the warnings
+	 * are allowed through rather than asserted on, and what IS asserted
+	 * is the behaviour: nothing was registered.
+	 */
+	fatal = g_log_set_always_fatal(0);
+
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+
+	g_log_set_always_fatal(fatal);
+
+	g_assert_false(gowl_config_has_tag_wallpapers(config));
+	g_object_unref(config);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -870,6 +1028,11 @@ main(int argc, char *argv[])
 	                test_config_cube_rejects_negative_durations);
 	g_test_add_func("/config/cube-unknown-curve",
 	                test_config_cube_keeps_an_unknown_curve);
+	g_test_add_func("/config/effect-defaults", test_config_effect_defaults);
+	g_test_add_func("/config/effect-clamps", test_config_effect_clamps);
+	g_test_add_func("/config/wallpaper-tags", test_config_wallpaper_tags);
+	g_test_add_func("/config/wallpaper-tags-bad-keys",
+	                test_config_wallpaper_tags_rejects_bad_keys);
 	g_test_add_func("/config/defaults", test_config_defaults);
 	g_test_add_func("/config/manage-lid", test_config_manage_lid);
 	g_test_add_func("/config/set-properties", test_config_set_properties);

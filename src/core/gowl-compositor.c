@@ -4181,6 +4181,39 @@ gowl_compositor_pretag_pid(
 	g_array_append_val(self->pretag_pids, entry);
 }
 
+gchar *
+gowl_compositor_run_command(GowlCompositor *self, const gchar *line)
+{
+	g_autofree gchar *word = NULL;
+	const gchar *args = NULL;
+	const gchar *space;
+	gchar *reply = NULL;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	g_return_val_if_fail(line != NULL, NULL);
+
+	/* Split on the first space: the command word is what a module
+	 * matches on, the remainder is its argument, uninterpreted. */
+	space = strchr(line, ' ');
+	if (space != NULL) {
+		word = g_strndup(line, (gsize)(space - line));
+		args = space + 1;
+	} else {
+		word = g_strdup(line);
+	}
+
+	if (self->module_mgr != NULL)
+		reply = gowl_module_manager_dispatch_command(self->module_mgr,
+		                                              word, args);
+
+	/* Announced whether or not a module claimed it: a listener on the
+	 * socket is watching what the session does, not what it handled. */
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT command %s", line);
+
+	return reply;
+}
+
 /**
  * gowl_compositor_view_tags:
  * @self: the #GowlCompositor
@@ -5984,6 +6017,15 @@ create_pointer(
  * wlr_cursor aggregates libinput swipe/pinch/hold gesture events from
  * every attached pointer; forward them to the focused client through
  * the pointer-gestures protocol (zwp_pointer_gestures_v1).
+ *
+ * Touchpad gestures are offered to modules before the focused client.
+ *
+ * A claimed gesture is one the application will NEVER see, which is right
+ * -- a three-finger swipe that turns the desktop and also scrolls the
+ * browser underneath it is nobody's intent -- but it means the claimant
+ * has to be remembered for the whole gesture rather than re-asked on
+ * every update: a handler that stopped claiming halfway would drop the
+ * gesture into the client mid-swipe.
  * ----------------------------------------------------------- */
 static void
 on_cursor_swipe_begin(struct wl_listener *listener, void *data)
@@ -5991,6 +6033,26 @@ on_cursor_swipe_begin(struct wl_listener *listener, void *data)
 	GowlCompositor *self =
 		wl_container_of(listener, self, cursor_swipe_begin);
 	struct wlr_pointer_swipe_begin_event *ev = data;
+
+	self->gesture_claimant = NULL;
+	if (self->module_mgr != NULL) {
+		GPtrArray *handlers =
+			gowl_module_manager_gesture_handlers(self->module_mgr);
+		guint i;
+
+		for (i = 0; handlers != NULL && i < handlers->len; i++) {
+			GowlGestureHandler *h = g_ptr_array_index(handlers, i);
+
+			if (gowl_gesture_handler_swipe_begin(h, self, ev->fingers)) {
+				self->gesture_claimant = h;
+				break;
+			}
+		}
+		g_clear_pointer(&handlers, g_ptr_array_unref);
+	}
+	if (self->gesture_claimant != NULL)
+		return;
+
 	wlr_pointer_gestures_v1_send_swipe_begin(self->pointer_gestures,
 		self->wlr_seat, ev->time_msec, ev->fingers);
 }
@@ -6001,6 +6063,12 @@ on_cursor_swipe_update(struct wl_listener *listener, void *data)
 	GowlCompositor *self =
 		wl_container_of(listener, self, cursor_swipe_update);
 	struct wlr_pointer_swipe_update_event *ev = data;
+
+	if (self->gesture_claimant != NULL) {
+		gowl_gesture_handler_swipe_update(self->gesture_claimant, self,
+		                                  ev->dx, ev->dy);
+		return;
+	}
 	wlr_pointer_gestures_v1_send_swipe_update(self->pointer_gestures,
 		self->wlr_seat, ev->time_msec, ev->dx, ev->dy);
 }
@@ -6011,6 +6079,17 @@ on_cursor_swipe_end(struct wl_listener *listener, void *data)
 	GowlCompositor *self =
 		wl_container_of(listener, self, cursor_swipe_end);
 	struct wlr_pointer_swipe_end_event *ev = data;
+
+	if (self->gesture_claimant != NULL) {
+		GowlGestureHandler *h = self->gesture_claimant;
+
+		/* Cleared FIRST: the handler may start an animation that runs a
+		 * frame during this call, and a stale claimant would then eat a
+		 * gesture that has already ended. */
+		self->gesture_claimant = NULL;
+		gowl_gesture_handler_swipe_end(h, self, ev->cancelled);
+		return;
+	}
 	wlr_pointer_gestures_v1_send_swipe_end(self->pointer_gestures,
 		self->wlr_seat, ev->time_msec, ev->cancelled);
 }
@@ -6021,6 +6100,26 @@ on_cursor_pinch_begin(struct wl_listener *listener, void *data)
 	GowlCompositor *self =
 		wl_container_of(listener, self, cursor_pinch_begin);
 	struct wlr_pointer_pinch_begin_event *ev = data;
+
+	self->pinch_claimant = NULL;
+	if (self->module_mgr != NULL) {
+		GPtrArray *handlers =
+			gowl_module_manager_gesture_handlers(self->module_mgr);
+		guint i;
+
+		for (i = 0; handlers != NULL && i < handlers->len; i++) {
+			GowlGestureHandler *h = g_ptr_array_index(handlers, i);
+
+			if (gowl_gesture_handler_pinch_begin(h, self, ev->fingers)) {
+				self->pinch_claimant = h;
+				break;
+			}
+		}
+		g_clear_pointer(&handlers, g_ptr_array_unref);
+	}
+	if (self->pinch_claimant != NULL)
+		return;
+
 	wlr_pointer_gestures_v1_send_pinch_begin(self->pointer_gestures,
 		self->wlr_seat, ev->time_msec, ev->fingers);
 }
@@ -6031,6 +6130,13 @@ on_cursor_pinch_update(struct wl_listener *listener, void *data)
 	GowlCompositor *self =
 		wl_container_of(listener, self, cursor_pinch_update);
 	struct wlr_pointer_pinch_update_event *ev = data;
+
+	if (self->pinch_claimant != NULL) {
+		gowl_gesture_handler_pinch_update(self->pinch_claimant, self,
+		                                  ev->dx, ev->dy, ev->scale,
+		                                  ev->rotation);
+		return;
+	}
 	wlr_pointer_gestures_v1_send_pinch_update(self->pointer_gestures,
 		self->wlr_seat, ev->time_msec, ev->dx, ev->dy,
 		ev->scale, ev->rotation);
@@ -6042,6 +6148,14 @@ on_cursor_pinch_end(struct wl_listener *listener, void *data)
 	GowlCompositor *self =
 		wl_container_of(listener, self, cursor_pinch_end);
 	struct wlr_pointer_pinch_end_event *ev = data;
+
+	if (self->pinch_claimant != NULL) {
+		GowlGestureHandler *h = self->pinch_claimant;
+
+		self->pinch_claimant = NULL;
+		gowl_gesture_handler_pinch_end(h, self, ev->cancelled);
+		return;
+	}
 	wlr_pointer_gestures_v1_send_pinch_end(self->pointer_gestures,
 		self->wlr_seat, ev->time_msec, ev->cancelled);
 }
@@ -6550,13 +6664,19 @@ gowl_compositor_dispatch_keybind(
 			}
 			case GOWL_ACTION_IPC_COMMAND: {
 				/*
-				 * Execute an arbitrary IPC command string.
-				 * The arg is forwarded to the IPC handler.
+				 * Run a command string.
+				 *
+				 * Modules get it first, which is what makes
+				 * `ipc_command' the config-driven way to reach
+				 * a plugin: a bind of
+				 *   { action: ipc_command, arg: "expo" }
+				 * opens the overview without gowl knowing that
+				 * the overview exists.  The event still goes to
+				 * the IPC socket either way, because a listener
+				 * there wants to see what happened.
 				 */
-				if (self->ipc != NULL && kb->arg != NULL) {
-					gowl_ipc_push_event(self->ipc,
-						"EVENT command %s", kb->arg);
-				}
+				if (kb->arg != NULL)
+					gowl_compositor_run_command(self, kb->arg);
 				return TRUE;
 			}
 			case GOWL_ACTION_LOCK:
@@ -6735,15 +6855,29 @@ on_kb_key(struct wl_listener *listener, void *data)
 	 * CapsLock stripped) so that keybinds work regardless of
 	 * those lock states, matching the behavior of the config
 	 * keybind check above. */
-	if (!handled && self->module_mgr != NULL &&
-	    event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+	/*
+	 * Modules see RELEASES as well as presses.
+	 *
+	 * The interface has always carried a `pressed' flag, and it has to
+	 * mean something: an alt-tab switcher is held open by a modifier and
+	 * commits when it is let go, which cannot be built out of presses
+	 * alone.  Every in-tree handler checks the flag; a handler that does
+	 * not will fire twice per key, which is why it is the first thing to
+	 * look at when a module's keybind starts double-firing.
+	 *
+	 * Configured keybinds are still consulted first and still only on
+	 * press, so this cannot shadow anything the user has bound.
+	 */
+	if (!handled && self->module_mgr != NULL) {
 		guint clean_mods;
+		gboolean down =
+			event->state == WL_KEYBOARD_KEY_STATE_PRESSED;
 
 		clean_mods = GOWL_CLEANMASK(mods);
 		for (i = 0; i < nsyms; i++) {
 			if (gowl_module_manager_dispatch_key(
 				    self->module_mgr, clean_mods,
-				    (guint)syms[i], TRUE)) {
+				    (guint)syms[i], down)) {
 				handled = TRUE;
 				break;
 			}
@@ -6761,7 +6895,7 @@ on_kb_key(struct wl_listener *listener, void *data)
 			for (i = 0; i < n_raw; i++) {
 				if (gowl_module_manager_dispatch_key(
 					    self->module_mgr, clean_mods,
-					    (guint)raw_syms[i], TRUE)) {
+					    (guint)raw_syms[i], down)) {
 					handled = TRUE;
 					break;
 				}
@@ -7629,6 +7763,26 @@ on_cursor_axis(struct wl_listener *listener, void *data)
 		ev.discrete = event->delta_discrete;
 		gowl_input_capture_emit(self->input_capture, &ev);
 		return;
+	}
+
+	/*
+	 * Modules see the scroll before the client does, which is how a
+	 * magnifier binds Super+wheel without the application also scrolling.
+	 * A claimed scroll is one the client never receives, so a handler
+	 * that claims without a modifier held would break the wheel
+	 * everywhere -- see GowlMouseHandlerInterface.
+	 */
+	{
+		struct wlr_keyboard *kbd = wlr_seat_get_keyboard(self->wlr_seat);
+		guint32 kmods = kbd != NULL ? wlr_keyboard_get_modifiers(kbd) : 0;
+
+		if (self->module_mgr != NULL
+		    && gowl_module_manager_dispatch_axis(
+				self->module_mgr,
+				event->orientation
+					== WL_POINTER_AXIS_HORIZONTAL_SCROLL ? 1 : 0,
+				event->delta, event->delta_discrete, kmods))
+			return;
 	}
 
 	/* Forward scroll event to the focused client */

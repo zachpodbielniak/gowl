@@ -669,15 +669,92 @@ immediate. Disabling the animation module finishes motion, restores
 live content and opacity, and releases all closing buffers. Shutdown
 finishes effects before renderer teardown.
 
-One provider is DISPATCHED; that is not the same as one being loaded.
-=gowl_module_manager_get_scene_effect_after()= returns the next active
-provider strictly after a given one in the same priority order, so a
-module that owns presentation only some of the time can hand down what
-it does not answer. The search never looks backwards, so a chain cannot
-loop, and a hook a provider leaves =NULL= is skipped by the core rather
-than passed on --- a delegating provider must therefore implement every
-hook it intends to forward. =modules/cube/= is the worked example; see
-[[file:modules.org::#bundled-modules][Bundled Modules]].
+*Six providers, dispatched per event.* Every hook is either CONSUMABLE
+(=client_event=, =get_geometry=, =surface_at= --- first claimant wins,
+because two modules cannot both decide where a window is) or BROADCAST
+(=alpha_changed=, =frame=, =frame_done=, =monitor_removed=, =finish= ---
+every provider gets one, because a module that misses its own teardown
+leaks buffers into a departing renderer). =src/core/gowl-effects.c= owns
+that distinction and =tests/test-effects.c= pins it; both failure modes
+are silent absences rather than crashes.
+
+gowl handed the whole interface to the single highest-priority provider
+until there were enough effect modules for that to hurt, at which point
+every module after the first would have had to be forwarded to by hand,
+eight hooks at a time. =gowl_module_manager_get_scene_effects()= returns
+the whole active set in priority order;
+=gowl_module_manager_get_scene_effect_after()= remains for a module that
+wants to ask what is below it without receiving the call.
+
+*** Visual effect layer
+
+=src/fx/= is the toolkit the effect modules are built on:
+=gowl_fx_gl_*= (borrowing the renderer's EGL context, textures, a styled
+quad pass, a separable blur), =gowl_fx_vis_*= and =gowl_fx_capture()=
+(rendering an output as it WOULD look under a different set of visible
+windows, and putting the scene back), and =GowlFxSheet= (one opaque
+monitor-sized buffer parked in the scene for as long as an effect owns
+that output).
+
+It adds no renderer. =libgowl= must stay free of one
+(=tests/test-no-libregnum.sh=), and this stays inside that rule by
+borrowing the context wlroots' own GLES2 renderer already owns:
+=wlr_gles2_renderer_get_egl()= for the context,
+=wlr_gles2_renderer_get_buffer_fbo()= for a target, each bracketed by
+make-current and restore because that context is process state shared
+with wlroots. Under any other renderer =gowl_fx_gl_new()= returns =NULL=
+and every module declines to run.
+
+Three invariants hold across all five callers:
+
+- *Y is negated in the projections.* wlroots hands out a buffer whose
+  first row is the top of the picture while GL's first framebuffer row is
+  the bottom, so =gowl_fx_mat4_perspective()= and =gowl_fx_mat4_ortho()=
+  both negate Y and the default screen quad puts the image's top at
+  NDC -1. They have to agree, or one effect comes out upside down while
+  the rest look right.
+- *There is no depth buffer.* A wlr_buffer's framebuffer has colour only,
+  and attaching depth to a framebuffer wlroots owns would be reaching
+  into its state. Effects draw back to front and reject back faces on the
+  CPU.
+- *A capture is a lie that must be taken back.* =GowlFxVis= remembers
+  every scene node an effect switched off so one call restores them all,
+  including on every early return.
+
+=tests/test-fx-render.c= checks the orientations, the blur and the corner
+rounding against a real GLES2 renderer, and skips when there is no DRM
+render node.
+
+*** Touchpad gestures
+
+=GowlGestureHandler= offers swipes and pinches to modules BEFORE they are
+relayed to the focused client. It is consumable and the claimant is
+remembered for the whole gesture rather than re-asked per update: a
+handler that stopped claiming halfway would drop the rest of the swipe
+into the client mid-motion. A claimed gesture is one the application
+never sees, which is the point --- a three-finger swipe that turned the
+desktop and also scrolled the browser underneath it is nobody's intent
+--- and it is why a handler that cannot act must decline in =begin=
+rather than claim and do nothing.
+
+The cube claims three fingers; expo claims four.
+
+*** Module commands
+
+A module =.so= cannot export a function for the compositor to call, so it
+exports a NAME. =gowl_compositor_run_command()= offers a command word to
+the =GowlIpcHandler= modules and then announces it on the IPC socket, and
+it is the one entry point shared by the =ipc_command= keybind action, the
+socket, and an embedder --- so
+=@{ action: ipc_command, arg: "expo" @}= opens the overview without gowl
+knowing an overview exists.
+
+Modules also see key RELEASES, not only presses. The interface always
+carried a =pressed= flag and it has to mean something: an alt-tab
+switcher is held open by a modifier and commits when it is let go, which
+cannot be built from presses alone. Configured keybinds are still
+consulted first and still only on press, so this cannot shadow a user's
+binding.
 
 *** Desktop cube
 

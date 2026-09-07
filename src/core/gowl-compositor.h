@@ -709,6 +709,26 @@ void gowl_compositor_pretag_pid (GowlCompositor *self,
                                   gint            monitor);
 
 /**
+ * gowl_compositor_run_command:
+ * @self: a #GowlCompositor
+ * @line: a command word, optionally followed by arguments
+ *
+ * Runs a compositor command, offering it to the loaded modules first and
+ * then announcing it on the IPC socket.
+ *
+ * This is the one entry point that a keybind (`ipc_command'), the IPC
+ * socket and an embedder all share, and it exists because a module .so
+ * cannot export a function for the compositor to call: it exports a NAME.
+ * So "expo" opens the overview, "switcher next" advances the window
+ * switcher, and nothing in the core has to know either module exists.
+ *
+ * Returns: (transfer full) (nullable): whatever a module answered, or
+ *   %NULL when no module claimed the command.
+ */
+gchar *gowl_compositor_run_command (GowlCompositor *self,
+                                    const gchar    *line);
+
+/**
  * gowl_compositor_view_tags:
  * @self: a #GowlCompositor
  * @monitor: the monitor whose view to switch

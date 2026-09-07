@@ -921,6 +921,112 @@ gboolean gowl_config_get_cube_caps (GowlConfig *self);
  * default: a cube on an unrelated screen is a distraction, not feedback. */
 gboolean gowl_config_get_cube_all_monitors (GowlConfig *self);
 
+/* Drive the rotation directly with a three-finger touchpad swipe.  A
+ * claimed gesture never reaches the focused client, so this also decides
+ * whether applications see three-finger swipes at all. */
+gboolean gowl_config_get_cube_gesture (GowlConfig *self);
+
+/* --- Magnifier (modules/magnifier) ---
+ *
+ * Screen zoom: hold the modifier and scroll to magnify the whole output
+ * around the pointer. */
+
+gboolean     gowl_config_get_magnifier (GowlConfig *self);
+/* How far in it will go, 1.0 (off) to 32.0. */
+gdouble      gowl_config_get_magnifier_max (GowlConfig *self);
+/* Multiplier per wheel click, 1.01 to 4.0. */
+gdouble      gowl_config_get_magnifier_step (GowlConfig *self);
+/* Milliseconds for the zoom and pan to catch up; 0 is instant. */
+gint         gowl_config_get_magnifier_smoothing (GowlConfig *self);
+/* Keep the pointer in view by panning the magnified image with it. */
+gboolean     gowl_config_get_magnifier_follow_cursor (GowlConfig *self);
+/* Linear sampling.  FALSE shows the actual pixels, which is what
+ * somebody magnifying to inspect them wants. */
+gboolean     gowl_config_get_magnifier_smooth (GowlConfig *self);
+/* Modifier held to zoom with the wheel: "Super", "Alt", "Ctrl" or
+ * "Shift".  A scroll the magnifier claims never reaches the client, so
+ * this must be a combination applications do not use. */
+const gchar *gowl_config_get_magnifier_modifier (GowlConfig *self);
+
+/* --- Expo (modules/expo) ---
+ *
+ * All tags at once, as a grid of live thumbnails. */
+
+gboolean     gowl_config_get_expo (GowlConfig *self);
+/* Milliseconds to zoom out and back. */
+gint         gowl_config_get_expo_duration (GowlConfig *self);
+const gchar *gowl_config_get_expo_curve (GowlConfig *self);
+/* Tags shown, 1..9.  Fewer means bigger tiles. */
+gint         gowl_config_get_expo_tags (GowlConfig *self);
+/* Columns in the grid; 0 chooses a near-square arrangement. */
+gint         gowl_config_get_expo_columns (GowlConfig *self);
+/* Gap between tiles as a fraction of a tile, 0.0 to 0.4. */
+gdouble      gowl_config_get_expo_gap (GowlConfig *self);
+/* Corner radius as a fraction of a tile, 0.0 to 0.3. */
+gdouble      gowl_config_get_expo_corner (GowlConfig *self);
+/* How much dimmer an unselected tag is, 0.0 to 1.0. */
+gdouble      gowl_config_get_expo_dim (GowlConfig *self);
+/* Hide tags with no windows on them. */
+gboolean     gowl_config_get_expo_hide_empty (GowlConfig *self);
+const gchar *gowl_config_get_expo_backdrop_color (GowlConfig *self);
+
+/* --- Window switcher (modules/switcher) --- */
+
+gboolean     gowl_config_get_switcher (GowlConfig *self);
+/* Milliseconds to slide from one card to the next. */
+gint         gowl_config_get_switcher_duration (GowlConfig *self);
+const gchar *gowl_config_get_switcher_curve (GowlConfig *self);
+/* Card width as a fraction of the output, 0.2 to 1.0. */
+gdouble      gowl_config_get_switcher_scale (GowlConfig *self);
+/* How far apart the cards sit, as a fraction of a card, 0.3 to 2.0. */
+gdouble      gowl_config_get_switcher_spacing (GowlConfig *self);
+/* Degrees the off-centre cards turn away, 0 to 80.  0 is a flat strip. */
+gdouble      gowl_config_get_switcher_angle (GowlConfig *self);
+/* Reflection under the cards, 0.0 to 1.0. */
+gdouble      gowl_config_get_switcher_reflection (GowlConfig *self);
+/* Show windows from every tag rather than only the visible ones. */
+gboolean     gowl_config_get_switcher_all_tags (GowlConfig *self);
+const gchar *gowl_config_get_switcher_backdrop_color (GowlConfig *self);
+
+/* --- Blur and shadows (modules/blur) --- */
+
+/* Blur the desktop behind translucent windows. */
+gboolean     gowl_config_get_blur (GowlConfig *self);
+/* How much smaller the blur is computed, 1 to 8.  Higher is cheaper and
+ * softer. */
+gint         gowl_config_get_blur_downscale (GowlConfig *self);
+/* Box passes, 1 to 6.  More is smoother and slower. */
+gint         gowl_config_get_blur_passes (GowlConfig *self);
+/* Brightness applied to the blurred backdrop, 0.2 to 2.0. */
+gdouble      gowl_config_get_blur_brightness (GowlConfig *self);
+/* Drop shadows under windows. */
+gboolean     gowl_config_get_shadow (GowlConfig *self);
+/* Shadow softness in pixels, 0 to 128. */
+gint         gowl_config_get_shadow_radius (GowlConfig *self);
+/* Shadow opacity, 0.0 to 1.0. */
+gdouble      gowl_config_get_shadow_opacity (GowlConfig *self);
+/* How far the shadow is pushed down and right, in pixels. */
+gint         gowl_config_get_shadow_offset_x (GowlConfig *self);
+gint         gowl_config_get_shadow_offset_y (GowlConfig *self);
+const gchar *gowl_config_get_shadow_color (GowlConfig *self);
+
+/* gowl has nine tags (TAGMASK in gowl-compositor.c), and anything keyed
+ * by tag is sized by this rather than by a literal. */
+#define GOWL_CONFIG_MAX_TAGS 9
+
+/* --- Per-tag wallpaper (modules/wallpaper) ---
+ *
+ * `wallpaper' remains the one every tag uses; these override it for
+ * individual tags, so an existing config keeps working untouched. */
+
+/* (transfer none) (nullable): path configured for @tag (1-based), or
+ * %NULL to use the default wallpaper. */
+const gchar *gowl_config_get_wallpaper_for_tag (GowlConfig *self, gint tag);
+/* Whether any per-tag wallpaper is configured at all. */
+gboolean     gowl_config_has_tag_wallpapers (GowlConfig *self);
+/* Milliseconds to cross-fade between wallpapers; 0 cuts. */
+gint         gowl_config_get_wallpaper_fade (GowlConfig *self);
+
 /* --- Palette --- */
 
 GowlPalette * gowl_config_get_palette       (GowlConfig  *self);

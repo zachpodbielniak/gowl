@@ -335,6 +335,7 @@ rotations out, because the projection assumes screen-aligned axes.
 | =cube-caps=            | bool   | =true=                | Draw the top and bottom of the solid |
 | =cube-backdrop-color=  | string | ="#12141f"=           | Colour behind the solid; palette names resolve |
 | =cube-all-monitors=    | bool   | =false=               | Also turn outputs that are not the focused one |
+| =cube-gesture=         | bool   | =true=                | Drive the rotation with a three-finger swipe |
 
 *How far it turns.* The distance is the difference between the two tag
 numbers, with no wrap-around: 9 to 1 is the eight-step trip, because tags
@@ -372,10 +373,238 @@ so they go onto EVERY side and their live copies come down for the
 rotation; gowl parks them above the sheet, so left alone they would hang
 motionless in mid-air while the desktop turned underneath.
 
+*Turning it by hand.* With =cube-gesture= on, a three-finger touchpad
+swipe turns the solid directly rather than triggering a rotation: the
+desktop is exactly as far round as the fingers have pushed it, and
+letting go settles to whichever side is nearer --- past halfway it
+commits and changes tag, short of it the same rotation runs backwards to
+where it started. The drag is deliberately NOT eased. A curve applied to
+a direct manipulation makes the desktop lag behind the touchpad and then
+catch up, which reads as the machine being slow rather than as motion
+design.
+
+A gesture the cube claims never reaches the focused client, which is
+right --- a swipe that turned the desktop and also scrolled the browser
+underneath it is nobody's intent --- but it means =cube-gesture: false=
+is also how you give applications their three-finger swipes back.
+
 *Cost.* One scene render per tag in the journey, once, at the start; the
 two ends are stored at full resolution and the tags passed through at
 half, since they are only ever seen turning and blurred. After that it is
 a handful of textured quads a frame.
+
+**** Overview (expo)
+:PROPERTIES:
+:CUSTOM_ID: expo
+:END:
+
+Every tag at once, as a grid of live thumbnails, with the camera pulling
+back out of the one you are on. Opt in with =modules.expo.enabled: true=;
+CMacs loads it by default.
+
+Open it with a four-finger swipe up, or bind a key to the command:
+
+#+begin_src yaml
+keybinds:
+  "Super+grave": { action: ipc_command, arg: "expo" }
+#+end_src
+
+Inside: arrows or =hjkl= move, =1= to =9= jump straight to a tag,
+=Return= or a click picks, =Escape= leaves everything as it was. Clicking
+the gap between tiles dismisses without changing tag.
+
+| Property               | Type   | Default           | Description |
+|------------------------+--------+-------------------+-------------|
+| =expo=                 | bool   | =true=            | Master switch |
+| =expo-duration=        | int    | =340=             | Milliseconds to zoom out, and back |
+| =expo-curve=           | string | ="ease-out-expo"= | Zoom curve, from the shared curve set |
+| =expo-tags=            | int    | =9=               | Tags shown, =1= to =9=; fewer means bigger tiles |
+| =expo-columns=         | int    | =0=               | =0= picks a near-square grid |
+| =expo-gap=             | float  | =0.06=            | Spacing between tiles, as a fraction of a tile |
+| =expo-corner=          | float  | =0.035=           | Tile corner rounding, as a fraction of a tile |
+| =expo-dim=             | float  | =0.45=            | How much dimmer an unselected tag is |
+| =expo-hide-empty=      | bool   | =false=           | Drop tags with no windows from the grid |
+| =expo-backdrop-color=  | string | ="#12141f"=       | Behind the grid; palette names resolve |
+
+*The grid moves as one object.* Opening is a single transform applied to
+every tile rather than nine tiles animating separately, so it reads as
+the camera pulling back from one desktop instead of as pictures flying
+into formation. At either end that transform is EXACT: the tile you came
+from is precisely the screen, so the overview opens out of the live
+desktop and closes back into the tag you picked with no cut.
+
+*Every tile keeps the output's shape*, because every tile is a picture of
+that output. The grid is therefore sized to whichever of width or height
+runs out first and centred in the other, and a short last row is centred
+under the rows above it.
+
+*The tag being viewed is always in the grid*, even with =expo-hide-empty=
+on and nothing on it --- the overview has to open out of somewhere, and
+that somewhere is where you are.
+
+**** Window switcher
+:PROPERTIES:
+:CUSTOM_ID: switcher
+:END:
+
+Alt-tab as a strip of live window previews, receding and turning away
+from the middle. Opt in with =modules.switcher.enabled: true=; CMacs
+loads it by default.
+
+Hold =Super= or =Alt= and tap =Tab=; let go to commit. That fallback
+binding only applies when your own config has not claimed the key ---
+gowl offers a key to modules after its own keybind table has declined
+it. To bind it explicitly, or to drive it from elsewhere:
+
+#+begin_src yaml
+keybinds:
+  "Super+Tab":       { action: ipc_command, arg: "switcher-next" }
+  "Super+Shift+Tab": { action: ipc_command, arg: "switcher-prev" }
+#+end_src
+
+| Property                   | Type   | Default           | Description |
+|----------------------------+--------+-------------------+-------------|
+| =switcher=                 | bool   | =true=            | Master switch |
+| =switcher-duration=        | int    | =220=             | Milliseconds to slide from one card to the next |
+| =switcher-curve=           | string | ="ease-out-expo"= | Reserved for the slide; the strip currently eases exponentially |
+| =switcher-scale=           | float  | =0.52=            | Card width as a fraction of the output |
+| =switcher-spacing=         | float  | =0.62=            | Distance between cards, as a fraction of a card |
+| =switcher-angle=           | float  | =52=              | Degrees the off-centre cards turn away; =0= is a flat strip |
+| =switcher-reflection=      | float  | =0.28=            | Reflection under the cards |
+| =switcher-all-tags=        | bool   | =false=           | Also list windows on other tags |
+| =switcher-backdrop-color=  | string | ="#0e1018"=       | Behind the strip |
+
+*The order is the focus stack*, most recently focused first, and it opens
+on the SECOND card. That is the entire reason alt-tab is worth having: one
+tap lands on the window you were in before this one.
+
+*Cards are pictures of windows, not of the desktop.* Each is captured
+with everything else hidden --- the wallpaper included --- so three
+terminals with the same icon are told apart by what is in them.
+
+*Commands.* =switcher=, =switcher-next=, =switcher-prev=,
+=switcher-close= (add =cancel= to leave focus alone),
+=switcher-select N=, and =switcher-list=, which returns one
+tab-separated =index/app-id/title= line per card. The last two are what
+let an external picker drive the strip: CMacs uses them to make an
+ordinary =completing-read= with the compositor's 3D preview underneath
+it.
+
+**** Magnifier
+:PROPERTIES:
+:CUSTOM_ID: magnifier
+:END:
+
+Hold the modifier and scroll to magnify the whole output around the
+pointer. Opt in with =modules.magnifier.enabled: true=; CMacs loads it by
+default. =Super+plus=, =Super+minus= and =Super+0= work as fallbacks when
+your config has not bound them.
+
+| Property                    | Type   | Default   | Description |
+|-----------------------------+--------+-----------+-------------|
+| =magnifier=                 | bool   | =true=    | Master switch |
+| =magnifier-max=             | float  | =8.0=     | How far in it will go, =1.0= to =32.0= |
+| =magnifier-step=            | float  | =1.25=    | Multiplier per wheel click |
+| =magnifier-smoothing=       | int    | =120=     | Milliseconds for the zoom and pan to catch up; =0= is instant |
+| =magnifier-follow-cursor=   | bool   | =true=    | Pan to keep the pointer in view |
+| =magnifier-smooth=          | bool   | =true=    | =false= shows the actual pixels, unfiltered |
+| =magnifier-modifier=        | string | ="Super"= | =Super=, =Alt=, =Ctrl= or =Shift= |
+
+*A scroll the magnifier claims never reaches the client*, so
+=magnifier-modifier= has to name a combination applications do not use.
+An unrecognised name falls back to =Super= with a warning rather than to
+"no modifier", which would make the mouse wheel stop working everywhere.
+
+*It zooms towards the pointer*, not the middle of the screen: anchoring
+on the centre sends whatever you are pointing at sliding off the edge as
+you zoom in.
+
+*It is the only effect that captures every frame*, because the thing it
+is magnifying is live. At =1.0= it puts everything away --- the sheet,
+the texture and the per-frame capture --- so an unzoomed session costs
+nothing. It also sits above the bar, since a magnifier that magnified
+everything except the panel would be useless to somebody who needs it to
+read the panel.
+
+**** Frosted glass and shadows
+:PROPERTIES:
+:CUSTOM_ID: blur
+:END:
+
+Blurred backdrops behind translucent windows, and soft drop shadows under
+all of them. Opt in with =modules.blur.enabled: true=; CMacs loads it by
+default. Windows become translucent through the =alpha= module or a
+window rule; this module supplies what shows through them.
+
+| Property            | Type   | Default     | Description |
+|---------------------+--------+-------------+-------------|
+| =blur=              | bool   | =true=      | Blur behind translucent windows |
+| =blur-downscale=    | int    | =4=         | How much smaller the blur is computed, =1= to =8= |
+| =blur-passes=       | int    | =3=         | Box passes, =1= to =6= |
+| =blur-brightness=   | float  | =0.9=       | Applied to the blurred backdrop |
+| =shadow=            | bool   | =true=      | Drop shadows |
+| =shadow-radius=     | int    | =28=        | Softness in pixels; =0= disables shadows |
+| =shadow-opacity=    | float  | =0.42=      | Peak opacity |
+| =shadow-offset-x=   | int    | =0=         | Horizontal offset |
+| =shadow-offset-y=   | int    | =10=        | Vertical offset |
+| =shadow-color=      | string | ="#000000"= | Palette names resolve |
+
+*What the blur actually blurs.* The WALLPAPER, computed once and cropped
+per window. It does not blur other windows. Doing that honestly would
+cost a full scene render per translucent window per frame --- three or
+four extra renders at sixty hertz, for a look --- where this costs one
+capture and one blur for as long as the wallpaper stays put. A
+translucent terminal over the desktop is indistinguishable either way; a
+translucent window over ANOTHER window shows blurred wallpaper rather
+than a blurred copy of the window below. That is the trade, stated
+plainly.
+
+The blurred copy is rebuilt when the tag changes, so it follows
+[[#wallpaper-tags][per-tag wallpapers]].
+
+*Shadows are computed, not drawn and blurred.* A blurred rectangle has a
+closed form, so a shadow costs one CPU pass when a window is resized and
+nothing per frame --- a window being dragged changes position constantly
+and size never, and the shadow is not redrawn for any of it.
+
+Neither decoration claims any event: they follow the window rather than
+placing it, so loading this module changes nothing about how windows
+move.
+
+**** Per-tag wallpaper
+:PROPERTIES:
+:CUSTOM_ID: wallpaper-tags
+:END:
+
+=wallpaper= keeps its meaning: the picture every tag uses. =wallpaper-tags=
+overrides it for individual tags, and a tag with no entry keeps the
+default --- so this is purely additive to an existing config.
+
+#+begin_src yaml
+wallpaper: "~/Pictures/default.jpg"
+wallpaper-fade: 320
+wallpaper-tags:
+  1: "~/Pictures/code.jpg"
+  4: "~/Pictures/mail.png"
+#+end_src
+
+| Property           | Type | Default | Description |
+|--------------------+------+---------+-------------|
+| =wallpaper-tags=   | map  | empty   | Tag number (1-9) to image path |
+| =wallpaper-fade=   | int  | =320=   | Milliseconds to cross-fade; =0= cuts |
+
+Keys are the tag numbers shown in the bar, so 1-based. A key outside 1-9
+is a typo and is reported and skipped rather than landing on tag 1.
+
+A combined tag view uses its LOWEST tag to choose, the same rule the cube
+uses to choose a face: adding a tag to a view does not change the
+wallpaper, and replacing one does.
+
+The cross-fade stacks the incoming picture above the outgoing one and
+fades it up, rather than swapping a buffer --- a swap is a cut, and the
+setting exists precisely so that it is not one. Every wallpaper the
+config mentions is decoded once and kept, so switching back to a tag does
+not re-read its file.
 
 **** tags
 :PROPERTIES:

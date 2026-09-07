@@ -67,6 +67,34 @@ static const GowlBuiltinModule builtin_modules[] = {
 		" *   - cube: rotate the desktop on a tag switch\n"
 	},
 	{
+		"expo",
+		"Shows every tag at once as a grid of live thumbnails",
+		"  expo:\n"
+		"    enabled: true\n",
+		" *   - expo: all tags at once, as a grid\n"
+	},
+	{
+		"switcher",
+		"Alt-tab as a 3D strip of live window previews",
+		"  switcher:\n"
+		"    enabled: true\n",
+		" *   - switcher: alt-tab with live previews\n"
+	},
+	{
+		"magnifier",
+		"Zooms the whole output around the pointer",
+		"  magnifier:\n"
+		"    enabled: true\n",
+		" *   - magnifier: screen zoom on modifier+wheel\n"
+	},
+	{
+		"blur",
+		"Blurs the desktop behind translucent windows and adds shadows",
+		"  blur:\n"
+		"    enabled: true\n",
+		" *   - blur: frosted glass and drop shadows\n"
+	},
+	{
 		"autostart",
 		"Spawn configured commands on compositor startup",
 		"  autostart:\n"

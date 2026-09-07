@@ -17,15 +17,14 @@
  */
 
 /*
- * gowl-cube-gl.h -- the drawing half of the cube.
+ * gowl-cube-gl.h -- the shape of the solid and where the camera stands.
  *
- * gowl itself has no renderer and must not gain one (tests/test-no-libregnum.sh
- * enforces that).  This file does not add one either: it borrows the EGL
- * context that wlroots' own GLES2 renderer already owns, draws into a
- * wlr_buffer wlroots allocated, and hands it back.  Nothing here outlives
- * the module, and with any other renderer selected (Vulkan, pixman) the
- * module reports itself unsupported and gets out of the way instead of
- * dragging a second GL stack into the compositor.
+ * All the GL plumbing -- context, shaders, textures, passes -- lives in
+ * the core effect layer (src/fx/gowl-fx.h), shared with expo, switcher,
+ * magnifier and blur.  What is left here is only the part that is about
+ * a prism: how wide a side is for a given face count, how far back the
+ * camera has to stand for the picture to be steady through a corner, and
+ * how a side is lit as it turns away.
  */
 
 #ifndef GOWL_CUBE_GL_H
@@ -33,27 +32,15 @@
 
 #include <glib.h>
 
+#include "fx/gowl-fx.h"
+
 G_BEGIN_DECLS
 
-struct wlr_renderer;
 struct wlr_buffer;
-struct wlr_texture;
 
-typedef struct _GowlCubeGl GowlCubeGl;
-
-/**
- * GowlCubeFace:
- * @tex: the stored desktop for this slot, or 0 for a blank side
- * @width: pixel width of @tex
- * @height: pixel height of @tex
- *
- * One captured desktop, already owned by the GL layer.
- */
-typedef struct {
-	guint tex;
-	gint  width;
-	gint  height;
-} GowlCubeFace;
+/* More than a dozen sides and they are too narrow to read on the way
+ * past; fewer than three is not a solid. */
+#define GOWL_CUBE_GL_MAX_FACES 12
 
 /**
  * GowlCubeFrame:
@@ -72,12 +59,12 @@ typedef struct {
  * @backdrop: linear RGB behind the solid
  * @first_slot: lowest slot to consider drawing
  * @last_slot: highest slot to consider drawing
- * @slot: the desktop for each slot in [@first_slot, @last_slot]
+ * @slot: the stored desktop for each slot in [@first_slot, @last_slot];
+ *   an entry with a zero texture is drawn as a blank side
  *
- * Everything one frame of the rotation needs.  The GL layer makes no
+ * Everything one frame of the rotation needs.  The renderer makes no
  * decisions of its own: the planner decides what turns and how far, the
- * module decides what a slot contains, and this struct is the contract
- * between them.
+ * module decides what a slot contains, and this is the contract.
  */
 typedef struct {
 	gint     faces;
@@ -95,93 +82,23 @@ typedef struct {
 	gfloat   backdrop[3];
 	gint     first_slot;
 	gint     last_slot;
-	const GowlCubeFace *slot;   /* indexed [0 .. last_slot - first_slot] */
+	const GowlFxTexture *slot;   /* indexed [0 .. last_slot - first_slot] */
 } GowlCubeFrame;
 
 /**
- * gowl_cube_gl_supported:
- * @renderer: the compositor's renderer
- *
- * Returns: %TRUE when @renderer is the GLES2 one, which is the only
- *   renderer whose context this can borrow.
- */
-gboolean gowl_cube_gl_supported (struct wlr_renderer *renderer);
-
-/**
- * gowl_cube_gl_new:
- * @renderer: the compositor's renderer, borrowed
- *
- * Compiles the shaders and takes the scratch objects.  Returns %NULL when
- * the renderer is not GLES2 or a shader fails to build, which the caller
- * must treat as "no cube", not as an error.
- *
- * Returns: (transfer full) (nullable): a new #GowlCubeGl
- */
-GowlCubeGl *gowl_cube_gl_new (struct wlr_renderer *renderer);
-
-/**
- * gowl_cube_gl_free:
- * @self: (transfer full) (nullable): the renderer
- *
- * Must be called while the EGL context is still alive, so before the
- * compositor tears its renderer down --- hence the module's `finish' hook.
- */
-void gowl_cube_gl_free (GowlCubeGl *self);
-
-/**
- * gowl_cube_gl_store_face:
- * @self: the renderer
- * @face: (inout): the slot to fill; a non-zero @face->tex is reused
- * @source: a texture of the whole output, as captured from the scene
- * @width: width to store at
- * @height: height to store at
- *
- * Copies a captured desktop into a texture the cube owns.
- *
- * The copy is not busywork.  The captured buffer belongs to the output's
- * swapchain and goes back the moment the capture finishes, and a
- * dma-buf import may arrive as an external-OES texture that the cube's
- * shader cannot sample.  Copying settles both, and because it goes
- * through the same coordinate convention the final draw uses, any
- * disagreement about which end of a buffer is the top cancels out
- * instead of showing up as an upside-down desktop.
- *
- * @width and @height may be smaller than the source: intermediate
- * desktops are only ever seen mid-spin and blurred, so they are stored
- * at half size, which is what keeps an eight-step rotation on a 4K
- * screen from costing a third of a gigabyte.
- *
- * Returns: %TRUE on success.
- */
-gboolean gowl_cube_gl_store_face (GowlCubeGl         *self,
-                                  GowlCubeFace       *face,
-                                  struct wlr_texture *source,
-                                  gint                width,
-                                  gint                height);
-
-/**
- * gowl_cube_gl_drop_face:
- * @self: the renderer
- * @face: (inout): the slot to release
- *
- * Frees a stored desktop.  Safe on an empty slot.
- */
-void gowl_cube_gl_drop_face (GowlCubeGl *self, GowlCubeFace *face);
-
-/**
- * gowl_cube_gl_render:
- * @self: the renderer
+ * gowl_cube_draw:
+ * @gl: the effect layer's GL context
  * @dst: the buffer to draw into, sized to the output
  * @frame: what to draw
  *
- * Draws one frame of the rotation into @dst.
+ * Draws one frame of the rotation.
  *
  * Returns: %TRUE on success; on failure @dst is left untouched and the
  *   caller should abandon the rotation rather than show a torn frame.
  */
-gboolean gowl_cube_gl_render (GowlCubeGl          *self,
-                              struct wlr_buffer   *dst,
-                              const GowlCubeFrame *frame);
+gboolean gowl_cube_draw (GowlFxGl            *gl,
+                         struct wlr_buffer   *dst,
+                         const GowlCubeFrame *frame);
 
 G_END_DECLS
 

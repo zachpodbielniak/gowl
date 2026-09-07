@@ -181,12 +181,45 @@ GPtrArray          *gowl_module_manager_get_layout_providers (
 gpointer gowl_module_manager_get_scene_effect(GowlModuleManager *self);
 
 /* Returns the next active scene-effect provider after @module in priority
- * order, borrowed, or NULL.  A provider that only owns presentation some
- * of the time (the `cube' module, during a tag rotation) uses this to hand
- * every other call down to the provider it outranks, so "one owner" stays
- * true per event without costing the lower provider its whole job. */
+ * order, borrowed, or NULL.  Rarely needed now that gowl_effects_* walks
+ * the whole set itself; kept for a provider that wants to ask what is
+ * below it without receiving the call. */
 gpointer gowl_module_manager_get_scene_effect_after(GowlModuleManager *self,
                                                     gpointer           module);
+
+/**
+ * gowl_module_manager_get_scene_effects:
+ * @self: a #GowlModuleManager
+ *
+ * Every ACTIVE scene-effect provider, in priority order.
+ *
+ * This is what `gowl-effects.c' dispatches over.  Ownership of a given
+ * event is decided per event --- geometry and input stop at the first
+ * provider that claims them, while per-frame and teardown calls reach all
+ * of them --- rather than by one module winning the whole interface.  Six
+ * effect modules can then be loaded at once without any of them having to
+ * know the others exist.
+ *
+ * The array is rebuilt on each call and is only valid until the module
+ * set changes.
+ *
+ * Returns: (transfer container) (element-type GowlSceneEffect): the
+ *   providers; free with g_ptr_array_unref().
+ */
+GPtrArray *gowl_module_manager_get_scene_effects(GowlModuleManager *self);
+
+gchar              *gowl_module_manager_dispatch_command  (GowlModuleManager *self,
+                                                           const gchar       *command,
+                                                           const gchar       *args);
+
+gboolean            gowl_module_manager_dispatch_axis     (GowlModuleManager *self,
+                                                           guint              axis,
+                                                           gdouble            delta,
+                                                           gint               discrete,
+                                                           guint              modifiers);
+
+/* Every active gesture handler, in priority order; free the container. */
+GPtrArray *gowl_module_manager_gesture_handlers(GowlModuleManager *self);
 
 G_END_DECLS
 

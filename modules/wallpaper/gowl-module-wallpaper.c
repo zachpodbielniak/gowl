@@ -55,8 +55,11 @@
 
 #include "gowl-enums.h"
 #include "module/gowl-module.h"
+#include "interfaces/gowl-scene-effect.h"
 #include "interfaces/gowl-startup-handler.h"
 #include "interfaces/gowl-wallpaper-provider.h"
+#include "config/gowl-config.h"
+#include "core/gowl-core-private.h"
 #include "core/gowl-compositor.h"
 #include "core/gowl-monitor.h"
 #include "util/gowl-wallpaper-scale.h"
@@ -132,6 +135,29 @@ typedef struct {
 	struct wlr_scene_buffer *scene_buf;
 	gint width;
 	gint height;
+
+	/*
+	 * Per-tag wallpaper.
+	 *
+	 * `wallpaper' in the config stays what it always was: the picture
+	 * every tag uses.  A tag with an entry in `wallpaper-tags' overrides
+	 * it, and one without simply keeps the default -- so an existing
+	 * config is untouched and a user can override one tag without
+	 * declaring the other eight.
+	 */
+	gchar   *shown_path;      /* what scene_buf is currently showing */
+	guint32  shown_tags;      /* the tag set it was chosen for */
+
+	/*
+	 * A cross-fade in flight.  The incoming picture is a second node
+	 * stacked above the outgoing one and faded up, rather than one node
+	 * whose buffer is swapped: a swap is a cut, and the whole point of
+	 * the setting is that it should not be.
+	 */
+	struct wlr_scene_buffer *fading_buf;
+	gchar   *fading_path;
+	gint64   fade_start_us;
+	gint64   fade_dur_us;
 } WallpaperState;
 
 /* ----------------------------------------------------------------
@@ -153,18 +179,30 @@ struct _GowlModuleWallpaper {
 	/* Decode cache.  The image is decoded once and reused on every
 	 * resize, so a geometry change re-scales it in memory (on the CPU,
 	 * via scale_pixbuf()) but never re-reads the file. */
-	GdkPixbuf *source_pixbuf;
-	gchar     *loaded_path;  /* path source_pixbuf was loaded from */
+	/* Every wallpaper the config mentions, decoded once.  With per-tag
+	 * wallpapers the single-entry cache above would thrash on every tag
+	 * switch, re-reading a file from disk to show a picture it decoded a
+	 * moment ago. */
+	GHashTable *decoded;     /* path -> GdkPixbuf* */
 };
 
 /* Forward declarations for interface init functions */
 static void wallpaper_startup_init  (GowlStartupHandlerInterface *iface);
 static void wallpaper_provider_init (GowlWallpaperProviderInterface *iface);
+static void wallpaper_effect_init   (GowlSceneEffectInterface *iface);
 
+/*
+ * The scene-effect interface is implemented only for its per-frame tick,
+ * which is what a cross-fade needs and what a wallpaper provider has no
+ * other way to get.  Nothing here claims an event, so window animations
+ * are entirely unaffected by this module being loaded.
+ */
 G_DEFINE_TYPE_WITH_CODE(GowlModuleWallpaper, gowl_module_wallpaper,
 	GOWL_TYPE_MODULE,
 	G_IMPLEMENT_INTERFACE(GOWL_TYPE_STARTUP_HANDLER,
 		wallpaper_startup_init)
+	G_IMPLEMENT_INTERFACE(GOWL_TYPE_SCENE_EFFECT,
+		wallpaper_effect_init)
 	G_IMPLEMENT_INTERFACE(GOWL_TYPE_WALLPAPER_PROVIDER,
 		wallpaper_provider_init))
 
@@ -424,42 +462,157 @@ expand_path(const gchar *path)
  * Decode cache
  * ---------------------------------------------------------------- */
 
-/* Decode self->path once and cache the source pixbuf.  Every scaling
- * mode is rendered on the CPU from this cached pixbuf (see
- * scale_pixbuf()), so a resize re-scales in memory but never re-reads
- * the file.  Returns FALSE when there is no loadable image. */
-static gboolean
-wallpaper_ensure_loaded(GowlModuleWallpaper *self)
+/*
+ * Decode a wallpaper once and keep it.
+ *
+ * Every scaling mode is rendered on the CPU from the cached pixbuf (see
+ * scale_pixbuf()), so a resize re-scales in memory but never re-reads the
+ * file -- and with per-tag wallpapers, neither does switching back to a
+ * tag whose picture was decoded a minute ago.
+ *
+ * Returns: (transfer none) (nullable): the decoded image.
+ */
+static void
+wallpaper_unref_maybe(gpointer pixbuf)
+{
+	if (pixbuf != NULL)
+		g_object_unref(pixbuf);
+}
+
+static GdkPixbuf *
+wallpaper_decode(GowlModuleWallpaper *self, const gchar *path)
 {
 	g_autoptr(GError) err = NULL;
 	GdkPixbuf *pixbuf;
 
-	if (self->path == NULL || self->path[0] == '\0')
-		return FALSE;
+	if (path == NULL || path[0] == '\0')
+		return NULL;
 
-	if (self->source_pixbuf != NULL &&
-	    g_strcmp0(self->loaded_path, self->path) == 0)
-		return TRUE;   /* already cached for this path */
+	pixbuf = g_hash_table_lookup(self->decoded, path);
+	if (pixbuf != NULL)
+		return pixbuf;
 
-	pixbuf = gdk_pixbuf_new_from_file(self->path, &err);
+	pixbuf = gdk_pixbuf_new_from_file(path, &err);
 	if (pixbuf == NULL) {
-		g_warning("wallpaper: failed to load '%s': %s",
-		          self->path, err->message);
-		return FALSE;
+		/* Cache the failure as a NULL so a broken path in the config is
+		 * not re-opened on every tag switch for the rest of the
+		 * session. */
+		g_warning("wallpaper: failed to load '%s': %s", path, err->message);
+		g_hash_table_insert(self->decoded, g_strdup(path), NULL);
+		return NULL;
 	}
 
-	if (self->source_pixbuf != NULL)
-		g_object_unref(self->source_pixbuf);
+	g_hash_table_insert(self->decoded, g_strdup(path), pixbuf);
+	return pixbuf;
+}
 
-	self->source_pixbuf = pixbuf;
-	g_free(self->loaded_path);
-	self->loaded_path   = g_strdup(self->path);
-	return TRUE;
+/*
+ * The wallpaper a monitor should be showing right now.
+ *
+ * The lowest set tag decides, the same rule the cube uses to pick a face:
+ * a combined tag view has no single honest answer, and taking the lowest
+ * means adding a tag to a view does not change the wallpaper while
+ * replacing one does.
+ *
+ * Returns: (transfer none) (nullable): a path, or %NULL for none at all.
+ */
+static const gchar *
+wallpaper_path_for(GowlModuleWallpaper *self, GowlCompositor *comp,
+                    GowlMonitor *monitor)
+{
+	guint32 tags;
+	gint    i;
+
+	if (comp == NULL || comp->config == NULL || monitor == NULL)
+		return self->path;
+
+	tags = monitor->tagset[monitor->seltags];
+	for (i = 0; i < GOWL_CONFIG_MAX_TAGS; i++) {
+		if ((tags & (1u << i)) != 0) {
+			const gchar *override =
+				gowl_config_get_wallpaper_for_tag(comp->config, i + 1);
+
+			if (override != NULL && override[0] != '\0')
+				return override;
+			break;
+		}
+	}
+	return self->path;
 }
 
 /* ----------------------------------------------------------------
  * GowlWallpaperProvider implementation
  * ---------------------------------------------------------------- */
+
+/*
+ * Build one monitor-sized scene node showing @path.
+ *
+ * Scaling happens on the CPU into an exact monitor-sized buffer -- one
+ * proven path for every mode (fill/fit/center/stretch/tile).  The GPU is
+ * NOT handed the full-resolution source plus a source box: a wallpaper
+ * larger than the driver's maximum texture size tiled into a grid on some
+ * hardware, which is the sort of bug that only appears on somebody else's
+ * machine.
+ *
+ * Returns: (transfer none) (nullable): the new node.
+ */
+static struct wlr_scene_buffer *
+wallpaper_make_node(GowlModuleWallpaper *self, struct wlr_scene_tree *bg_layer,
+                     const gchar *path, gint x, gint y, gint width, gint height)
+{
+	GdkPixbuf *source = wallpaper_decode(self, path);
+	GdkPixbuf *scaled;
+	GowlPixbufBuffer *wlr_buf;
+	struct wlr_scene_buffer *node;
+	guchar *dst_pixels;
+	gint dst_stride;
+	gsize dst_size;
+
+	if (source == NULL || bg_layer == NULL || width <= 0 || height <= 0)
+		return NULL;
+
+	scaled = scale_pixbuf(source, self->mode, width, height);
+	if (scaled == NULL)
+		return NULL;
+
+	dst_stride = width * 4;
+	dst_size   = (gsize)height * dst_stride;
+	dst_pixels = (guchar *)g_malloc(dst_size);
+	convert_pixbuf_to_argb8888(scaled, dst_pixels, width, height, dst_stride);
+	g_object_unref(scaled);
+
+	wlr_buf = (GowlPixbufBuffer *)g_new0(GowlPixbufBuffer, 1);
+	wlr_buf->pixels = dst_pixels;
+	wlr_buf->size   = dst_size;
+	wlr_buf->stride = dst_stride;
+	wlr_buffer_init(&wlr_buf->base, &pixbuf_buffer_impl, width, height);
+
+	node = wlr_scene_buffer_create(bg_layer, &wlr_buf->base);
+	/* The scene now holds the only reference to this buffer. */
+	wlr_buffer_drop(&wlr_buf->base);
+	if (node != NULL)
+		wlr_scene_node_set_position(&node->node, x, y);
+	return node;
+}
+
+/* Finish a cross-fade: the incoming picture becomes the wallpaper and the
+ * outgoing one goes. */
+static void
+wallpaper_settle(WallpaperState *state)
+{
+	if (state->fading_buf == NULL)
+		return;
+
+	if (state->scene_buf != NULL)
+		wlr_scene_node_destroy(&state->scene_buf->node);
+	state->scene_buf = state->fading_buf;
+	wlr_scene_buffer_set_opacity(state->scene_buf, 1.0f);
+	state->fading_buf = NULL;
+
+	g_free(state->shown_path);
+	state->shown_path  = state->fading_path;
+	state->fading_path = NULL;
+}
 
 static void
 wallpaper_on_output(
@@ -473,11 +626,14 @@ wallpaper_on_output(
 	struct wlr_scene_tree *bg_layer;
 	WallpaperState *state;
 	const gchar *mon_name;
+	const gchar *path;
 	gint mon_x, mon_y, mon_w, mon_h;
 
 	self = GOWL_MODULE_WALLPAPER(provider);
 	compositor = GOWL_COMPOSITOR(compositor_ptr);
 	monitor = GOWL_MONITOR(monitor_ptr);
+
+	self->compositor = compositor;
 
 	mon_name = gowl_monitor_get_name(monitor);
 	gowl_monitor_get_geometry(monitor, &mon_x, &mon_y, &mon_w, &mon_h);
@@ -491,86 +647,169 @@ wallpaper_on_output(
 	if (bg_layer == NULL)
 		return;
 
-	/* If this monitor already has a wallpaper at this exact size the
-	 * scene buffer is still correct -- nothing to do.  This is the
-	 * common case during the run; only an actual geometry change
-	 * (e.g. dragging a nested output) falls through. */
+	path = wallpaper_path_for(self, compositor, monitor);
+
 	state = (WallpaperState *)g_hash_table_lookup(self->per_monitor,
 	                                              mon_name);
-	if (state != NULL && state->width == mon_w && state->height == mon_h)
+	/* Already correct at this size and showing this picture: the common
+	 * case during the run, and it must stay free. */
+	if (state != NULL && state->width == mon_w && state->height == mon_h
+	    && g_strcmp0(state->shown_path, path) == 0
+	    && state->fading_buf == NULL)
 		return;
 
 	/* Geometry changed (or first time): tear down the old node. */
 	if (state != NULL) {
+		if (state->fading_buf != NULL)
+			wlr_scene_node_destroy(&state->fading_buf->node);
 		if (state->scene_buf != NULL)
 			wlr_scene_node_destroy(&state->scene_buf->node);
+		g_free(state->shown_path);
+		g_free(state->fading_path);
 		g_hash_table_remove(self->per_monitor, mon_name);
-		g_free(state);
 		state = NULL;
 	}
 
-	/* If no path configured, leave root_bg color showing */
-	if (self->path == NULL || self->path[0] == '\0')
-		return;
-
-	/* Decode the image once and cache it; resizes reuse the cache so
-	 * the file is never re-read or re-scaled on the CPU mid-drag. */
-	if (!wallpaper_ensure_loaded(self))
+	/* If no path applies, leave root_bg color showing */
+	if (path == NULL || path[0] == '\0')
 		return;
 
 	state = g_new0(WallpaperState, 1);
 	state->width  = mon_w;
 	state->height = mon_h;
-
-	{
-		/* Scale (and crop/letterbox) on the CPU from the cached source
-		 * pixbuf into an exact mon_w x mon_h buffer, then give the scene
-		 * a single monitor-sized buffer.  One proven path for every mode
-		 * -- fill/fit/center/stretch/tile (see scale_pixbuf()).  We do
-		 * NOT hand the GPU the full-resolution source plus a source-box:
-		 * a wallpaper larger than the GPU's max texture size tiled into a
-		 * grid on some drivers.  source_pixbuf is cached, so a resize
-		 * re-scales in memory but never re-reads the file. */
-		GdkPixbuf *scaled;
-		GowlPixbufBuffer *wlr_buf;
-		guchar *dst_pixels;
-		gint dst_stride;
-		gsize dst_size;
-
-		scaled = scale_pixbuf(self->source_pixbuf, self->mode,
-		                      mon_w, mon_h);
-		if (scaled == NULL) {
-			g_free(state);
-			return;
-		}
-
-		dst_stride = mon_w * 4;
-		dst_size   = (gsize)mon_h * dst_stride;
-		dst_pixels = (guchar *)g_malloc(dst_size);
-		convert_pixbuf_to_argb8888(scaled, dst_pixels, mon_w, mon_h,
-		                           dst_stride);
-		g_object_unref(scaled);
-
-		wlr_buf = (GowlPixbufBuffer *)g_new0(GowlPixbufBuffer, 1);
-		wlr_buf->pixels = dst_pixels;
-		wlr_buf->size   = dst_size;
-		wlr_buf->stride = dst_stride;
-		wlr_buffer_init(&wlr_buf->base, &pixbuf_buffer_impl,
-		                mon_w, mon_h);
-
-		state->scene_buf = wlr_scene_buffer_create(bg_layer,
-		                                           &wlr_buf->base);
-		wlr_scene_node_set_position(&state->scene_buf->node,
-		                            mon_x, mon_y);
-		/* The scene now holds the only ref to this per-monitor buffer. */
-		wlr_buffer_drop(&wlr_buf->base);
+	state->scene_buf = wallpaper_make_node(self, bg_layer, path,
+	                                       mon_x, mon_y, mon_w, mon_h);
+	if (state->scene_buf == NULL) {
+		g_free(state);
+		return;
 	}
+	state->shown_path = g_strdup(path);
+	state->shown_tags = monitor->tagset[monitor->seltags];
 
 	g_hash_table_insert(self->per_monitor,
 	                    g_strdup(mon_name), (gpointer)state);
 
-	g_debug("wallpaper: set for monitor %s (%dx%d+%d+%d, mode=%s)",
-	        mon_name, mon_w, mon_h, mon_x, mon_y, self->mode);
+	g_debug("wallpaper: set for monitor %s (%dx%d+%d+%d, mode=%s, path=%s)",
+	        mon_name, mon_w, mon_h, mon_x, mon_y, self->mode, path);
+}
+
+/*
+ * A tag change, noticed per frame.
+ *
+ * Polling rather than listening for the monitor's tag-changed signal, for
+ * the same reason the cube polls: the module has to be able to cope with
+ * an output that appeared after it loaded, and a per-monitor signal
+ * connection would miss those.  It costs one integer comparison per
+ * output per frame, and only when per-tag wallpapers are configured at
+ * all.
+ */
+static gboolean
+wallpaper_frame(GowlSceneEffect *effect, GowlCompositor *comp,
+                 GowlMonitor *monitor, gint64 now)
+{
+	GowlModuleWallpaper *self = GOWL_MODULE_WALLPAPER(effect);
+	WallpaperState *state;
+	struct wlr_scene_tree *bg_layer;
+	const gchar *mon_name;
+	const gchar *path;
+	gint mon_x, mon_y, mon_w, mon_h;
+	gint fade_ms;
+
+	if (comp == NULL || monitor == NULL || comp->config == NULL)
+		return FALSE;
+
+	self->compositor = comp;
+
+	mon_name = gowl_monitor_get_name(monitor);
+	state = mon_name != NULL
+		? (WallpaperState *)g_hash_table_lookup(self->per_monitor, mon_name)
+		: NULL;
+	if (state == NULL)
+		return FALSE;
+
+	/* Advance a fade already running. */
+	if (state->fading_buf != NULL) {
+		gdouble t = state->fade_dur_us > 0
+			? CLAMP((gdouble)(now - state->fade_start_us)
+			        / (gdouble)state->fade_dur_us, 0.0, 1.0)
+			: 1.0;
+
+		wlr_scene_buffer_set_opacity(state->fading_buf, (gfloat)t);
+		if (t >= 1.0) {
+			wallpaper_settle(state);
+			return FALSE;
+		}
+		return TRUE;   /* keep the frames coming while it fades */
+	}
+
+	if (!gowl_config_has_tag_wallpapers(comp->config))
+		return FALSE;
+
+	if (state->shown_tags == monitor->tagset[monitor->seltags])
+		return FALSE;
+	state->shown_tags = monitor->tagset[monitor->seltags];
+
+	path = wallpaper_path_for(self, comp, monitor);
+	if (path == NULL || g_strcmp0(path, state->shown_path) == 0)
+		return FALSE;
+
+	gowl_monitor_get_geometry(monitor, &mon_x, &mon_y, &mon_w, &mon_h);
+	bg_layer = gowl_compositor_get_scene_layer(comp, GOWL_SCENE_LAYER_BG);
+	if (bg_layer == NULL || mon_w <= 0 || mon_h <= 0)
+		return FALSE;
+
+	state->fading_buf = wallpaper_make_node(self, bg_layer, path,
+	                                        mon_x, mon_y, mon_w, mon_h);
+	if (state->fading_buf == NULL)
+		return FALSE;
+
+	g_free(state->fading_path);
+	state->fading_path = g_strdup(path);
+
+	/* Above the outgoing picture, so fading it up reveals it rather than
+	 * revealing whatever is under the wallpaper. */
+	wlr_scene_node_place_above(&state->fading_buf->node,
+	                           &state->scene_buf->node);
+
+	fade_ms = gowl_config_get_wallpaper_fade(comp->config);
+	if (fade_ms <= 0) {
+		wlr_scene_buffer_set_opacity(state->fading_buf, 1.0f);
+		wallpaper_settle(state);
+		return FALSE;
+	}
+
+	wlr_scene_buffer_set_opacity(state->fading_buf, 0.0f);
+	state->fade_start_us = now;
+	state->fade_dur_us   = (gint64)fade_ms * 1000;
+	return TRUE;
+}
+
+/*
+ * Wallpapers are scene nodes, not held buffers or GL objects, so there is
+ * nothing here that must go before the renderer does -- but a fade caught
+ * mid-flight by a shutdown would leave two nodes stacked, so it is
+ * settled rather than abandoned.
+ */
+static void
+wallpaper_effect_finish(GowlSceneEffect *effect, GowlCompositor *comp)
+{
+	GowlModuleWallpaper *self = GOWL_MODULE_WALLPAPER(effect);
+	GHashTableIter iter;
+	gpointer key, value;
+
+	if (self->per_monitor == NULL)
+		return;
+
+	g_hash_table_iter_init(&iter, self->per_monitor);
+	while (g_hash_table_iter_next(&iter, &key, &value))
+		wallpaper_settle((WallpaperState *)value);
+}
+
+static void
+wallpaper_effect_init(GowlSceneEffectInterface *iface)
+{
+	iface->frame  = wallpaper_frame;
+	iface->finish = wallpaper_effect_finish;
 }
 
 static void
@@ -592,12 +831,17 @@ wallpaper_on_output_destroy(
 	if (state == NULL)
 		return;
 
-	/* Destroy the scene node (releases the wlr_buffer consumer ref,
-	 * which triggers pixel data cleanup) */
+	/* Destroy the scene nodes (releases the wlr_buffer consumer ref,
+	 * which triggers pixel data cleanup).  A cross-fade caught in flight
+	 * has two of them. */
+	if (state->fading_buf != NULL)
+		wlr_scene_node_destroy(&state->fading_buf->node);
 	if (state->scene_buf != NULL)
 		wlr_scene_node_destroy(&state->scene_buf->node);
 
 	g_hash_table_remove(self->per_monitor, mon_name);
+	g_free(state->shown_path);
+	g_free(state->fading_path);
 	g_free(state);
 
 	g_debug("wallpaper: removed for monitor %s", mon_name);
@@ -726,17 +970,18 @@ gowl_module_wallpaper_finalize(GObject *object)
 			WallpaperState *state;
 
 			state = (WallpaperState *)value;
+			if (state->fading_buf != NULL)
+				wlr_scene_node_destroy(&state->fading_buf->node);
 			if (state->scene_buf != NULL)
 				wlr_scene_node_destroy(&state->scene_buf->node);
+			g_free(state->shown_path);
+			g_free(state->fading_path);
 			g_free(state);
 		}
 		g_hash_table_destroy(self->per_monitor);
 	}
 
-	/* Release the decode cache. */
-	if (self->source_pixbuf != NULL)
-		g_object_unref(self->source_pixbuf);
-	g_free(self->loaded_path);
+	g_clear_pointer(&self->decoded, g_hash_table_unref);
 
 	g_free(self->path);
 	g_free(self->mode);
@@ -771,6 +1016,12 @@ gowl_module_wallpaper_init(GowlModuleWallpaper *self)
 	self->compositor   = NULL;
 	self->per_monitor  = g_hash_table_new_full(g_str_hash, g_str_equal,
 	                                           g_free, NULL);
+	/* A path that failed to decode is cached as a NULL value so it is not
+	 * re-opened on every tag switch, and GHashTable calls the value
+	 * destructor even for those -- hence the wrapper, because
+	 * g_object_unref(NULL) is a critical warning rather than a no-op. */
+	self->decoded      = g_hash_table_new_full(g_str_hash, g_str_equal,
+	                                           g_free, wallpaper_unref_maybe);
 }
 
 /* ----------------------------------------------------------------

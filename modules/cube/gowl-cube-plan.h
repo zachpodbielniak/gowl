@@ -58,12 +58,17 @@ G_BEGIN_DECLS
  * sides are separate ideas here.
  */
 typedef struct {
-	gint    faces;
-	gint    steps;
-	gint    dir;
-	gint    tag[GOWL_CUBE_MAX_STEPS + 1];
-	gint64  start_us;
-	gint64  dur_us;
+	gint     faces;
+	gint     steps;
+	gint     dir;
+	gint     tag[GOWL_CUBE_MAX_STEPS + 1];
+	gint64   start_us;
+	gint64   dur_us;
+
+	/* Set when the journey has been abandoned and is running backwards
+	 * to where it started; see gowl_cube_plan_reverse(). */
+	gboolean rewind;
+	gdouble  rewind_from;
 } GowlCubePlan;
 
 /**
@@ -113,6 +118,42 @@ gboolean gowl_cube_plan_init (GowlCubePlan *plan,
                               gint          base_ms,
                               gint          step_ms,
                               gint64        now_us);
+
+/**
+ * gowl_cube_plan_reverse:
+ * @plan: (inout): the plan to turn around
+ * @from_progress: where the journey got to, 0.0..1.0
+ * @now_us: monotonic microseconds
+ *
+ * Abandons the journey and sends the solid back to where it started.
+ *
+ * This is what letting go of a half-finished swipe does.  It is not a
+ * second plan: the same tags, sides, direction and captures carry the
+ * rotation home, so the picture is continuous across the moment the
+ * fingers lift.  The trip back is shortened in proportion to how far it
+ * got --- a rotation abandoned after a tenth of a turn should not take
+ * as long to undo as one abandoned just short of the end --- with a
+ * floor, because an instant snap back reads as a glitch rather than as
+ * a decision.
+ */
+void gowl_cube_plan_reverse (GowlCubePlan *plan,
+                             gdouble       from_progress,
+                             gint64        now_us);
+
+/**
+ * gowl_cube_plan_finished:
+ * @plan: a plan
+ * @now_us: monotonic microseconds
+ *
+ * Whether the rotation is over and its resources can go.
+ *
+ * Not the same as progress reaching 1.0: a reversed plan finishes at 0.0,
+ * and asking about progress alone would leave a rewound rotation on
+ * screen for ever.
+ *
+ * Returns: %TRUE when the plan has run its course.
+ */
+gboolean gowl_cube_plan_finished (const GowlCubePlan *plan, gint64 now_us);
 
 /**
  * gowl_cube_plan_progress:

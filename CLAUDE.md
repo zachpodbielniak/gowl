@@ -43,9 +43,22 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   which way is up, that the flat frame fills the viewport corner to
   corner, and that a quarter turn actually changes the picture. Skips
   itself when there is no DRM render node
-- `test-cube-chain` -- The cube and animation plugins loaded together:
-  priority order, delegation to the next provider, chain termination, and
-  that the cube implements every hook the animation module does
+- `test-effects` -- How scene-effect hooks are shared out: priority
+  order, consumable hooks stopping at the first claimant, broadcast hooks
+  reaching every provider, and neither kind affecting the other. Both
+  failure modes are silent, so this is the file to read before changing
+  `src/core/gowl-effects.c`
+- `test-fx-render` -- The shared effect layer (`src/fx`) against a real
+  GLES2 renderer: quad and ortho orientation agreeing with each other,
+  the blur actually blurring, corner rounding actually rounding. Skips
+  itself without a DRM render node
+- `test-expo` -- The overview's grid: cells keeping the output's aspect,
+  the grid fitting, no overlap, the closed zoom landing EXACTLY on the
+  anchor tile (the property that makes it cut-free), hit testing and
+  keyboard stepping
+- `test-blur-shadow` -- The analytic drop shadow: falloff, rounded
+  corners, and premultiplied output (straight colour gives every shadow a
+  bright halo)
 - `test-input-recorder` -- Input recording: consent gate, bounded ring,
   motion coalescing, self-stop deadline, secret-suppression policy,
   payload shape, and the config-to-recorder wiring
@@ -53,10 +66,13 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 `make test` also runs every `tests/*.sh` **source guard** before the compiled
 tests. These assert invariants no unit test can reach:
 - `test-no-libregnum.sh` -- gowl links no rendering engine (see below)
-- `test-cube-guard.sh` -- the `cube` module still delegates every
-  scene-effect hook to the provider below it (so loading the cube does not
-  silently switch window animations off) and still takes an output with an
-  opaque sheet rather than by disabling a shared, cross-monitor scene layer
+- `test-cube-guard.sh` -- the `cube` module still claims ONLY its own
+  reveal (it sorts ahead of every other effect module, so a `client_event`
+  that started returning TRUE broadly would silently switch window
+  animations off), still leaves `get_geometry` / `surface_at` /
+  `alpha_changed` to the animation module, and still takes an output with
+  an opaque sheet rather than by disabling a shared, cross-monitor scene
+  layer
 - `test-close-guard.sh` -- `wlr_xdg_toplevel_send_close` /
   `wlr_xwayland_surface_close` have exactly one call site each (inside
   `gowl_client_close()`), `gowl_compositor_focus_client()` still consults
@@ -131,6 +147,7 @@ src/
   module/                   # Module system (GowlModule, GowlModuleManager, GowlModuleInfo)
   config/                   # Configuration (GowlConfig, GowlConfigCompiler, GowlKeybind)
   core/                     # Core compositor objects (GowlCompositor, GowlMonitor, GowlClient, etc.)
+  fx/                       # Shared visual-effect layer (GL, capture, sheet) used by the effect modules
   layout/                   # Built-in layouts (tile, monocle, float)
   ipc/                      # IPC socket handling
   util/                     # Utilities (logging)
@@ -158,12 +175,26 @@ docs/                       # Documentation (architecture, building, configurati
 - `gobject-introspection-1.0` (GIR generation, controlled by `BUILD_GIR`)
 - `libdecor-0` (window decorations for nested Wayland sessions, auto-detected)
 
+> **`src/fx/` is the only place with GL, and it OWNS none of it.** The
+> five visual-effect modules (`cube`, `expo`, `switcher`, `magnifier`,
+> `blur`) contain no GL at all: they call `gowl_fx_*`, which borrows the
+> EGL context wlroots' GLES2 renderer already owns and restores whatever
+> was current. Three invariants hold across every caller -- Y is negated
+> in the projections (a wlroots buffer's first row is the top, GL's is
+> the bottom), there is no depth buffer (colour-only framebuffer; draw
+> back to front and cull on the CPU), and a `GowlFxVis` capture is a lie
+> that must be taken back on every exit path. See *Visual effect layer*
+> in `docs/architecture.org`.
+
 > **Do not add a rendering-engine dependency.** The raw-frame sink
 > (`src/core/gowl-frame-sink.{c,h}`, see *Raw Frame Sink* in
 > `docs/architecture.org`) lets external producers (e.g. cmacs screensavers)
 > hand gowl finished ARGB8888 pixels — gowl must stay free of `libregnum` /
-> `graylib` / `raylib` / GL. `tests/test-no-libregnum.sh` (run by `make test`)
-> enforces this and will fail the build if those symbols/headers leak in.
+> `graylib` / `raylib`, and must not gain a renderer of its own.
+> `tests/test-no-libregnum.sh` (run by `make test`) enforces this and will
+> fail the build if those symbols/headers leak in. Borrowing the context
+> wlroots' GLES2 renderer already owns is a different thing and is what
+> `src/fx/` does; that boundary file itself stays free of GL includes.
 
 ## Architecture Notes
 

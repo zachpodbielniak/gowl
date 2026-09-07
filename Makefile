@@ -51,6 +51,7 @@ LIB_SRCS := \
 	src/interfaces/gowl-layout-provider.c \
 	src/interfaces/gowl-keybind-handler.c \
 	src/interfaces/gowl-mouse-handler.c \
+	src/interfaces/gowl-gesture-handler.c \
 	src/interfaces/gowl-client-decorator.c \
 	src/interfaces/gowl-client-placer.c \
 	src/interfaces/gowl-focus-policy.c \
@@ -82,6 +83,9 @@ LIB_SRCS := \
 	src/ipc/gowl-ipc.c \
 	src/util/gowl-log.c \
 	src/util/gowl-easing.c \
+	src/fx/gowl-fx-gl.c \
+	src/fx/gowl-fx-capture.c \
+	src/fx/gowl-fx-sheet.c \
 	src/util/gowl-systemd.c \
 	src/util/gowl-wallpaper-scale.c \
 	src/core/gowl-compositor.c \
@@ -159,6 +163,7 @@ LIB_HDRS := \
 	src/interfaces/gowl-wallpaper-provider.h \
 	src/interfaces/gowl-lock-handler.h \
 	src/interfaces/gowl-prefix-key-policy.h \
+	src/interfaces/gowl-gesture-handler.h \
 	src/interfaces/gowl-session-provider.h \
 	src/interfaces/gowl-embed-renderer.h \
 	src/interfaces/gowl-workspace-provider.h \
@@ -168,6 +173,7 @@ LIB_HDRS := \
 	src/ipc/gowl-ipc.h \
 	src/util/gowl-log.h \
 	src/util/gowl-easing.h \
+	src/fx/gowl-fx.h \
 	src/util/gowl-systemd.h \
 	src/core/gowl-compositor.h \
 	src/core/gowl-monitor.h \
@@ -374,11 +380,6 @@ $(OUTDIR)/modules/cube.so: $(filter-out $(OUTDIR)/modules/cube.so,$(wildcard mod
 $(OUTDIR)/test-cube-render: $(OUTDIR)/modules/cube.so
 $(OUTDIR)/test-cube-render: TEST_LDFLAGS += -L$(OUTDIR)/modules -l:cube.so -Wl,-rpath,$(abspath $(OUTDIR)/modules)
 
-# The chain test dlopens the two real plugins rather than linking them:
-# what it is checking is how the module manager orders and delegates
-# between them, which only means anything for the shipped .so files.
-$(OUTDIR)/test-cube-chain: $(OUTDIR)/modules/cube.so $(OUTDIR)/modules/animation.so
-$(OBJDIR)/tests/test-cube-chain.o: TEST_CFLAGS += -DGOWL_TEST_CUBE_MODULE='"$(abspath $(OUTDIR)/modules/cube.so)"' -DGOWL_TEST_ANIMATION_MODULE='"$(abspath $(OUTDIR)/modules/animation.so)"'
 
 $(OUTDIR)/test-animation $(OUTDIR)/test-animation-scene: $(OUTDIR)/modules/animation.so
 $(OUTDIR)/test-animation $(OUTDIR)/test-animation-scene: TEST_LDFLAGS += -L$(OUTDIR)/modules -l:animation.so -Wl,-rpath,$(abspath $(OUTDIR)/modules)

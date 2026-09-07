@@ -241,6 +241,99 @@ test_bump_is_zero_at_both_ends(void)
 	g_assert_cmpfloat(gowl_cube_plan_bump(0.1), >, 0.15);
 }
 
+/*
+ * Letting go of a half-finished swipe.
+ *
+ * The trip back is the SAME plan re-aimed, not a new one, because the
+ * picture has to be continuous across the moment the fingers lift --- the
+ * captured desktops, the direction and the sides all have to stay put.
+ */
+static void
+test_reverse_runs_the_journey_back(void)
+{
+	GowlCubePlan plan;
+	gint j;
+
+	g_assert_true(gowl_cube_plan_init(&plan, 0, 3, 4, 500, 150, 0));
+	gowl_cube_plan_reverse(&plan, 0.4, 1000000);
+
+	/* Same itinerary, same direction: only the clock changed. */
+	g_assert_cmpint(plan.steps, ==, 3);
+	g_assert_cmpint(plan.dir, ==, 1);
+	for (j = 0; j <= plan.steps; j++)
+		g_assert_cmpint(plan.tag[j], ==, j);
+
+	/* Starts from where the swipe got to and returns to nothing. */
+	g_assert_cmpfloat(fabs(gowl_cube_plan_progress(&plan, 1000000) - 0.4),
+	                  <, 1e-9);
+	g_assert_cmpfloat(gowl_cube_plan_progress(&plan, 9000000), ==, 0.0);
+	/* And monotonically, with no bounce past zero. */
+	g_assert_cmpfloat(gowl_cube_plan_progress(&plan, 1000000 + plan.dur_us / 2),
+	                  <, 0.4);
+	g_assert_cmpfloat(gowl_cube_plan_progress(&plan, 1000000 + plan.dur_us / 2),
+	                  >, 0.0);
+}
+
+/*
+ * A rotation abandoned early should not take as long to undo as one
+ * abandoned just short of the end --- but nor should it snap, which reads
+ * as a glitch rather than as a decision.
+ */
+static void
+test_reverse_duration_scales_with_a_floor(void)
+{
+	GowlCubePlan early, late;
+
+	g_assert_true(gowl_cube_plan_init(&early, 0, 1, 4, 500, 150, 0));
+	g_assert_true(gowl_cube_plan_init(&late, 0, 1, 4, 500, 150, 0));
+
+	gowl_cube_plan_reverse(&early, 0.05, 0);
+	gowl_cube_plan_reverse(&late, 0.9, 0);
+
+	g_assert_cmpint((gint)early.dur_us, <, (gint)late.dur_us);
+	/* The floor: never an instant snap. */
+	g_assert_cmpint((gint)early.dur_us, >=, 90 * 1000);
+	/* And never longer than the trip out. */
+	g_assert_cmpint((gint)late.dur_us, <=, 500 * 1000);
+}
+
+/*
+ * "Finished" cannot be "progress reached 1.0", because a reversed plan
+ * finishes at 0.0.  Getting this wrong leaves a rewound rotation frozen
+ * on the user's screen for ever, holding its captures.
+ */
+static void
+test_finished_covers_both_directions(void)
+{
+	GowlCubePlan plan;
+
+	g_assert_true(gowl_cube_plan_init(&plan, 0, 1, 4, 500, 150, 0));
+	g_assert_false(gowl_cube_plan_finished(&plan, 0));
+	g_assert_false(gowl_cube_plan_finished(&plan, 400000));
+	g_assert_true(gowl_cube_plan_finished(&plan, 500000));
+	g_assert_true(gowl_cube_plan_finished(&plan, 9000000));
+
+	gowl_cube_plan_reverse(&plan, 0.5, 1000000);
+	g_assert_false(gowl_cube_plan_finished(&plan, 1000000));
+	g_assert_true(gowl_cube_plan_finished(&plan, 1000000 + plan.dur_us));
+}
+
+/* Reversing twice must not compound the shortening into a snap. */
+static void
+test_reverse_is_idempotent(void)
+{
+	GowlCubePlan plan;
+	gint64 first;
+
+	g_assert_true(gowl_cube_plan_init(&plan, 0, 2, 4, 500, 150, 0));
+	gowl_cube_plan_reverse(&plan, 0.8, 0);
+	first = plan.dur_us;
+	gowl_cube_plan_reverse(&plan, 0.6, 10000);
+	g_assert_cmpint((gint)plan.dur_us, ==, (gint)first);
+	g_assert_cmpfloat(fabs(gowl_cube_plan_progress(&plan, 10000) - 0.6),
+	                  <, 1e-9);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -258,6 +351,11 @@ main(int argc, char **argv)
 	g_test_add_func("/cube/slot-window",
 	                test_slot_window_is_narrow_and_tracks_the_front);
 	g_test_add_func("/cube/bump", test_bump_is_zero_at_both_ends);
+	g_test_add_func("/cube/reverse", test_reverse_runs_the_journey_back);
+	g_test_add_func("/cube/reverse-duration",
+	                test_reverse_duration_scales_with_a_floor);
+	g_test_add_func("/cube/finished", test_finished_covers_both_directions);
+	g_test_add_func("/cube/reverse-idempotent", test_reverse_is_idempotent);
 
 	return g_test_run();
 }

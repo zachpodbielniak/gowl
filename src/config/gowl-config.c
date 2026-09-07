@@ -71,6 +71,38 @@
 #define GOWL_CONFIG_DEFAULT_CUBE_REFLECTION     (0.32)
 #define GOWL_CONFIG_DEFAULT_CUBE_MOTION_BLUR    (0.35)
 #define GOWL_CONFIG_DEFAULT_CUBE_BACKDROP_COLOR "#12141f"
+
+#define GOWL_CONFIG_DEFAULT_MAGNIFIER_MAX        (8.0)
+#define GOWL_CONFIG_DEFAULT_MAGNIFIER_STEP       (1.25)
+#define GOWL_CONFIG_DEFAULT_MAGNIFIER_SMOOTHING  (120)
+#define GOWL_CONFIG_DEFAULT_MAGNIFIER_MODIFIER   "Super"
+
+#define GOWL_CONFIG_DEFAULT_EXPO_DURATION        (340)
+#define GOWL_CONFIG_DEFAULT_EXPO_CURVE           "ease-out-expo"
+#define GOWL_CONFIG_DEFAULT_EXPO_TAGS            (9)
+#define GOWL_CONFIG_DEFAULT_EXPO_GAP             (0.06)
+#define GOWL_CONFIG_DEFAULT_EXPO_CORNER          (0.035)
+#define GOWL_CONFIG_DEFAULT_EXPO_DIM             (0.45)
+#define GOWL_CONFIG_DEFAULT_EXPO_BACKDROP_COLOR  "#12141f"
+
+#define GOWL_CONFIG_DEFAULT_SWITCHER_DURATION    (220)
+#define GOWL_CONFIG_DEFAULT_SWITCHER_CURVE       "ease-out-expo"
+#define GOWL_CONFIG_DEFAULT_SWITCHER_SCALE       (0.52)
+#define GOWL_CONFIG_DEFAULT_SWITCHER_SPACING     (0.62)
+#define GOWL_CONFIG_DEFAULT_SWITCHER_ANGLE       (52.0)
+#define GOWL_CONFIG_DEFAULT_SWITCHER_REFLECTION  (0.28)
+#define GOWL_CONFIG_DEFAULT_SWITCHER_BACKDROP_COLOR "#0e1018"
+
+#define GOWL_CONFIG_DEFAULT_BLUR_DOWNSCALE       (4)
+#define GOWL_CONFIG_DEFAULT_BLUR_PASSES          (3)
+#define GOWL_CONFIG_DEFAULT_BLUR_BRIGHTNESS      (0.9)
+#define GOWL_CONFIG_DEFAULT_SHADOW_RADIUS        (28)
+#define GOWL_CONFIG_DEFAULT_SHADOW_OPACITY       (0.42)
+#define GOWL_CONFIG_DEFAULT_SHADOW_OFFSET_X      (0)
+#define GOWL_CONFIG_DEFAULT_SHADOW_OFFSET_Y      (10)
+#define GOWL_CONFIG_DEFAULT_SHADOW_COLOR         "#000000"
+
+#define GOWL_CONFIG_DEFAULT_WALLPAPER_FADE       (320)
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
 #define GOWL_CONFIG_DEFAULT_REPEAT_RATE         (25)
@@ -145,6 +177,53 @@ struct _GowlConfig {
 	gchar   *cube_backdrop_color;
 	gboolean cube_caps;
 	gboolean cube_all_monitors;
+	gboolean cube_gesture;
+
+	gboolean magnifier;
+	gdouble  magnifier_max;
+	gdouble  magnifier_step;
+	gint     magnifier_smoothing;
+	gboolean magnifier_follow_cursor;
+	gboolean magnifier_smooth;
+	gchar   *magnifier_modifier;
+
+	gboolean expo;
+	gint     expo_duration;
+	gchar   *expo_curve;
+	gint     expo_tags;
+	gint     expo_columns;
+	gdouble  expo_gap;
+	gdouble  expo_corner;
+	gdouble  expo_dim;
+	gboolean expo_hide_empty;
+	gchar   *expo_backdrop_color;
+
+	gboolean switcher;
+	gint     switcher_duration;
+	gchar   *switcher_curve;
+	gdouble  switcher_scale;
+	gdouble  switcher_spacing;
+	gdouble  switcher_angle;
+	gdouble  switcher_reflection;
+	gboolean switcher_all_tags;
+	gchar   *switcher_backdrop_color;
+
+	gboolean blur;
+	gint     blur_downscale;
+	gint     blur_passes;
+	gdouble  blur_brightness;
+	gboolean shadow;
+	gint     shadow_radius;
+	gdouble  shadow_opacity;
+	gint     shadow_offset_x;
+	gint     shadow_offset_y;
+	gchar   *shadow_color;
+
+	/* Per-tag wallpaper overrides, 1-based; NULL means "use the default
+	 * wallpaper", which is what every entry is until a config says
+	 * otherwise. */
+	gchar   *wallpaper_tags[GOWL_CONFIG_MAX_TAGS];
+	gint     wallpaper_fade;
 	gint     nmaster;
 	gint     tag_count;
 
@@ -552,6 +631,18 @@ gowl_config_finalize(GObject *object)
 	g_free(self->animation_curve_open);
 	g_free(self->cube_curve);
 	g_free(self->cube_backdrop_color);
+	g_free(self->magnifier_modifier);
+	g_free(self->expo_curve);
+	g_free(self->expo_backdrop_color);
+	g_free(self->switcher_curve);
+	g_free(self->switcher_backdrop_color);
+	g_free(self->shadow_color);
+	{
+		gint ti;
+
+		for (ti = 0; ti < GOWL_CONFIG_MAX_TAGS; ti++)
+			g_free(self->wallpaper_tags[ti]);
+	}
 
 	if (self->keybinds != NULL)
 		g_array_unref(self->keybinds);
@@ -828,6 +919,52 @@ gowl_config_init(GowlConfig *self)
 		g_strdup(GOWL_CONFIG_DEFAULT_CUBE_BACKDROP_COLOR);
 	self->cube_caps           = TRUE;
 	self->cube_all_monitors   = FALSE;
+	self->cube_gesture        = TRUE;
+
+	self->magnifier               = TRUE;
+	self->magnifier_max           = GOWL_CONFIG_DEFAULT_MAGNIFIER_MAX;
+	self->magnifier_step          = GOWL_CONFIG_DEFAULT_MAGNIFIER_STEP;
+	self->magnifier_smoothing     = GOWL_CONFIG_DEFAULT_MAGNIFIER_SMOOTHING;
+	self->magnifier_follow_cursor = TRUE;
+	self->magnifier_smooth        = TRUE;
+	self->magnifier_modifier      =
+		g_strdup(GOWL_CONFIG_DEFAULT_MAGNIFIER_MODIFIER);
+
+	self->expo                = TRUE;
+	self->expo_duration       = GOWL_CONFIG_DEFAULT_EXPO_DURATION;
+	self->expo_curve          = g_strdup(GOWL_CONFIG_DEFAULT_EXPO_CURVE);
+	self->expo_tags           = GOWL_CONFIG_DEFAULT_EXPO_TAGS;
+	self->expo_columns        = 0;
+	self->expo_gap            = GOWL_CONFIG_DEFAULT_EXPO_GAP;
+	self->expo_corner         = GOWL_CONFIG_DEFAULT_EXPO_CORNER;
+	self->expo_dim            = GOWL_CONFIG_DEFAULT_EXPO_DIM;
+	self->expo_hide_empty     = FALSE;
+	self->expo_backdrop_color =
+		g_strdup(GOWL_CONFIG_DEFAULT_EXPO_BACKDROP_COLOR);
+
+	self->switcher                = TRUE;
+	self->switcher_duration       = GOWL_CONFIG_DEFAULT_SWITCHER_DURATION;
+	self->switcher_curve          = g_strdup(GOWL_CONFIG_DEFAULT_SWITCHER_CURVE);
+	self->switcher_scale          = GOWL_CONFIG_DEFAULT_SWITCHER_SCALE;
+	self->switcher_spacing        = GOWL_CONFIG_DEFAULT_SWITCHER_SPACING;
+	self->switcher_angle          = GOWL_CONFIG_DEFAULT_SWITCHER_ANGLE;
+	self->switcher_reflection     = GOWL_CONFIG_DEFAULT_SWITCHER_REFLECTION;
+	self->switcher_all_tags       = FALSE;
+	self->switcher_backdrop_color =
+		g_strdup(GOWL_CONFIG_DEFAULT_SWITCHER_BACKDROP_COLOR);
+
+	self->blur             = TRUE;
+	self->blur_downscale   = GOWL_CONFIG_DEFAULT_BLUR_DOWNSCALE;
+	self->blur_passes      = GOWL_CONFIG_DEFAULT_BLUR_PASSES;
+	self->blur_brightness  = GOWL_CONFIG_DEFAULT_BLUR_BRIGHTNESS;
+	self->shadow           = TRUE;
+	self->shadow_radius    = GOWL_CONFIG_DEFAULT_SHADOW_RADIUS;
+	self->shadow_opacity   = GOWL_CONFIG_DEFAULT_SHADOW_OPACITY;
+	self->shadow_offset_x  = GOWL_CONFIG_DEFAULT_SHADOW_OFFSET_X;
+	self->shadow_offset_y  = GOWL_CONFIG_DEFAULT_SHADOW_OFFSET_Y;
+	self->shadow_color     = g_strdup(GOWL_CONFIG_DEFAULT_SHADOW_COLOR);
+
+	self->wallpaper_fade   = GOWL_CONFIG_DEFAULT_WALLPAPER_FADE;
 	self->nmaster             = GOWL_CONFIG_DEFAULT_NMASTER;
 	self->tag_count           = GOWL_CONFIG_DEFAULT_TAG_COUNT;
 	self->repeat_rate         = GOWL_CONFIG_DEFAULT_REPEAT_RATE;
@@ -1159,6 +1296,228 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "cube-all-monitors")) {
 		self->cube_all_monitors = yaml_mapping_get_boolean_member(
 			mapping, "cube-all-monitors");
+	}
+	if (yaml_mapping_has_member(mapping, "cube-gesture")) {
+		self->cube_gesture = yaml_mapping_get_boolean_member(
+			mapping, "cube-gesture");
+	}
+
+	/* Magnifier. */
+	if (yaml_mapping_has_member(mapping, "magnifier"))
+		self->magnifier = yaml_mapping_get_boolean_member(mapping, "magnifier");
+	if (yaml_mapping_has_member(mapping, "magnifier-max")) {
+		self->magnifier_max = CLAMP(yaml_mapping_get_double_member(
+			mapping, "magnifier-max"), 1.0, 32.0);
+	}
+	if (yaml_mapping_has_member(mapping, "magnifier-step")) {
+		self->magnifier_step = CLAMP(yaml_mapping_get_double_member(
+			mapping, "magnifier-step"), 1.01, 4.0);
+	}
+	if (yaml_mapping_has_member(mapping, "magnifier-smoothing")) {
+		gint v = (gint)yaml_mapping_get_int_member(mapping,
+		                                           "magnifier-smoothing");
+		if (v >= 0)
+			self->magnifier_smoothing = v;
+	}
+	if (yaml_mapping_has_member(mapping, "magnifier-follow-cursor")) {
+		self->magnifier_follow_cursor = yaml_mapping_get_boolean_member(
+			mapping, "magnifier-follow-cursor");
+	}
+	if (yaml_mapping_has_member(mapping, "magnifier-smooth")) {
+		self->magnifier_smooth = yaml_mapping_get_boolean_member(
+			mapping, "magnifier-smooth");
+	}
+	if (yaml_mapping_has_member(mapping, "magnifier-modifier")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "magnifier-modifier");
+		if (v != NULL) {
+			g_free(self->magnifier_modifier);
+			self->magnifier_modifier = g_strdup(v);
+		}
+	}
+
+	/* Expo. */
+	if (yaml_mapping_has_member(mapping, "expo"))
+		self->expo = yaml_mapping_get_boolean_member(mapping, "expo");
+	if (yaml_mapping_has_member(mapping, "expo-duration")) {
+		gint v = (gint)yaml_mapping_get_int_member(mapping, "expo-duration");
+		if (v >= 0)
+			self->expo_duration = v;
+	}
+	if (yaml_mapping_has_member(mapping, "expo-curve")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "expo-curve");
+		if (v != NULL) {
+			g_free(self->expo_curve);
+			self->expo_curve = g_strdup(v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "expo-tags")) {
+		self->expo_tags = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "expo-tags"), 1, GOWL_CONFIG_MAX_TAGS);
+	}
+	if (yaml_mapping_has_member(mapping, "expo-columns")) {
+		self->expo_columns = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "expo-columns"), 0, GOWL_CONFIG_MAX_TAGS);
+	}
+	if (yaml_mapping_has_member(mapping, "expo-gap")) {
+		self->expo_gap = CLAMP(yaml_mapping_get_double_member(
+			mapping, "expo-gap"), 0.0, 0.4);
+	}
+	if (yaml_mapping_has_member(mapping, "expo-corner")) {
+		self->expo_corner = CLAMP(yaml_mapping_get_double_member(
+			mapping, "expo-corner"), 0.0, 0.3);
+	}
+	if (yaml_mapping_has_member(mapping, "expo-dim")) {
+		self->expo_dim = CLAMP(yaml_mapping_get_double_member(
+			mapping, "expo-dim"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "expo-hide-empty")) {
+		self->expo_hide_empty = yaml_mapping_get_boolean_member(
+			mapping, "expo-hide-empty");
+	}
+	if (yaml_mapping_has_member(mapping, "expo-backdrop-color")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "expo-backdrop-color");
+		if (v != NULL) {
+			g_free(self->expo_backdrop_color);
+			self->expo_backdrop_color =
+				gowl_palette_resolve(self->palette, v);
+		}
+	}
+
+	/* Switcher. */
+	if (yaml_mapping_has_member(mapping, "switcher"))
+		self->switcher = yaml_mapping_get_boolean_member(mapping, "switcher");
+	if (yaml_mapping_has_member(mapping, "switcher-duration")) {
+		gint v = (gint)yaml_mapping_get_int_member(mapping,
+		                                           "switcher-duration");
+		if (v >= 0)
+			self->switcher_duration = v;
+	}
+	if (yaml_mapping_has_member(mapping, "switcher-curve")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "switcher-curve");
+		if (v != NULL) {
+			g_free(self->switcher_curve);
+			self->switcher_curve = g_strdup(v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "switcher-scale")) {
+		self->switcher_scale = CLAMP(yaml_mapping_get_double_member(
+			mapping, "switcher-scale"), 0.2, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "switcher-spacing")) {
+		self->switcher_spacing = CLAMP(yaml_mapping_get_double_member(
+			mapping, "switcher-spacing"), 0.3, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "switcher-angle")) {
+		self->switcher_angle = CLAMP(yaml_mapping_get_double_member(
+			mapping, "switcher-angle"), 0.0, 80.0);
+	}
+	if (yaml_mapping_has_member(mapping, "switcher-reflection")) {
+		self->switcher_reflection = CLAMP(yaml_mapping_get_double_member(
+			mapping, "switcher-reflection"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "switcher-all-tags")) {
+		self->switcher_all_tags = yaml_mapping_get_boolean_member(
+			mapping, "switcher-all-tags");
+	}
+	if (yaml_mapping_has_member(mapping, "switcher-backdrop-color")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "switcher-backdrop-color");
+		if (v != NULL) {
+			g_free(self->switcher_backdrop_color);
+			self->switcher_backdrop_color =
+				gowl_palette_resolve(self->palette, v);
+		}
+	}
+
+	/* Blur and shadows. */
+	if (yaml_mapping_has_member(mapping, "blur"))
+		self->blur = yaml_mapping_get_boolean_member(mapping, "blur");
+	if (yaml_mapping_has_member(mapping, "blur-downscale")) {
+		self->blur_downscale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "blur-downscale"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "blur-passes")) {
+		self->blur_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "blur-passes"), 1, 6);
+	}
+	if (yaml_mapping_has_member(mapping, "blur-brightness")) {
+		self->blur_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "blur-brightness"), 0.2, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "shadow"))
+		self->shadow = yaml_mapping_get_boolean_member(mapping, "shadow");
+	if (yaml_mapping_has_member(mapping, "shadow-radius")) {
+		self->shadow_radius = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "shadow-radius"), 0, 128);
+	}
+	if (yaml_mapping_has_member(mapping, "shadow-opacity")) {
+		self->shadow_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "shadow-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "shadow-offset-x")) {
+		self->shadow_offset_x = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "shadow-offset-x"), -128, 128);
+	}
+	if (yaml_mapping_has_member(mapping, "shadow-offset-y")) {
+		self->shadow_offset_y = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "shadow-offset-y"), -128, 128);
+	}
+	if (yaml_mapping_has_member(mapping, "shadow-color")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "shadow-color");
+		if (v != NULL) {
+			g_free(self->shadow_color);
+			self->shadow_color = gowl_palette_resolve(self->palette, v);
+		}
+	}
+
+	/* Wallpaper cross-fade and per-tag overrides.
+	 *
+	 * `wallpaper' keeps its meaning as the one every tag uses; these are
+	 * overrides on top of it, so an existing config keeps working and a
+	 * tag with no entry simply shows the default. */
+	if (yaml_mapping_has_member(mapping, "wallpaper-fade")) {
+		gint v = (gint)yaml_mapping_get_int_member(mapping, "wallpaper-fade");
+		if (v >= 0)
+			self->wallpaper_fade = v;
+	}
+	if (yaml_mapping_has_member(mapping, "wallpaper-tags")) {
+		YamlMapping *tag_map =
+			yaml_mapping_get_mapping_member(mapping, "wallpaper-tags");
+
+		if (tag_map != NULL) {
+			guint n = yaml_mapping_get_size(tag_map);
+			guint ti;
+
+			for (ti = 0; ti < n; ti++) {
+				const gchar *key = yaml_mapping_get_key(tag_map, ti);
+				YamlNode *val = yaml_mapping_get_value(tag_map, ti);
+				const gchar *path;
+				gint64 tag;
+
+				if (key == NULL || val == NULL)
+					continue;
+				path = yaml_node_get_scalar(val);
+				if (path == NULL)
+					continue;
+
+				/* Keys are the tag numbers the user sees in the bar, so
+				 * 1-based; anything outside the range is a typo and is
+				 * skipped rather than silently landing on tag 1. */
+				tag = g_ascii_strtoll(key, NULL, 10);
+				if (tag < 1 || tag > GOWL_CONFIG_MAX_TAGS) {
+					g_warning("gowl_config: wallpaper-tags key '%s' is not "
+					          "a tag number between 1 and %d", key,
+					          GOWL_CONFIG_MAX_TAGS);
+					continue;
+				}
+				g_free(self->wallpaper_tags[tag - 1]);
+				self->wallpaper_tags[tag - 1] = g_strdup(path);
+			}
+		}
 	}
 
 	if (yaml_mapping_has_member(mapping, "animation-curve")) {
@@ -2998,4 +3357,327 @@ gowl_config_get_cube_all_monitors(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
 	return self->cube_all_monitors;
+}
+
+gboolean
+gowl_config_get_cube_gesture(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->cube_gesture;
+}
+
+/* --- Magnifier --- */
+
+gboolean
+gowl_config_get_magnifier(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->magnifier;
+}
+
+gdouble
+gowl_config_get_magnifier_max(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_MAGNIFIER_MAX);
+	return self->magnifier_max;
+}
+
+gdouble
+gowl_config_get_magnifier_step(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_MAGNIFIER_STEP);
+	return self->magnifier_step;
+}
+
+gint
+gowl_config_get_magnifier_smoothing(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_MAGNIFIER_SMOOTHING);
+	return self->magnifier_smoothing;
+}
+
+gboolean
+gowl_config_get_magnifier_follow_cursor(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), TRUE);
+	return self->magnifier_follow_cursor;
+}
+
+gboolean
+gowl_config_get_magnifier_smooth(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), TRUE);
+	return self->magnifier_smooth;
+}
+
+const gchar *
+gowl_config_get_magnifier_modifier(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_MAGNIFIER_MODIFIER);
+	return self->magnifier_modifier;
+}
+
+/* --- Expo --- */
+
+gboolean
+gowl_config_get_expo(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->expo;
+}
+
+gint
+gowl_config_get_expo_duration(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_EXPO_DURATION);
+	return self->expo_duration;
+}
+
+const gchar *
+gowl_config_get_expo_curve(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_EXPO_CURVE);
+	return self->expo_curve;
+}
+
+gint
+gowl_config_get_expo_tags(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_EXPO_TAGS);
+	return self->expo_tags;
+}
+
+gint
+gowl_config_get_expo_columns(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0);
+	return self->expo_columns;
+}
+
+gdouble
+gowl_config_get_expo_gap(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EXPO_GAP);
+	return self->expo_gap;
+}
+
+gdouble
+gowl_config_get_expo_corner(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EXPO_CORNER);
+	return self->expo_corner;
+}
+
+gdouble
+gowl_config_get_expo_dim(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EXPO_DIM);
+	return self->expo_dim;
+}
+
+gboolean
+gowl_config_get_expo_hide_empty(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->expo_hide_empty;
+}
+
+const gchar *
+gowl_config_get_expo_backdrop_color(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_EXPO_BACKDROP_COLOR);
+	return self->expo_backdrop_color;
+}
+
+/* --- Switcher --- */
+
+gboolean
+gowl_config_get_switcher(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->switcher;
+}
+
+gint
+gowl_config_get_switcher_duration(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SWITCHER_DURATION);
+	return self->switcher_duration;
+}
+
+const gchar *
+gowl_config_get_switcher_curve(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SWITCHER_CURVE);
+	return self->switcher_curve;
+}
+
+gdouble
+gowl_config_get_switcher_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SWITCHER_SCALE);
+	return self->switcher_scale;
+}
+
+gdouble
+gowl_config_get_switcher_spacing(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SWITCHER_SPACING);
+	return self->switcher_spacing;
+}
+
+gdouble
+gowl_config_get_switcher_angle(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SWITCHER_ANGLE);
+	return self->switcher_angle;
+}
+
+gdouble
+gowl_config_get_switcher_reflection(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SWITCHER_REFLECTION);
+	return self->switcher_reflection;
+}
+
+gboolean
+gowl_config_get_switcher_all_tags(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->switcher_all_tags;
+}
+
+const gchar *
+gowl_config_get_switcher_backdrop_color(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SWITCHER_BACKDROP_COLOR);
+	return self->switcher_backdrop_color;
+}
+
+/* --- Blur and shadows --- */
+
+gboolean
+gowl_config_get_blur(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->blur;
+}
+
+gint
+gowl_config_get_blur_downscale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_BLUR_DOWNSCALE);
+	return self->blur_downscale;
+}
+
+gint
+gowl_config_get_blur_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_BLUR_PASSES);
+	return self->blur_passes;
+}
+
+gdouble
+gowl_config_get_blur_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_BLUR_BRIGHTNESS);
+	return self->blur_brightness;
+}
+
+gboolean
+gowl_config_get_shadow(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->shadow;
+}
+
+gint
+gowl_config_get_shadow_radius(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SHADOW_RADIUS);
+	return self->shadow_radius;
+}
+
+gdouble
+gowl_config_get_shadow_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SHADOW_OPACITY);
+	return self->shadow_opacity;
+}
+
+gint
+gowl_config_get_shadow_offset_x(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0);
+	return self->shadow_offset_x;
+}
+
+gint
+gowl_config_get_shadow_offset_y(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SHADOW_OFFSET_Y);
+	return self->shadow_offset_y;
+}
+
+const gchar *
+gowl_config_get_shadow_color(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SHADOW_COLOR);
+	return self->shadow_color;
+}
+
+/* --- Per-tag wallpaper --- */
+
+const gchar *
+gowl_config_get_wallpaper_for_tag(GowlConfig *self, gint tag)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+
+	if (tag < 1 || tag > GOWL_CONFIG_MAX_TAGS)
+		return NULL;
+	return self->wallpaper_tags[tag - 1];
+}
+
+gboolean
+gowl_config_has_tag_wallpapers(GowlConfig *self)
+{
+	gint i;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+
+	for (i = 0; i < GOWL_CONFIG_MAX_TAGS; i++) {
+		if (self->wallpaper_tags[i] != NULL)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+gint
+gowl_config_get_wallpaper_fade(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WALLPAPER_FADE);
+	return self->wallpaper_fade;
 }

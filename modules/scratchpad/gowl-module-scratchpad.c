@@ -273,7 +273,11 @@ scratchpad_handle_key(
 	(void)handler;
 	(void)modifiers;
 	(void)keysym;
-	(void)pressed;
+
+	/* Presses only.  Modules now see releases as well, and a handler
+	 * that ignored the distinction would fire twice per key. */
+	if (!pressed)
+		return FALSE;
 
 	/*
 	 * Scratchpad keybind dispatch:

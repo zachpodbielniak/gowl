@@ -606,6 +606,10 @@ Gowl ships with several modules in the =modules/= directory:
 | =dropdown=       | Fixed, toggleable shell overlay                       |
 | =animation=      | Window pops, focus wiggles, settling and overlay slides |
 | =cube=           | Turns the desktop as a solid when the tag changes      |
+| =expo=           | Every tag at once, as a grid of live thumbnails        |
+| =switcher=       | Alt-tab as a 3D strip of live window previews          |
+| =magnifier=      | Zooms the whole output around the pointer              |
+| =blur=           | Frosted glass behind translucent windows, plus shadows |
 | =autostart=      | Runs autostart commands from config                   |
 | =vanitygaps=     | Adds configurable inner/outer gaps to layouts         |
 | =pertag=         | Per-tag layout and mfact settings                     |
@@ -871,43 +875,89 @@ scene/renderer teardown. Deactivation must also restore ordinary live
 presentation and release all held buffers. Providers own their state;
 there are no animation clocks or snapshots in the core client structure.
 
-** The desktop cube, and how two effects share one owner
+** Six effect modules, one interface
 
-The =cube= module implements =GowlSceneEffect= as well, and is opt-in in
-standalone Gowl (=modules.cube.enabled: true=). CMacs loads it by
-default. See [[file:configuration.org::#cube][cube configuration]] for the settings and for what
-each side of the solid contains.
+=animation=, =cube=, =expo=, =switcher=, =magnifier= and =blur= all
+implement =GowlSceneEffect=, all opt in through the =modules= mapping,
+and all are loaded by CMacs by default. They are separate plugins rather
+than one because each is a separate decision: somebody who wants shadows
+and no cube, or a magnifier and nothing else, configures exactly that.
 
-It exists as a worked example of the rule above, because "a single
-provider owns scene presentation" reads at first like "only one effect
-module may be loaded". It is not: it means one provider is DISPATCHED,
-and what that provider does with a call is its own business.
+*How six providers share one interface.* Every hook is either
+CONSUMABLE or BROADCAST, and which one it is is a property of the hook
+rather than of the module:
 
-The cube registers at priority =-10=, ahead of the animation module's
-default =0=, and every one of its hooks ends by handing the call to
-=gowl_module_manager_get_scene_effect_after()= --- the next active
-provider in the same priority order. So:
+- =client_event=, =get_geometry= and =surface_at= decide where a window
+  IS and what the pointer hits. Two modules cannot both answer, so the
+  first provider in priority order that claims one owns it. This is the
+  rule that stops two modules fighting over one scene node.
+- =alpha_changed=, =frame=, =frame_done=, =monitor_removed= and =finish=
+  are "here is a tick" and "put your things away". Every provider gets
+  them, because a module that misses its own teardown leaks buffers into
+  a renderer that is going away.
 
-- the cube is asked first, which is the only way it can DECLINE (wrong
-  renderer, rotated output, no tag change) and get out of the way;
-- everything it declines reaches the animation module unchanged, so
-  window entrances, exits, layout motion and jiggles behave exactly as
-  they do without the cube loaded;
-- the search runs strictly after the asking module, so delegation can
-  only travel down the priority order and cannot loop.
+Dispatch lives in =src/core/gowl-effects.c= and is pinned by
+=tests/test-effects.c=. Both failure modes are silent: a consumable hook
+that did not stop at the first claimant would let two modules place the
+same window, and a broadcast hook that stopped early would switch off
+every module after it in priority order.
 
-The one call the cube answers on its own is a visibility reveal on a
-monitor whose tags have just changed: the rotation's first captured side
-already shows those windows, so letting them ALSO fade in would fade the
-desktop up after the rotation had landed.
+The consequence for a module author is that there is nothing to forward.
+Implement what you need, return =FALSE= or =NULL= for the rest, and pick
+a priority. The current order is =cube= (-10), =expo= (-8), =switcher=
+(-6), =animation= (0), =blur= (10), =magnifier= (100); the effects that
+own a whole output sort before the ones that decorate a window, and the
+magnifier sorts last because it magnifies whatever the others drew.
 
-The cube owns the output only for the length of a rotation, and it takes
-it by parking one opaque, monitor-sized buffer just under the top layer
---- not by switching scene layers off. The layers are global while tags
-are per-monitor, so switching one off to make room on one screen would
-blank the other. =tests/test-cube-guard.sh= fails the build if either
-that or the delegation is lost, because both fail silently: the symptom
-is an absence, not a crash.
+** The shared effect layer
+
+The five newer effects contain no GL. Every context bracket, shader,
+texture, capture and scene-sheet lives in =src/fx= (see *Visual effect
+layer* in [[file:architecture.org][architecture]]), because that is where a mistake is
+expensive and invisible --- a context left current, a scene node left
+hidden, a buffer freed after its renderer. One implementation, one set of
+tests (=tests/test-fx-render.c=, against a real GPU), five callers.
+
+What is left in each module is the part that is actually about that
+effect: the shape of a prism and where the camera stands (=cube=), how a
+grid of tiles becomes one screen again (=expo=), where the cards go
+(=switcher=). Those parts are pure arithmetic in their own translation
+units, so =tests/test-cube.c= and =tests/test-expo.c= check them without
+a display.
+
+*None of them adds a renderer.* They borrow the EGL context wlroots'
+GLES2 renderer already owns. Under any other renderer =gowl_fx_gl_new()=
+returns %NULL, every module treats that as "sit this session out", and
+the desktop behaves exactly as it did without them.
+
+** Taking an output, and giving it back
+
+An effect that replaces the whole screen --- the cube's rotation, the
+overview, the switcher --- parks one opaque monitor-sized buffer in the
+scene for its duration. It hides what is below it by COVERING it, never
+by switching a scene layer off: the layers are shared by every output
+while tags are per-monitor, so an effect that disabled one to make room
+on one screen would blank the other. Only the few things gowl stacks
+ABOVE that point (fullscreen clients, embedder-pinned overlays) are taken
+down individually, and they are put back from a held reference so a
+window closed mid-effect cannot leave a dangling one.
+
+=tests/test-cube-guard.sh= fails the build if the cube stops claiming
+only its own reveal, or starts taking a shared layer. Both fail silently
+otherwise: the symptom is an absence, not a crash.
+
+** The desktop cube
+
+The =cube= module turns the desktop as one side of a solid when the tag
+changes, one face-step per tag crossed. Opt-in in standalone Gowl
+(=modules.cube.enabled: true=); CMacs loads it by default. See
+[[file:configuration.org::#cube][cube configuration]] for the settings and for what each side contains.
+
+The one call it claims is a visibility reveal on a monitor whose tags
+have just changed: the rotation's first captured side already shows those
+windows, so letting them ALSO fade in would fade the desktop up after the
+rotation had landed. Everything else --- window geometry, opacity,
+hit-testing --- reaches the animation module untouched.
 
 Module shared objects remain resident after registering static GTypes,
 so restarting a compositor manager cannot leave GLib holding unloaded

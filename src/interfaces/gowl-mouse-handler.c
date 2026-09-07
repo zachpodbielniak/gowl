@@ -80,3 +80,17 @@ gowl_mouse_handler_handle_motion(
 		return iface->handle_motion(self, x, y);
 	return FALSE;
 }
+
+gboolean
+gowl_mouse_handler_handle_axis(GowlMouseHandler *self, guint axis,
+                                gdouble delta, gint discrete, guint modifiers)
+{
+	GowlMouseHandlerInterface *iface;
+
+	g_return_val_if_fail(GOWL_IS_MOUSE_HANDLER(self), FALSE);
+
+	iface = GOWL_MOUSE_HANDLER_GET_IFACE(self);
+	if (iface->handle_axis == NULL)
+		return FALSE;
+	return iface->handle_axis(self, axis, delta, discrete, modifiers);
+}

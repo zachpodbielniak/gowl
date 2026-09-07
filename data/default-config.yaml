@@ -91,6 +91,73 @@ cube-caps: true           # draw the top and bottom of the solid
 cube-backdrop-color: "#12141f"
 cube-all-monitors: false  # true also turns outputs that are not focused
 
+# Desktop cube: drive the rotation directly with a three-finger swipe.
+# A gesture the cube claims never reaches the focused client, so turning
+# this off is also how you give applications their three-finger swipes back.
+cube-gesture: true
+
+# Overview (modules.expo.enabled).  Every tag at once, as a grid of live
+# thumbnails.  Bind a key to it with
+#   "Super+grave": { action: ipc_command, arg: "expo" }
+# or swipe up with four fingers.
+expo: true
+expo-duration: 340        # ms to zoom out and back
+expo-curve: "ease-out-expo"
+expo-tags: 9              # tags shown, 1..9; fewer means bigger tiles
+expo-columns: 0           # 0 picks a near-square grid
+expo-gap: 0.06            # spacing as a fraction of a tile
+expo-corner: 0.035        # tile corner rounding, as a fraction of a tile
+expo-dim: 0.45            # how much dimmer an unselected tag is
+expo-hide-empty: false    # drop tags with no windows from the grid
+expo-backdrop-color: "#12141f"
+
+# Window switcher (modules.switcher.enabled).  Alt-tab as a strip of live
+# window previews.  Hold Super or Alt and tap Tab; let go to commit.
+switcher: true
+switcher-duration: 220    # ms to slide from one card to the next
+switcher-curve: "ease-out-expo"
+switcher-scale: 0.52      # card width as a fraction of the output
+switcher-spacing: 0.62    # distance between cards, as a fraction of a card
+switcher-angle: 52        # degrees the off-centre cards turn away; 0 is flat
+switcher-reflection: 0.28
+switcher-all-tags: false  # true also lists windows on other tags
+switcher-backdrop-color: "#0e1018"
+
+# Magnifier (modules.magnifier.enabled).  Hold the modifier and scroll.
+# A scroll the magnifier claims never reaches the client, so the modifier
+# has to be one applications do not use.
+magnifier: true
+magnifier-max: 8.0        # how far in it will go
+magnifier-step: 1.25      # multiplier per wheel click
+magnifier-smoothing: 120  # ms for the zoom and pan to catch up; 0 is instant
+magnifier-follow-cursor: true
+magnifier-smooth: true    # false shows the actual pixels, unfiltered
+magnifier-modifier: "Super"   # Super, Alt, Ctrl or Shift
+
+# Frosted glass and shadows (modules.blur.enabled).
+# The blur is of the WALLPAPER, computed once and cropped per window --
+# not of other windows.  A translucent window over the desktop looks
+# right; one over another window shows blurred wallpaper rather than a
+# blurred copy of the window below.
+blur: true
+blur-downscale: 4         # 1..8; higher is cheaper and softer
+blur-passes: 3            # 1..6; more is smoother and slower
+blur-brightness: 0.9
+shadow: true
+shadow-radius: 28         # softness in pixels; 0 disables shadows
+shadow-opacity: 0.42
+shadow-offset-x: 0
+shadow-offset-y: 10
+shadow-color: "#000000"
+
+# Wallpaper.  `wallpaper' is the picture every tag uses; wallpaper-tags
+# overrides it for individual tags, and a tag with no entry keeps the
+# default -- so this is additive to an existing config.
+wallpaper-fade: 320       # ms to cross-fade between them; 0 cuts
+# wallpaper-tags:
+#   1: "~/Pictures/code.jpg"
+#   4: "~/Pictures/mail.png"
+
 # Scrolling layout: column width as a fraction of the usable width.
 # 0.5 shows two columns at a time, 1.0 shows one.  Matches Hyprland's
 # scrolling.column_width so a config translates.
@@ -390,6 +457,14 @@ modules:
   animation:
     enabled: false  # opt in here; CMacs loads this module by default
   cube:
+    enabled: false  # opt in here; CMacs loads this module by default
+  expo:
+    enabled: false  # opt in here; CMacs loads this module by default
+  switcher:
+    enabled: false  # opt in here; CMacs loads this module by default
+  magnifier:
+    enabled: false  # opt in here; CMacs loads this module by default
+  blur:
     enabled: false  # opt in here; CMacs loads this module by default
   vanitygaps:
     enabled: true

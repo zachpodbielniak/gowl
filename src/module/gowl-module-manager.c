@@ -22,6 +22,7 @@
 #include "interfaces/gowl-layout-provider.h"
 #include "interfaces/gowl-keybind-handler.h"
 #include "interfaces/gowl-mouse-handler.h"
+#include "interfaces/gowl-gesture-handler.h"
 #include "interfaces/gowl-startup-handler.h"
 #include "interfaces/gowl-shutdown-handler.h"
 #include "interfaces/gowl-ipc-handler.h"
@@ -52,6 +53,7 @@ struct _GowlModuleManager {
 	GPtrArray *layout_providers;   /* element-type GowlLayoutProvider* */
 	GPtrArray *keybind_handlers;   /* element-type GowlKeybindHandler* */
 	GPtrArray *mouse_handlers;     /* element-type GowlMouseHandler*   */
+	GPtrArray *gesture_handlers;   /* element-type GowlGestureHandler* */
 	GPtrArray *startup_handlers;   /* element-type GowlStartupHandler* */
 	GPtrArray *shutdown_handlers;  /* element-type GowlShutdownHandler* */
 	GPtrArray *ipc_handlers;       /* element-type GowlIpcHandler*     */
@@ -158,6 +160,7 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->layout_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->keybind_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->mouse_handlers, g_ptr_array_unref);
+	g_clear_pointer(&self->gesture_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->startup_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->shutdown_handlers, g_ptr_array_unref);
 	g_clear_pointer(&self->ipc_handlers, g_ptr_array_unref);
@@ -264,6 +267,7 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->layout_providers  = g_ptr_array_new();
 	self->keybind_handlers  = g_ptr_array_new();
 	self->mouse_handlers    = g_ptr_array_new();
+	self->gesture_handlers  = g_ptr_array_new();
 	self->startup_handlers  = g_ptr_array_new();
 	self->shutdown_handlers = g_ptr_array_new();
 	self->ipc_handlers      = g_ptr_array_new();
@@ -306,6 +310,11 @@ classify_module(
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_KEYBIND_HANDLER)) {
 		g_ptr_array_add(self->keybind_handlers, (gpointer)mod);
 		sort_dispatch_array(self->keybind_handlers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_GESTURE_HANDLER)) {
+		g_ptr_array_add(self->gesture_handlers, (gpointer)mod);
+		sort_dispatch_array(self->gesture_handlers);
 	}
 
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_MOUSE_HANDLER)) {
@@ -758,6 +767,124 @@ gowl_module_manager_dispatch_key(
  *
  * Returns: %TRUE if a handler consumed the event
  */
+/**
+ * gowl_module_manager_gesture_handlers:
+ * @self: a #GowlModuleManager
+ *
+ * Every ACTIVE gesture handler, in priority order.
+ *
+ * The compositor walks this itself rather than calling a dispatch helper,
+ * because a gesture is a three-part conversation: whichever handler
+ * claims the `begin' must be the one that receives the updates and the
+ * end, and only the caller can remember which that was.
+ *
+ * Returns: (transfer container) (element-type GowlGestureHandler): the
+ *   handlers; free with g_ptr_array_unref().
+ */
+GPtrArray *
+gowl_module_manager_gesture_handlers(GowlModuleManager *self)
+{
+	GPtrArray *out;
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+
+	out = g_ptr_array_new();
+	for (i = 0; i < self->gesture_handlers->len; i++) {
+		GowlModule *mod = g_ptr_array_index(self->gesture_handlers, i);
+
+		if (gowl_module_get_is_active(mod))
+			g_ptr_array_add(out, mod);
+	}
+	return out;
+}
+
+/**
+ * gowl_module_manager_dispatch_axis:
+ * @self: a #GowlModuleManager
+ * @axis: 0 for vertical, 1 for horizontal
+ * @delta: scroll distance in surface units
+ * @discrete: scroll distance in wheel clicks, 0 for a smooth device
+ * @modifiers: the modifier mask held at the time
+ *
+ * Offers a scroll to the mouse handlers before the focused client.
+ *
+ * Returns: %TRUE when a handler claimed it, in which case the client
+ *   must not be told about it.
+ */
+/**
+ * gowl_module_manager_dispatch_command:
+ * @self: a #GowlModuleManager
+ * @command: the command word
+ * @args: (nullable): the rest of the line
+ *
+ * Offers a command to the #GowlIpcHandler modules, first answer wins.
+ *
+ * This is how a module gets an entry point that a keybind, the IPC
+ * socket and an embedder can all reach without any of them linking
+ * against it.  A module .so cannot export a function the compositor
+ * calls directly -- so it exports a NAME instead, and everything that
+ * wants to open the overview or the switcher says "expo" or "switcher"
+ * rather than holding a pointer.
+ *
+ * Returns: (transfer full) (nullable): the handler's reply, or %NULL when
+ *   nothing claimed the command.
+ */
+gchar *
+gowl_module_manager_dispatch_command(
+	GowlModuleManager *self,
+	const gchar       *command,
+	const gchar       *args
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+	g_return_val_if_fail(command != NULL, NULL);
+
+	for (i = 0; i < self->ipc_handlers->len; i++) {
+		GowlIpcHandler *handler;
+		gchar *reply;
+
+		handler = (GowlIpcHandler *)g_ptr_array_index(self->ipc_handlers, i);
+		if (!gowl_module_get_is_active(GOWL_MODULE(handler)))
+			continue;
+
+		reply = gowl_ipc_handler_handle_command(handler, command, args);
+		if (reply != NULL)
+			return reply;
+	}
+	return NULL;
+}
+
+gboolean
+gowl_module_manager_dispatch_axis(
+	GowlModuleManager *self,
+	guint              axis,
+	gdouble            delta,
+	gint               discrete,
+	guint              modifiers
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), FALSE);
+
+	for (i = 0; i < self->mouse_handlers->len; i++) {
+		GowlMouseHandler *handler;
+
+		handler = (GowlMouseHandler *)g_ptr_array_index(
+			self->mouse_handlers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(handler)))
+			continue;
+
+		if (gowl_mouse_handler_handle_axis(handler, axis, delta,
+		                                    discrete, modifiers))
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
 gboolean
 gowl_module_manager_dispatch_button(
 	GowlModuleManager *self,
@@ -1368,7 +1495,37 @@ gowl_module_manager_get_decorator(GowlModuleManager *self)
 	return NULL;
 }
 
-/* A single presentation owner prevents competing scene transforms. */
+/*
+ * Every active provider, in priority order.
+ *
+ * gowl used to hand scene presentation to the first one and stop there,
+ * which was fine while `animation' was the only such module.  It stopped
+ * being fine at six: the second module to load would have had to forward
+ * all eight hooks to the first by hand, and a forward left out is not a
+ * crash, it is a window animation that quietly stopped happening.
+ * Dispatching over the whole set moves that decision into one place
+ * (gowl-effects.c) where it is per event and testable.
+ */
+GPtrArray *
+gowl_module_manager_get_scene_effects(GowlModuleManager *self)
+{
+ GPtrArray *out;
+ guint i;
+
+ g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+
+ out = g_ptr_array_new();
+ for (i = 0; i < self->scene_effects->len; i++) {
+  GowlModule *mod = g_ptr_array_index(self->scene_effects, i);
+
+  if (gowl_module_get_is_active(mod))
+   g_ptr_array_add(out, mod);
+ }
+ return out;
+}
+
+/* The highest-priority active provider.  Still the answer to "who would
+ * claim this first", which some callers want without the whole list. */
 gpointer
 gowl_module_manager_get_scene_effect(GowlModuleManager *self)
 {
@@ -1383,15 +1540,11 @@ gowl_module_manager_get_scene_effect(GowlModuleManager *self)
 }
 
 /*
- * The owner may delegate, but only downwards.
+ * The provider below a given one.
  *
- * "One owner" exists so two modules cannot both move the same scene node.
- * It does not mean only one module may ever be loaded: a module that owns
- * the OUTPUT for 400 ms (the cube, mid-rotation) still wants the module
- * that owns per-client geometry to keep doing its job the rest of the
- * time.  Searching strictly after @module in the same priority order
- * makes that a chain rather than a free-for-all --- delegation can only
- * go to a lower-priority provider, so it cannot loop.
+ * Searching strictly after @module in the same priority order means an
+ * answer can only ever point downwards, so a module walking the list
+ * cannot loop back onto itself.
  */
 gpointer
 gowl_module_manager_get_scene_effect_after(GowlModuleManager *self,

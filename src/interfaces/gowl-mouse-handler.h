@@ -27,16 +27,33 @@ G_BEGIN_DECLS
 
 G_DECLARE_INTERFACE(GowlMouseHandler, gowl_mouse_handler, GOWL, MOUSE_HANDLER, GObject)
 
+/**
+ * GowlMouseHandlerInterface:
+ * @handle_button: a pointer button changed state
+ * @handle_motion: the pointer moved to a layout position
+ * @handle_axis: the pointer scrolled; @axis is 0 for vertical and 1 for
+ *   horizontal, @delta is in surface units and @discrete in wheel clicks
+ *
+ * All three are consumable, first claimant wins: returning %TRUE stops
+ * other handlers AND keeps the event from reaching the focused client.
+ * A handler that claims a scroll with no modifier held would make the
+ * mouse wheel stop working everywhere, so claim narrowly.
+ */
 struct _GowlMouseHandlerInterface {
 	GTypeInterface parent_iface;
 
 	gboolean (*handle_button) (GowlMouseHandler *self, guint button, guint state, guint modifiers);
 	gboolean (*handle_motion) (GowlMouseHandler *self, gdouble x, gdouble y);
+	gboolean (*handle_axis)   (GowlMouseHandler *self, guint axis,
+	                           gdouble delta, gint discrete, guint modifiers);
 };
 
 /* Public dispatch functions */
 gboolean gowl_mouse_handler_handle_button (GowlMouseHandler *self, guint button, guint state, guint modifiers);
 gboolean gowl_mouse_handler_handle_motion (GowlMouseHandler *self, gdouble x, gdouble y);
+gboolean gowl_mouse_handler_handle_axis   (GowlMouseHandler *self, guint axis,
+                                           gdouble delta, gint discrete,
+                                           guint modifiers);
 
 G_END_DECLS
 

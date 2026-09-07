@@ -48,6 +48,7 @@
 #include "core/gowl-focus-rules.h"
 #include "boxed/gowl-process-info.h"
 #include "interfaces/gowl-prefix-key-policy.h"
+#include "interfaces/gowl-gesture-handler.h"
 #include "protocols/gowl-ext-workspace.h"
 #include "protocols/gowl-input-capture-protocol.h"
 
@@ -255,6 +256,16 @@ struct _GowlCompositor {
 	GowlIdleManager             *idle_mgr;
 	GowlBar                     *bar;           /* NULL unless bar module active */
 	gpointer                     capture_provider; /* GowlCaptureProvider* (screencast) */
+
+	/*
+	 * The module that claimed the gesture in progress, if any.  Held for
+	 * the whole gesture rather than re-asked per update, because a
+	 * handler that stopped claiming halfway would drop the rest of the
+	 * swipe into the focused client mid-motion.  Unowned: modules outlive
+	 * gestures.
+	 */
+	GowlGestureHandler           *gesture_claimant;
+	GowlGestureHandler           *pinch_claimant;
 
 	/* keybind state for key-repeat */
 	gint                          kb_nsyms;

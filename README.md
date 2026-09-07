@@ -84,13 +84,28 @@ in YAML (or generate a config with `--modules animation`). CMacs loads
 this module by default. Existing `animation-*` settings keep their names
 and behavior.
 
-The desktop cube is the optional `cube.so` plugin: a tag switch turns the
-desktop as one side of a solid, one turn per tag crossed, showing each tag
-on the way past. Standalone Gowl enables it only with
-`modules.cube.enabled: true`; CMacs loads it by default. It runs
-alongside `animation.so` rather than instead of it, and needs the GLES2
-renderer -- under any other one it stands down and tag switches stay
-instant. Settings are the `cube-*` keys.
+Five more optional plugins add the visual effects, each enabled the same
+way (`modules.<name>.enabled: true` in YAML) and each loaded by CMacs by
+default:
+
+| Plugin | What it does | Settings |
+|--------|--------------|----------|
+| `cube` | A tag switch turns the desktop as one side of a solid, one turn per tag crossed, showing each tag on the way past. Three fingers turn it by hand. | `cube-*` |
+| `expo` | Every tag at once, as a grid of live thumbnails, with the camera pulling back out of the one you are on. Four-finger swipe, or `ipc_command expo`. | `expo-*` |
+| `switcher` | Alt-tab as a strip of live window previews, in focus order. Hold Super or Alt and tap Tab. | `switcher-*` |
+| `magnifier` | Hold the modifier and scroll to magnify the whole output around the pointer. | `magnifier-*` |
+| `blur` | Frosted glass behind translucent windows, and soft drop shadows under all of them. | `blur-*`, `shadow-*` |
+
+They run alongside `animation.so` and each other rather than instead of
+them: gowl dispatches each scene-effect hook per event, so window motion
+is unchanged with any combination loaded. All five borrow the GLES2
+renderer's context rather than adding one, and under any other renderer
+they stand down and the desktop behaves as it did without them.
+
+`wallpaper.so` gained per-tag wallpapers in the same release:
+`wallpaper` is still the picture every tag uses, `wallpaper-tags`
+overrides it for individual tags, and `wallpaper-fade` cross-fades
+between them.
 
 Gowl supports two configuration methods:
 

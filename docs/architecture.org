@@ -770,6 +770,38 @@ the seat directly again.  =tests/test-record-guard.sh= enforces the
 recorder half at the tap now rather than by keeping injection away from
 it --- the old arrangement relied on the bypass that *was* the bug.
 
+*** A captured image that outlives the frame needs a buffer we own
+:PROPERTIES:
+:CUSTOM_ID: fx-buffer-ownership
+:END:
+
+=gowl_fx_capture_to_buffer()= hands back a slot of the *output's*
+swapchain.  Presenting it and dropping it inside one frame is fine.
+Keeping it is not, for two reasons, and the second is the dangerous one:
+
+- it takes a buffer permanently out of the rotation the output needs to
+  present; and
+- it ties the content to a pool the compositor keeps drawing the live
+  desktop into.  If that slot is ever handed back out --- a swapchain
+  recreated on a mode or format change, a lock dropped, a scanout path
+  that does not consult the lock --- what you are holding stops being
+  your capture and silently becomes a photograph of the desktop, windows
+  and all.
+
+The blur backdrop did exactly this.  It captured the wallpaper with
+every client layer hidden, which is correct, and then held the output's
+buffer for as long as the tag set did not change --- which in frame
+terms is forever.  The symptom was a translucent window on one tag
+showing *another tag's application* through it, intermittently: what a
+stale desktop frame looks like when it reappears underneath something
+see-through.
+
+Anything that needs a captured image to outlive the frame allocates its
+own =wlr_swapchain=, as =GowlFxSheet= always has and the blur backdrop
+now does.  =tests/test-fx-buffer-ownership.sh= fails the build on a new
+caller of =gowl_fx_capture_to_buffer=, because there is currently no
+legitimate one.
+
 *** A sheet is not in a layer, and a capture must hide it
 :PROPERTIES:
 :CUSTOM_ID: fx-sheet-capture

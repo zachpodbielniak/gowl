@@ -426,6 +426,21 @@ gboolean gowl_fx_capture (GowlFxGl       *self,
  * scene rather than into a shader.
  *
  * Returns: %TRUE on success; unlock @out with wlr_buffer_unlock().
+ *
+ * The returned buffer belongs to the OUTPUT'S SWAPCHAIN.  Present it and
+ * drop it within the frame; never store it.
+ *
+ * Holding one keeps a slot permanently out of the rotation the output
+ * needs to present, and ties the content to a pool the compositor keeps
+ * drawing the live desktop into.  If that slot is ever handed back out
+ * -- a swapchain recreated on a mode or format change, a lock dropped,
+ * a scanout path that does not consult the lock -- what you are holding
+ * silently stops being your capture and becomes a photograph of the
+ * desktop, windows and all.
+ *
+ * Anything that needs a captured image to outlive the frame must
+ * allocate its own buffer, as #GowlFxSheet and the blur backdrop do
+ * with their own wlr_swapchain.
  */
 gboolean gowl_fx_capture_to_buffer (GowlFxGl           *self,
                                     GowlCompositor     *compositor,

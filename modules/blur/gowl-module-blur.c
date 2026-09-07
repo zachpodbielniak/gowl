@@ -60,6 +60,10 @@
 #include "config/gowl-config.h"
 #include "boxed/gowl-color.h"
 #include "fx/gowl-fx.h"
+
+#include <drm_fourcc.h>
+#include <wlr/render/allocator.h>
+#include <wlr/render/swapchain.h>
 #include "interfaces/gowl-scene-effect.h"
 #include "interfaces/gowl-shutdown-handler.h"
 
@@ -95,6 +99,26 @@ typedef struct {
 	struct wlr_buffer *buffer;       /* locked */
 	guint32            tags;         /* what was showing when it was made */
 	gint               width, height;
+	/*
+	 * Our OWN swapchain, not the output's.
+	 *
+	 * The backdrop is held for as long as the tag set does not change,
+	 * which is a very long time in frame terms.  Holding a slot of the
+	 * OUTPUT's swapchain for that long is wrong twice over: it takes a
+	 * buffer permanently out of the rotation the output needs to
+	 * present, and it ties the backdrop's contents to a pool the
+	 * compositor keeps drawing the live desktop into.  If that slot is
+	 * ever handed back out -- a swapchain recreated on a mode or format
+	 * change, a lock dropped, a scanout path that does not consult the
+	 * lock -- the backdrop stops being blurred wallpaper and becomes a
+	 * photograph of whatever was on screen at that moment, windows and
+	 * all.  On a tag switch, that is the tag you just left, showing
+	 * through every translucent window on the tag you arrived at.
+	 *
+	 * GowlFxSheet in the same layer already allocates its own; this
+	 * follows it.
+	 */
+	struct wlr_swapchain *swapchain;
 } GowlBlurBackdrop;
 
 struct _GowlModuleBlur {
@@ -185,6 +209,7 @@ blur_backdrop_free(GowlBlurBackdrop *bd)
 		return;
 	if (bd->buffer != NULL)
 		wlr_buffer_unlock(bd->buffer);
+	g_clear_pointer(&bd->swapchain, wlr_swapchain_destroy);
 	g_free(bd);
 }
 
@@ -220,6 +245,51 @@ blur_backdrop_for(GowlModuleBlur *mod, GowlMonitor *m)
  * showing the previous tag's wallpaper is exactly the sort of thing
  * nobody notices in review and everybody notices on screen.
  */
+/*
+ * A buffer of our own to keep the blurred wallpaper in.
+ *
+ * Modelled on GowlFxSheet: the output's render format first, falling
+ * back to plain opaque 8888, which every GBM allocator can produce even
+ * when a driver refuses the output's format for an off-screen buffer.
+ */
+static struct wlr_buffer *
+blur_acquire_buffer(GowlCompositor *self, GowlMonitor *m, GowlBlurBackdrop *bd)
+{
+	struct wlr_output *output = m->wlr_output;
+
+	if (output == NULL || self->allocator == NULL)
+		return NULL;
+
+	/* Reallocate when the output changed shape under us; a stale
+	 * swapchain hands back a buffer of the wrong size. */
+	if (bd->swapchain != NULL
+	    && (bd->width != output->width || bd->height != output->height))
+		g_clear_pointer(&bd->swapchain, wlr_swapchain_destroy);
+
+	if (bd->swapchain == NULL) {
+		struct wlr_drm_format format;
+		uint64_t              modifier = DRM_FORMAT_MOD_INVALID;
+
+		memset(&format, 0, sizeof(format));
+		format.format    = output->render_format;
+		format.len       = 1;
+		format.capacity  = 1;
+		format.modifiers = &modifier;
+
+		bd->swapchain = wlr_swapchain_create(self->allocator,
+			output->width, output->height, &format);
+		if (bd->swapchain == NULL) {
+			format.format = DRM_FORMAT_XRGB8888;
+			bd->swapchain = wlr_swapchain_create(self->allocator,
+				output->width, output->height, &format);
+		}
+		if (bd->swapchain == NULL)
+			return NULL;
+	}
+
+	return wlr_swapchain_acquire(bd->swapchain);
+}
+
 static gboolean
 blur_build_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m,
                      GowlBlurBackdrop *bd)
@@ -262,9 +332,9 @@ blur_build_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m,
 	if (m->fullscreen_bg != NULL)
 		gowl_fx_vis_set(vis, &m->fullscreen_bg->node, FALSE);
 
-	if (gowl_fx_capture(mod->gl, self, m, &raw, 1)
-	    && gowl_fx_capture_to_buffer(mod->gl, self, m, &out)) {
-		ok = TRUE;
+	if (gowl_fx_capture(mod->gl, self, m, &raw, 1)) {
+		out = blur_acquire_buffer(self, m, bd);
+		ok = out != NULL;
 	}
 
 	gowl_fx_vis_restore(vis);

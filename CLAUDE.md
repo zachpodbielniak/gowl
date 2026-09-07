@@ -140,6 +140,16 @@ tests. These assert invariants no unit test can reach:
 > diversion (would echo input back to its sender) and key repeat (the
 > sender repeats already). `tests/test-inject-routing.sh` enforces it.
 
+> **A captured image that outlives the frame needs a buffer you own.**
+> `gowl_fx_capture_to_buffer()` returns a slot of the *output's* swapchain
+> — fine to present and drop in one frame, wrong to keep. Keeping one takes
+> a buffer out of the output's rotation and ties the content to a pool the
+> compositor keeps drawing the live desktop into; if the slot is handed back
+> out, what you hold silently becomes a photograph of the desktop with its
+> windows. That was the blur backdrop showing another tag's app through
+> translucent windows. Allocate your own `wlr_swapchain` like `GowlFxSheet`
+> does. `tests/test-fx-buffer-ownership.sh` enforces it.
+
 > **A `GowlFxSheet` is NOT in a layer, so hiding the layers does not hide it.**
 > A sheet's tree is a direct child of `scene->tree`, a sibling of the layer
 > trees, so it can sit above or below whole layers. It is also an opaque,

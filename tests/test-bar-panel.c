@@ -170,6 +170,12 @@ build_kitchen_sink(void)
 	gowl_bar_panel_add_row(panel, "net-1", "\xef\x87\xab", "Pumpkin",
 	                       "Connected");
 	gowl_bar_panel_add_label(panel, "A plain line");
+	/* Long enough to wrap, so the measure/render agreement below
+	   covers a paragraph rather than only single lines. */
+	gowl_bar_panel_add_label(panel,
+		"Bringing a device up usually needs root. Granting your "
+		"user the operator role does that once, and then joining "
+		"works from here on its own.");
 	gowl_bar_panel_add_spacer(panel, 12);
 
 	item = gowl_bar_panel_add_buttons(panel, "dns");
@@ -351,6 +357,100 @@ test_scroll_offsets_the_hit_regions(void)
 	fixture_clear(&f);
 }
 
+/* Nothing may be painted outside the items' own rows.
+ *
+ * A height calculation that draws is the specific way this broke: the
+ * wrapped-label height was measured by calling the drawing helper, and
+ * because the height pass runs during the draw pass too, every
+ * paragraph was also stamped at the panel's origin, on top of the
+ * hero.  A measure that paints is invisible in any assertion about
+ * heights -- only the pixels show it. */
+static void
+test_the_measure_pass_does_not_draw(void)
+{
+	Fixture f;
+	GowlBarPanel *panel;
+	GowlBarPanelRenderCtx ctx;
+	unsigned char *data;
+	gint stride, x, y;
+	gboolean painted;
+
+	fixture_init(&f);
+
+	/* Clear to fully transparent so any stray ink is unmistakable. */
+	cairo_save(f.cr);
+	cairo_set_operator(f.cr, CAIRO_OPERATOR_SOURCE);
+	cairo_set_source_rgba(f.cr, 0.0, 0.0, 0.0, 0.0);
+	cairo_paint(f.cr);
+	cairo_restore(f.cr);
+
+	/* A tall spacer first, so the whole top band of the panel is
+	   guaranteed to belong to no item that draws anything. */
+	panel = gowl_bar_panel_new();
+	gowl_bar_panel_set_width(panel, PANEL_W);
+	gowl_bar_panel_add_spacer(panel, 120);
+	gowl_bar_panel_add_label(panel,
+		"A paragraph long enough that it has to wrap onto several "
+		"lines inside the panel, which is what makes its height "
+		"something that must be measured rather than assumed.");
+
+	gowl_bar_panel_render_ctx_init(&ctx, PANEL_W);
+	ctx.hits = g_array_new(FALSE, FALSE, sizeof(GowlBarHitRect));
+	gowl_bar_panel_render(panel, f.cr, f.layout, f.theme, &ctx);
+
+	cairo_surface_flush(f.surface);
+	data = cairo_image_surface_get_data(f.surface);
+	stride = cairo_image_surface_get_stride(f.surface);
+
+	painted = FALSE;
+	for (y = 0; y < 100 && !painted; y++) {
+		for (x = 0; x < PANEL_W; x++) {
+			/* ARGB32 is premultiplied; a non-zero alpha is ink. */
+			if (data[y * stride + x * 4 + 3] != 0) {
+				painted = TRUE;
+				break;
+			}
+		}
+	}
+	g_assert_false(painted);
+
+	g_array_unref(ctx.hits);
+	g_object_unref(panel);
+	fixture_clear(&f);
+}
+
+/* A paragraph gets the height it actually needs, not one line's worth. */
+static void
+test_a_label_wraps(void)
+{
+	Fixture f;
+	GowlBarPanel *short_panel;
+	GowlBarPanel *long_panel;
+	gint short_h, long_h;
+
+	fixture_init(&f);
+
+	short_panel = gowl_bar_panel_new();
+	gowl_bar_panel_add_label(short_panel, "One line.");
+
+	long_panel = gowl_bar_panel_new();
+	gowl_bar_panel_add_label(long_panel,
+		"A paragraph long enough that it has to wrap onto several "
+		"lines inside the panel, which is the whole point: an "
+		"explanation should be a sentence, not a truncated one.");
+
+	short_h = gowl_bar_panel_measure(short_panel, f.layout, f.theme,
+	                                 PANEL_W);
+	long_h = gowl_bar_panel_measure(long_panel, f.layout, f.theme,
+	                                PANEL_W);
+
+	g_assert_cmpint(long_h, >, short_h);
+
+	g_object_unref(short_panel);
+	g_object_unref(long_panel);
+	fixture_clear(&f);
+}
+
 static void
 test_empty_panel_renders(void)
 {
@@ -393,6 +493,9 @@ main(int argc, char *argv[])
 	                test_hit_find_prefers_the_topmost);
 	g_test_add_func("/bar-panel/scroll-offsets-hits",
 	                test_scroll_offsets_the_hit_regions);
+	g_test_add_func("/bar-panel/measure-does-not-draw",
+	                test_the_measure_pass_does_not_draw);
+	g_test_add_func("/bar-panel/label-wraps", test_a_label_wraps);
 	g_test_add_func("/bar-panel/empty-renders", test_empty_panel_renders);
 
 	return g_test_run();

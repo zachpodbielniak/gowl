@@ -177,6 +177,56 @@ pass_draw_tracked(PanelPass *p, const gchar *text, gint x, gint center_y,
 	pango_attr_list_unref(attrs);
 }
 
+/* Lay @text out wrapped inside @width and return the height it needs.
+   Never draws: this is called from the height calculation, which runs
+   in the draw pass too, so a version that painted would stamp every
+   paragraph at the origin as well as in its place. */
+static gint
+pass_measure_wrapped(PanelPass *p, const gchar *text, gint width)
+{
+	PangoRectangle logical;
+
+	if (text == NULL || text[0] == '\0' || width <= 0)
+		return 0;
+
+	pango_layout_set_attributes(p->layout, NULL);
+	pango_layout_set_alignment(p->layout, PANGO_ALIGN_LEFT);
+	pango_layout_set_ellipsize(p->layout, PANGO_ELLIPSIZE_NONE);
+	pango_layout_set_width(p->layout, width * PANGO_SCALE);
+	pango_layout_set_wrap(p->layout, PANGO_WRAP_WORD_CHAR);
+	pango_layout_set_text(p->layout, text, -1);
+	pango_layout_get_pixel_extents(p->layout, NULL, &logical);
+
+	/* Leave the layout as the rest of the walk expects to find it. */
+	pango_layout_set_wrap(p->layout, PANGO_WRAP_WORD);
+	pango_layout_set_width(p->layout, -1);
+
+	return logical.height;
+}
+
+/* Draw @text wrapped inside @width, with its top at @y. */
+static void
+pass_draw_wrapped(PanelPass *p, const gchar *text, gint x, gint y,
+                  gint width, GowlBarColor role, gdouble alpha)
+{
+	if (p->cr == NULL || text == NULL || text[0] == '\0' || width <= 0)
+		return;
+
+	pango_layout_set_attributes(p->layout, NULL);
+	pango_layout_set_alignment(p->layout, PANGO_ALIGN_LEFT);
+	pango_layout_set_ellipsize(p->layout, PANGO_ELLIPSIZE_NONE);
+	pango_layout_set_width(p->layout, width * PANGO_SCALE);
+	pango_layout_set_wrap(p->layout, PANGO_WRAP_WORD_CHAR);
+	pango_layout_set_text(p->layout, text, -1);
+
+	gowl_bar_theme_cairo_set_alpha(p->theme, p->cr, role, alpha);
+	cairo_move_to(p->cr, x, y);
+	pango_cairo_show_layout(p->cr, p->layout);
+
+	pango_layout_set_wrap(p->layout, PANGO_WRAP_WORD);
+	pango_layout_set_width(p->layout, -1);
+}
+
 /* Right-align @text so its right edge lands on @right.
  *
  * The box is placed at @right - @box_w and Pango aligns inside it.
@@ -348,7 +398,20 @@ pass_item_height(PanelPass *p, GowlBarPanelItem *item)
 		return (gint)((gdouble)p->row_h * 1.7);
 	case GOWL_BAR_ITEM_SECTION:
 		return (gint)((gdouble)p->row_h * 0.78);
-	case GOWL_BAR_ITEM_LABEL:
+	case GOWL_BAR_ITEM_LABEL: {
+		/* A label carries prose, so its height is whatever the
+		   prose wraps to.  Measured here rather than assumed,
+		   which is what lets an explanation be a sentence instead
+		   of a truncated line. */
+		gint text_h;
+
+		pass_set_font(p, 1.0, FALSE, FALSE);
+		text_h = pass_measure_wrapped(p,
+			gowl_bar_panel_item_get_title(item), p->inner_w);
+		if (text_h <= 0)
+			return (gint)((gdouble)p->row_h * 0.68);
+		return text_h + p->gap / 2;
+	}
 	case GOWL_BAR_ITEM_FIELD:
 	case GOWL_BAR_ITEM_FIELD_PAIR:
 		return (gint)((gdouble)p->row_h * 0.68);
@@ -1087,12 +1150,13 @@ normal:
 			break;
 		case GOWL_BAR_ITEM_LABEL:
 			pass_set_font(p, 1.0, FALSE, FALSE);
-			pass_draw_text(p, gowl_bar_panel_item_get_title(item),
-			               p->pad_x, y + h / 2,
-			               gowl_bar_panel_item_has_color(item)
-			               	? gowl_bar_panel_item_get_color(item)
-			               	: GOWL_BAR_COLOR_SUBTEXT,
-			               1.0, p->inner_w, PANGO_ALIGN_LEFT);
+			pass_draw_wrapped(p,
+				gowl_bar_panel_item_get_title(item),
+				p->pad_x, y + p->gap / 4, p->inner_w,
+				gowl_bar_panel_item_has_color(item)
+					? gowl_bar_panel_item_get_color(item)
+					: GOWL_BAR_COLOR_SUBTEXT,
+				1.0);
 			break;
 		case GOWL_BAR_ITEM_FIELD:
 			pass_draw_field(p, item, y, h, FALSE);

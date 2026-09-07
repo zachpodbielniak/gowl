@@ -145,10 +145,10 @@ test_the_shipped_layout(void)
 	g_assert_cmpint(count_widget(listing, "cpu"), ==, 1);
 
 	/* The Tailscale widget ships in the default layout because it can
-	   answer for itself whether it belongs: it stays invisible until
-	   this host has joined a tailnet.  A widget that can decide that
-	   should not have to be configured, and dropping it from the
-	   shipped list would silently take that away. */
+	   answer for itself whether it belongs: hidden where Tailscale is
+	   not installed, and carrying the join flow where it is but no
+	   tailnet has been joined.  Dropping it from the shipped list
+	   would silently take that away. */
 	g_assert_cmpint(count_widget(listing, "tailscale"), ==, 1);
 
 	g_object_unref(module);

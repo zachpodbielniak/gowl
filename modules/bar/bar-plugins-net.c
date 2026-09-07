@@ -739,6 +739,9 @@ typedef struct {
 	   so a widget keyed on the binary being present would sit grey
 	   and permanent on machines that do not use it. */
 	gboolean joined;
+	/* The sign-in URL tailscale publishes while a join is waiting for
+	   the browser.  Empty except during that window. */
+	gchar   *auth_url;
 	gboolean busy;
 	gchar   *self_name;
 	gchar   *self_ip;
@@ -771,6 +774,7 @@ ts_destroy(GowlBarPlugin *plugin, gpointer data)
 		return;
 	g_free(td->self_name);
 	g_free(td->self_ip);
+	g_free(td->auth_url);
 	g_free(td->exit_node);
 	g_free(td->status_text);
 	g_free(td->last_error);
@@ -876,18 +880,19 @@ ts_parse_peers(TailscaleData *td, const gchar *json)
  * Whether the widget belongs in this bar at all.
  *
  * `show' is `auto' (the default), `always' or `never'.  Under `auto'
- * the widget appears only on a host that has actually joined a
- * tailnet, because the alternative --- keying on the binary being
- * installed --- puts a permanently grey icon on every Immutablue
- * machine, Tailscale being part of the image.
+ * the widget appears wherever Tailscale is installed --- including on
+ * a host that has never joined a tailnet, where it carries the join
+ * flow.  On a Tailscale-native image that is the case you most want a
+ * prompt for: a machine that is one click from being on the tailnet
+ * and simply has not been told to.
  *
- * A host that has joined keeps the widget whether the tailnet is up or
- * down: down is a state worth seeing on a machine that uses Tailscale,
- * and it is one click from the switch that fixes it.
+ * Membership is not a visibility question, then; it is a presentation
+ * one.  Never joined reads as ready-to-set-up, joined but down reads
+ * as off, joined and up reads as on -- see ts_apply_state().
  *
- * The plugin keeps polling while invisible, so a `tailscale up' on a
- * fresh host makes the widget appear on the next poll rather than at
- * the next login.
+ * The plugin keeps polling while invisible, so installing Tailscale
+ * makes the widget appear on the next poll rather than at the next
+ * login.
  */
 static void
 ts_apply_visibility(GowlBarPlugin *plugin, TailscaleData *td)
@@ -907,7 +912,7 @@ ts_apply_visibility(GowlBarPlugin *plugin, TailscaleData *td)
 	else if (g_strcmp0(show, "never") == 0)
 		visible = FALSE;
 	else
-		visible = (td->installed && td->joined);
+		visible = td->installed;
 
 	gowl_bar_plugin_set_visible(plugin, visible);
 
@@ -921,6 +926,48 @@ ts_apply_visibility(GowlBarPlugin *plugin, TailscaleData *td)
    than waiting for a poll: `show: never' should take effect at once,
    and under `auto' this keeps the widget out of the bar until a poll
    confirms membership instead of showing it and taking it away. */
+/* The bar's icon, label and colour for the state we are in.  Three
+   states worth telling apart: on, off, and never set up. */
+static void
+ts_apply_state(GowlBarPlugin *plugin, TailscaleData *td)
+{
+	gboolean labels;
+
+	if (!gowl_bar_plugin_get_visible(plugin))
+		return;
+
+	labels = gowl_bar_plugin_get_setting_bool(plugin, "labels", FALSE);
+	gowl_bar_plugin_set_icon(plugin, "\xef\x95\x82");
+
+	if (!td->installed) {
+		gowl_bar_plugin_set_label(plugin, labels ? "n/a" : NULL);
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_OVERLAY);
+		return;
+	}
+
+	if (!td->joined) {
+		/* Not an error and not "off": this host has never been
+		   told to join, and the panel behind the icon is where it
+		   gets told.  Yellow rather than grey so it reads as
+		   something to do rather than something broken. */
+		gowl_bar_plugin_set_label(plugin, labels ? "set up" : NULL);
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_YELLOW);
+		return;
+	}
+
+	if (td->active) {
+		gowl_bar_plugin_set_label(plugin,
+			labels ? ((td->self_name != NULL) ? td->self_name
+			                                  : "tailscale")
+			       : NULL);
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_TEAL);
+		return;
+	}
+
+	gowl_bar_plugin_set_label(plugin, labels ? "off" : NULL);
+	gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+}
+
 static void
 ts_configure(GowlBarPlugin *plugin, gpointer data, GHashTable *settings)
 {
@@ -940,6 +987,7 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 	if (!td->installed) {
 		td->joined = FALSE;
 		ts_apply_visibility(plugin, td);
+		ts_apply_state(plugin, td);
 		return;
 	}
 
@@ -950,15 +998,7 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 		   all, which the last successful poll already told us. */
 		td->active = FALSE;
 		ts_apply_visibility(plugin, td);
-		if (gowl_bar_plugin_get_visible(plugin)) {
-			gowl_bar_plugin_set_icon(plugin, "\xef\x95\x82");
-			gowl_bar_plugin_set_label(plugin,
-				gowl_bar_plugin_get_setting_bool(plugin,
-					"labels", FALSE)
-				? "tailscale" : NULL);
-			gowl_bar_plugin_set_color(plugin,
-			                          GOWL_BAR_COLOR_MUTED);
-		}
+		ts_apply_state(plugin, td);
 		return;
 	}
 
@@ -971,6 +1011,12 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 	   host that has never joined or has been logged out. */
 	td->joined = gowl_bar_json_bool(json, "HaveNodeKey", FALSE) ||
 	             td->active;
+
+	/* Populated only while a join is waiting on the browser. */
+	g_free(td->auth_url);
+	td->auth_url = gowl_bar_json_string(json, "AuthURL");
+	if (td->auth_url != NULL && td->auth_url[0] == '\0')
+		g_clear_pointer(&td->auth_url, g_free);
 
 	ts_apply_visibility(plugin, td);
 	if (!gowl_bar_plugin_get_visible(plugin))
@@ -1024,25 +1070,33 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 
 	ts_parse_peers(td, json);
 
-	gowl_bar_plugin_set_icon(plugin, "\xef\x95\x82");
-	if (gowl_bar_plugin_get_setting_bool(plugin, "labels", FALSE)) {
-		gowl_bar_plugin_set_label(plugin,
-			td->active ? (td->self_name != NULL ? td->self_name
-			                                    : "tailscale")
-			           : "off");
-	} else {
-		gowl_bar_plugin_set_label(plugin, NULL);
-	}
-	gowl_bar_plugin_set_color(plugin,
-		td->active ? GOWL_BAR_COLOR_TEAL
-		: td->needs_login ? GOWL_BAR_COLOR_YELLOW
-		: GOWL_BAR_COLOR_MUTED);
+	ts_apply_state(plugin, td);
 
-	/* Say it once when a host that *is* a tailnet member has lapsed --
-	   an expired session is actionable and easy to miss.  A host that
-	   never joined gets nothing: the widget is not even shown there,
-	   so a toast pointing at its panel would point at nothing. */
-	if (td->needs_login && td->joined &&
+	/*
+	 * One toast, and only when it is actionable.
+	 *
+	 * A join that is waiting on the browser is time-sensitive and easy
+	 * to miss, so it gets a notification wired to this widget's own
+	 * panel -- click it and the sign-in link is right there.  A
+	 * lapsed session gets the same treatment.
+	 *
+	 * A host that has simply never joined gets nothing: the widget is
+	 * visible and yellow, which is the invitation.  A toast every
+	 * login telling you that you could set up Tailscale is nagging,
+	 * not helping.
+	 */
+	if (td->auth_url != NULL &&
+	    !gowl_bar_plugin_get_setting_bool(plugin, "auth-notified",
+	                                      FALSE)) {
+		gowl_bar_plugin_set_setting(plugin, "auth-notified", "true");
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+			"Tailscale is waiting for sign-in",
+			"Open the link to finish joining the tailnet.");
+	} else if (td->auth_url == NULL) {
+		gowl_bar_plugin_set_setting(plugin, "auth-notified", NULL);
+	}
+
+	if (td->needs_login && td->joined && td->auth_url == NULL &&
 	    !gowl_bar_plugin_get_setting_bool(plugin, "login-notified",
 	                                      FALSE)) {
 		gowl_bar_plugin_set_setting(plugin, "login-notified", "true");
@@ -1072,13 +1126,52 @@ ts_panel(GowlBarPlugin *plugin, gpointer data)
 		return panel;
 	}
 	if (!td->joined) {
-		/* Reachable only with `show: always' --- under `auto' the
-		   widget is not in the bar to be clicked. */
+		/*
+		 * The set-up panel.  This is the whole reason the widget is
+		 * visible on a host that has never joined: the machine is
+		 * one click from being on the tailnet and the bar is where
+		 * that click should be.
+		 */
 		gowl_bar_panel_add_hero(panel, "\xef\x95\x82", "Tailscale",
-		                        "Not on a tailnet");
+			(td->auth_url != NULL) ? "Waiting for sign-in"
+			                       : "Not set up yet");
+
+		if (td->auth_url != NULL) {
+			/* A join is already in flight and the browser has
+			   not been sent yet.  Everything else can wait. */
+			item = gowl_bar_panel_add_row(panel, "auth",
+				"\xef\x82\x8e", "Open the sign-in page",
+				"Finish joining in your browser");
+			gowl_bar_panel_item_set_color(item,
+			                              GOWL_BAR_COLOR_GREEN);
+
+			item = gowl_bar_panel_add_label(panel, td->auth_url);
+			gowl_bar_panel_item_set_color(item,
+			                              GOWL_BAR_COLOR_MUTED);
+
+			gowl_bar_panel_add_separator(panel);
+			item = gowl_bar_panel_add_buttons(panel, "auth-tool");
+			gowl_bar_panel_add_button(item, "Copy link", FALSE);
+			gowl_bar_panel_add_button(item, "Cancel", FALSE);
+			return panel;
+		}
+
+		item = gowl_bar_panel_add_row(panel, "join", "\xef\x82\x90",
+			"Join a tailnet", "Opens a sign-in page in your "
+			"browser");
+		gowl_bar_panel_item_set_color(item, GOWL_BAR_COLOR_YELLOW);
+
+		gowl_bar_panel_add_separator(panel);
+		gowl_bar_panel_add_section(panel, "If joining fails");
 		gowl_bar_panel_add_label(panel,
-			"Run `tailscale up' to join one. The widget appears "
-			"on its own once you have.");
+			"Bringing a device up usually needs root. Granting "
+			"your user the operator role does that once, and "
+			"then joining works from here on its own.");
+		item = gowl_bar_panel_add_row(panel, "operator",
+			"\xef\x82\x84", "Allow without sudo",
+			"Asks for your password once");
+		gowl_bar_panel_item_set_color(item, GOWL_BAR_COLOR_SUBTEXT);
+
 		return panel;
 	}
 
@@ -1188,12 +1281,69 @@ ts_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 		return;
 	}
 
-	if (g_strcmp0(item_id, "login") == 0) {
+	if (g_strcmp0(item_id, "login") == 0 ||
+	    g_strcmp0(item_id, "join") == 0) {
+		/* `tailscale up' publishes its sign-in URL through the
+		   status reply, so the next poll picks it up and the panel
+		   turns into the open-the-link view by itself.  Nothing
+		   here has to parse the command's output. */
+		td->busy = TRUE;
+		gowl_bar_plugin_set_setting(plugin, "auth-notified", NULL);
 		gowl_bar_plugin_spawn(plugin, "tailscale up");
-		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
-			"Tailscale sign-in started",
-			"Follow the link tailscale printed to finish "
-			"joining the tailnet.");
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+			"Joining a tailnet",
+			"A sign-in link will appear here shortly.");
+		return;
+	}
+
+	if (g_strcmp0(item_id, "auth") == 0) {
+		g_autofree gchar *quoted = NULL;
+		g_autofree gchar *line = NULL;
+
+		if (td->auth_url == NULL)
+			return;
+		quoted = g_shell_quote(td->auth_url);
+		line = g_strdup_printf("%s %s",
+			(gowl_bar_plugin_get_setting(plugin, "browser-command")
+			 != NULL)
+				? gowl_bar_plugin_get_setting(plugin,
+					"browser-command")
+				: "xdg-open",
+			quoted);
+		gowl_bar_plugin_spawn(plugin, line);
+		return;
+	}
+
+	if (g_strcmp0(item_id, "auth-tool") == 0) {
+		if (index == 0 && td->auth_url != NULL) {
+			g_autofree gchar *quoted = NULL;
+			g_autofree gchar *line = NULL;
+			const gchar *copy;
+
+			copy = gowl_bar_plugin_get_setting(plugin,
+			                                   "copy-command");
+			quoted = g_shell_quote(td->auth_url);
+			line = g_strdup_printf("sh -c 'printf %%s %s | %s'",
+				quoted, (copy != NULL) ? copy : "wl-copy");
+			gowl_bar_plugin_spawn(plugin, line);
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+				"Copied", "The sign-in link is on the "
+				"clipboard.");
+		} else if (index == 1) {
+			gowl_bar_plugin_spawn(plugin, "tailscale logout");
+			g_clear_pointer(&td->auth_url, g_free);
+		}
+		return;
+	}
+
+	if (g_strcmp0(item_id, "operator") == 0) {
+		g_autofree gchar *line = NULL;
+
+		/* pkexec so the polkit prompt is the desktop's, not a
+		   terminal the bar has no way to give you. */
+		line = g_strdup_printf("pkexec tailscale set --operator=%s",
+		                       g_get_user_name());
+		gowl_bar_plugin_spawn(plugin, line);
 		return;
 	}
 

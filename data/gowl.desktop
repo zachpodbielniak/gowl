@@ -10,8 +10,33 @@ Comment=A GObject-based Wayland compositor inspired by dwl and dwm
 Exec=/bin/sh -c 'gowl; systemctl --user stop gowl-session.target graphical-session.target 2>/dev/null || true'
 Type=Application
 Icon=gowl
-# Trailing :wlroots makes XDG_CURRENT_DESKTOP match xdg-desktop-portal-wlr's
-# UseIn (wlroots;sway;Wayfire;river;phosh;Hyprland), so screen-share apps get
-# the wlroots ScreenCast portal.  Without it the portal frontend finds no
-# ScreenCast backend under gowl and the share picker does nothing.
-DesktopNames=gowl:wlroots
+# XDG_CURRENT_DESKTOP for the session.  Order is load-bearing, and each
+# name is here for a different consumer:
+#
+#   gowl     -- xdg-desktop-portal reads <desktop>-portals.conf, and the
+#               gowl InputCapture/RemoteDesktop backend carries UseIn=gowl.
+#   wlroots  -- matches xdg-desktop-portal-wlr's UseIn
+#               (wlroots;sway;Wayfire;river;phosh;Hyprland), so screen-share
+#               apps get the wlroots ScreenCast portal.  Without it the
+#               portal frontend finds no ScreenCast backend and the share
+#               picker does nothing.
+#   GNOME    -- LAST, and only as a fallback for software that pattern-matches
+#               this variable against a hardcoded list of desktops it knows.
+#
+# That last one is not cosmetic.  Chromium (and therefore every Electron
+# app) picks its password store by splitting XDG_CURRENT_DESKTOP on ':'
+# and comparing each name against a fixed set -- GNOME, KDE, XFCE, Unity,
+# Cinnamon, Pantheon, UKUI, LXQt.  A session naming none of them resolves
+# to DESKTOP_ENVIRONMENT_OTHER, and key_storage_util_linux then selects the
+# PLAINTEXT backend instead of libsecret.  The user-visible symptom is an
+# Electron app announcing it cannot save your session and you will have to
+# log in again next time -- which is also what happens to secrets it had
+# already stored under a session that did report GNOME, because the
+# backend changed underneath them.
+#
+# GNOME goes last so every first-match consumer still resolves to gowl or
+# wlroots: the portal picks gowl-portals.conf (the first name here with a
+# matching <name>-portals.conf), and UseIn matching hits gowl and wlroots
+# first.  gowl runs no XDG autostart .desktop files, so nothing here can
+# trip an OnlyShowIn=GNOME entry.
+DesktopNames=gowl:wlroots:GNOME

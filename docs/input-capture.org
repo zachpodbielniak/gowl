@@ -267,9 +267,61 @@ set by the KVM client, not the user.
   ScreenCast/Screenshot still go to =xdg-desktop-portal-wlr=.
 - =org.freedesktop.impl.portal.desktop.gowl.service= -- D-Bus activation.
 
+- =org.freedesktop.impl.portal.Secret= is pinned to =gnome-keyring=. It is
+  the only interface here that gowl does not implement itself, and it is
+  pinned because it would otherwise have *no* backend at all: the
+  implementation lives in =gnome-keyring.portal=, whose backend name is
+  =gnome-keyring= and whose =UseIn= is =gnome=, so neither =default=wlr=
+  nor a =default=gtk;gnome= ever names it. A sandboxed app asking
+  =org.freedesktop.portal.Secret= for its master key then gets nothing.
+  =gnome-keyring-daemon= owns =org.freedesktop.secrets= regardless of which
+  compositor is in front of it; only the routing was missing.
+
 The session's =XDG_CURRENT_DESKTOP= must contain =gowl=. Gowl's own session
-=data/gowl.desktop= uses =DesktopNames=gowl:wlroots=; the cmacs session uses
-=DesktopNames=CMacs:gowl=.
+=data/gowl.desktop= uses =DesktopNames=gowl:wlroots:GNOME=; the cmacs session
+uses =DesktopNames=CMacs:gowl:GNOME=.
+
+*** Why =GNOME= is on the end
+:PROPERTIES:
+:CUSTOM_ID: input-capture-desktopnames-gnome
+:END:
+Not cosmetic, and not about the portal.
+
+Chromium -- and so every Electron app: Claude Desktop, VS Code, Slack,
+Discord -- picks its password store by splitting =XDG_CURRENT_DESKTOP= on
+=:= and comparing each name against a fixed list (=GNOME=, =KDE=, =XFCE=,
+=Unity=, =X-Cinnamon=, =Pantheon=, =UKUI=, =LXQt=, =Deepin=). A session
+naming none of them resolves to =DESKTOP_ENVIRONMENT_OTHER=, and
+=key_storage_util_linux= then selects the *plaintext* backend rather than
+libsecret.
+
+What the user sees is an app announcing that it cannot save the session
+and they will have to log in again next time -- and it applies equally to
+secrets the app had *already* stored while running under GNOME, because
+the backend changed underneath them. Chromium records this in its
+=Local State=:
+
+#+begin_example
+"os_crypt":{"portal":{"prev_desktop":"GNOME","prev_init_success":true}}
+#+end_example
+
+so switching between a GNOME session and a gowl one is exactly what
+invalidates it. Nothing is wrong with the keyring in this state:
+=gnome-keyring-daemon= is running, owns =org.freedesktop.secrets=, and the
+login collection is unlocked. Only the advertised desktop name was wrong.
+
+=GNOME= goes *last* so every first-match consumer still resolves to gowl:
+=xdg-desktop-portal= picks =gowl-portals.conf= (the first name with a
+matching =<name>-portals.conf=) and =UseIn= matching hits =gowl= and
+=wlroots= before it. Putting it first would silently move
+InputCapture/RemoteDesktop to another backend.
+
+Adding =GNOME= cannot trip =OnlyShowIn=GNOME= autostart entries, because
+gowl runs no XDG autostart =.desktop= files at all -- its autostart module
+spawns an explicit list of commands from the config.
+
+=tests/test-desktop-names.sh= enforces both halves: that a recognised name
+is present, and that it does not out-rank gowl's own names.
 
 ** Building
 :PROPERTIES:

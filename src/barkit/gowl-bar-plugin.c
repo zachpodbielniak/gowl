@@ -701,6 +701,37 @@ gowl_bar_plugin_spawn(GowlBarPlugin *self, const gchar *cmdline)
 }
 
 /**
+ * gowl_bar_plugin_set_bar_setting:
+ * @self: a plugin
+ * @key: a bar configuration key, e.g. `theme-scale'
+ * @value: its new value
+ *
+ * Changes one of the BAR's settings, not the plugin's own.
+ *
+ * gowl_bar_plugin_set_setting() stores state belonging to this plugin;
+ * this reaches the bar's configuration, so a control in a panel can do
+ * what the config file does.  Without it a panel offering, say, a text
+ * size could only record a wish and tell the user to go and edit a file
+ * -- which is what the display plugin did, writing a `requested-scale'
+ * nothing ever read.
+ *
+ * Returns: %TRUE if the host recognised and applied @key
+ */
+gboolean
+gowl_bar_plugin_set_bar_setting(GowlBarPlugin *self, const gchar *key,
+                                const gchar *value)
+{
+	GowlBarHost *host;
+
+	g_return_val_if_fail(GOWL_IS_BAR_PLUGIN(self), FALSE);
+
+	host = PRIV(self)->host;
+	if (host == NULL)
+		return FALSE;
+	return gowl_bar_host_set_bar_setting(host, key, value);
+}
+
+/**
  * gowl_bar_plugin_notify:
  * @self: a plugin
  * @urgency: the level

@@ -137,4 +137,34 @@ for f in modules/bar/bar-plugins-*.c; do
 	fi
 done
 
+# A panel control must change something, not just record a wish.
+#
+# The display plugin's text-size buttons wrote a `requested-scale'
+# setting that nothing ever read, and toasted "set theme-scale in the
+# configuration to make this permanent".  The buttons moved; the text
+# never did.  Nothing catches that: writing a setting nobody reads is
+# perfectly legal.
+#
+# So: no plugin may write a setting that no reader anywhere consults.
+for f in modules/bar/bar-plugins-*.c; do
+	for key in $(grep -ohE 'set_setting\(plugin, "[a-z-]+"' "$f" \
+			| grep -oE '"[a-z-]+"' | sort -u); do
+		# tag-count is published FOR external consumers, not for us.
+		[ "$key" = '"tag-count"' ] && continue
+		if ! grep -qh "get_setting.*$key" modules/bar/*.c \
+				src/barkit/*.c 2>/dev/null; then
+			fail "$f writes $key but nothing reads it; the control it backs does nothing"
+		fi
+	done
+done
+
+# The compositor's own recorder must stay reachable.
+#
+# gowl_recording_provider_start() had NO callers anywhere in the tree:
+# the recording module implemented every capture mode and nothing could
+# invoke it, so the only way to record was an external tool.  An
+# interface with no callers rots quietly.
+grep -rq "gowl_recording_provider_start" modules/ src/core/ ||
+	fail "nothing calls gowl_recording_provider_start; the recording module is unreachable again"
+
 echo "PASS: bar source guards"

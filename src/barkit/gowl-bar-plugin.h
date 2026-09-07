@@ -196,6 +196,22 @@ gboolean     gowl_bar_plugin_get_setting_bool (GowlBarPlugin *self,
  * plugin from a spec such as `disk:/var', which becomes the `param'
  * setting.
  */
+/**
+ * gowl_bar_plugin_set_bar_setting:
+ * @self: a plugin
+ * @key: a bar configuration key, e.g. `theme-scale'
+ * @value: its new value
+ *
+ * Changes one of the BAR's own settings, as a config file would.
+ * Distinct from gowl_bar_plugin_set_setting(), which stores state
+ * belonging to this plugin.
+ *
+ * Returns: %TRUE if the host recognised and applied @key
+ */
+gboolean gowl_bar_plugin_set_bar_setting (GowlBarPlugin *self,
+                                           const gchar   *key,
+                                           const gchar   *value);
+
 void gowl_bar_plugin_set_setting (GowlBarPlugin *self,
                                    const gchar   *key,
                                    const gchar   *value);

@@ -56,6 +56,7 @@ typedef void (*GowlBarWorkFunc) (GowlBarPlugin *plugin, gpointer user_data);
  * @queue_work: runs a blocking callback off the compositor thread
  * @spawn: launches a detached shell command
  * @get_state_dir: returns a writable per-user directory for plugin state
+ * @set_bar_setting: changes one of the bar's own configuration keys
  *
  * The services a bar plugin may ask of whatever is hosting it.
  *
@@ -85,11 +86,36 @@ struct _GowlBarHostInterface {
 	void                (*spawn)                (GowlBarHost *self,
 	                                             const gchar *cmdline);
 	const gchar        *(*get_state_dir)        (GowlBarHost *self);
+	gboolean            (*set_bar_setting)      (GowlBarHost *self,
+	                                             const gchar *key,
+	                                             const gchar *value);
 
-	gpointer padding[8];
+	gpointer padding[7];
 };
 
 const GowlBarTheme *gowl_bar_host_get_theme (GowlBarHost *self);
+
+/**
+ * gowl_bar_host_set_bar_setting:
+ * @self: a host
+ * @key: a bar configuration key, e.g. `theme-scale'
+ * @value: its new value
+ *
+ * Changes one of the bar's OWN settings, as though it had been written
+ * in the configuration file.
+ *
+ * A plugin cannot do this through the theme: gowl_bar_host_get_theme()
+ * hands back a const pointer on purpose, because the theme is shared and
+ * a plugin mutating it would not survive the next configuration pass.
+ * Routing through the host means a change made from a panel and a change
+ * made in the config file take exactly the same path, and the host gets
+ * to re-measure afterwards -- which a font or scale change requires.
+ *
+ * Returns: %TRUE if the host recognised and applied @key
+ */
+gboolean gowl_bar_host_set_bar_setting (GowlBarHost *self,
+                                         const gchar *key,
+                                         const gchar *value);
 
 /**
  * gowl_bar_host_request_redraw:

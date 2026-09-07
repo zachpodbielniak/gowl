@@ -115,6 +115,7 @@ bar_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buf, uint32_t flags,
 	return true;
 }
 
+
 static void
 bar_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buf)
 {
@@ -1996,6 +1997,51 @@ host_get_state_dir(GowlBarHost *host)
 	return GOWL_MODULE_BAR(host)->state_dir;
 }
 
+/*
+ * Change one of the bar's own settings from a plugin panel.
+ *
+ * Routed through the same gowl_bar_theme_apply_setting() a config pass
+ * uses, so a change made from a panel and one made in the config file
+ * are indistinguishable -- and then the bar is re-measured, because a
+ * scale or font change alters every widget's width and a redraw alone
+ * would paint the new size into the old slots.
+ *
+ * Only `theme-*' is accepted.  A plugin reaching further into the bar's
+ * configuration -- rewriting the widget list, moving regions -- is a
+ * different and much larger question than "make this text bigger".
+ */
+static gboolean
+host_set_bar_setting(GowlBarHost *host, const gchar *key, const gchar *value)
+{
+	GowlModuleBar *self = GOWL_MODULE_BAR(host);
+	gboolean       applied = FALSE;
+	gint           i;
+
+	if (key == NULL || !g_str_has_prefix(key, "theme-"))
+		return FALSE;
+
+	for (i = 0; i < GOWL_BAR_POSITION_COUNT; i++) {
+		GowlBarInstance *bar = &self->bars[i];
+
+		if (bar->theme == NULL)
+			continue;
+		if (gowl_bar_theme_apply_setting(bar->theme, key, value))
+			applied = TRUE;
+	}
+
+	/*
+	 * A redraw is enough: bar_layout_slot() re-measures every item on
+	 * every render, so the new metrics are picked up on the next frame.
+	 * The bar's HEIGHT is its own config key rather than something
+	 * derived from the theme, so this cannot invalidate the surface --
+	 * and the size check in the per-monitor pass would rebuild it
+	 * anyway if it ever did.
+	 */
+	if (applied)
+		host_request_redraw(host);
+	return applied;
+}
+
 static void
 bar_host_iface_init(GowlBarHostInterface *iface)
 {
@@ -2008,6 +2054,7 @@ bar_host_iface_init(GowlBarHostInterface *iface)
 	iface->queue_work            = host_queue_work;
 	iface->spawn                 = host_spawn;
 	iface->get_state_dir         = host_get_state_dir;
+	iface->set_bar_setting       = host_set_bar_setting;
 }
 
 /* ----------------------------------------------------------------

@@ -30,6 +30,8 @@
 #include "boxed/gowl-process-info.h"
 
 #include "bar-internal.h"
+#include "interfaces/gowl-recording-provider.h"
+#include "module/gowl-module-manager.h"
 
 /**
  * SECTION:bar-plugins-desktop
@@ -1660,11 +1662,25 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 		   reaching into the theme: a change made here should look
 		   exactly like one made in the config file. */
 		scale = g_strdup_printf("%.2f", scales[index]);
-		gowl_bar_plugin_set_setting(plugin, "requested-scale", scale);
-		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
-			"Bar text size",
-			"Set theme-scale in the bar configuration to make "
-			"this permanent.");
+		/*
+		 * Applied through the host, so a change made here takes the
+		 * same path as one written in the config file and the bar
+		 * re-measures.  This used to store a `requested-scale' that
+		 * nothing read, which meant the buttons moved but the text
+		 * never did.
+		 */
+		if (gowl_bar_plugin_set_bar_setting(plugin, "theme-scale",
+		                                    scale)) {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+				"Bar text size",
+				"Add theme-scale to the bar configuration to "
+				"keep it across restarts.");
+			gowl_bar_plugin_request_redraw(plugin);
+		} else {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+				"Bar text size",
+				"This host does not allow changing it.");
+		}
 		return;
 	}
 
@@ -1798,6 +1814,23 @@ recorder_running(GowlBarPlugin *plugin)
 	proc = gowl_bar_plugin_get_setting(plugin, "process");
 	if (proc == NULL || *proc == '\0')
 		proc = "wf-recorder";
+	{
+		const BarEnv *env = bar_env();
+
+		if (env != NULL && env->compositor != NULL) {
+			GowlCompositor        *comp;
+			GowlRecordingProvider *prov;
+
+			comp = GOWL_COMPOSITOR(env->compositor);
+			prov = (GowlRecordingProvider *)
+				gowl_module_manager_get_recording_provider(
+					gowl_compositor_get_module_manager(comp));
+			if (prov != NULL
+			    && gowl_recording_provider_is_recording(prov))
+				return TRUE;
+		}
+	}
+
 	if (!bar_have_command("pidof"))
 		return FALSE;
 	line = g_strdup_printf("pidof %s", proc);
@@ -1917,6 +1950,63 @@ recorder_geometry(gint index, gchar **scope_out)
 	return NULL;
 }
 
+/*
+ * Start a recording through the compositor's own provider.
+ *
+ * Returns FALSE when there is nothing to start it with, or when the
+ * provider refused, so the caller can fall back.  A refusal is not
+ * necessarily a fault: the module gates on ffmpeg being present.
+ */
+static gboolean
+recorder_start_native(GowlBarPlugin *plugin, gint index, gchar **scope_out)
+{
+	const BarEnv          *env = bar_env();
+	GowlRecordingProvider *prov;
+	GowlCompositor        *comp;
+	GowlMonitor           *mon;
+	GowlClient            *client = NULL;
+	GowlCaptureMode        mode;
+	const gchar           *mon_name = NULL;
+	g_autoptr(GError)      err = NULL;
+
+	if (env == NULL || env->compositor == NULL)
+		return FALSE;
+	comp = GOWL_COMPOSITOR(env->compositor);
+
+	prov = (GowlRecordingProvider *)
+		gowl_module_manager_get_recording_provider(gowl_compositor_get_module_manager(comp));
+	if (prov == NULL)
+		return FALSE;
+
+	switch (index) {
+	case 1:
+		mode = GOWL_CAPTURE_MODE_WINDOW;
+		client = gowl_compositor_get_focused_client(comp);
+		if (client == NULL)
+			return FALSE;
+		*scope_out = g_strdup("Focused window");
+		break;
+	case 2:
+		mode = GOWL_CAPTURE_MODE_AREA;
+		*scope_out = g_strdup("Region");
+		break;
+	default:
+		mode = GOWL_CAPTURE_MODE_DESKTOP;
+		mon = gowl_compositor_get_selected_monitor(comp);
+		if (mon != NULL)
+			mon_name = gowl_monitor_get_name(mon);
+		*scope_out = g_strdup("Whole screen");
+		break;
+	}
+
+	if (!gowl_recording_provider_start(prov, mode, mon_name, client,
+	                                   0, 0, 0, 0, NULL, &err)) {
+		g_clear_pointer(scope_out, g_free);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 static void
 recorder_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
                 gint index, gdouble value, guint button)
@@ -1932,6 +2022,27 @@ recorder_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	(void)button;
 
 	if (g_strcmp0(item_id, "stop") == 0) {
+		const BarEnv *env = bar_env();
+
+		if (env != NULL && env->compositor != NULL) {
+			GowlCompositor        *comp;
+			GowlRecordingProvider *prov;
+
+			comp = GOWL_COMPOSITOR(env->compositor);
+			prov = (GowlRecordingProvider *)
+				gowl_module_manager_get_recording_provider(
+					gowl_compositor_get_module_manager(comp));
+			if (prov != NULL
+			    && gowl_recording_provider_is_recording(prov)) {
+				g_autofree gchar *path = NULL;
+
+				gowl_recording_provider_stop(prov, &path, NULL);
+				gowl_bar_plugin_notify(plugin,
+					GOWL_BAR_TOAST_LOW,
+					"Recording stopped", path);
+				return;
+			}
+		}
 		proc = gowl_bar_plugin_get_setting(plugin, "process");
 		if (proc == NULL || *proc == '\0')
 			proc = "wf-recorder";
@@ -1959,6 +2070,18 @@ recorder_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 			"slurp is not installed.");
 		return;
 	}
+
+	/*
+	 * The compositor's own recorder first.  It captures through the
+	 * scene, so a window is the window rather than a rectangle that
+	 * happens to be over it, and it needs neither wf-recorder nor
+	 * slurp.  It falls through to wf-recorder when no recording module
+	 * is loaded or the provider refuses -- until this call existed the
+	 * provider had no callers at all, so the fallback is what keeps a
+	 * newly-exercised path from being the only path.
+	 */
+	if (recorder_start_native(plugin, index, &scope))
+		return;
 
 	geom = recorder_geometry(index, &scope);
 	if (index == 1 && geom == NULL) {

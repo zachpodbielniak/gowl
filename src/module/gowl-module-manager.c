@@ -1605,6 +1605,17 @@ gowl_module_manager_get_layout_providers(GowlModuleManager *self)
  * Returns: (transfer none) (nullable): the active decorator
  */
 gpointer
+gowl_module_manager_get_recording_provider(GowlModuleManager *self)
+{
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+
+	if (self->recording_providers == NULL
+	    || self->recording_providers->len == 0)
+		return NULL;
+	return g_ptr_array_index(self->recording_providers, 0);
+}
+
+gpointer
 gowl_module_manager_get_decorator(GowlModuleManager *self)
 {
 	guint i;

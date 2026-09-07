@@ -45,6 +45,21 @@ gowl_bar_host_get_theme(GowlBarHost *self)
 	return iface->get_theme(self);
 }
 
+gboolean
+gowl_bar_host_set_bar_setting(GowlBarHost *self, const gchar *key,
+                              const gchar *value)
+{
+	GowlBarHostInterface *iface;
+
+	g_return_val_if_fail(GOWL_IS_BAR_HOST(self), FALSE);
+	g_return_val_if_fail(key != NULL, FALSE);
+
+	iface = GOWL_BAR_HOST_GET_IFACE(self);
+	if (iface->set_bar_setting == NULL)
+		return FALSE;
+	return iface->set_bar_setting(self, key, value);
+}
+
 /**
  * gowl_bar_host_request_redraw:
  * @self: a host

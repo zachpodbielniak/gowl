@@ -186,6 +186,23 @@ gboolean            gowl_module_manager_bar_axis          (GowlModuleManager *se
 gpointer            gowl_module_manager_get_decorator (GowlModuleManager *self);
 
 /**
+ * gowl_module_manager_get_recording_provider:
+ * @self: a #GowlModuleManager
+ *
+ * Returns the first active #GowlRecordingProvider module, or %NULL if
+ * none is loaded.
+ *
+ * The recording module implements every capture mode --- a monitor, a
+ * client, a region, all outputs stitched --- and until this existed
+ * there was no way to reach it: the interface had no callers anywhere
+ * in the tree, so the compositor's own recorder could only be used by
+ * something outside it.
+ *
+ * Returns: (transfer none) (nullable): the active recording provider
+ */
+gpointer            gowl_module_manager_get_recording_provider (GowlModuleManager *self);
+
+/**
  * gowl_module_manager_get_layout_providers:
  * @self: a #GowlModuleManager
  *

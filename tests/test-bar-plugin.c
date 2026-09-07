@@ -643,6 +643,125 @@ test_toast_carries_its_panel_target(void)
 	gowl_bar_toast_free(toast);
 }
 
+/* ── A stub host ─────────────────────────────────────────────────── */
+
+/*
+ * The smallest thing that satisfies GowlBarHost, so the plugin->host
+ * calls can be tested without a compositor.
+ *
+ * It exists for gowl_bar_plugin_set_bar_setting(), which is the call
+ * that lets a panel control change the BAR rather than merely record a
+ * wish about it -- the display plugin's text-size buttons used to write
+ * a setting nobody read, so they moved and nothing happened.  A stub
+ * host is the only way to assert that the call actually arrives.
+ */
+typedef struct {
+	GObject parent;
+	gchar  *last_key;
+	gchar  *last_value;
+	gboolean accept;
+} StubHost;
+
+typedef struct { GObjectClass parent; } StubHostClass;
+
+static void stub_host_iface_init(GowlBarHostInterface *iface);
+
+G_DEFINE_TYPE_WITH_CODE(StubHost, stub_host, G_TYPE_OBJECT,
+	G_IMPLEMENT_INTERFACE(GOWL_TYPE_BAR_HOST, stub_host_iface_init))
+
+static gboolean
+stub_host_set_bar_setting(GowlBarHost *host, const gchar *key,
+                          const gchar *value)
+{
+	StubHost *self = (StubHost *)host;
+
+	g_free(self->last_key);
+	g_free(self->last_value);
+	self->last_key = g_strdup(key);
+	self->last_value = g_strdup(value);
+	return self->accept;
+}
+
+static void
+stub_host_iface_init(GowlBarHostInterface *iface)
+{
+	iface->set_bar_setting = stub_host_set_bar_setting;
+}
+
+static void
+stub_host_finalize(GObject *o)
+{
+	StubHost *self = (StubHost *)o;
+
+	g_free(self->last_key);
+	g_free(self->last_value);
+	G_OBJECT_CLASS(stub_host_parent_class)->finalize(o);
+}
+
+static void
+stub_host_class_init(StubHostClass *klass)
+{
+	G_OBJECT_CLASS(klass)->finalize = stub_host_finalize;
+}
+
+static void stub_host_init(StubHost *self) { self->accept = TRUE; }
+
+/*
+ * A plugin's bar-setting change reaches the host, carries the key and
+ * value unchanged, and reports the host's verdict rather than always
+ * claiming success.
+ */
+static void
+test_plugin_reaches_the_host_for_bar_settings(void)
+{
+	g_autoptr(GowlBarRegistry) registry = NULL;
+	GowlBarPlugin *plugin;
+	StubHost      *host;
+
+	registry = gowl_bar_registry_new(NULL);
+	gowl_bar_registry_register_vtable(registry, "probe", NULL, NULL,
+	                                  &probe_vtable);
+	plugin = gowl_bar_registry_instantiate(registry, "probe", NULL);
+	g_assert_nonnull(plugin);
+
+	host = g_object_new(stub_host_get_type(), NULL);
+	gowl_bar_plugin_set_host(plugin, GOWL_BAR_HOST(host));
+
+	g_assert_true(gowl_bar_plugin_set_bar_setting(plugin,
+	                                              "theme-scale", "1.20"));
+	g_assert_cmpstr(host->last_key, ==, "theme-scale");
+	g_assert_cmpstr(host->last_value, ==, "1.20");
+
+	/* A host that refuses must be reported as refusing: the caller
+	   decides whether to tell the user it did nothing. */
+	host->accept = FALSE;
+	g_assert_false(gowl_bar_plugin_set_bar_setting(plugin,
+	                                               "theme-scale", "2.0"));
+
+	g_object_unref(plugin);
+	g_object_unref(host);
+}
+
+/* With no host at all the call must fail rather than crash: a plugin
+   can be instantiated and queried before it is ever adopted. */
+static void
+test_bar_setting_without_a_host(void)
+{
+	g_autoptr(GowlBarRegistry) registry = NULL;
+	GowlBarPlugin *plugin;
+
+	registry = gowl_bar_registry_new(NULL);
+	gowl_bar_registry_register_vtable(registry, "probe", NULL, NULL,
+	                                  &probe_vtable);
+	plugin = gowl_bar_registry_instantiate(registry, "probe", NULL);
+	g_assert_nonnull(plugin);
+
+	g_assert_false(gowl_bar_plugin_set_bar_setting(plugin,
+	                                               "theme-scale", "1.0"));
+	g_object_unref(plugin);
+}
+
+
 int
 main(int argc, char *argv[])
 {
@@ -684,5 +803,9 @@ main(int argc, char *argv[])
 	g_test_add_func("/bar-toast/panel-target",
 	                test_toast_carries_its_panel_target);
 
+	g_test_add_func("/bar-plugin/host-bar-setting",
+	                test_plugin_reaches_the_host_for_bar_settings);
+	g_test_add_func("/bar-plugin/bar-setting-without-host",
+	                test_bar_setting_without_a_host);
 	return g_test_run();
 }

@@ -78,6 +78,7 @@ LIB_SRCS := \
 	src/interfaces/gowl-workspace-provider.c \
 	src/interfaces/gowl-capture-provider.c \
 	src/barkit/gowl-bar-theme.c \
+	src/barkit/gowl-bar-json.c \
 	src/barkit/gowl-bar-panel.c \
 	src/barkit/gowl-bar-panel-render.c \
 	src/barkit/gowl-bar-toast.c \
@@ -149,6 +150,7 @@ LIB_HDRS := \
 	src/boxed/gowl-workspace-id.h \
 	src/barkit/gowl-barkit-types.h \
 	src/barkit/gowl-bar-theme.h \
+	src/barkit/gowl-bar-json.h \
 	src/barkit/gowl-bar-panel.h \
 	src/barkit/gowl-bar-panel-render.h \
 	src/barkit/gowl-bar-toast.h \

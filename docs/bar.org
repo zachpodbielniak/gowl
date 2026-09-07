@@ -346,6 +346,35 @@ This is the one rule that matters more than the rest.
 
 If you need a subprocess in response to a click, use =gowl_bar_plugin_spawn()=, which is fire-and-forget, or =gowl_bar_plugin_queue_work()= to run something blocking on a worker.
 
+*** Talking to a CLI
+:PROPERTIES:
+:CUSTOM_ID: plugin-json
+:END:
+
+Plenty of things a widget wants to show come from a command with a
+=--json= mode. Linking a full JSON parser into a bar plugin for three
+scalars is more dependency than the job deserves, and hand-rolling a
+scanner is how a plugin ends up reading the *next* object's field when
+its own is absent --- silently, with a plausible-looking answer.
+
+=gowl/barkit/gowl-bar-json.h= reads named fields by anchoring on a
+complete ~"key":~ match and brace-matching object values:
+
+#+begin_src C
+g_autofree gchar *state = NULL;
+g_autofree gchar *self = NULL;
+
+state = gowl_bar_json_string(reply, "BackendState");
+self  = gowl_bar_json_object(reply, "Self");   /* bounded */
+name  = gowl_bar_json_string(self, "HostName");
+
+gowl_bar_json_foreach_object(reply, "Peer", collect_peer, &state);
+#+end_src
+
+It is not a JSON parser: it does not validate, build a tree, or address
+a path. What it does is fail by returning =NULL= rather than by
+returning somebody else's value. The Tailscale widget is built on it.
+
 *** Colour
 :PROPERTIES:
 :CUSTOM_ID: plugin-colour

@@ -23,6 +23,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "barkit/gowl-bar-json.h"
+
 #include "bar-internal.h"
 
 /**
@@ -779,188 +781,90 @@ ts_interval(GowlBarPlugin *plugin, gpointer data)
 	return gowl_bar_plugin_get_setting_int(plugin, "refresh", 30);
 }
 
-/* A very small JSON reader for the handful of fields the panel needs.
-   `tailscale status --json' is large and deeply nested; pulling three
-   scalars and one object's keys out of it by hand is far less than
-   linking a JSON parser into a bar module for one plugin.  Anything
-   this cannot parse simply leaves the panel showing less, never wrong
-   data: every extraction is anchored on a full `"key":' match. */
-static gchar *
-ts_json_string(const gchar *json, const gchar *key)
-{
-	g_autofree gchar *needle = NULL;
-	const gchar *p, *start, *end;
-	GString *out;
-
-	if (json == NULL)
-		return NULL;
-
-	needle = g_strdup_printf("\"%s\":", key);
-	p = strstr(json, needle);
-	if (p == NULL)
-		return NULL;
-	p += strlen(needle);
-	while (*p == ' ' || *p == '\t' || *p == '\n')
-		p++;
-	if (*p != '"')
-		return NULL;
-	start = ++p;
-
-	out = g_string_new(NULL);
-	for (end = start; *end != '\0'; end++) {
-		if (*end == '\\' && end[1] != '\0') {
-			end++;
-			g_string_append_c(out, *end);
-			continue;
-		}
-		if (*end == '"')
-			break;
-		g_string_append_c(out, *end);
-	}
-	return g_string_free(out, FALSE);
-}
-
+/* The peer walk.  Each callback gets one peer object, brace-matched by
+   the kit's reader, so a field missing from a peer cannot be answered
+   from the next one. */
 static gboolean
-ts_json_bool(const gchar *json, const gchar *key, gboolean fallback)
+ts_collect_peer(const gchar *obj, guint index, gpointer user_data)
 {
-	g_autofree gchar *needle = NULL;
-	const gchar *p;
+	TailscaleData *td = user_data;
+	g_autofree gchar *name = NULL;
+	g_autofree gchar *host = NULL;
+	g_autofree gchar *os = NULL;
+	g_autofree gchar *ip = NULL;
+	g_auto(GStrv) ips = NULL;
+	gboolean online, exit_option;
 
-	if (json == NULL)
-		return fallback;
+	(void)index;
 
-	needle = g_strdup_printf("\"%s\":", key);
-	p = strstr(json, needle);
-	if (p == NULL)
-		return fallback;
-	p += strlen(needle);
-	while (*p == ' ' || *p == '\t' || *p == '\n')
-		p++;
-	if (strncmp(p, "true", 4) == 0)
+	name = gowl_bar_json_string(obj, "DNSName");
+	host = gowl_bar_json_string(obj, "HostName");
+	os   = gowl_bar_json_string(obj, "OS");
+	online      = gowl_bar_json_bool(obj, "Online", FALSE);
+	exit_option = gowl_bar_json_bool(obj, "ExitNodeOption", FALSE);
+
+	/* DNSName is fully qualified and can be empty --- a tailnet
+	   service such as a funnel ingress has only a HostName.  Prefer
+	   the host name when there is one, since that is what the admin
+	   console shows. */
+	if (name != NULL) {
+		gchar *dot = strchr(name, '.');
+
+		if (dot != NULL)
+			*dot = '\0';
+	}
+	if (host != NULL && host[0] != '\0') {
+		g_free(name);
+		name = g_strdup(host);
+	}
+	if (name == NULL || name[0] == '\0')
 		return TRUE;
-	if (strncmp(p, "false", 5) == 0)
-		return FALSE;
-	return fallback;
+
+	/* Prefer the 100.x address: a machine list showing fd7a:... for
+	   some peers and 100.x for others is not one anybody can use. */
+	ips = gowl_bar_json_string_array(obj, "TailscaleIPs", NULL);
+	if (ips != NULL) {
+		gint i;
+
+		for (i = 0; ips[i] != NULL; i++) {
+			if (g_str_has_prefix(ips[i], "100.")) {
+				ip = g_strdup(ips[i]);
+				break;
+			}
+			if (ip == NULL)
+				ip = g_strdup(ips[i]);
+		}
+	}
+
+	g_ptr_array_add(td->peers,
+		g_strdup_printf("%s\t%s\t%s\t%d", name,
+		                (ip != NULL) ? ip : "",
+		                (os != NULL) ? os : "", online ? 1 : 0));
+	if (exit_option) {
+		g_ptr_array_add(td->exit_nodes,
+			g_strdup_printf("%s\t%s", name,
+			                (ip != NULL) ? ip : ""));
+	}
+
+	/* ExitNodeStatus is an object when set and null when not, so the
+	   peer's own flag is the reliable way to know which node traffic
+	   is leaving through. */
+	if (gowl_bar_json_bool(obj, "ExitNode", FALSE)) {
+		g_free(td->exit_node);
+		td->exit_node = g_strdup(name);
+	}
+
+	return (td->peers->len < 60);
 }
 
-/* Walk the Peer map, extracting one row per machine.  Each peer object
-   starts at a `"nodekey:..."` key and ends at the matching brace, so
-   the scan is a brace counter rather than a real parser. */
 static void
 ts_parse_peers(TailscaleData *td, const gchar *json)
 {
-	const gchar *peers, *p;
-	gint depth;
-
 	g_ptr_array_set_size(td->peers, 0);
 	g_ptr_array_set_size(td->exit_nodes, 0);
+	g_clear_pointer(&td->exit_node, g_free);
 
-	if (json == NULL)
-		return;
-	peers = strstr(json, "\"Peer\":");
-	if (peers == NULL)
-		return;
-	p = strchr(peers, '{');
-	if (p == NULL)
-		return;
-	p++;
-
-	depth = 0;
-	while (*p != '\0') {
-		const gchar *obj_start;
-		g_autofree gchar *obj = NULL;
-		g_autofree gchar *name = NULL;
-		g_autofree gchar *host = NULL;
-		g_autofree gchar *os = NULL;
-		gboolean online, exit_option;
-
-		if (*p == '}' && depth == 0)
-			break;
-		if (*p != '{') {
-			p++;
-			continue;
-		}
-
-		obj_start = p;
-		depth = 1;
-		p++;
-		while (*p != '\0' && depth > 0) {
-			if (*p == '"') {
-				/* Skip a string wholesale so a brace inside
-				   a machine name cannot unbalance the
-				   counter. */
-				p++;
-				while (*p != '\0' && *p != '"') {
-					if (*p == '\\' && p[1] != '\0')
-						p++;
-					p++;
-				}
-			} else if (*p == '{') {
-				depth++;
-			} else if (*p == '}') {
-				depth--;
-			}
-			p++;
-		}
-		obj = g_strndup(obj_start, (gsize)(p - obj_start));
-
-		name = ts_json_string(obj, "DNSName");
-		host = ts_json_string(obj, "HostName");
-		os   = ts_json_string(obj, "OS");
-		online = ts_json_bool(obj, "Online", FALSE);
-		exit_option = ts_json_bool(obj, "ExitNodeOption", FALSE);
-
-		if (name != NULL && name[0] != '\0') {
-			gchar *dot;
-			g_autofree gchar *ip = NULL;
-
-			/* DNSName is fully qualified and ends with a dot;
-			   the short name is what a machine list wants. */
-			dot = strchr(name, '.');
-			if (dot != NULL)
-				*dot = '\0';
-
-			ip = ts_json_string(obj, "TailscaleIPs");
-			if (ip == NULL) {
-				const gchar *ips;
-
-				ips = strstr(obj, "\"TailscaleIPs\":");
-				if (ips != NULL) {
-					const gchar *q;
-
-					q = strchr(ips + 15, '"');
-					if (q != NULL) {
-						const gchar *e;
-
-						q++;
-						e = strchr(q, '"');
-						if (e != NULL)
-							ip = g_strndup(q,
-								(gsize)(e - q));
-					}
-				}
-			}
-
-			g_ptr_array_add(td->peers,
-				g_strdup_printf("%s\t%s\t%s\t%d",
-					(host != NULL && host[0] != '\0')
-						? host : name,
-					(ip != NULL) ? ip : "",
-					(os != NULL) ? os : "",
-					online ? 1 : 0));
-			if (exit_option) {
-				g_ptr_array_add(td->exit_nodes,
-					g_strdup_printf("%s\t%s",
-						(host != NULL && host[0] != '\0')
-							? host : name,
-						(ip != NULL) ? ip : ""));
-			}
-		}
-
-		if (td->peers->len >= 40)
-			break;
-		depth = 0;
-	}
+	gowl_bar_json_foreach_object(json, "Peer", ts_collect_peer, td);
 }
 
 static void
@@ -990,7 +894,7 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 		return;
 	}
 
-	state = ts_json_string(json, "BackendState");
+	state = gowl_bar_json_string(json, "BackendState");
 	td->active      = (g_strcmp0(state, "Running") == 0);
 	td->needs_login = (g_strcmp0(state, "NeedsLogin") == 0);
 
@@ -998,30 +902,51 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 	td->status_text = g_strdup((state != NULL) ? state : "Unknown");
 
 	{
-		const gchar *self;
+		g_autofree gchar *self = NULL;
 
-		self = strstr(json, "\"Self\":");
+		self = gowl_bar_json_object(json, "Self");
 		if (self != NULL) {
 			g_autofree gchar *dns = NULL;
+			g_autofree gchar *host = NULL;
+			g_auto(GStrv) ips = NULL;
 
-			dns = ts_json_string(self, "DNSName");
+			dns  = gowl_bar_json_string(self, "DNSName");
+			host = gowl_bar_json_string(self, "HostName");
 			if (dns != NULL) {
 				gchar *dot = strchr(dns, '.');
 
 				if (dot != NULL)
 					*dot = '\0';
-				g_free(td->self_name);
-				td->self_name = g_strdup(dns);
+			}
+			g_free(td->self_name);
+			td->self_name = (dns != NULL && dns[0] != '\0')
+				? g_strdup(dns) : g_strdup(host);
+
+			g_free(td->self_ip);
+			td->self_ip = NULL;
+			ips = gowl_bar_json_string_array(self, "TailscaleIPs",
+			                                 NULL);
+			if (ips != NULL) {
+				gint i;
+
+				for (i = 0; ips[i] != NULL; i++) {
+					if (g_str_has_prefix(ips[i], "100.")) {
+						g_free(td->self_ip);
+						td->self_ip =
+							g_strdup(ips[i]);
+						break;
+					}
+					if (td->self_ip == NULL)
+						td->self_ip =
+							g_strdup(ips[i]);
+				}
 			}
 		}
 	}
 
-	g_free(td->exit_node);
-	td->exit_node = ts_json_string(json, "ExitNodeStatus");
-
 	ts_parse_peers(td, json);
 
-	gowl_bar_plugin_set_icon(plugin, "\xef\x95\x82");   /* U+F0E2 */
+	gowl_bar_plugin_set_icon(plugin, "\xef\x95\x82");
 	if (gowl_bar_plugin_get_setting_bool(plugin, "labels", FALSE)) {
 		gowl_bar_plugin_set_label(plugin,
 			td->active ? (td->self_name != NULL ? td->self_name
@@ -1082,8 +1007,10 @@ ts_panel(GowlBarPlugin *plugin, gpointer data)
 		gowl_bar_panel_item_set_color(item, GOWL_BAR_COLOR_YELLOW);
 	}
 
-	gowl_bar_panel_add_field(panel, "State",
-		(td->status_text != NULL) ? td->status_text : "Unknown");
+	gowl_bar_panel_add_field_pair(panel, "State",
+		(td->status_text != NULL) ? td->status_text : "Unknown",
+		"Address",
+		(td->self_ip != NULL) ? td->self_ip : "--");
 	if (td->exit_node != NULL && td->exit_node[0] != '\0')
 		gowl_bar_panel_add_field(panel, "Exit node", td->exit_node);
 

@@ -156,6 +156,7 @@ audio_read_devices(AudioData *ad, const gchar *heading, GPtrArray *out,
 		   device id in it. */
 		if (strstr(lines[i], "Sources:") != NULL ||
 		    strstr(lines[i], "Sinks:") != NULL ||
+		    strstr(lines[i], "Devices:") != NULL ||
 		    strstr(lines[i], "Filters:") != NULL ||
 		    strstr(lines[i], "Streams:") != NULL) {
 			if (strstr(lines[i], heading) == NULL)

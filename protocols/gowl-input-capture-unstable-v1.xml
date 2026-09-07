@@ -39,7 +39,7 @@
     may be made; the 'z' prefix and version suffix are bumped accordingly.
   </description>
 
-  <interface name="zgowl_input_capture_manager_v1" version="1">
+  <interface name="zgowl_input_capture_manager_v1" version="2">
     <description summary="input capture/injection manager">
       The manager is the global the portal binds.  It hands out capture
       sessions (egress) and injection objects (ingress).
@@ -278,7 +278,7 @@
     </event>
   </interface>
 
-  <interface name="zgowl_input_inject_v1" version="1">
+  <interface name="zgowl_input_inject_v1" version="2">
     <description summary="input injection (RemoteDesktop)">
       Drives the compositor's virtual pointer/keyboard to emulate input
       for the RemoteDesktop portal.  Each motion/button/axis/key request
@@ -296,9 +296,17 @@
     </request>
 
     <request name="pointer_motion_absolute">
-      <description summary="inject absolute pointer motion">
+      <description summary="inject absolute pointer motion, normalized">
         x/y are normalized [0,1] across the layout extents, matching the
         RemoteDesktop NotifyPointerMotionAbsolute convention.
+
+        Deprecated since version 2: a fixed-point value between 0 and 1
+        carries only eight fractional bits, so on a 3840-pixel-wide
+        layout the smallest step this request can express is fifteen
+        pixels.  That is invisible for a portal client nudging the
+        cursor and useless for a software KVM placing it.  Use
+        pointer_motion_absolute_layout instead, where the same
+        fixed-point value is a pixel and resolves to 1/256th of one.
       </description>
       <arg name="x" type="fixed"/>
       <arg name="y" type="fixed"/>
@@ -333,6 +341,28 @@
       <description summary="commit a batch of injected events">
         Groups the preceding inject requests into a single input frame.
       </description>
+    </request>
+
+    <!--
+      New requests are APPENDED, never inserted.  A request's opcode is
+      its position in this list, so putting this one next to the other
+      motion requests where it reads better would shift the opcode of
+      every request after it and make a version 1 client send buttons
+      where the compositor expects keys.
+    -->
+    <request name="pointer_motion_absolute_layout" since="2">
+      <description summary="inject absolute pointer motion, in layout pixels">
+        Warps the pointer to x, y in output-layout coordinates -- the
+        same space add_barrier and the zone events use, so a client that
+        knows where a zone is can place the cursor inside it exactly.
+
+        Coordinates outside the layout are clamped to the nearest point
+        on it rather than rejected: a KVM client's idea of the screen
+        edge is derived from zone geometry it was told about earlier,
+        and it should not lose a pointer to a rounding disagreement.
+      </description>
+      <arg name="x" type="fixed"/>
+      <arg name="y" type="fixed"/>
     </request>
   </interface>
 </protocol>

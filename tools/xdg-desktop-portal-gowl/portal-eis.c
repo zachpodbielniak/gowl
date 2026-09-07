@@ -55,9 +55,24 @@ struct _PortalEis {
 
 	GArray            *zones;         /* struct portal_eis_zone */
 
+	/* Capture side: the RECEIVER client (a KVM server sharing this
+	 * machine's input).  We create the device and push at it. */
 	struct eis_client *client;        /* the connected receiver client */
 	struct eis_seat   *seat;
 	struct eis_device *device;        /* pointer+keyboard virtual device */
+
+	/* Injection side: the SENDER client (a KVM client driven from
+	 * another machine).  It pushes at us and we forward into the
+	 * compositor.  Separate fields rather than a shared "current
+	 * client", because deskflow configured for both roles opens both
+	 * sessions from one process and they must not evict each other. */
+	struct eis_client *tx_client;
+	struct eis_seat   *tx_seat;
+	struct eis_device *tx_device;
+	gboolean           tx_emulating;
+
+	const PortalEisInjectOps *inject;
+	gpointer                  inject_data;
 
 	/* deskflow connects as a libei RECEIVER context, so OUR EIS context is
 	 * the SENDER: the server creates the device and SENDS events to the
@@ -119,6 +134,46 @@ drop_device(PortalEis *self)
 	}
 	self->resumed = FALSE;
 	self->emulating = FALSE;
+}
+
+/* The injection device and its seat.  The seat is unref'd here too
+ * because a sender client that closes its device usually follows with a
+ * disconnect, and a stale seat would take a second client's bind. */
+static void
+drop_tx_device(PortalEis *self)
+{
+	if (self->tx_device != NULL) {
+		eis_device_unref(self->tx_device);
+		self->tx_device = NULL;
+	}
+	self->tx_emulating = FALSE;
+}
+
+/* Whether an event belongs to the injecting (sender) client. */
+static gboolean
+is_tx_event(PortalEis *self, struct eis_event *event)
+{
+	struct eis_client *client = eis_event_get_client(event);
+
+	return self->tx_client != NULL && client == self->tx_client;
+}
+
+/*
+ * Whether an injected event should be acted on.
+ *
+ * Three things have to be true, and each of them has bitten somebody:
+ * the event is the sender client's, that client has told us it is
+ * emulating (events outside a start/stop sequence are not a request to
+ * move anything), and there is somewhere to forward to at all -- a
+ * portal whose Wayland side failed to come up still accepts the
+ * connection, and dropping the events is far better than dereferencing
+ * a missing one.
+ */
+static gboolean
+inject_ready(PortalEis *self, struct eis_event *event)
+{
+	return is_tx_event(self, event) && self->tx_emulating
+	       && self->inject != NULL;
 }
 
 /* Build a default XKB keymap and write it to a sealed memfd.  Returns the
@@ -259,6 +314,96 @@ create_device(PortalEis *self)
 	}
 }
 
+/*
+ * The device a sender client emulates on.
+ *
+ * Regions matter as much here as on the capture side, for the mirror-image
+ * reason: a client sending ABSOLUTE motion addresses a coordinate space,
+ * and with no region there is no space to address -- libei has nowhere to
+ * put the coordinates and absolute positioning silently does nothing.
+ * The regions are the compositor's own zones, so the coordinates a KVM
+ * client sends are the layout coordinates the compositor already speaks.
+ */
+static void
+create_tx_device(PortalEis *self)
+{
+	struct eis_device *dev;
+	int                keymap_fd;
+	size_t             keymap_size = 0;
+
+	if (self->tx_seat == NULL)
+		return;
+
+	dev = eis_seat_new_device(self->tx_seat);
+	eis_device_configure_name(dev, "gowl injected input");
+	eis_device_configure_type(dev, EIS_DEVICE_TYPE_VIRTUAL);
+	eis_device_configure_capability(dev, EIS_DEVICE_CAP_POINTER);
+	eis_device_configure_capability(dev, EIS_DEVICE_CAP_POINTER_ABSOLUTE);
+	eis_device_configure_capability(dev, EIS_DEVICE_CAP_BUTTON);
+	eis_device_configure_capability(dev, EIS_DEVICE_CAP_SCROLL);
+	eis_device_configure_capability(dev, EIS_DEVICE_CAP_KEYBOARD);
+
+	if (self->zones != NULL && self->zones->len > 0) {
+		guint i;
+
+		for (i = 0; i < self->zones->len; i++) {
+			struct portal_eis_zone *z =
+				&g_array_index(self->zones,
+				               struct portal_eis_zone, i);
+			struct eis_region *region;
+
+			region = eis_device_new_region(dev);
+			if (region == NULL)
+				continue;
+			eis_region_set_offset(region,
+				z->x < 0 ? 0u : (uint32_t)z->x,
+				z->y < 0 ? 0u : (uint32_t)z->y);
+			eis_region_set_size(region, z->w, z->h);
+			eis_region_add(region);
+		}
+	} else {
+		g_warning("portal: no zones known; the injection device has no "
+			"region, so a client can send relative motion but not "
+			"absolute positions");
+	}
+
+	keymap_fd = make_keymap_fd(&keymap_size);
+	if (keymap_fd >= 0) {
+		struct eis_keymap *km;
+
+		km = eis_device_new_keymap(dev, EIS_KEYMAP_TYPE_XKB,
+			keymap_fd, keymap_size);
+		if (km != NULL)
+			eis_keymap_add(km);
+		close(keymap_fd);
+	}
+
+	eis_device_add(dev);
+	eis_device_resume(dev);
+	self->tx_device = dev;
+
+	/* No start_emulating here: for a sender client the CLIENT owns the
+	 * sequence and we wait for EIS_EVENT_DEVICE_START_EMULATING.  Calling
+	 * it from this side is the receiver-client protocol and would be a
+	 * bug against a sender. */
+}
+
+void
+portal_eis_set_inject_ops(PortalEis *self, const PortalEisInjectOps *ops,
+                           gpointer user_data)
+{
+	if (self == NULL)
+		return;
+	self->inject = ops;
+	self->inject_data = user_data;
+}
+
+gboolean
+portal_eis_injecting(PortalEis *self)
+{
+	return self != NULL && self->tx_device != NULL && self->tx_emulating;
+}
+
 static void
 handle_event(PortalEis *self, struct eis_event *event)
 {
@@ -267,55 +412,164 @@ handle_event(PortalEis *self, struct eis_event *event)
 	switch (type) {
 	case EIS_EVENT_CLIENT_CONNECT: {
 		struct eis_client *client = eis_event_get_client(event);
+		gboolean sender = eis_client_is_sender(client);
+		struct eis_seat **seat = sender ? &self->tx_seat : &self->seat;
+		struct eis_client **slot =
+			sender ? &self->tx_client : &self->client;
 
-		/* deskflow's InputCapture path is a receiver; reject senders. */
-		if (eis_client_is_sender(client)) {
+		/*
+		 * Both directions are served, on the same context.  A sender is
+		 * a KVM client being driven from elsewhere; a receiver is a KVM
+		 * server sharing this machine.  One of each at a time -- a
+		 * second client of the same direction has nothing to add and
+		 * would fight the first for the one device.
+		 */
+		if (*slot != NULL) {
 			eis_client_disconnect(client);
 			break;
 		}
-		if (self->client != NULL) {
-			/* One client at a time for a session. */
-			eis_client_disconnect(client);
-			break;
-		}
-		self->client = client;
+		*slot = client;
 		eis_client_connect(client);
 
-		self->seat = eis_client_new_seat(client, "gowl-capture");
-		eis_seat_configure_capability(self->seat,
-			EIS_DEVICE_CAP_POINTER);
-		eis_seat_configure_capability(self->seat,
-			EIS_DEVICE_CAP_BUTTON);
-		eis_seat_configure_capability(self->seat,
-			EIS_DEVICE_CAP_SCROLL);
-		eis_seat_configure_capability(self->seat,
-			EIS_DEVICE_CAP_KEYBOARD);
-		eis_seat_add(self->seat);
+		*seat = eis_client_new_seat(client,
+			sender ? "gowl-inject" : "gowl-capture");
+		eis_seat_configure_capability(*seat, EIS_DEVICE_CAP_POINTER);
+		eis_seat_configure_capability(*seat, EIS_DEVICE_CAP_BUTTON);
+		eis_seat_configure_capability(*seat, EIS_DEVICE_CAP_SCROLL);
+		eis_seat_configure_capability(*seat, EIS_DEVICE_CAP_KEYBOARD);
+		/*
+		 * Absolute pointing is offered to SENDERS only.  A KVM client
+		 * needs it -- it knows where on the screen the pointer should
+		 * be -- but the capture direction has never sent an absolute
+		 * event, and advertising a capability we do not produce invites
+		 * a receiver to bind it and wait for events that never come.
+		 */
+		if (sender)
+			eis_seat_configure_capability(*seat,
+				EIS_DEVICE_CAP_POINTER_ABSOLUTE);
+		eis_seat_add(*seat);
 		break;
 	}
 
 	case EIS_EVENT_CLIENT_DISCONNECT:
-		drop_device(self);
-		self->client = NULL;
+		if (eis_event_get_client(event) == self->tx_client) {
+			drop_tx_device(self);
+			self->tx_client = NULL;
+			self->tx_seat = NULL;
+		} else {
+			drop_device(self);
+			self->client = NULL;
+			self->seat = NULL;
+		}
 		break;
 
 	case EIS_EVENT_SEAT_BIND:
-		/* The client bound a capability on our seat: (re)create the
-		 * device so it can receive events.  Only one device needed. */
-		if (self->device == NULL)
+	case EIS_EVENT_SEAT_DEVICE_REQUESTED:
+		/*
+		 * The client bound a capability (or, since libei 1.6, asked for
+		 * a device outright): create the device it will use.  Both
+		 * events are handled because which one arrives depends on the
+		 * client's libei version, and a portal that only understood one
+		 * would work with some deskflow builds and not others.
+		 */
+		if (is_tx_event(self, event)) {
+			if (self->tx_device == NULL)
+				create_tx_device(self);
+		} else if (self->device == NULL) {
 			create_device(self);
+		}
 		break;
 
 	case EIS_EVENT_DEVICE_CLOSED:
-		drop_device(self);
+		if (is_tx_event(self, event))
+			drop_tx_device(self);
+		else
+			drop_device(self);
 		break;
 
-	/* EIS_EVENT_DEVICE_START_EMULATING / _STOP_EMULATING are only
-	 * generated on a *receiving* EIS context (i.e. when WE handle a
-	 * sender client).  deskflow is a receiver client, so our context is
-	 * the sender and these never fire -- the server itself drives
-	 * eis_device_start_emulating() on portal activation (see
-	 * portal_eis_start).  Nothing to do here. */
+	/*
+	 * The sender client's own emulation sequence.  These fire only for a
+	 * sender (our context is the receiver for it); the capture direction
+	 * is the other way round and drives eis_device_start_emulating()
+	 * itself from portal_eis_start().
+	 */
+	case EIS_EVENT_DEVICE_START_EMULATING:
+		if (is_tx_event(self, event))
+			self->tx_emulating = TRUE;
+		break;
+
+	case EIS_EVENT_DEVICE_STOP_EMULATING:
+		if (is_tx_event(self, event))
+			self->tx_emulating = FALSE;
+		break;
+
+	/*
+	 * Injected input.  Forwarded verbatim: the portal is a pipe here,
+	 * and every decision about what an injected event MEANS -- whether
+	 * it moves the cursor across a monitor edge, which surface it
+	 * reaches, how a modifier composes with a physically held one --
+	 * belongs to the compositor, which is the only thing that knows.
+	 */
+	case EIS_EVENT_POINTER_MOTION:
+		if (inject_ready(self, event) && self->inject->rel_motion != NULL)
+			self->inject->rel_motion(self->inject_data,
+				eis_event_pointer_get_dx(event),
+				eis_event_pointer_get_dy(event));
+		break;
+
+	case EIS_EVENT_POINTER_MOTION_ABSOLUTE:
+		if (inject_ready(self, event) && self->inject->abs_motion != NULL)
+			self->inject->abs_motion(self->inject_data,
+				eis_event_pointer_get_absolute_x(event),
+				eis_event_pointer_get_absolute_y(event));
+		break;
+
+	case EIS_EVENT_BUTTON_BUTTON:
+		if (inject_ready(self, event) && self->inject->button != NULL)
+			self->inject->button(self->inject_data,
+				eis_event_button_get_button(event),
+				eis_event_button_get_is_press(event));
+		break;
+
+	case EIS_EVENT_SCROLL_DELTA:
+		if (inject_ready(self, event) && self->inject->axis != NULL) {
+			double dx = eis_event_scroll_get_dx(event);
+			double dy = eis_event_scroll_get_dy(event);
+
+			if (dy != 0.0)
+				self->inject->axis(self->inject_data, 0, dy);
+			if (dx != 0.0)
+				self->inject->axis(self->inject_data, 1, dx);
+		}
+		break;
+
+	case EIS_EVENT_SCROLL_DISCRETE:
+		if (inject_ready(self, event) && self->inject->axis != NULL) {
+			/* libei counts discrete scroll in 120ths of a step, the
+			 * same unit the high-resolution wheel protocol uses; the
+			 * compositor wants surface units, and 10 per step is what
+			 * a notch has always been worth on a wheel. */
+			double dx = eis_event_scroll_get_discrete_dx(event) / 120.0;
+			double dy = eis_event_scroll_get_discrete_dy(event) / 120.0;
+
+			if (dy != 0.0)
+				self->inject->axis(self->inject_data, 0, dy * 10.0);
+			if (dx != 0.0)
+				self->inject->axis(self->inject_data, 1, dx * 10.0);
+		}
+		break;
+
+	case EIS_EVENT_KEYBOARD_KEY:
+		if (inject_ready(self, event) && self->inject->key != NULL)
+			self->inject->key(self->inject_data,
+				eis_event_keyboard_get_key(event),
+				eis_event_keyboard_get_key_is_press(event));
+		break;
+
+	case EIS_EVENT_FRAME:
+		if (inject_ready(self, event) && self->inject->frame != NULL)
+			self->inject->frame(self->inject_data);
+		break;
 
 	default:
 		break;

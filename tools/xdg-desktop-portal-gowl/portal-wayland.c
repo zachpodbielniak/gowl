@@ -32,6 +32,7 @@ struct _PortalWayland {
 	struct zgowl_input_capture_manager_v1 *manager;
 	struct zgowl_input_capture_v1   *capture;
 	struct zgowl_input_inject_v1    *inject;
+	uint32_t                         manager_version;
 
 	guint                            fd_source;
 
@@ -244,8 +245,16 @@ registry_global(void *data, struct wl_registry *registry, uint32_t name,
 	(void)version;
 	if (g_strcmp0(interface,
 	              zgowl_input_capture_manager_v1_interface.name) == 0) {
+		/*
+		 * Version 2 adds absolute injection in layout coordinates.
+		 * MIN with the advertised version so a newer portal against an
+		 * older compositor degrades to the normalised request rather
+		 * than dying on a protocol error.
+		 */
+		self->manager_version = version < 2u ? version : 2u;
 		self->manager = wl_registry_bind(registry, name,
-			&zgowl_input_capture_manager_v1_interface, 1);
+			&zgowl_input_capture_manager_v1_interface,
+			self->manager_version);
 	}
 }
 
@@ -454,9 +463,59 @@ portal_wayland_release(PortalWayland *self, guint32 activation_id,
 	wl_display_flush(self->display);
 }
 
+gboolean
+portal_wayland_zone_extents(PortalWayland *self, int32_t *x_out,
+                             int32_t *y_out, uint32_t *width_out,
+                             uint32_t *height_out)
+{
+	int32_t min_x = 0, min_y = 0, max_x = 0, max_y = 0;
+	guint i;
+
+	if (self == NULL || self->zones == NULL || self->zones->len == 0)
+		return FALSE;
+
+	for (i = 0; i < self->zones->len; i++) {
+		PortalZone *z = &g_array_index(self->zones, PortalZone, i);
+
+		if (i == 0) {
+			min_x = z->x;
+			min_y = z->y;
+			max_x = z->x + (int32_t)z->width;
+			max_y = z->y + (int32_t)z->height;
+			continue;
+		}
+		if (z->x < min_x) min_x = z->x;
+		if (z->y < min_y) min_y = z->y;
+		if (z->x + (int32_t)z->width > max_x)
+			max_x = z->x + (int32_t)z->width;
+		if (z->y + (int32_t)z->height > max_y)
+			max_y = z->y + (int32_t)z->height;
+	}
+
+	if (max_x <= min_x || max_y <= min_y)
+		return FALSE;
+
+	if (x_out != NULL)      *x_out = min_x;
+	if (y_out != NULL)      *y_out = min_y;
+	if (width_out != NULL)  *width_out = (uint32_t)(max_x - min_x);
+	if (height_out != NULL) *height_out = (uint32_t)(max_y - min_y);
+	return TRUE;
+}
+
+/*
+ * Every injection entry point tolerates a missing inject object.
+ *
+ * The portal accepts an EIS connection before it knows whether the
+ * compositor gave it somewhere to send the events, and a KVM client
+ * driving a portal whose Wayland side failed to come up should see input
+ * go nowhere -- not take the portal down with it, which would also lose
+ * the capture direction that was working.
+ */
 void
 portal_wayland_inject_rel_motion(PortalWayland *self, double dx, double dy)
 {
+	if (self == NULL || self->inject == NULL)
+		return;
 	zgowl_input_inject_v1_pointer_motion(self->inject,
 		wl_fixed_from_double(dx), wl_fixed_from_double(dy));
 }
@@ -464,20 +523,63 @@ portal_wayland_inject_rel_motion(PortalWayland *self, double dx, double dy)
 void
 portal_wayland_inject_abs_motion(PortalWayland *self, double nx, double ny)
 {
+	if (self == NULL || self->inject == NULL)
+		return;
 	zgowl_input_inject_v1_pointer_motion_absolute(self->inject,
 		wl_fixed_from_double(nx), wl_fixed_from_double(ny));
+}
+
+gboolean
+portal_wayland_can_inject_layout(PortalWayland *self)
+{
+	return self != NULL && self->inject != NULL && self->manager_version >= 2;
+}
+
+void
+portal_wayland_inject_abs_motion_layout(PortalWayland *self,
+                                        double x, double y)
+{
+	if (self == NULL || self->inject == NULL)
+		return;
+
+	if (self->manager_version < 2) {
+		/*
+		 * Fall back by normalising against the zone extents.  It works,
+		 * and it is coarse: a normalised fixed-point value has eight
+		 * fractional bits, so on a wide layout the smallest step it can
+		 * express is over a dozen pixels.  Good enough not to lose the
+		 * pointer, not good enough to place it.
+		 */
+		int32_t  min_x, min_y;
+		uint32_t width, height;
+
+		if (!portal_wayland_zone_extents(self, &min_x, &min_y,
+		                                 &width, &height))
+			return;
+		zgowl_input_inject_v1_pointer_motion_absolute(self->inject,
+			wl_fixed_from_double((x - min_x) / (double)width),
+			wl_fixed_from_double((y - min_y) / (double)height));
+		return;
+	}
+
+	zgowl_input_inject_v1_pointer_motion_absolute_layout(self->inject,
+		wl_fixed_from_double(x), wl_fixed_from_double(y));
 }
 
 void
 portal_wayland_inject_button(PortalWayland *self, uint32_t button,
                              gboolean pressed)
 {
+	if (self == NULL || self->inject == NULL)
+		return;
 	zgowl_input_inject_v1_button(self->inject, button, pressed ? 1 : 0);
 }
 
 void
 portal_wayland_inject_axis(PortalWayland *self, uint32_t axis, double value)
 {
+	if (self == NULL || self->inject == NULL)
+		return;
 	zgowl_input_inject_v1_axis(self->inject, axis,
 		wl_fixed_from_double(value));
 }
@@ -486,12 +588,16 @@ void
 portal_wayland_inject_key(PortalWayland *self, uint32_t keycode,
                           gboolean pressed)
 {
+	if (self == NULL || self->inject == NULL)
+		return;
 	zgowl_input_inject_v1_key(self->inject, keycode, pressed ? 1 : 0);
 }
 
 void
 portal_wayland_inject_frame(PortalWayland *self)
 {
+	if (self == NULL || self->inject == NULL)
+		return;
 	zgowl_input_inject_v1_frame(self->inject);
 	wl_display_flush(self->display);
 }

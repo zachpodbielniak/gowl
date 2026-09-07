@@ -390,6 +390,19 @@ inject_pointer_motion_absolute(struct wl_client   *client,
 }
 
 static void
+inject_pointer_motion_absolute_layout(struct wl_client   *client,
+                                       struct wl_resource *resource,
+                                       wl_fixed_t          x,
+                                       wl_fixed_t          y)
+{
+	GowlInputCaptureProtocol *p = wl_resource_get_user_data(resource);
+
+	(void)client;
+	gowl_compositor_inject_pointer_warp((GowlCompositor *)p->compositor,
+		wl_fixed_to_double(x), wl_fixed_to_double(y));
+}
+
+static void
 inject_button(struct wl_client   *client,
               struct wl_resource *resource,
               uint32_t            button,
@@ -449,6 +462,7 @@ static const struct zgowl_input_inject_v1_interface inject_impl = {
 	.destroy                 = inject_destroy,
 	.pointer_motion          = inject_pointer_motion,
 	.pointer_motion_absolute = inject_pointer_motion_absolute,
+	.pointer_motion_absolute_layout = inject_pointer_motion_absolute_layout,
 	.button                  = inject_button,
 	.axis                    = inject_axis,
 	.key                     = inject_key,
@@ -559,8 +573,13 @@ gowl_input_capture_protocol_register(gpointer            compositor,
 
 	self = g_new0(GowlInputCaptureProtocol, 1);
 	self->compositor = compositor;
+	/*
+	 * Version 2 adds pointer_motion_absolute_layout.  A client that binds
+	 * version 1 still works: it gets the normalized request and its
+	 * eight fractional bits, which is all it ever had.
+	 */
 	self->global = wl_global_create(display,
-		&zgowl_input_capture_manager_v1_interface, 1, self,
+		&zgowl_input_capture_manager_v1_interface, 2, self,
 		manager_bind);
 	if (self->global == NULL) {
 		g_free(self);

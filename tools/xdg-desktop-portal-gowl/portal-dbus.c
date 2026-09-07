@@ -440,6 +440,93 @@ return_eis_fd(PortalDbus *self, GDBusMethodInvocation *invocation)
 	g_object_unref(fds);
 }
 
+/*
+ * Mirror the compositor's zones onto the EIS devices as regions.
+ *
+ * Both directions need this and neither can invent it.  A RECEIVER client
+ * sums the device's regions to work out the screen's shape; with none it
+ * sees a 1x1 screen, a barrier crossing normalises far outside [0,1], and
+ * the cursor never leaves for the remote.  A SENDER client addresses
+ * absolute positions inside those regions; with none there is no
+ * coordinate space and absolute positioning silently does nothing.
+ *
+ * It used to be done only from GetZones, which is an InputCapture call --
+ * so a RemoteDesktop-only client (a KVM in client mode) never triggered
+ * it and got a device it could not position on.  Now it also runs at
+ * startup and whenever the outputs change.
+ */
+static void
+portal_dbus_refresh_zones(PortalDbus *self)
+{
+	PortalZone *zones = NULL;
+	guint       n = 0;
+	guint32     zone_set = 0;
+	guint       i;
+
+	if (!portal_wayland_get_zones(self->wl, &zones, &n, &zone_set))
+		return;
+
+	portal_eis_clear_zones(self->eis);
+	for (i = 0; i < n; i++)
+		portal_eis_add_zone(self->eis, zones[i].x, zones[i].y,
+			zones[i].width, zones[i].height);
+}
+
+/* ---------------------------------------------------------------
+ * Injected input: EIS sender client -> compositor
+ * --------------------------------------------------------------- */
+
+static void
+inject_rel_motion(gpointer user_data, double dx, double dy)
+{
+	portal_wayland_inject_rel_motion(((PortalDbus *)user_data)->wl, dx, dy);
+}
+
+static void
+inject_abs_motion(gpointer user_data, double x, double y)
+{
+	/* libei absolute coordinates are inside the device's regions, which
+	 * ARE the compositor's layout coordinates -- so this is a pass
+	 * through, not a conversion. */
+	portal_wayland_inject_abs_motion_layout(((PortalDbus *)user_data)->wl,
+		x, y);
+}
+
+static void
+inject_button_cb(gpointer user_data, uint32_t button, bool pressed)
+{
+	portal_wayland_inject_button(((PortalDbus *)user_data)->wl, button,
+		pressed ? TRUE : FALSE);
+}
+
+static void
+inject_axis_cb(gpointer user_data, uint32_t axis, double value)
+{
+	portal_wayland_inject_axis(((PortalDbus *)user_data)->wl, axis, value);
+}
+
+static void
+inject_key_cb(gpointer user_data, uint32_t keycode, bool pressed)
+{
+	portal_wayland_inject_key(((PortalDbus *)user_data)->wl, keycode,
+		pressed ? TRUE : FALSE);
+}
+
+static void
+inject_frame_cb(gpointer user_data)
+{
+	portal_wayland_inject_frame(((PortalDbus *)user_data)->wl);
+}
+
+static const PortalEisInjectOps inject_ops = {
+	.rel_motion = inject_rel_motion,
+	.abs_motion = inject_abs_motion,
+	.button     = inject_button_cb,
+	.axis       = inject_axis_cb,
+	.key        = inject_key_cb,
+	.frame      = inject_frame_cb,
+};
+
 /* ---------------------------------------------------------------
  * Activation / zones-changed bridges -> InputCapture signals
  * --------------------------------------------------------------- */
@@ -484,10 +571,15 @@ on_zones_changed(guint32 zone_set, gpointer user_data)
 	PortalDbus *self = user_data;
 	GVariantBuilder opts;
 
+	/* Before the early return: the EIS regions have to follow a monitor
+	 * being plugged in whether or not anyone has an InputCapture session
+	 * open to be told about it. */
+	self->zone_set = zone_set;
+	portal_dbus_refresh_zones(self);
+
 	if (self->session_handle == NULL)
 		return;
 
-	self->zone_set = zone_set;
 	g_variant_builder_init(&opts, G_VARIANT_TYPE("a{sv}"));
 	g_variant_builder_add(&opts, "{sv}", "zone_set",
 		g_variant_new_uint32(zone_set));
@@ -613,22 +705,13 @@ ic_method(GDBusConnection *conn, const gchar *sender, const gchar *path,
 
 		portal_wayland_get_zones(self->wl, &zones, &n, &zone_set);
 		self->zone_set = zone_set;
-
-		/* Mirror the zones onto the EIS device as regions: the receiver
-		 * client (deskflow) derives its screen shape from them, and
-		 * without a region pointer-barrier neighbour mapping collapses
-		 * (1x1 screen -> no neighbour -> cursor never crosses).  Done
-		 * here, before the client binds the seat and the device is
-		 * created. */
-		portal_eis_clear_zones(self->eis);
+		portal_dbus_refresh_zones(self);
 
 		g_variant_builder_init(&zarr, G_VARIANT_TYPE("a(uuii)"));
 		for (i = 0; i < n; i++) {
 			g_variant_builder_add(&zarr, "(uuii)",
 				zones[i].width, zones[i].height,
 				zones[i].x, zones[i].y);
-			portal_eis_add_zone(self->eis, zones[i].x, zones[i].y,
-				zones[i].width, zones[i].height);
 		}
 
 		g_variant_builder_init(&results, G_VARIANT_TYPE("a{sv}"));
@@ -1088,6 +1171,12 @@ portal_dbus_new(PortalWayland *wl, PortalEis *eis)
 
 	portal_wayland_set_activation_callback(wl, on_activation, self);
 	portal_wayland_set_zones_changed_callback(wl, on_zones_changed, self);
+	portal_eis_set_inject_ops(eis, &inject_ops, self);
+
+	/* Zones now, not at GetZones: a RemoteDesktop client never calls
+	 * that, and without regions its injection device cannot be
+	 * positioned on. */
+	portal_dbus_refresh_zones(self);
 
 	self->owner_id = g_bus_own_name(G_BUS_TYPE_SESSION, PORTAL_BUS_NAME,
 		G_BUS_NAME_OWNER_FLAGS_REPLACE,

@@ -1369,6 +1369,28 @@ gowl_compositor_warp_cursor(
 }
 
 void
+gowl_compositor_inject_pointer_warp(
+	GowlCompositor *self,
+	gdouble         x,
+	gdouble         y
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_cursor == NULL)
+		return;
+
+	/*
+	 * warp_closest, not warp: a KVM client derives the screen edge from
+	 * zone geometry it was told about earlier, and a point a fraction
+	 * outside the layout should put the cursor at the edge rather than
+	 * be dropped.  Losing a pointer to a rounding disagreement is a much
+	 * worse failure than a pixel of clamping.
+	 */
+	wlr_cursor_warp_closest(self->wlr_cursor, NULL, x, y);
+	gowl_compositor_motionnotify(self, inject_now_msec());
+}
+
+void
 gowl_compositor_inject_button(
 	GowlCompositor *self,
 	guint32         button,
@@ -1411,12 +1433,56 @@ gowl_compositor_inject_key(
 	guint32         keycode,
 	gboolean        pressed
 ){
+	struct wlr_keyboard *kb;
+
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
 	if (self->wlr_seat == NULL || self->wlr_kb_group == NULL)
 		return;
 
-	wlr_seat_set_keyboard(self->wlr_seat, &self->wlr_kb_group->keyboard);
+	kb = &self->wlr_kb_group->keyboard;
+
+	/*
+	 * INJECTED MODIFIERS HAVE TO ACTUALLY MODIFY.
+	 *
+	 * A key sent straight to the seat reaches the focused client, but a
+	 * client's idea of which modifiers are held comes from a SEPARATE
+	 * message that only the physical keyboard path ever sent.  Without
+	 * the update below an injected Shift arrives as a keystroke nobody
+	 * acts on: a software KVM types lower case for ever, and Ctrl-C does
+	 * nothing.
+	 *
+	 * xkb_state_update_key, because a keycode is what an injected event
+	 * carries -- libei reports keys, not masks -- and because it is what
+	 * the physical path (wlr_keyboard_notify_key) already applies to this
+	 * same state.  One mechanism on one state is what keeps a modifier
+	 * held by two keys, or by one local and one remote key, correct when
+	 * either is released.
+	 *
+	 * Sharing the group's state rather than keeping a private one is
+	 * deliberate: a modifier held on the local keyboard should apply to
+	 * a click arriving from the remote, and the reverse.  It also keeps
+	 * the capture path's view of kb->modifiers true, since that reads
+	 * the same struct.
+	 */
+	if (kb->xkb_state != NULL) {
+		xkb_state_update_key(kb->xkb_state, keycode + 8,
+			pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
+
+		kb->modifiers.depressed = xkb_state_serialize_mods(kb->xkb_state,
+			XKB_STATE_MODS_DEPRESSED);
+		kb->modifiers.latched = xkb_state_serialize_mods(kb->xkb_state,
+			XKB_STATE_MODS_LATCHED);
+		kb->modifiers.locked = xkb_state_serialize_mods(kb->xkb_state,
+			XKB_STATE_MODS_LOCKED);
+		kb->modifiers.group = xkb_state_serialize_layout(kb->xkb_state,
+			XKB_STATE_LAYOUT_EFFECTIVE);
+	}
+
+	wlr_seat_set_keyboard(self->wlr_seat, kb);
+	/* Modifiers first, so a shifted letter is already shifted when it
+	 * lands rather than a frame later. */
+	wlr_seat_keyboard_notify_modifiers(self->wlr_seat, &kb->modifiers);
 	wlr_seat_keyboard_notify_key(self->wlr_seat, inject_now_msec(), keycode,
 		pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
 		        : WL_KEYBOARD_KEY_STATE_RELEASED);

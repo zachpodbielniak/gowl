@@ -189,13 +189,16 @@ ext-workspace-v1-protocol.c: ext-workspace-v1-protocol.h
 # RemoteDesktop portal backend.  Generates BOTH a server header and the
 # private-code dispatcher from the in-tree XML; consumed by
 # gowl-input-capture-protocol.c.
-gowl-input-capture-v1-protocol.h:
-	$(WAYLAND_SCANNER) server-header \
-		protocols/gowl-input-capture-unstable-v1.xml $@
+# The XML is a prerequisite, not just the recipe's argument.  Without it
+# make only checks that the header EXISTS, so a protocol change -- a new
+# request, a version bump -- silently never reaches the generated code and
+# the failure surfaces as "no member named ..." in a file nobody edited.
+gowl-input-capture-v1-protocol.h: protocols/gowl-input-capture-unstable-v1.xml
+	$(WAYLAND_SCANNER) server-header $< $@
 
-gowl-input-capture-v1-protocol.c: gowl-input-capture-v1-protocol.h
-	$(WAYLAND_SCANNER) private-code \
-		protocols/gowl-input-capture-unstable-v1.xml $@
+gowl-input-capture-v1-protocol.c: protocols/gowl-input-capture-unstable-v1.xml \
+                                  gowl-input-capture-v1-protocol.h
+	$(WAYLAND_SCANNER) private-code $< $@
 
 # GIR generation
 $(OUTDIR)/$(GIR_FILE): $(LIB_SRCS) $(LIB_HDRS) | $(OUTDIR)/$(LIB_SHARED_FULL)

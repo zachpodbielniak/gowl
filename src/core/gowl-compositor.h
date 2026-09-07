@@ -725,6 +725,25 @@ void gowl_compositor_pretag_pid (GowlCompositor *self,
  * Returns: (transfer full) (nullable): whatever a module answered, or
  *   %NULL when no module claimed the command.
  */
+/**
+ * gowl_compositor_inject_pointer_warp:
+ * @self: a #GowlCompositor
+ * @x: layout x, in pixels
+ * @y: layout y, in pixels
+ *
+ * Places the injected pointer at a point in OUTPUT-LAYOUT coordinates --
+ * the same space the input-capture zones and barriers use.
+ *
+ * The normalized variant that came first cannot do this job: a
+ * fixed-point number between 0 and 1 has eight fractional bits, so on a
+ * 3840-pixel layout its smallest step is fifteen pixels.  In layout
+ * coordinates the same representation resolves to 1/256th of a pixel.
+ * A point outside the layout is clamped to the nearest one on it.
+ */
+void gowl_compositor_inject_pointer_warp (GowlCompositor *self,
+                                          gdouble         x,
+                                          gdouble         y);
+
 gchar *gowl_compositor_run_command (GowlCompositor *self,
                                     const gchar    *line);
 

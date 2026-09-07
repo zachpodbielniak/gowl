@@ -130,12 +130,107 @@ makes it release immediately. (Mutter behaves the same way.)
 :PROPERTIES:
 :CUSTOM_ID: input-inject-flow
 :END:
-The RemoteDesktop backend's =NotifyPointer*= / =NotifyKeyboard*= methods drive
-the =zgowl_input_inject_v1= object, which calls
-=gowl_compositor_inject_pointer_motion= / =_button= / =_axis= / =_key= --
-synthesizing input through the compositor's =wlr_cursor= and seat. (gowl's
-=wlr_virtual_pointer_manager_v1= / =wlr_virtual_keyboard_manager_v1= globals
-back this.)
+
+This is the direction a KVM *client* uses: another machine's keyboard and
+mouse driving this one.
+
+*** Two doors, and only one of them is used in practice
+
+The RemoteDesktop backend exposes both routes the portal specification
+allows:
+
+- =NotifyPointerMotion= / =NotifyPointerButton= / =NotifyKeyboardKeycode=
+  and friends, one D-Bus round trip per event; and
+- =ConnectToEIS=, which hands the caller a libei socket and lets it stream.
+
+Every current client uses the second. deskflow calls =ei_new_sender()= and
+=ei_setup_backend_fd()= on the fd from =ConnectToEIS=; it does not call the
+=Notify*= methods at all. They are kept because the interface declares them
+and something older may still use them, but nothing about them is on the
+path that matters.
+
+*** Sender and receiver, and why it is easy to get backwards
+
+libei clients declare a DIRECTION when they connect, and the EIS
+implementation takes the opposite role:
+
+| Client declares | EIS acts as | Portal        | KVM role                    |
+|-----------------+-------------+---------------+-----------------------------|
+| receiver        | sender      | InputCapture  | server: shares this machine |
+| sender          | receiver    | RemoteDesktop | client: driven by another   |
+
+Both connect through =ConnectToEIS=, both get an fd from the same libeis
+context, and the *only* thing that distinguishes them is that one flag.
+A backend written for capture alone will therefore look complete, pass its
+handshake, hand over a working socket, and then drop the connection the
+instant the client says which way round it wants to be -- with nothing
+logged on either side and no error the user can act on. That is precisely
+what "KVM server mode works, client mode does nothing" looks like, and it
+is why =tests/test-portal-guard.sh= exists.
+
+*** What actually happens
+
+1. The client creates a RemoteDesktop session, calls =SelectDevices= and
+   =Start=, then =ConnectToEIS=.
+2. It connects as a *sender*. The backend accepts it, gives it a seat
+   (=gowl-inject=) and a pointer+keyboard device carrying the compositor's
+   monitor rectangles as =ei_region=\ s and a real XKB keymap.
+3. The client calls =ei_device_start_emulating()= and streams events. The
+   backend forwards each one over =zgowl_input_inject_v1= to
+   =gowl_compositor_inject_pointer_motion= / =_pointer_warp= / =_button= /
+   =_axis= / =_key=, which drive the compositor's own =wlr_cursor= and seat.
+
+*** Regions are required in this direction too
+
+An injecting client addresses ABSOLUTE positions inside the device's
+regions. With no region there is no coordinate space to address and
+absolute positioning silently does nothing -- the mirror image of the
+capture-side failure in [[#input-capture-eis-regions]], where a client with
+no region sees a 1×1 screen.
+
+The zones used to be pushed onto the EIS device only from
+=GetZones=, which is an *InputCapture* method. A client that only ever
+opens a RemoteDesktop session never calls it, so its injection device came
+up with no regions at all. The backend now fetches zones at startup and
+again whenever the outputs change, so both directions have them regardless
+of which portal is in use.
+
+*** Absolute coordinates are layout pixels, not fractions
+
+=zgowl_input_inject_v1.pointer_motion_absolute= takes a normalised [0,1]
+pair, matching the =NotifyPointerMotionAbsolute= convention. That is
+adequate for nudging a cursor and useless for placing one: a Wayland
+fixed-point number has eight fractional bits, so between 0 and 1 its
+smallest step is 1/256 of the whole layout -- fifteen pixels on a 3840-wide
+screen.
+
+Version 2 of the protocol adds =pointer_motion_absolute_layout=, which
+takes the same fixed-point numbers as layout *pixels* and therefore
+resolves to 1/256th of one. libei already reports absolute positions in
+region coordinates, which are the compositor's layout coordinates, so the
+portal passes them through unchanged rather than normalising and
+un-normalising them. A version 1 compositor still works; the portal falls
+back to the normalised request and the coarseness with it.
+
+*** Injected modifiers
+
+A key sent to the seat reaches the focused surface, but a client's idea of
+which modifiers are HELD arrives in a separate message that only the
+physical keyboard path used to send. Injection therefore also updates the
+keyboard's XKB state (=xkb_state_update_key=, the same call the physical
+path makes, on the same state) and publishes the resulting masks. Without
+it a remote keyboard types in lower case for ever and Ctrl-C does nothing.
+
+Sharing one state with the physical keyboard is deliberate: a modifier
+held on the local keyboard applies to a click arriving from the remote
+one, and the reverse.
+
+*Injected keys do not run compositor keybinds.* They go to the focused
+surface, not through the keybind table, so =Super+1= from the remote
+machine reaches the application rather than switching tags. That is the
+conservative default -- a remote machine driving the local window manager
+is a bigger step than driving the local applications -- and it is a
+deliberate choice rather than an oversight.
 
 ** Zones and barriers
 :PROPERTIES:
@@ -222,6 +317,22 @@ deliberately not a public/stable interface.
   =[server] externalConfig=true= (or launch via the GUI) so the links load.
   Verify with the client's debug log (deskflow: =[log] level=7=, logs to stdout)
   -- "no neighbor on right of <screen>" is the signature.
+- *KVM client mode does nothing at all: the cursor never appears, no keys
+  arrive, and nothing is logged anywhere*: the backend is rejecting the
+  libei connection because the client declared itself a *sender*. Both
+  directions are served now; a build predating that fix serves only
+  capture. Confirm with =systemctl --user restart xdg-desktop-portal= after
+  updating the backend -- it is D-Bus activated, so an old process keeps
+  running until something restarts it, and the symptom of a stale one is
+  identical to the original bug.
+- *the pointer arrives but lands in roughly the right place rather than the
+  right place*: the compositor is version 1 of =gowl-input-capture=, so the
+  portal is normalising absolute positions and losing precision to
+  fixed-point (see [[#input-inject-flow]]). Rebuild the compositor.
+- *keys arrive from the remote machine but everything is lower case, and
+  Ctrl / Alt combinations do nothing*: the injection path is not publishing
+  modifier state. Rebuild the compositor; this is
+  =gowl_compositor_inject_key= failing to update the XKB state.
 - *the cursor crosses but typing on the remote spams "failed to open x11 default
   display" (and/or keys don't forward)*: this is a *client*-side limitation, not
   a gowl bug. deskflow still uses an X11 display to translate keycodes even on

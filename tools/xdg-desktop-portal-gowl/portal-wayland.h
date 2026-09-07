@@ -86,9 +86,25 @@ void     portal_wayland_release      (PortalWayland *self,
                                       gboolean has_position,
                                       double x, double y);
 
-/* RemoteDesktop injection (called from the D-Bus method handlers). */
+/* The bounding box of the reported capture zones, in layout coordinates.
+ * Returns FALSE when no zones are known yet. */
+gboolean portal_wayland_zone_extents  (PortalWayland *self,
+                                       int32_t       *x_out,
+                                       int32_t       *y_out,
+                                       uint32_t      *width_out,
+                                       uint32_t      *height_out);
+
+/* RemoteDesktop injection (called from the D-Bus method handlers and from
+ * the EIS sender path). */
 void portal_wayland_inject_rel_motion (PortalWayland *self, double dx,
                                        double dy);
+/* Absolute position in LAYOUT coordinates -- what a KVM client actually
+ * has.  Uses the version 2 request when the compositor offers it and
+ * normalises as a coarse fallback when it does not. */
+void portal_wayland_inject_abs_motion_layout (PortalWayland *self, double x,
+                                              double y);
+gboolean portal_wayland_can_inject_layout (PortalWayland *self);
+
 void portal_wayland_inject_abs_motion (PortalWayland *self, double nx,
                                        double ny);
 void portal_wayland_inject_button     (PortalWayland *self, uint32_t button,

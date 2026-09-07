@@ -59,6 +59,10 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-blur-shadow` -- The analytic drop shadow: falloff, rounded
   corners, and premultiplied output (straight colour gives every shadow a
   bright halo)
+- `test-inject-keyboard` -- Injected keys and the modifiers they carry:
+  the evdev-to-xkb `+8` offset (getting it wrong types a *different
+  letter*, silently), Shift/Ctrl/Alt actually modifying, and local and
+  remote modifiers composing on one state
 - `test-input-recorder` -- Input recording: consent gate, bounded ring,
   motion coalescing, self-stop deadline, secret-suppression policy,
   payload shape, and the config-to-recorder wiring
@@ -66,6 +70,16 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 `make test` also runs every `tests/*.sh` **source guard** before the compiled
 tests. These assert invariants no unit test can reach:
 - `test-no-libregnum.sh` -- gowl links no rendering engine (see below)
+- `test-portal-guard.sh` -- `xdg-desktop-portal-gowl` still serves BOTH
+  libei directions. A libei client declares itself sender or receiver at
+  connect time; a receiver is a KVM sharing this machine (InputCapture),
+  a **sender** is a KVM driving it (RemoteDesktop). Rejecting senders is
+  why client mode used to do nothing, and it fails with no error on
+  either side: the D-Bus handshake succeeds, `ConnectToEIS` hands over a
+  working fd, and the connection dies the instant libei states its
+  direction. A source guard rather than a unit test because this machine
+  has libeis (server) but not libei (client), so there is nothing to
+  build a real sender with
 - `test-cube-guard.sh` -- the `cube` module still claims ONLY its own
   reveal (it sorts ahead of every other effect module, so a `client_event`
   that started returning TRUE broadly would silently switch window
@@ -84,6 +98,18 @@ tests. These assert invariants no unit test can reach:
   a tap there would record gowl's own injected input), `on_kb_key` still
   carries the Super+Shift+Escape force-stop, and the on-screen indicator
   is still raised from the recorder's own state change
+
+> **Both directions of libei are load-bearing, and they are asymmetric.**
+> `tools/xdg-desktop-portal-gowl` is one libeis context serving two
+> opposite roles: a *receiver* client is a software KVM sharing this
+> machine's input (InputCapture, the compositor pushes at it), a *sender*
+> client is a KVM driving this machine (RemoteDesktop, it pushes at us and
+> we inject). Both arrive through the same `ConnectToEIS`, and the only
+> thing distinguishing them is one flag — so a backend written for capture
+> alone looks complete and fails silently in the other direction. Zones
+> must reach the EIS device regardless of which portal is in use: a
+> RemoteDesktop-only client never calls `GetZones`, and a device with no
+> region cannot be positioned absolutely. See `docs/input-capture.org`.
 
 > **Input *recording* is not input *injection*, and they must never share a
 > switch.** `GowlInputRecorder` (`src/core/gowl-input-recorder.c`) observes

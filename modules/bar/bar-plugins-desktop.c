@@ -1779,6 +1779,16 @@ static const GowlBarPluginVTable display_vtable = {
 typedef struct {
 	gint64    started;      /* g_get_monotonic_time(), 0 when idle */
 	gchar    *scope;        /* what the running recording covers */
+	/*
+	 * Whether a recording is running, as last seen by the ASYNC poll.
+	 *
+	 * Cached rather than asked for on demand because finding out costs
+	 * a subprocess, and everything except the async poll -- the sync
+	 * poll, the panel, a click -- runs on the compositor thread while
+	 * it holds cmacs_gowl_mutex.  Forking `pidof' there once a second
+	 * does not make the bar slow, it freezes the editor.
+	 */
+	gboolean  running;
 } RecorderData;
 
 static gpointer
@@ -1800,42 +1810,61 @@ recorder_destroy(GowlBarPlugin *plugin, gpointer data)
 	g_free(rd);
 }
 
-/* Whether a recording this plugin started is still running.  Asking the
-   process table rather than trusting our own flag: the recorder can be
-   stopped from anywhere, and a button that says "Stop" for a process
-   that already exited is worse than no button. */
+/*
+ * Whether a recording is running, from the cache the async poll fills.
+ *
+ * The compositor's own provider can be asked for nothing -- it is a
+ * pointer dereference -- so that part stays live.  Only the external
+ * recorder costs a process, and that answer is whatever the last async
+ * poll saw.
+ */
 static gboolean
-recorder_running(GowlBarPlugin *plugin)
+recorder_running(GowlBarPlugin *plugin, RecorderData *rd)
 {
+	const BarEnv *env = bar_env();
+
+	(void)plugin;
+
+	if (env != NULL && env->compositor != NULL) {
+		GowlCompositor        *comp;
+		GowlRecordingProvider *prov;
+
+		comp = GOWL_COMPOSITOR(env->compositor);
+		prov = (GowlRecordingProvider *)
+			gowl_module_manager_get_recording_provider(
+				gowl_compositor_get_module_manager(comp));
+		if (prov != NULL
+		    && gowl_recording_provider_is_recording(prov))
+			return TRUE;
+	}
+
+	return rd != NULL && rd->running;
+}
+
+/*
+ * The one thing here that costs a subprocess, on the worker thread.
+ */
+static void
+recorder_poll_async(GowlBarPlugin *plugin, gpointer data)
+{
+	RecorderData     *rd = data;
 	const gchar      *proc;
 	g_autofree gchar *line = NULL;
 	g_autofree gchar *out = NULL;
 
+	if (rd == NULL || !bar_have_command("pidof")) {
+		if (rd != NULL)
+			rd->running = FALSE;
+		return;
+	}
+
 	proc = gowl_bar_plugin_get_setting(plugin, "process");
 	if (proc == NULL || *proc == '\0')
 		proc = "wf-recorder";
-	{
-		const BarEnv *env = bar_env();
 
-		if (env != NULL && env->compositor != NULL) {
-			GowlCompositor        *comp;
-			GowlRecordingProvider *prov;
-
-			comp = GOWL_COMPOSITOR(env->compositor);
-			prov = (GowlRecordingProvider *)
-				gowl_module_manager_get_recording_provider(
-					gowl_compositor_get_module_manager(comp));
-			if (prov != NULL
-			    && gowl_recording_provider_is_recording(prov))
-				return TRUE;
-		}
-	}
-
-	if (!bar_have_command("pidof"))
-		return FALSE;
 	line = g_strdup_printf("pidof %s", proc);
 	out = bar_run_shell_line(line);
-	return out != NULL && *out != '\0';
+	rd->running = (out != NULL && *out != '\0');
 }
 
 static void
@@ -1847,7 +1876,7 @@ recorder_poll(GowlBarPlugin *plugin, gpointer data)
 	if (rd == NULL)
 		return;
 
-	if (!recorder_running(plugin)) {
+	if (!recorder_running(plugin, rd)) {
 		if (rd->started != 0) {
 			rd->started = 0;
 			g_clear_pointer(&rd->scope, g_free);
@@ -1890,7 +1919,7 @@ recorder_panel(GowlBarPlugin *plugin, gpointer data)
 	panel = gowl_bar_panel_new();
 	gowl_bar_panel_set_width(panel, 380);
 
-	if (recorder_running(plugin)) {
+	if (recorder_running(plugin, rd)) {
 		gowl_bar_panel_add_hero(panel, "\xef\x8f\x9b", "Recording",
 			rd != NULL && rd->scope != NULL ? rd->scope : NULL);
 		gowl_bar_panel_add_separator(panel);
@@ -2119,7 +2148,7 @@ static const GowlBarPluginVTable recorder_vtable = {
 	sizeof(GowlBarPluginVTable),
 	recorder_create, recorder_destroy,
 	NULL, NULL, NULL,
-	recorder_interval, recorder_poll, NULL,
+	recorder_interval, recorder_poll, recorder_poll_async,
 	NULL, NULL,
 	NULL, NULL,
 	recorder_panel, recorder_action,

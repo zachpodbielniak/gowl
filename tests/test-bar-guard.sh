@@ -89,6 +89,53 @@ for f in modules/bar/bar-plugins-*.c; do
 	fi
 done
 
+# The blocking HELPERS are just as fatal, and checking only for
+# g_spawn_sync missed them entirely.
+#
+# bar_run_argv/_line/_shell_line all wait for a subprocess.  Called from
+# a SYNC poll they run on the compositor thread while it holds
+# cmacs_gowl_mutex, so the cost is not a slow bar -- it is a frozen
+# editor.  The recorder widget forked `pidof' there once a second and
+# the Emacs frame never appeared.
+#
+# So: a vtable whose SYNC poll slot is non-NULL must not reach a
+# blocking helper.  Checked by pairing each vtable's poll function with
+# what that function calls.
+for f in modules/bar/bar-plugins-*.c; do
+	sync_polls=$(awk '
+		/^static const GowlBarPluginVTable/ { buf=""; in_v=1; next }
+		in_v { buf = buf $0 "\n" }
+		/^};/ && in_v {
+			# slots: interval, poll, poll_async
+			if (match(buf, /[a-z_]+_interval, *[a-z_]+, *[a-zA-Z_]+/)) {
+				line = substr(buf, RSTART, RLENGTH)
+				n = split(line, a, /, */)
+				gsub(/^[ \t]+|[ \t]+$/, "", a[2])
+				if (a[2] != "NULL") print a[2]
+			}
+			in_v = 0
+		}' "$f" | sort -u)
+
+	for fn in $sync_polls; do
+		body=$(awk -v fn="$fn" '
+			$0 ~ "^" fn "\\(" { inside = 1 }
+			inside { print }
+			inside && /^}/ { exit }' "$f")
+		# Plus anything that poll calls in the same file, one level.
+		callees=$(echo "$body" | grep -oE '\b[a-z_]+\(' | tr -d '(' | sort -u)
+		for c in $fn $callees; do
+			cbody=$(awk -v fn="$c" '
+				$0 ~ "^" fn "\\(" { inside = 1 }
+				inside { print }
+				inside && /^}/ { exit }' "$f")
+			if echo "$cbody" | grep -qE '\bbar_run_(argv|argv_line|shell_line)[[:space:]]*\('; then
+				echo "  $fn -> $c blocks" >&2
+				fail "$f: a sync poll reaches a blocking helper; move it to poll_async"
+			fi
+		done
+	done
+done
+
 # Plugins that SHARE a panel function must share its panel_opened too.
 #
 # net_panel says "scanning..." until net_scan_wifi() has run, and that

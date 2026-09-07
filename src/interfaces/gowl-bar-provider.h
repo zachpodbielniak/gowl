@@ -42,6 +42,21 @@ struct _GowlBarProviderInterface {
 	   clickable tags. */
 	gint (*tag_at)         (GowlBarProvider *self, gpointer monitor,
 	                        gint x, gint y);
+
+	/* Optional pointer routing.  A bar that draws its own widgets and
+	   dropdowns needs the raw events, not just a tag hit-test: a click
+	   may land on a bar item, on an open panel anywhere on the output,
+	   or outside both (which dismisses the panel).  Only the provider
+	   knows which.  Returning %TRUE consumes the event, so it never
+	   reaches a client.  Coordinates are monitor-local. */
+	gboolean (*handle_button) (GowlBarProvider *self, gpointer monitor,
+	                           gint x, gint y, guint button,
+	                           gboolean pressed, guint modifiers);
+	gboolean (*handle_motion) (GowlBarProvider *self, gpointer monitor,
+	                           gint x, gint y);
+	gboolean (*handle_axis)   (GowlBarProvider *self, gpointer monitor,
+	                           gint x, gint y, gdouble delta,
+	                           gint discrete, guint modifiers);
 };
 
 /* Public dispatch functions */
@@ -63,6 +78,61 @@ void gowl_bar_provider_render_bar     (GowlBarProvider *self, gpointer monitor);
  */
 gint gowl_bar_provider_tag_at         (GowlBarProvider *self, gpointer monitor,
                                         gint x, gint y);
+
+/**
+ * gowl_bar_provider_handle_button:
+ * @self: a #GowlBarProvider
+ * @monitor: (nullable): the monitor under the pointer
+ * @x: x relative to the monitor's left edge
+ * @y: y relative to the monitor's top edge
+ * @button: the libinput button code
+ * @pressed: %TRUE on press, %FALSE on release
+ * @modifiers: the keyboard modifiers held
+ *
+ * Offers a pointer button to the bar.
+ *
+ * Returns: %TRUE when the bar consumed it
+ */
+gboolean gowl_bar_provider_handle_button (GowlBarProvider *self,
+                                           gpointer monitor,
+                                           gint x, gint y, guint button,
+                                           gboolean pressed,
+                                           guint modifiers);
+
+/**
+ * gowl_bar_provider_handle_motion:
+ * @self: a #GowlBarProvider
+ * @monitor: (nullable): the monitor under the pointer
+ * @x: x relative to the monitor's left edge
+ * @y: y relative to the monitor's top edge
+ *
+ * Offers pointer motion to the bar so it can track hover.
+ *
+ * Returns: %TRUE when the pointer is over bar-owned pixels, in which
+ *   case the event must not reach a client
+ */
+gboolean gowl_bar_provider_handle_motion (GowlBarProvider *self,
+                                           gpointer monitor,
+                                           gint x, gint y);
+
+/**
+ * gowl_bar_provider_handle_axis:
+ * @self: a #GowlBarProvider
+ * @monitor: (nullable): the monitor under the pointer
+ * @x: x relative to the monitor's left edge
+ * @y: y relative to the monitor's top edge
+ * @delta: the scroll distance in surface units
+ * @discrete: the scroll distance in wheel clicks
+ * @modifiers: the keyboard modifiers held
+ *
+ * Offers a scroll to the bar.
+ *
+ * Returns: %TRUE when the bar consumed it
+ */
+gboolean gowl_bar_provider_handle_axis (GowlBarProvider *self,
+                                         gpointer monitor,
+                                         gint x, gint y, gdouble delta,
+                                         gint discrete, guint modifiers);
 
 /**
  * gowl_bar_provider_get_bar_insets:

@@ -37,6 +37,10 @@ $(OBJDIR)/interfaces/%.o: src/interfaces/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(OBJDIR)/barkit/%.o: src/barkit/%.c | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(OBJDIR)/layout/%.o: src/layout/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@

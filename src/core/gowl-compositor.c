@@ -7262,6 +7262,41 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 		}
 	}
 
+	/* CMACS: offer the motion to the bar before anything under the
+	 * cursor sees it.  The bar draws its widgets and dropdowns into
+	 * scene buffers, not client surfaces, so xytonode below cannot
+	 * find them -- without this hook a bar dropdown would be visible
+	 * but unhoverable, and the pointer would keep driving whatever
+	 * window is behind it. */
+	if (self->module_mgr != NULL && !self->locked) {
+		GowlMonitor *bm;
+
+		bm = xytomon(self, self->wlr_cursor->x, self->wlr_cursor->y);
+		if (bm != NULL) {
+			gint gx, gy, gw, gh;
+
+			gowl_monitor_get_geometry(bm, &gx, &gy, &gw, &gh);
+			if (gowl_module_manager_bar_motion(self->module_mgr, bm,
+				    (gint)(self->wlr_cursor->x - gx),
+				    (gint)(self->wlr_cursor->y - gy))) {
+				if (time_msec)
+					self->selmon = bm;
+				wlr_cursor_set_xcursor(self->wlr_cursor,
+				                       self->xcursor_mgr,
+				                       "default");
+				/* Drop the client's pointer focus so it does
+				 * not sit believing the pointer is still
+				 * inside it while the user works a panel. */
+				pointerfocus(self, NULL, NULL, 0, 0, time_msec);
+				self->prev_cursor_x = self->wlr_cursor->x;
+				self->prev_cursor_y = self->wlr_cursor->y;
+				self->cap_motion_dx = 0.0;
+				self->cap_motion_dy = 0.0;
+				return;
+			}
+		}
+	}
+
 	/* Find surface under cursor */
 	xytonode(self, self->wlr_cursor->x, self->wlr_cursor->y,
 	         &surface, &c, &sx, &sy);
@@ -7672,6 +7707,38 @@ on_cursor_button(struct wl_listener *listener, void *data)
 		if (self->locked)
 			break;
 
+		/* Bar clicks.  The bar owns two kinds of pixel: tag boxes,
+		 * which the compositor acts on directly, and everything a
+		 * bar provider draws itself -- widgets and dropdowns --
+		 * which only the provider can hit-test.  Both are consumed
+		 * here so neither reaches a client. */
+		{
+			GowlMonitor *bm;
+
+			bm = xytomon(self, self->wlr_cursor->x,
+			             self->wlr_cursor->y);
+			if (bm != NULL && self->module_mgr != NULL) {
+				gint lx, ly, gx, gy, gw, gh;
+				struct wlr_keyboard *bkbd;
+				guint bmods;
+
+				gowl_monitor_get_geometry(bm, &gx, &gy,
+				                          &gw, &gh);
+				lx = (gint)(self->wlr_cursor->x - gx);
+				ly = (gint)(self->wlr_cursor->y - gy);
+				bkbd = wlr_seat_get_keyboard(self->wlr_seat);
+				bmods = bkbd != NULL
+					? wlr_keyboard_get_modifiers(bkbd) : 0;
+
+				if (gowl_module_manager_bar_button(
+					    self->module_mgr, bm, lx, ly,
+					    event->button, TRUE, bmods)) {
+					self->selmon = bm;
+					return;
+				}
+			}
+		}
+
 		/* Tag-bar clicks: a left/right click on a bar tag box
 		 * views (left) or toggles (right) that tag on the monitor
 		 * under the cursor, then focuses that monitor.  Consumed
@@ -7754,6 +7821,32 @@ on_cursor_button(struct wl_listener *listener, void *data)
 	}
 
 	case WL_POINTER_BUTTON_STATE_RELEASED:
+		/* CMACS: the bar sees the release too.  A slider drag
+		 * inside a bar panel is started on the press and has to be
+		 * ended somewhere, and the release is the only event that
+		 * says so. */
+		if (!self->locked && self->module_mgr != NULL) {
+			GowlMonitor *bm;
+
+			bm = xytomon(self, self->wlr_cursor->x,
+			             self->wlr_cursor->y);
+			if (bm != NULL) {
+				gint gx, gy, gw, gh;
+
+				gowl_monitor_get_geometry(bm, &gx, &gy,
+				                          &gw, &gh);
+				if (gowl_module_manager_bar_button(
+					    self->module_mgr, bm,
+					    (gint)(self->wlr_cursor->x - gx),
+					    (gint)(self->wlr_cursor->y - gy),
+					    event->button, FALSE, 0)) {
+					self->cursor_mode =
+						GOWL_CURSOR_MODE_NORMAL;
+					return;
+				}
+			}
+		}
+
 		/* End interactive move/resize on button release */
 		if (!self->locked &&
 		    self->cursor_mode != GOWL_CURSOR_MODE_NORMAL &&
@@ -7841,6 +7934,30 @@ on_cursor_axis(struct wl_listener *listener, void *data)
 	{
 		struct wlr_keyboard *kbd = wlr_seat_get_keyboard(self->wlr_seat);
 		guint32 kmods = kbd != NULL ? wlr_keyboard_get_modifiers(kbd) : 0;
+
+		/* CMACS: a scroll over the bar or an open bar dropdown is
+		 * the bar's -- that is how the volume widget takes the
+		 * wheel, and how a long panel scrolls.  Position-gated, so
+		 * it cannot claim the wheel anywhere else. */
+		if (self->module_mgr != NULL && !self->locked) {
+			GowlMonitor *bm;
+
+			bm = xytomon(self, self->wlr_cursor->x,
+			             self->wlr_cursor->y);
+			if (bm != NULL) {
+				gint gx, gy, gw, gh;
+
+				gowl_monitor_get_geometry(bm, &gx, &gy,
+				                          &gw, &gh);
+				if (gowl_module_manager_bar_axis(
+					    self->module_mgr, bm,
+					    (gint)(self->wlr_cursor->x - gx),
+					    (gint)(self->wlr_cursor->y - gy),
+					    event->delta,
+					    event->delta_discrete, kmods))
+					return;
+			}
+		}
 
 		if (self->module_mgr != NULL
 		    && gowl_module_manager_dispatch_axis(

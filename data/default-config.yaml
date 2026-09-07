@@ -480,20 +480,66 @@ modules:
     mode: fill
   bar:
     enabled: false
-    height: 28
-    # "base/cc" is the palette's background at 80% opacity.
-    bg-color: base/cc
+    height: 30
+    # "base/e6" is the palette's background at 90% opacity.
+    bg-color: base/e6
     fg-color: text
     font: "monospace"
-    font-size: 13
-    # Right-side widgets (space-separated): cpu memory disk battery clock
-    widgets: "cpu memory disk battery clock"
-    # Per-widget colors (optional, falls back to fg-color)
+    font-size: 11
+    #
+    # Widgets are placed in three regions.  Each is a space-separated
+    # list, in order; the right region reads outward, so the first entry
+    # ends up furthest right.
+    #
+    # A widget is `name', `name:parameter' or `name:parameter@seconds'
+    # -- e.g. `disk:/var@60'.  Run `gowl bar-plugins' for the full list
+    # of what is registered, including anything you have dropped in
+    # ~/.config/gowl/bar-plugins/.
+    widgets-left: "tags title"
+    widgets-center: "clock"
+    widgets-right: "cpu memory disk battery"
+    #
+    # Which centre widget sits dead centre on the monitor.  Without an
+    # anchor the whole centre group is centred, so the clock slides
+    # every time something appears beside it.
+    center-anchor: "clock"
+    #
+    # `widgets' with no region keeps its old meaning -- the right-hand
+    # status list -- so an existing configuration needs no changes.
+    # widgets: "cpu memory disk battery clock"
+    #
+    # Per-widget colours name a palette role, so one `palette:' setting
+    # restyles the whole bar.  A hex literal works too.
     # cpu-color: green
     # memory-color: blue
     # disk-color: yellow
     # battery-color: teal
     # clock-color: text
+    #
+    # Per-widget settings use `<widget>.<key>':
+    # clock.format: "%a %b %d  %H:%M"
+    # weather.param: "Muskegon"
+    # network.ping-host: "1.1.1.1"
+    # title.max-width: "480"
+    #
+    # The panel and toast styling, on top of the palette:
+    # theme-accent: mauve
+    # theme-scale: "1.0"
+    # theme-metric-panel-width: 400
+    # theme-metric-radius: 8
+    # theme-icon-font: "Symbols Nerd Font Mono 11"
+    #
+    # The second bar, on the bottom edge.  One module owns both slots,
+    # and a YAML block names one module, so the bottom bar's keys are
+    # the same keys with a `bottom-' prefix.  Anything the top bar
+    # accepts works here.  (A configuration pushed from Elisp or
+    # config.c uses `position: bottom' instead.)
+    bottom-enabled: true
+    bottom-height: 26
+    bottom-bg-color: base/e6
+    bottom-widgets-left: "user host"
+    bottom-widgets-right: "network podman media"
+    bottom-tags.visible: "false"
   alpha:
     enabled: false
     # Opacity for the focused window (0.0 = transparent, 1.0 = opaque)

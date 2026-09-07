@@ -64,28 +64,39 @@ typedef struct {
  */
 #define GOWL_PALETTE_KEYS(base, mantle, crust, surface, overlay, \
                           text, subtext, accent, red, green, \
-                          yellow, blue, mauve, teal, peach) \
-	{ "base",    base    }, \
-	{ "mantle",  mantle  }, \
-	{ "crust",   crust   }, \
-	{ "surface", surface }, \
-	{ "overlay", overlay }, \
-	{ "text",    text    }, \
-	{ "subtext", subtext }, \
-	{ "accent",  accent  }, \
-	{ "red",     red     }, \
-	{ "green",   green   }, \
-	{ "yellow",  yellow  }, \
-	{ "blue",    blue    }, \
-	{ "mauve",   mauve   }, \
-	{ "teal",    teal    }, \
-	{ "peach",   peach   }
+                          yellow, blue, mauve, teal, peach, \
+                          pink, sapphire, sky, lavender, flamingo, \
+                          rosewater, maroon) \
+	{ "base",      base      }, \
+	{ "mantle",    mantle    }, \
+	{ "crust",     crust     }, \
+	{ "surface",   surface   }, \
+	{ "overlay",   overlay   }, \
+	{ "text",      text      }, \
+	{ "subtext",   subtext   }, \
+	{ "accent",    accent    }, \
+	{ "red",       red       }, \
+	{ "green",     green     }, \
+	{ "yellow",    yellow    }, \
+	{ "blue",      blue      }, \
+	{ "mauve",     mauve     }, \
+	{ "teal",      teal      }, \
+	{ "peach",     peach     }, \
+	{ "pink",      pink      }, \
+	{ "sapphire",  sapphire  }, \
+	{ "sky",       sky       }, \
+	{ "lavender",  lavender  }, \
+	{ "flamingo",  flamingo  }, \
+	{ "rosewater", rosewater }, \
+	{ "maroon",    maroon    }
 
 static const GowlPaletteEntry palette_mocha[] = {
 	GOWL_PALETTE_KEYS("#1e1e2e", "#181825", "#11111b", "#313244",
 	                  "#6c7086", "#cdd6f4", "#a6adc8", "#89b4fa",
 	                  "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa",
-	                  "#cba6f7", "#94e2d5", "#fab387"),
+	                  "#cba6f7", "#94e2d5", "#fab387",
+	                  "#f5c2e7", "#74c7ec", "#89dceb", "#b4befe", "#f2cdcd",
+	                  "#f5e0dc", "#eba0ac"),
 	{ NULL, NULL }
 };
 
@@ -93,7 +104,9 @@ static const GowlPaletteEntry palette_macchiato[] = {
 	GOWL_PALETTE_KEYS("#24273a", "#1e2030", "#181926", "#363a4f",
 	                  "#6e738d", "#cad3f5", "#b8c0e0", "#8aadf4",
 	                  "#ed8796", "#a6da95", "#eed49f", "#8aadf4",
-	                  "#c6a0f6", "#8bd5ca", "#f5a97f"),
+	                  "#c6a0f6", "#8bd5ca", "#f5a97f",
+	                  "#f5bde6", "#7dc4e4", "#91d7e3", "#b7bdf8", "#f0c6c6",
+	                  "#f4dbd6", "#ee99a0"),
 	{ NULL, NULL }
 };
 
@@ -101,7 +114,9 @@ static const GowlPaletteEntry palette_frappe[] = {
 	GOWL_PALETTE_KEYS("#303446", "#292c3c", "#232634", "#414559",
 	                  "#737994", "#c6d0f5", "#b5bfe2", "#8caaee",
 	                  "#e78284", "#a6d189", "#e5c890", "#8caaee",
-	                  "#ca9ee6", "#81c8be", "#ef9f76"),
+	                  "#ca9ee6", "#81c8be", "#ef9f76",
+	                  "#f4b8e4", "#85c1dc", "#99d1db", "#babbf1", "#eebebe",
+	                  "#f2d5cf", "#ea999c"),
 	{ NULL, NULL }
 };
 
@@ -109,7 +124,9 @@ static const GowlPaletteEntry palette_latte[] = {
 	GOWL_PALETTE_KEYS("#eff1f5", "#e6e9ef", "#dce0e8", "#ccd0da",
 	                  "#9ca0b0", "#4c4f69", "#6c6f85", "#1e66f5",
 	                  "#d20f39", "#40a02b", "#df8e1d", "#1e66f5",
-	                  "#8839ef", "#179299", "#fe640b"),
+	                  "#8839ef", "#179299", "#fe640b",
+	                  "#ea76cb", "#209fb5", "#04a5e5", "#7287fd", "#dd7878",
+	                  "#dc8a78", "#e64553"),
 	{ NULL, NULL }
 };
 
@@ -122,7 +139,9 @@ static const GowlPaletteEntry palette_dwm[] = {
 	GOWL_PALETTE_KEYS("#222222", "#111111", "#000000", "#444444",
 	                  "#444444", "#bbbbbb", "#888888", "#005577",
 	                  "#ff0000", "#00aa00", "#aaaa00", "#005577",
-	                  "#770055", "#007777", "#aa5500"),
+	                  "#770055", "#007777", "#aa5500",
+	                  "#770055", "#005577", "#007777", "#8888bb", "#aa5555",
+	                  "#bbbbbb", "#aa0000"),
 	{ NULL, NULL }
 };
 

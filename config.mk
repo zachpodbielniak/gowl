@@ -137,7 +137,11 @@ CFLAGS_BASE += -DGOWL_WLROOTS_VERSION_MINOR=$(WLROOTS_MINOR)
 DEPS_REQUIRED := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
 DEPS_REQUIRED += $(WLROOTS_PC) wayland-server wayland-protocols
 DEPS_REQUIRED += xkbcommon libinput
-DEPS_REQUIRED += yaml-0.1 json-glib-1.0 cairo egl gl glesv2
+# pangocairo joins cairo because the bar kit (src/barkit) lives in
+# libgowl: panels, toasts and every plugin's label are laid out with
+# Pango, and the kit has to be linkable by both the compositor and a
+# standalone bar client.
+DEPS_REQUIRED += yaml-0.1 json-glib-1.0 cairo pangocairo egl gl glesv2
 
 # Optional XWayland dependencies
 ifeq ($(BUILD_XWAYLAND),1)

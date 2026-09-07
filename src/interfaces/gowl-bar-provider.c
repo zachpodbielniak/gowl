@@ -114,3 +114,104 @@ gowl_bar_provider_tag_at(
 
 	return iface->tag_at(self, monitor, x, y);
 }
+
+/**
+ * gowl_bar_provider_handle_button:
+ * @self: a #GowlBarProvider
+ * @monitor: (nullable): the monitor under the pointer
+ * @x: x relative to the monitor's left edge
+ * @y: y relative to the monitor's top edge
+ * @button: the libinput button code
+ * @pressed: %TRUE on press, %FALSE on release
+ * @modifiers: the keyboard modifiers held
+ *
+ * Offers a pointer button to the bar.
+ *
+ * Returns: %TRUE when the bar consumed it
+ */
+gboolean
+gowl_bar_provider_handle_button(
+	GowlBarProvider *self,
+	gpointer         monitor,
+	gint             x,
+	gint             y,
+	guint            button,
+	gboolean         pressed,
+	guint            modifiers
+){
+	GowlBarProviderInterface *iface;
+
+	g_return_val_if_fail(GOWL_IS_BAR_PROVIDER(self), FALSE);
+
+	iface = GOWL_BAR_PROVIDER_GET_IFACE(self);
+	if (iface->handle_button == NULL)
+		return FALSE;
+
+	return iface->handle_button(self, monitor, x, y, button, pressed,
+	                            modifiers);
+}
+
+/**
+ * gowl_bar_provider_handle_motion:
+ * @self: a #GowlBarProvider
+ * @monitor: (nullable): the monitor under the pointer
+ * @x: x relative to the monitor's left edge
+ * @y: y relative to the monitor's top edge
+ *
+ * Offers pointer motion to the bar so it can track hover.
+ *
+ * Returns: %TRUE when the pointer is over bar-owned pixels
+ */
+gboolean
+gowl_bar_provider_handle_motion(
+	GowlBarProvider *self,
+	gpointer         monitor,
+	gint             x,
+	gint             y
+){
+	GowlBarProviderInterface *iface;
+
+	g_return_val_if_fail(GOWL_IS_BAR_PROVIDER(self), FALSE);
+
+	iface = GOWL_BAR_PROVIDER_GET_IFACE(self);
+	if (iface->handle_motion == NULL)
+		return FALSE;
+
+	return iface->handle_motion(self, monitor, x, y);
+}
+
+/**
+ * gowl_bar_provider_handle_axis:
+ * @self: a #GowlBarProvider
+ * @monitor: (nullable): the monitor under the pointer
+ * @x: x relative to the monitor's left edge
+ * @y: y relative to the monitor's top edge
+ * @delta: the scroll distance in surface units
+ * @discrete: the scroll distance in wheel clicks
+ * @modifiers: the keyboard modifiers held
+ *
+ * Offers a scroll to the bar.
+ *
+ * Returns: %TRUE when the bar consumed it
+ */
+gboolean
+gowl_bar_provider_handle_axis(
+	GowlBarProvider *self,
+	gpointer         monitor,
+	gint             x,
+	gint             y,
+	gdouble          delta,
+	gint             discrete,
+	guint            modifiers
+){
+	GowlBarProviderInterface *iface;
+
+	g_return_val_if_fail(GOWL_IS_BAR_PROVIDER(self), FALSE);
+
+	iface = GOWL_BAR_PROVIDER_GET_IFACE(self);
+	if (iface->handle_axis == NULL)
+		return FALSE;
+
+	return iface->handle_axis(self, monitor, x, y, delta, discrete,
+	                          modifiers);
+}

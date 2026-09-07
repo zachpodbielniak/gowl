@@ -77,6 +77,16 @@ LIB_SRCS := \
 	src/interfaces/gowl-embed-renderer.c \
 	src/interfaces/gowl-workspace-provider.c \
 	src/interfaces/gowl-capture-provider.c \
+	src/barkit/gowl-bar-theme.c \
+	src/barkit/gowl-bar-panel.c \
+	src/barkit/gowl-bar-panel-render.c \
+	src/barkit/gowl-bar-toast.c \
+	src/barkit/gowl-bar-layout.c \
+	src/barkit/gowl-bar-guard.c \
+	src/barkit/gowl-bar-host.c \
+	src/barkit/gowl-bar-plugin.c \
+	src/barkit/gowl-bar-plugin-proxy.c \
+	src/barkit/gowl-bar-registry.c \
 	src/config/gowl-config.c \
 	src/config/gowl-config-compiler.c \
 	src/config/gowl-keybind.c \
@@ -137,6 +147,17 @@ LIB_HDRS := \
 	src/boxed/gowl-process-info.h \
 	src/boxed/gowl-focus-token.h \
 	src/boxed/gowl-workspace-id.h \
+	src/barkit/gowl-barkit-types.h \
+	src/barkit/gowl-bar-theme.h \
+	src/barkit/gowl-bar-panel.h \
+	src/barkit/gowl-bar-panel-render.h \
+	src/barkit/gowl-bar-toast.h \
+	src/barkit/gowl-bar-layout.h \
+	src/barkit/gowl-bar-guard.h \
+	src/barkit/gowl-bar-host.h \
+	src/barkit/gowl-bar-plugin.h \
+	src/barkit/gowl-bar-plugin-proxy.h \
+	src/barkit/gowl-bar-registry.h \
 	src/module/gowl-module.h \
 	src/module/gowl-module-manager.h \
 	src/module/gowl-module-info.h \

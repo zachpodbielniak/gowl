@@ -150,6 +150,30 @@ gint                gowl_module_manager_bar_tag_at        (GowlModuleManager *se
                                                            gint               x,
                                                            gint               y);
 
+/* Offer pointer input to the active bar providers.  Coordinates are
+   monitor-local.  The first provider to claim an event stops the walk
+   and the event never reaches a client -- that is how a click on a bar
+   widget, or anywhere over an open bar dropdown, stays out of the
+   application underneath. */
+gboolean            gowl_module_manager_bar_button        (GowlModuleManager *self,
+                                                           gpointer           monitor,
+                                                           gint               x,
+                                                           gint               y,
+                                                           guint              button,
+                                                           gboolean           pressed,
+                                                           guint              modifiers);
+gboolean            gowl_module_manager_bar_motion        (GowlModuleManager *self,
+                                                           gpointer           monitor,
+                                                           gint               x,
+                                                           gint               y);
+gboolean            gowl_module_manager_bar_axis          (GowlModuleManager *self,
+                                                           gpointer           monitor,
+                                                           gint               x,
+                                                           gint               y,
+                                                           gdouble            delta,
+                                                           gint               discrete,
+                                                           guint              modifiers);
+
 /**
  * gowl_module_manager_get_decorator:
  * @self: a #GowlModuleManager

@@ -1419,6 +1419,135 @@ gowl_module_manager_bar_tag_at(
 }
 
 /**
+ * gowl_module_manager_bar_button:
+ * @self: a #GowlModuleManager
+ * @monitor: (nullable): the monitor under the pointer
+ * @x: x relative to the monitor's left edge
+ * @y: y relative to the monitor's top edge
+ * @button: the libinput button code
+ * @pressed: %TRUE on press, %FALSE on release
+ * @modifiers: the keyboard modifiers held
+ *
+ * Returns: %TRUE when a bar provider consumed the button
+ */
+gboolean
+gowl_module_manager_bar_button(
+	GowlModuleManager *self,
+	gpointer           monitor,
+	gint               x,
+	gint               y,
+	guint              button,
+	gboolean           pressed,
+	guint              modifiers
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), FALSE);
+
+	for (i = 0; i < self->bar_providers->len; i++) {
+		GowlBarProvider *provider;
+
+		provider = (GowlBarProvider *)g_ptr_array_index(
+			self->bar_providers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(provider)))
+			continue;
+
+		if (gowl_bar_provider_handle_button(provider, monitor, x, y,
+		                                    button, pressed,
+		                                    modifiers))
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+/**
+ * gowl_module_manager_bar_motion:
+ * @self: a #GowlModuleManager
+ * @monitor: (nullable): the monitor under the pointer
+ * @x: x relative to the monitor's left edge
+ * @y: y relative to the monitor's top edge
+ *
+ * Every provider is offered the motion even after one claims it: a
+ * provider that is not claiming still needs to see the pointer leave
+ * so it can drop its hover highlight.
+ *
+ * Returns: %TRUE when the pointer is over bar-owned pixels
+ */
+gboolean
+gowl_module_manager_bar_motion(
+	GowlModuleManager *self,
+	gpointer           monitor,
+	gint               x,
+	gint               y
+){
+	gboolean claimed;
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), FALSE);
+
+	claimed = FALSE;
+	for (i = 0; i < self->bar_providers->len; i++) {
+		GowlBarProvider *provider;
+
+		provider = (GowlBarProvider *)g_ptr_array_index(
+			self->bar_providers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(provider)))
+			continue;
+
+		if (gowl_bar_provider_handle_motion(provider, monitor, x, y))
+			claimed = TRUE;
+	}
+
+	return claimed;
+}
+
+/**
+ * gowl_module_manager_bar_axis:
+ * @self: a #GowlModuleManager
+ * @monitor: (nullable): the monitor under the pointer
+ * @x: x relative to the monitor's left edge
+ * @y: y relative to the monitor's top edge
+ * @delta: the scroll distance in surface units
+ * @discrete: the scroll distance in wheel clicks
+ * @modifiers: the keyboard modifiers held
+ *
+ * Returns: %TRUE when a bar provider consumed the scroll
+ */
+gboolean
+gowl_module_manager_bar_axis(
+	GowlModuleManager *self,
+	gpointer           monitor,
+	gint               x,
+	gint               y,
+	gdouble            delta,
+	gint               discrete,
+	guint              modifiers
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), FALSE);
+
+	for (i = 0; i < self->bar_providers->len; i++) {
+		GowlBarProvider *provider;
+
+		provider = (GowlBarProvider *)g_ptr_array_index(
+			self->bar_providers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(provider)))
+			continue;
+
+		if (gowl_bar_provider_handle_axis(provider, monitor, x, y,
+		                                  delta, discrete, modifiers))
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+/**
  * gowl_module_manager_dispatch_bar_render:
  * @self: a #GowlModuleManager
  * @compositor: (nullable): the compositor instance

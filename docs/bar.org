@@ -1,0 +1,470 @@
+#+title: The gowl bar
+#+description: Widgets, dropdown panels, toasts and the plugin system behind them
+#+author: Zach Podbielniak
+
+* The gowl bar
+:PROPERTIES:
+:CUSTOM_ID: the-gowl-bar
+:END:
+
+The bar is a gowl module that draws one or two status bars, a dropdown panel under whichever widget you click, and a stack of notification toasts. Everything it shows comes from a *plugin*: a small object with a poll function, a label, and optionally a panel. The shipped widgets --- the clock, the system readings, the network panel --- use exactly the same interface a plugin you write does, and there is no private path they take that yours cannot.
+
+This document covers configuring the bar, then writing a plugin.
+
+** At a glance
+:PROPERTIES:
+:CUSTOM_ID: at-a-glance
+:END:
+
+- Three regions per bar --- left, centre and right --- with a *centre anchor* so one widget stays dead centre no matter what appears beside it.
+- Two bars: top and bottom. Both are optional; both are configured the same way.
+- A click on a widget opens its *panel*: a dropdown the plugin describes and the bar renders, hit-tests, scrolls and gives keyboard navigation to.
+- *Toasts*: on-screen notifications the bar owns. A toast can name a panel, so "Wi-Fi is not configured" becomes one click away from the network dropdown.
+- Plugins load from =~/.config/gowl/bar-plugins/= as a compiled =.so= *or as a plain =.c= file*, compiled on demand through crispy --- no build system, no install step, and =gowl bar-plugin-reload= to pick up an edit without restarting.
+- Every colour is a named *theme role* resolved out of the session palette, so one =palette:= setting restyles the bar, its panels, its toasts, and every third-party widget in it.
+- A plugin that faults is caught, unloaded and reported rather than taking the session down. See [[#containment][Containment]] for what that does and does not promise.
+
+** Configuring the bar
+:PROPERTIES:
+:CUSTOM_ID: configuring-the-bar
+:END:
+
+*** Widget lists and regions
+:PROPERTIES:
+:CUSTOM_ID: widget-lists-and-regions
+:END:
+
+#+begin_src yaml
+modules:
+  bar:
+    enabled: true
+    height: 30
+    widgets-left: "tags title"
+    widgets-center: "clock"
+    widgets-right: "cpu memory disk:/var battery network audio"
+    center-anchor: "clock"
+#+end_src
+
+Each list is space separated and in order. The *right* region reads outward: the first entry ends up furthest right, which is how every dwm-descended status list has always read.
+
+=center-anchor= names one widget in the centre region. That widget is centred on the monitor and the rest of the centre region packs around it. Without an anchor the centre region is centred *as a group*, which means the clock slides sideways every time something appears next to it.
+
+A =widgets:= key with no region keeps its historical meaning --- the right-hand status list --- so a configuration written before regions existed needs no changes.
+
+*** Widget specs
+:PROPERTIES:
+:CUSTOM_ID: widget-specs
+:END:
+
+A widget is written =name=, =name:parameter= or =name:parameter@seconds=:
+
+| Spec              | Meaning                                            |
+|-------------------+----------------------------------------------------|
+| =cpu=             | The =cpu= widget with its own defaults             |
+| =disk:/var=       | The =disk= widget watching =/var=                  |
+| =weather:Berlin@600= | Weather for Berlin, refreshed every ten minutes |
+| =cmd:~/bin/pomo@5=   | A command's first line of output, every five seconds |
+
+The interval suffix uses the *last* =@= in the spec, so =cmd:ssh me@host@30= parses the way you meant it.
+
+The whole spec is the widget's identity, so two =disk:= widgets on different mounts are separately addressable --- by =gowl bar-panel=, by a toast's panel target, and by per-widget settings.
+
+*** Per-widget settings
+:PROPERTIES:
+:CUSTOM_ID: per-widget-settings
+:END:
+
+Two forms, both in the same block:
+
+#+begin_src yaml
+modules:
+  bar:
+    # A colour, by palette role or by hex literal.
+    cpu-color: green
+    memory-color: blue
+
+    # Anything else, as <widget>.<key>.
+    clock.format: "%a %b %d  %H:%M"
+    title.max-width: "480"
+    network.ping-host: "1.1.1.1"
+    weather.units: "m"
+#+end_src
+
+*** The bottom bar
+:PROPERTIES:
+:CUSTOM_ID: the-bottom-bar
+:END:
+
+One module owns both slots, and a YAML block names one module --- so the bottom bar's keys are the same keys with a =bottom-= prefix:
+
+#+begin_src yaml
+modules:
+  bar:
+    enabled: true
+    widgets-right: "cpu memory clock"
+
+    bottom-enabled: true
+    bottom-height: 26
+    bottom-widgets-left: "user host"
+    bottom-widgets-right: "network podman media"
+    bottom-tags.visible: "false"
+#+end_src
+
+A configuration pushed from Elisp or from =config.c= uses =position: bottom= instead and arrives as its own call; both routes end in the same place.
+
+*** Theming
+:PROPERTIES:
+:CUSTOM_ID: theming
+:END:
+
+The bar inherits the session palette, so the first thing to reach for is not a bar setting at all:
+
+#+begin_src yaml
+palette:
+  name: mocha        # or macchiato, frappe, latte, dwm
+#+end_src
+
+Every widget, panel and toast follows it, including plugins you wrote and plugins somebody else wrote. On top of that, =theme-*= keys adjust the bar specifically:
+
+| Key                          | Meaning                                              |
+|------------------------------+------------------------------------------------------|
+| =theme-<role>=               | Override one colour role, e.g. =theme-accent: mauve= |
+| =theme-metric-<name>=        | A pixel metric, e.g. =theme-metric-panel-width: 400= |
+| =theme-scale=                | Multiply every metric at once, for a HiDPI session   |
+| =theme-font=                 | The body font, as a Pango description                |
+| =theme-icon-font=            | The font used for glyph icons                        |
+
+Roles: =base=, =mantle=, =crust=, =surface=, =surface-alt=, =overlay=, =text=, =subtext=, =muted=, =accent=, =red=, =green=, =yellow=, =blue=, =mauve=, =teal=, =peach=, =pink=, =sapphire=, =sky=, =lavender=, =flamingo=, =rosewater=, =maroon=.
+
+Metrics: =radius=, =pad-x=, =pad-y=, =gap=, =row-height=, =item-pad=, =item-gap=, =border=, =panel-width=, =panel-offset=, =shadow=, =toast-width=.
+
+The legacy =bg-color= and =fg-color= keys still work; they set the =base= and =text= roles.
+
+** The shipped widgets
+:PROPERTIES:
+:CUSTOM_ID: the-shipped-widgets
+:END:
+
+Run =gowl bar-plugins= for the live list, which includes anything you have installed. What ships:
+
+*** Window manager
+| Widget   | Shows                       | Click                        |
+|----------+-----------------------------+------------------------------|
+| =tags=   | The dwm-style tag row       | View (left) / toggle (right) |
+| =title=  | The focused window's title  | ---                          |
+| =layout= | The active layout's symbol  | Cycle layouts                |
+
+=title= takes =delimiters=, =palette= and =delimiter-color= to colourise a path or a buffer name by segment, and =max-width= to stop a maximised terminal's title pushing everything else off the bar.
+
+*** System
+| Widget    | Shows                          | Panel               |
+|-----------+--------------------------------+---------------------|
+| =cpu=     | Processor utilisation          | System              |
+| =memory=  | Memory in use                  | System              |
+| =swap=    | Swap in use                    | System              |
+| =disk=    | Free space on a mount          | System              |
+| =load=    | One-minute load average        | System              |
+| =temp=    | Package temperature            | System              |
+| =gpu=     | GPU utilisation                | System              |
+| =io=      | Block read and write rates     | System              |
+| =uptime=  | Time since boot                | System              |
+| =host=    | Host name                      | ---                 |
+| =user=    | User name                      | ---                 |
+| =battery= | Charge, with a bolt when charging | Power            |
+| =power=   | Session power actions          | Power               |
+
+All of the system widgets open the *same* panel, with the hero changed to match whichever one you clicked. A click on the memory widget and a click on the temperature widget should both take you to the place where you can see what the machine is doing.
+
+Colour is computed from pressure --- text, then peach past 75%, then red past 90% --- unless you set an explicit =<widget>-color=, which always wins.
+
+*** Network
+| Widget      | Shows                      | Panel                                    |
+|-------------+----------------------------+------------------------------------------|
+| =network=   | SSID or address            | Ping, rates, totals, signal, DNS, Wi-Fi list |
+| =net=       | Throughput                 | Network                                  |
+| =ip=        | The interface's address    | Network                                  |
+| =wifi=      | Signal strength            | Network                                  |
+| =vpn=       | Whether a tunnel is up     | ---                                      |
+| =tailscale= | Tailnet state              | Peers, exit nodes, sign-in               |
+
+The network panel reads what the kernel already knows, and uses =nmcli= only for the parts that genuinely need it --- so the readings still work on a machine with no NetworkManager, and only the actions disappear.
+
+The Tailscale widget is off by default and hides itself entirely when Tailscale is not installed. It reads =tailscale status --json= directly rather than shelling out per field. A device that has Tailscale but has never signed in raises a toast saying so, once.
+
+*** Desktop
+| Widget     | Shows                        | Panel                                 |
+|------------+------------------------------+---------------------------------------|
+| =audio=    | Volume, muted state          | Output and input sliders, devices     |
+| =media=    | What is playing              | Track, player, transport              |
+| =podman=   | Running containers           | Container list, start/stop, logs      |
+| =weather=  | Conditions and temperature   | Feels-like, wind, three-day forecast  |
+| =git=      | The focused window's branch  | ---                                   |
+| =keymap=   | Keyboard layout              | ---                                   |
+| =display=  | Brightness                   | Brightness, text size, night light    |
+
+The wheel over =audio= changes the volume and over =display= changes the brightness. A bar widget may claim the wheel without a modifier only because the pointer is over it --- there is no ambiguity about what it means.
+
+*** Generic
+These are how you add something the shipped set does not cover, without writing any C:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right: "button:screenrec toggle:caffeine cmd:~/bin/pomo@10 spacer label"
+
+    # A button runs a command.
+    button.icon: "⏺"
+    button.command: "wf-recorder -g \"$(slurp)\""
+    button.command-right: "pkill -INT wf-recorder"
+    button.tooltip: "Record a region"
+
+    # A toggle asks a command for its state and runs another to change it.
+    toggle.state-command: "pgrep -x wl-idle-inhibit"
+    toggle.command-on: "systemd-inhibit --what=idle sleep infinity &"
+    toggle.command-off: "pkill wl-idle-inhibit"
+    toggle.icon-on: "☕"
+    toggle.icon-off: "☕"
+    toggle.color-on: "green"
+#+end_src
+
+| Widget    | Purpose                                                     |
+|-----------+-------------------------------------------------------------|
+| =button=  | A glyph that runs a command; separate left/right/middle     |
+| =toggle=  | A stateful button, polled by =state-command=                |
+| =cmd=     | The first line of a command's output                        |
+| =label=   | Static text                                                 |
+| =spacer=  | Fixed empty width, optionally a divider rule                |
+
+** Panels
+:PROPERTIES:
+:CUSTOM_ID: panels
+:END:
+
+Clicking a widget with a panel opens it under that widget (or above it, for a bottom bar). Clicking the same widget closes it; clicking a different one switches. A click anywhere else dismisses it and is swallowed, so the click that closed a dropdown does not also land in the application behind it.
+
+While a panel is open:
+
+| Key             | Does                          |
+|-----------------+-------------------------------|
+| =Escape=        | Close                         |
+| =Down= / =j= / =Tab= | Next interactive row     |
+| =Up= / =k=      | Previous row                  |
+| =Return= / =Space= | Activate the focused row   |
+
+The wheel scrolls a panel taller than the screen. Sliders are draggable.
+
+Open a panel without the pointer:
+
+#+begin_src sh
+gowl bar-panel network      # open the network dropdown
+gowl bar-panel              # close whatever is open
+#+end_src
+
+** Toasts
+:PROPERTIES:
+:CUSTOM_ID: toasts
+:END:
+
+The bar owns an on-screen notification stack, drawn on the OVERLAY scene layer so it is visible over a fullscreen window --- which is when a critical notification matters most.
+
+#+begin_src sh
+gowl bar-notify 'Backup finished|1.4 GB written'
+gowl bar-notify 'Wi-Fi is not configured|No known network is in range|network'
+gowl bar-dismiss
+#+end_src
+
+The third field is a *panel target*. A toast with one is clickable, and clicking it opens that widget's dropdown --- a notification that hands you the thing that fixes it, rather than telling you to go find it. A toast with no panel but a command runs the command instead.
+
+A toast raised at critical urgency never expires on its own and cannot be pushed off the stack by later chatter. That is what a plugin-crash report uses.
+
+** Writing a plugin
+:PROPERTIES:
+:CUSTOM_ID: writing-a-plugin
+:END:
+
+Copy =data/example-bar-plugin.c= into =~/.config/gowl/bar-plugins/= and it works. That file is a complete, commented pomodoro timer with a panel; this section is the contract behind it.
+
+*** The shape of one
+:PROPERTIES:
+:CUSTOM_ID: the-shape-of-one
+:END:
+
+A plugin is a struct of function pointers and a descriptor:
+
+#+begin_src C
+#include <gowl/barkit/gowl-bar-plugin.h>
+#include <gowl/barkit/gowl-bar-plugin-proxy.h>
+#include <gowl/barkit/gowl-bar-registry.h>
+
+static void
+hello_poll(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)data;
+	gowl_bar_plugin_set_label(plugin, "hello");
+}
+
+static const GowlBarPluginVTable hello_vtable = {
+	sizeof(GowlBarPluginVTable),
+	NULL, NULL,            /* create, destroy */
+	NULL, NULL, NULL,      /* activate, deactivate, configure */
+	NULL, hello_poll, NULL,/* interval, poll, poll_async */
+	NULL, NULL,            /* measure, draw */
+	NULL, NULL,            /* click, scroll */
+	NULL, NULL,            /* panel, action */
+	NULL, NULL             /* panel_opened, panel_closed */
+};
+
+static const GowlBarPluginDesc descs[] = {
+	{ GOWL_BAR_PLUGIN_ABI, "hello", "Hello", "A greeting", "1.0.0",
+	  &hello_vtable, NULL, { NULL, NULL, NULL, NULL } }
+};
+
+G_MODULE_EXPORT const GowlBarPluginDesc *
+gowl_bar_plugin_query(guint *n_descs)
+{
+	*n_descs = G_N_ELEMENTS(descs);
+	return descs;
+}
+#+end_src
+
+Every slot may be =NULL=; the bar uses its default. The minimum viable plugin is a =poll= that calls =gowl_bar_plugin_set_label()=, and it gets measurement, drawing, hover, and the panel machinery for free.
+
+=size= must be the first member and must be =sizeof= the struct *as your file sees it*. That is what lets the vtable grow without breaking a plugin built against an older gowl: the bar checks every callback lies inside the size you declared before calling it.
+
+One file may publish several plugins. They are then one compile and one reload rather than several.
+
+*** Which thread you are on
+:PROPERTIES:
+:CUSTOM_ID: which-thread
+:END:
+
+This is the one rule that matters more than the rest.
+
+- =poll= runs on the *compositor's dispatch thread*. It may read =/proc=, do arithmetic, and call the setters. It may **not** spawn a process, touch the network, or block on anything --- that thread holds the lock every editor primitive needs, so blocking it freezes the editor as well as the bar.
+- =poll_async= runs on a *worker thread*. This is where a subprocess, an HTTP request or a slow file read belongs. It may call =gowl_bar_plugin_set_label()=, =set_icon()=, =set_color()= and =set_tooltip()= --- all of which are thread-safe --- and nothing else.
+- =draw=, =measure=, =click=, =scroll=, =panel= and =action= all run on the dispatch thread, and are subject to the same rule as =poll=.
+
+If you need a subprocess in response to a click, use =gowl_bar_plugin_spawn()=, which is fire-and-forget, or =gowl_bar_plugin_queue_work()= to run something blocking on a worker.
+
+*** Colour
+:PROPERTIES:
+:CUSTOM_ID: plugin-colour
+:END:
+
+Name a role, never a hex literal:
+
+#+begin_src C
+gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_PEACH);
+#+end_src
+
+A widget that writes =#fab387= stays that colour when the user switches to Latte. A widget that names =GOWL_BAR_COLOR_PEACH= follows. The shipped plugins are held to this by a source guard.
+
+*** Panels
+:PROPERTIES:
+:CUSTOM_ID: plugin-panels
+:END:
+
+A plugin *describes* its dropdown; the bar draws it. That is what makes a plugin from outside the tree look and behave exactly like a shipped one, and what lets the panel layer gain a feature --- scrolling, keyboard navigation --- without any plugin changing.
+
+#+begin_src C
+static GowlBarPanel *
+my_panel(GowlBarPlugin *plugin, gpointer data)
+{
+	GowlBarPanel *panel;
+	GowlBarPanelItem *item;
+
+	panel = gowl_bar_panel_new();
+	gowl_bar_panel_set_width(panel, 400);
+
+	item = gowl_bar_panel_add_hero(panel, "☂", "Umbrella", "Staying dry");
+	gowl_bar_panel_item_set_id(item, "power");     /* adds a switch */
+	gowl_bar_panel_item_set_active(item, TRUE);
+
+	gowl_bar_panel_add_field_pair(panel, "Ping", "9.8 ms",
+	                              "Loss", "0%");
+	gowl_bar_panel_add_separator(panel);
+	gowl_bar_panel_add_slider(panel, "level", "Level", 0.4);
+
+	item = gowl_bar_panel_add_buttons(panel, "action");
+	gowl_bar_panel_add_button(item, "Up", FALSE);
+	gowl_bar_panel_add_button(item, "Down", FALSE);
+
+	return panel;
+}
+#+end_src
+
+Item kinds: =HERO=, =SECTION=, =LABEL=, =FIELD=, =FIELD_PAIR=, =SEPARATOR=, =SLIDER=, =TOGGLE=, =BUTTONS=, =ROW=, =PROGRESS=, =GRAPH=, =CALENDAR=, =SPACER=.
+
+The =action= callback is given the item's id, a child index for a button row, and a slider's new value. Rows in a list all share one id unless you give each a distinct one --- the shipped plugins encode the payload into the id (=connect:SSID=, =peer:100.x.y.z=) because the callback sees nothing else.
+
+=build_panel= is called every time the panel is shown *or refreshed*, so it must be cheap and must not block. Refresh it from a poll with =gowl_bar_plugin_refresh_panel()=.
+
+*** Loading, reloading, unloading
+:PROPERTIES:
+:CUSTOM_ID: loading
+:END:
+
+#+begin_src sh
+gowl bar-plugins                    # what is registered
+gowl bar-plugin-load ~/x/thing.c    # load one now
+gowl bar-plugin-reload pomodoro     # recompile and swap in an edit
+gowl bar-plugin-unload pomodoro     # drop it
+gowl bar-quarantined                # what is being held back, and why
+gowl bar-plugin-clear pomodoro      # let a held-back plugin load again
+#+end_src
+
+=~/.config/gowl/bar-plugins/= is scanned at startup, in name order. =GOWL_BAR_PLUGIN_DIR= overrides the location, which is what a development tree wants.
+
+A =.c= file is compiled to a cached shared object keyed on a hash of its contents and its flags, so an unchanged source loads without invoking the compiler. Set =CRISPY_PARAMS= in the source for extra flags:
+
+#+begin_src C
+#define CRISPY_PARAMS "$(pkg-config --cflags --libs json-glib-1.0)"
+#+end_src
+
+Unloading removes the plugin from the registry and drops every instance of it, but the shared object itself *stays mapped*. Unmapping code that a queued worker or a pending callback may still point into is how a hot-unload turns into a crash somewhere else entirely, and the memory saved is a few tens of kilobytes.
+
+That is also why the vtable form is the one to use: a =GType= cannot be unregistered, so a plugin that defines its own class can be dropped from the bar but a recompiled version of it cannot re-register the same class name.
+
+** Containment
+:PROPERTIES:
+:CUSTOM_ID: containment
+:END:
+
+Bar plugins run *inside the compositor*. That is what lets them read compositor state directly and draw into the bar's own buffer, and it is also what makes a bad one dangerous: under =emacs --gowl= the compositor is the whole session.
+
+Two mechanisms narrow that.
+
+*** The fault guard
+:PROPERTIES:
+:CUSTOM_ID: the-fault-guard
+:END:
+
+Every call into a plugin --- poll, async poll, draw, click, panel build, panel action, and the load itself --- runs under a signal guard. A =SIGSEGV=, =SIGBUS=, =SIGFPE=, =SIGILL= or =SIGABRT= raised inside one of those calls unwinds back to the call site; the bar then quarantines the plugin, drops it, and raises a critical toast naming it. The session keeps running.
+
+=SIGABRT= is in the set deliberately: =g_assert= and =g_error= are the most likely way a plugin dies, and losing a session to somebody's failed assertion is exactly the outcome this exists to prevent.
+
+The honest limits: this recovers a fault whose damage was confined to the faulting call. A plugin that corrupts the heap and crashes later, somewhere else, is not recoverable by any in-process mechanism. Outside a guarded call the previous handler runs unchanged, so genuine compositor crashes still produce a core dump.
+
+*** The load journal
+:PROPERTIES:
+:CUSTOM_ID: the-load-journal
+:END:
+
+The case the guard cannot catch is the one where the session dies anyway. Before each plugin load the bar writes what it is about to load to =$XDG_STATE_HOME/gowl/bar-plugins.journal=, and clears the entry when the load completes. On the next start, an entry that was never cleared identifies a plugin that took the session down --- so it is quarantined before it gets a second try, and you are told which one it was.
+
+Without that record the next start loads it again and crashes again. With it, one bad session is followed by a notification naming the culprit.
+
+Clear a quarantine with =gowl bar-plugin-clear <name>= once you have fixed the plugin.
+
+** Source guards
+:PROPERTIES:
+:CUSTOM_ID: source-guards
+:END:
+
+=tests/test-bar-guard.sh= (run by =make test=) asserts five properties that no unit test can reach and that all fail silently:
+
+1. Every plugin entry point still runs under the fault guard.
+2. The registry still keeps unloaded modules resident rather than closing them.
+3. Panels and toasts still use the OVERLAY scene layer, so they float over fullscreen windows.
+4. No shipped plugin hard-codes a colour.
+5. No shipped plugin spawns synchronously --- that would be on the compositor's dispatch thread.

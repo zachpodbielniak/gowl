@@ -3249,6 +3249,44 @@ bar_handle_command(GowlIpcHandler *handler, const gchar *command,
 		return g_string_free(out, FALSE);
 	}
 
+	if (strcmp(command, "bar-widgets") == 0) {
+		GString *out;
+		gint bi;
+		guint i;
+
+		/* The laid-out truth, per slot and region.  "Why is my
+		   widget missing" has three plausible answers -- it is not
+		   registered, it measured to nothing, or the region it went
+		   into is not the one that was configured -- and this is
+		   the only thing that distinguishes them. */
+		out = g_string_new(NULL);
+		for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++) {
+			GowlBarInstance *bar = &self->bars[bi];
+
+			g_string_append_printf(out, "%s\t%s\t%s\tanchor=%s\n",
+				(bi == GOWL_BAR_POSITION_TOP) ? "top" : "bottom",
+				bar->enabled ? "enabled" : "disabled",
+				bar->visible ? "visible" : "hidden",
+				(bar->anchor_id != NULL) ? bar->anchor_id
+				                         : "-");
+
+			for (i = 0; i < bar->items->len; i++) {
+				BarItem *item;
+				g_autofree gchar *label = NULL;
+
+				item = g_ptr_array_index(bar->items, i);
+				label = gowl_bar_plugin_dup_label(item->plugin);
+				g_string_append_printf(out,
+					"  %-6s %-28s %s%s\n",
+					gowl_bar_layout_region_name(item->region),
+					item->spec,
+					item->slot.visible ? "" : "[hidden] ",
+					(label != NULL) ? label : "");
+			}
+		}
+		return g_string_free(out, FALSE);
+	}
+
 	if (strcmp(command, "bar-plugin-load") == 0) {
 		if (args == NULL || args[0] == '\0')
 			return g_strdup("error: a path is required\n");

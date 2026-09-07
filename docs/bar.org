@@ -449,6 +449,7 @@ The =action= callback is given the item's id, a child index for a button row, an
 :END:
 
 #+begin_src sh
+gowl bar-widgets                    # the laid-out bar, per slot and region
 gowl bar-plugins                    # what is registered
 gowl bar-plugin-load ~/x/thing.c    # load one now
 gowl bar-plugin-reload pomodoro     # recompile and swap in an edit
@@ -468,6 +469,33 @@ A =.c= file is compiled to a cached shared object keyed on a hash of its content
 Unloading removes the plugin from the registry and drops every instance of it, but the shared object itself *stays mapped*. Unmapping code that a queued worker or a pending callback may still point into is how a hot-unload turns into a crash somewhere else entirely, and the memory saved is a few tens of kilobytes.
 
 That is also why the vtable form is the one to use: a =GType= cannot be unregistered, so a plugin that defines its own class can be dropped from the bar but a recompiled version of it cannot re-register the same class name.
+
+** When a widget does not appear
+:PROPERTIES:
+:CUSTOM_ID: missing-widgets
+:END:
+
+=gowl bar-widgets= prints the laid-out bar --- each slot, then each widget with its region, its spec and its current label:
+
+#+begin_example
+top     enabled visible anchor=clock
+  left   tags                         1/3/1
+  left   title                        cmacs-gowl.el
+  center clock                        Mon Sep 07  11:27
+  right  cpu                          CPU 31%
+  right  memory                       MEM 11.9G
+  right  battery              [hidden]
+bottom  enabled visible anchor=-
+  right  ip                           10.0.5.239
+#+end_example
+
+"Why is my widget missing" has three plausible answers, and this is what tells them apart:
+
+- *It is not in the list at all.* The spec did not resolve to a registered plugin --- a typo, or a plugin that failed to load. Check =gowl bar-plugins= and =gowl bar-quarantined=.
+- *It is listed but marked =[hidden]=.* It measured to nothing, which for most widgets means it has nothing to show: no battery on a desktop, no swap on a machine without any, no wireless interface. That is deliberate --- an empty widget would leave a hole in the bar.
+- *It is in the wrong region.* Usually a configuration that set only some regions on top of a layout it expected to be cleared. See [[#shipped-layout][What happens to the shipped layout]].
+
+From Elisp, =M-x cmacs-gowl-bar-widgets=.
 
 ** Containment
 :PROPERTIES:

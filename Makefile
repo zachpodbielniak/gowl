@@ -547,6 +547,12 @@ $(OUTDIR)/modules/tile.so $(OUTDIR)/modules/monocle.so $(OUTDIR)/modules/float.s
 $(OUTDIR)/test-layout: $(addprefix $(OUTDIR)/modules/,tile.so monocle.so float.so scrolling.so)
 $(OUTDIR)/test-layout: TEST_LDFLAGS += -L$(OUTDIR)/modules -l:tile.so -l:monocle.so -l:float.so -Wl,-rpath,$(abspath $(OUTDIR)/modules)
 
+# The bar module's configuration is asserted against the real module:
+# it loads and configures without a compositor, so what a given
+# configuration actually produces is testable here.
+$(OUTDIR)/test-bar-module: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-module.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"'
+
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 $(OUTDIR)/test-layout-orientation: $(addprefix $(OUTDIR)/modules/,tile.so monocle.so scrolling.so centeredmaster.so fibonacci.so)

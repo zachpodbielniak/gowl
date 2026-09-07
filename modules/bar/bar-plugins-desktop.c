@@ -958,9 +958,20 @@ weather_create(GowlBarPlugin *plugin)
 {
 	WeatherData *wd;
 
-	(void)plugin;
 	wd = g_new0(WeatherData, 1);
 	wd->forecast = g_ptr_array_new_with_free_func(g_free);
+	/*
+	 * Something to show before the first fetch lands.
+	 *
+	 * The poll is asynchronous and the service is somebody else's, so
+	 * there is a window of a second or two -- longer on a slow link --
+	 * where this widget has no text.  A widget with no label measures
+	 * zero width and is dropped, so during that window the weather
+	 * looked like it had never been added to the bar at all.
+	 */
+	gowl_bar_plugin_set_icon(plugin, "\xef\x83\x82");
+	gowl_bar_plugin_set_label(plugin, "\xe2\x80\xa6");
+
 	return wd;
 }
 
@@ -1005,7 +1016,10 @@ weather_poll_async(GowlBarPlugin *plugin, gpointer data)
 	gint i;
 
 	if (!bar_have_command("curl")) {
-		gowl_bar_plugin_set_label(plugin, NULL);
+		/* Say so rather than vanishing.  A widget with no label
+		   measures zero and is dropped from the bar, which is
+		   indistinguishable from never having been configured. */
+		gowl_bar_plugin_set_label(plugin, "no curl");
 		return;
 	}
 
@@ -1487,8 +1501,18 @@ display_poll(GowlBarPlugin *plugin, gpointer data)
 
 	display_find_backlight(dd);
 	if (dd->backlight == NULL) {
+		/*
+		 * No backlight is the normal case on a desktop, and the
+		 * panel is still worth opening -- it carries the output's
+		 * name, size and the scale buttons.  Labelled rather than
+		 * left as a bare glyph, because a lone icon in a row of
+		 * readings is easy to miss and easy to mistake for tofu
+		 * when the Nerd Font is not installed.
+		 */
 		gowl_bar_plugin_set_icon(plugin, "\xef\x84\x88");
-		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_label(plugin, "Display");
+		gowl_bar_plugin_set_tooltip(plugin,
+			"Monitor, scale and brightness settings");
 		return;
 	}
 

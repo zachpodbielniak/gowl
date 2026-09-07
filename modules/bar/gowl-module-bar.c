@@ -3742,10 +3742,129 @@ bar_instance_init(GowlBarInstance *bar, GowlBarPosition position)
 	gowl_bar_theme_set_font(bar->theme, "monospace 11");
 }
 
+/*
+ * The shipped layout, as a settings table.
+ *
+ * Fed through bar_configure_slot() -- the same path a user
+ * configuration takes -- so a default and a configured value cannot
+ * diverge in how they are interpreted, and every per-widget key works
+ * here exactly as it does in a config file.
+ *
+ * defaults_pending is put back afterwards, because the rule it drives
+ * still has to hold: the FIRST configuration naming any widget list
+ * replaces this layout wholesale rather than adding to it.  Without
+ * that, a user who lists their own widgets gets them alongside these,
+ * and the bar shows two clocks.
+ *
+ * ORDER.  The right region packs leftwards from the far edge, so the
+ * first entry here ends up FURTHEST RIGHT.  The list below therefore
+ * reads backwards from what appears on screen, which left to right is:
+ * tailscale, cpu, memory, disk, network, battery.  The centre is the
+ * other way round -- entries before the anchor sit to its left -- so it
+ * reads as it appears: the recorder and caffeine buttons, then the
+ * clock dead centre, then the weather.
+ *
+ * Colours name palette ROLES rather than hex, so the whole bar --
+ * panels, toasts and third-party widgets included -- follows the
+ * session flavour, which is Catppuccin Mocha by default.
+ */
+static void
+bar_apply_shipped_defaults(GowlModuleBar *self)
+{
+	static const gchar *const top_kv[] = {
+		"height",            "30",
+
+		"widgets-left",      "tags title",
+		"widgets-center",    "recorder toggle:caffeine clock weather",
+		/* Reversed: first entry lands furthest right. */
+		"widgets-right",     "battery network disk memory cpu tailscale",
+		"center-anchor",     "clock",
+
+		"cpu-color",         "green",
+		"memory-color",      "blue",
+		"disk-color",        "yellow",
+		"temp-color",        "peach",
+		"battery-color",     "teal",
+		"clock-color",       "text",
+		"weather-color",     "sky",
+		"audio-color",       "mauve",
+		"network-color",     "sapphire",
+		"tailscale-color",   "teal",
+
+		"clock.format",      "%a %b %d  %H:%M",
+		"title.max-width",   "520",
+		"network.ping-host", "1.1.1.1",
+
+		/* The title reads as a path; splitting it and cycling the
+		   palette makes the interesting end easy to find. */
+		"title-delimiters",       "-._/: *",
+		"title-delimiter-color",  "#585b70",
+		"title-palette",
+		"#89b4fa #a6e3a1 #f9e2af #f5c2e7 #94e2d5 #cba6f7 #fab387 #89dceb",
+
+		/* Caffeine asks its state-command whether idle inhibition is
+		   running and flips it, so the glyph always reflects reality
+		   even when something else started it. */
+		"toggle:caffeine.state-command", "pgrep -x systemd-inhibit",
+		"toggle:caffeine.command-on",
+		"sh -c 'systemd-inhibit --what=idle:sleep --why=caffeine "
+		"sleep infinity &'",
+		"toggle:caffeine.command-off",
+		"pkill -f 'systemd-inhibit.*caffeine'",
+		"toggle:caffeine.icon-on",  "\xe2\x98\x95",
+		"toggle:caffeine.icon-off", "\xe2\x98\x95",
+		"toggle:caffeine.color-on", "yellow",
+		NULL
+	};
+	static const gchar *const bottom_kv[] = {
+		"enabled",         "true",
+		"height",          "26",
+
+		"widgets-left",    "user host git",
+		/* Reversed: reads as ip then podman, left to right. */
+		"widgets-right",   "podman ip",
+
+		/* The tag row belongs to the top bar; two copies is noise. */
+		"tags.visible",    "false",
+
+		"ip-color",        "mauve",
+		"podman-color",    "peach",
+		"git-color",       "lavender",
+		NULL
+	};
+	static const struct {
+		GowlBarPosition           pos;
+		const gchar *const *const kv;
+	} shipped[] = {
+		{ GOWL_BAR_POSITION_TOP,    top_kv },
+		{ GOWL_BAR_POSITION_BOTTOM, bottom_kv }
+	};
+	gsize b;
+
+	for (b = 0; b < G_N_ELEMENTS(shipped); b++) {
+		GowlBarInstance *bar = &self->bars[shipped[b].pos];
+		GHashTable      *kv;
+		gsize            i;
+
+		kv = g_hash_table_new(g_str_hash, g_str_equal);
+		for (i = 0; shipped[b].kv[i] != NULL; i += 2)
+			g_hash_table_insert(kv,
+				(gpointer)shipped[b].kv[i],
+				(gpointer)shipped[b].kv[i + 1]);
+
+		bar->enabled = TRUE;
+		bar_configure_slot(self, bar, kv);
+		g_hash_table_destroy(kv);
+
+		/* Still the shipped layout, so the first real configuration
+		   still replaces it rather than adding to it. */
+		bar->defaults_pending = TRUE;
+	}
+}
+
 static void
 gowl_module_bar_init(GowlModuleBar *self)
 {
-	GowlBarInstance *top;
 	gint i;
 
 	gowl_bar_guard_init();
@@ -3805,29 +3924,7 @@ gowl_module_bar_init(GowlModuleBar *self)
 	self->worker_pool = g_thread_pool_new(bar_work_run, NULL, 4, FALSE,
 	                                      NULL);
 
-	/* The shipped default: a top bar carrying the tag row and window
-	   title on the left, the clock dead centre, and the system
-	   readings on the right. */
-	top = &self->bars[GOWL_BAR_POSITION_TOP];
-	top->enabled = TRUE;
-	bar_set_region(self, top, GOWL_BAR_REGION_LEFT, "tags title");
-	/* weather sits in the centre group so it lands immediately right
-	   of the dead-centre clock, which is where a glanceable reading
-	   belongs -- next to the time, not lost among the gauges. */
-	bar_set_region(self, top, GOWL_BAR_REGION_CENTER, "clock weather");
-	/* tailscale is in the shipped list because it decides for itself
-	   whether it belongs: it stays invisible unless this host has
-	   actually joined a tailnet, and appears on its own the first
-	   time one is joined.  A widget that can answer that question
-	   should not have to be configured.  display and recorder are here
-	   for the same reason a settings menu is: they are the controls you
-	   go looking for, and a control nobody can find may as well not
-	   exist. */
-	bar_set_region(self, top, GOWL_BAR_REGION_RIGHT,
-	               "display recorder cpu memory disk battery tailscale");
-	top->anchor_id = g_strdup("clock");
-	bar_resolve_anchor(top);
-	top->defaults_pending = TRUE;
+	bar_apply_shipped_defaults(self);
 }
 
 /* ----------------------------------------------------------------

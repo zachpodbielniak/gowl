@@ -50,8 +50,12 @@ G_DECLARE_FINAL_TYPE(GowlModuleAlpha, gowl_module_alpha,
 struct _GowlModuleAlpha {
 	GowlModule parent_instance;
 	gpointer   compositor;        /* borrowed GowlCompositor* */
-	gfloat     focused_alpha;     /* default 1.0 */
-	gfloat     unfocused_alpha;   /* default 0.8 */
+	gfloat     focused_alpha;     /* default 0.9 */
+	gfloat     unfocused_alpha;   /* default 0.9 */
+	/* Both default to the same value on purpose: the point of the
+	   translucency here is the frosted look, not a focus cue -- the
+	   border already says which window has focus, and a window that
+	   changes opacity as you move between them is distracting. */
 	gulong     focus_handler_id;  /* g_signal_connect handler */
 	gpointer   prev_focused;      /* last focused GowlClient* */
 };
@@ -219,7 +223,7 @@ alpha_configure(GowlModule *mod, gpointer config)
 
 	/* Clamp to valid range */
 	if (self->focused_alpha < 0.0f)   self->focused_alpha = 0.0f;
-	if (self->focused_alpha > 1.0f)   self->focused_alpha = 1.0f;
+	if (self->focused_alpha > 1.0f)   self->focused_alpha = 0.9f;
 	if (self->unfocused_alpha < 0.0f) self->unfocused_alpha = 0.0f;
 	if (self->unfocused_alpha > 1.0f) self->unfocused_alpha = 1.0f;
 
@@ -305,8 +309,14 @@ static void
 gowl_module_alpha_init(GowlModuleAlpha *self)
 {
 	self->compositor       = NULL;
-	self->focused_alpha    = 1.0f;
-	self->unfocused_alpha  = 0.8f;
+	/*
+	 * Both the same on purpose.  The translucency here is for the
+	 * frosted look, not a focus cue: the border already says which
+	 * window has focus, and a window that changes opacity as you move
+	 * between them is distracting rather than informative.
+	 */
+	self->focused_alpha    = 0.9f;
+	self->unfocused_alpha  = 0.9f;
 	self->focus_handler_id = 0;
 	self->prev_focused     = NULL;
 }

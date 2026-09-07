@@ -152,15 +152,24 @@ test_the_shipped_layout(void)
 	g_assert_cmpint(count_widget(listing, "tailscale"), ==, 1);
 
 	/*
-	 * The controls you go looking for have to be findable.  weather
-	 * sits beside the clock (a glanceable reading belongs next to the
-	 * time), and display and recorder ship because a settings control
-	 * nobody can find may as well not exist -- both were implemented
-	 * and then reachable only by hand-editing a config.
+	 * The centre carries the two things you reach for rather than
+	 * read: the recorder and the caffeine toggle, to the left of the
+	 * anchored clock, with the weather to its right.
 	 */
 	g_assert_cmpint(count_widget(listing, "weather"), ==, 1);
-	g_assert_cmpint(count_widget(listing, "display"), ==, 1);
 	g_assert_cmpint(count_widget(listing, "recorder"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "toggle:caffeine"), ==, 1);
+
+	/* The bottom bar ships enabled, and its tag row is off -- two
+	   copies of the tags is noise, not information. */
+	g_assert_cmpint(count_widget(listing, "user"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "host"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "git"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "podman"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "ip"), ==, 1);
+
+	/* Exactly one tag row, on the top bar. */
+	g_assert_cmpint(count_widget(listing, "tags"), ==, 1);
 
 	g_object_unref(module);
 }

@@ -31,7 +31,7 @@
  *
  * Default gap size in pixels when no configuration is provided.
  */
-#define GOWL_VANITYGAPS_DEFAULT_GAP (16)
+#define GOWL_VANITYGAPS_DEFAULT_GAP (32)
 
 /**
  * GowlModuleVanitygaps:

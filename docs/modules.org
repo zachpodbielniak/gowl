@@ -1,4 +1,10 @@
 * Gowl Module Development Guide
+
+#+begin_quote
+Writing a *bar widget* is a different and much smaller job than writing
+a compositor module --- a poll function and a panel builder, with no
+GType at all.  See [[file:bar.org][bar.org]].
+#+end_quote
 :PROPERTIES:
 :CUSTOM_ID: gowl-module-development-guide
 :END:

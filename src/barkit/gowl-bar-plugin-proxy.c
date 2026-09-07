@@ -125,6 +125,18 @@ proxy_poll_async(GowlBarPlugin *plugin)
 		self->vt->poll_async(plugin, self->data);
 }
 
+static gboolean
+proxy_wants_async(GowlBarPlugin *plugin)
+{
+	GowlBarPluginProxy *self = GOWL_BAR_PLUGIN_PROXY(plugin);
+
+	/* Without this every proxy would look asynchronous -- poll_async
+	   is wired unconditionally below, because deciding it per
+	   instance would need a per-instance class -- and the host would
+	   dispatch a worker per widget per interval to do nothing. */
+	return GOWL_BAR_PLUGIN_VTABLE_HAS(self->vt, poll_async);
+}
+
 static gint
 proxy_measure(GowlBarPlugin *plugin, PangoLayout *layout,
               const GowlBarTheme *theme, gint height)
@@ -254,14 +266,12 @@ gowl_bar_plugin_proxy_class_init(GowlBarPluginProxyClass *klass)
 	plugin_class->configure       = proxy_configure;
 	plugin_class->get_interval    = proxy_get_interval;
 	plugin_class->poll            = proxy_poll;
-	/* poll_async is wired unconditionally so gowl_bar_plugin_wants_async
-	   is true for every proxy; the forwarder itself checks the vtable.
-	   The alternative -- deciding per instance -- would need a per-
-	   instance class, which is exactly what the proxy exists to avoid.
-	   The cost is one no-op worker dispatch for a plugin with no async
-	   poll, and the interval logic means that is at most once per
-	   interval. */
+	/* poll_async is wired unconditionally -- deciding it per instance
+	   would need a per-instance class, which is what the proxy exists
+	   to avoid -- and proxy_wants_async above is what stops the host
+	   dispatching a worker for a plugin that has no async poll. */
 	plugin_class->poll_async      = proxy_poll_async;
+	plugin_class->wants_async     = proxy_wants_async;
 	plugin_class->measure         = proxy_measure;
 	plugin_class->draw            = proxy_draw;
 	plugin_class->on_click        = proxy_on_click;

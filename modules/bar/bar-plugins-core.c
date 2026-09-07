@@ -779,7 +779,7 @@ clock_panel(GowlBarPlugin *plugin, gpointer data)
 		g_autofree gchar *weekday = NULL;
 
 		weekday = g_date_time_format(now, "%A");
-		gowl_bar_panel_add_hero(panel, "\xef\x87\xb3", heading,
+		gowl_bar_panel_add_hero(panel, "\xef\x81\xb3", heading,
 		                        weekday);
 	}
 

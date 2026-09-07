@@ -146,12 +146,21 @@ Install modules to `~/.local/lib/gowl/modules/` or `$(PREFIX)/lib/gowl/modules/`
 
 See [docs/modules.org](docs/modules.org) for the module development guide.
 
+## Status Bar
+
+The bar is a host for **widget plugins**. Two bars (top and bottom), each with left/centre/right regions and a centre anchor so one widget stays dead centre. Clicking a widget opens its **dropdown panel** -- sliders, toggles, lists, graphs, a calendar -- which the plugin describes and the bar renders, hit-tests, scrolls and navigates. **Toasts** are drawn above fullscreen windows, and a toast can name a panel, so a notification is one click from the thing that resolves it.
+
+Plugins load from `~/.config/gowl/bar-plugins/` as a compiled `.so` **or as a plain `.c` file**, compiled on demand through crispy -- no build system, no install step, and `gowl bar-plugin-reload` to pick up an edit without restarting. Every colour is a palette role, so one `palette:` setting restyles the bar, its panels, its toasts and every third-party widget in it.
+
+Plugins run inside the compositor, so a fault in one is caught by a signal guard, quarantined and reported rather than taking the session down; a load that kills the session anyway is journalled and held back on the next start. See [docs/bar.org](docs/bar.org), and `data/example-bar-plugin.c` for a complete worked plugin.
+
 ## Documentation
 
 - [docs/architecture.org](docs/architecture.org) -- Type hierarchy, module system, interface dispatch, config system.
 - [docs/building.org](docs/building.org) -- Dependencies, build commands, build options.
 - [docs/configuration.org](docs/configuration.org) -- YAML and C configuration reference.
 - [docs/modules.org](docs/modules.org) -- Module development guide with examples.
+- [docs/bar.org](docs/bar.org) -- The status bar: widgets, dropdown panels, toasts, and writing a bar plugin.
 
 ## License
 

@@ -2084,6 +2084,11 @@ bar_on_plugin_unloaded(GowlBarRegistry *registry, const gchar *name,
 		g_atomic_int_set(&self->redraw_pending, 1);
 }
 
+/* Raised from a load, a poll or a panel action -- every one of which
+   runs on a thread that owns the compositor -- so the overlay can be
+   rebuilt here rather than waiting up to a tick.  A plugin-crash notice
+   that appears five seconds later has already been overtaken by the
+   user wondering what happened. */
 static void
 bar_on_plugin_failed(GowlBarRegistry *registry, const gchar *name,
                      const gchar *message, gpointer user_data)
@@ -2105,6 +2110,7 @@ bar_on_plugin_failed(GowlBarRegistry *registry, const gchar *name,
 		"<name>");
 	gowl_bar_toast_stack_push(self->toasts, toast);
 	g_atomic_int_set(&self->redraw_pending, 1);
+	bar_toast_render(self);
 }
 
 /* ----------------------------------------------------------------
@@ -2237,29 +2243,42 @@ bar_resolve_anchor(GowlBarInstance *bar)
 	}
 }
 
-/* Forward a legacy `<plugin>-<key>' setting to whichever items came
-   from that plugin.  This is what keeps a config written against the
-   old widget list -- `cpu-color', `tag-active-bg', `title-palette' --
-   working unchanged. */
-static void
-bar_forward_legacy(GowlModuleBar *self, GowlBarInstance *bar,
-                   const gchar *plugin_name, const gchar *key,
-                   const gchar *value)
+/* Forward a `<target>.<key>' or legacy `<plugin>-<key>' setting to the
+   items it names.  @target matches either a plugin's registry name --
+   so `toggle.icon' reaches every toggle -- or one item's whole spec --
+   so `toggle:caffeine.icon' reaches exactly one of them.  That
+   distinction is what makes two instances of the same widget
+   separately configurable.
+
+   This is also what keeps a config written against the old widget list
+   -- `cpu-color', `tag-active-bg', `title-palette' -- working
+   unchanged.
+
+   Returns how many items it reached. */
+static gint
+bar_forward_setting(GowlModuleBar *self, GowlBarInstance *bar,
+                    const gchar *target, const gchar *key,
+                    const gchar *value)
 {
 	guint i;
+	gint reached;
 
 	(void)self;
 
+	reached = 0;
 	for (i = 0; i < bar->items->len; i++) {
 		BarItem *item = g_ptr_array_index(bar->items, i);
 		const gchar *name;
 
 		name = gowl_bar_plugin_get_setting(item->plugin, "name");
-		if (g_strcmp0(name, plugin_name) != 0)
+		if (g_strcmp0(name, target) != 0 &&
+		    g_strcmp0(item->spec, target) != 0)
 			continue;
 		gowl_bar_plugin_set_setting(item->plugin, key, value);
 		gowl_bar_plugin_configure(item->plugin, NULL);
+		reached++;
 	}
+	return reached;
 }
 
 /* Apply one settings map to one slot.  Split out from bar_configure so
@@ -2354,13 +2373,30 @@ bar_configure_slot(GowlModuleBar *self, GowlBarInstance *bar,
 		const gchar *key = (const gchar *)k;
 		const gchar *dot;
 
-		dot = strchr(key, '.');
+		/* The LAST dot, so a spec that contains one --
+		   `disk:/etc/foo.d.color' -- still splits into the widget
+		   and the key rather than at the path. */
+		dot = strrchr(key, '.');
 		if (dot != NULL && dot != key) {
-			g_autofree gchar *plugin_name = NULL;
+			g_autofree gchar *target = NULL;
 
-			plugin_name = g_strndup(key, (gsize)(dot - key));
-			bar_forward_legacy(self, bar, plugin_name, dot + 1,
-			                   (const gchar *)v);
+			target = g_strndup(key, (gsize)(dot - key));
+			if (bar_forward_setting(self, bar, target, dot + 1,
+			                        (const gchar *)v) == 0) {
+				const gchar *first = strchr(key, '.');
+
+				/* Nothing matched: the widget's own name may
+				   be the part before the first dot instead. */
+				if (first != NULL && first != dot &&
+				    first != key) {
+					g_autofree gchar *head = NULL;
+
+					head = g_strndup(key,
+						(gsize)(first - key));
+					bar_forward_setting(self, bar, head,
+						first + 1, (const gchar *)v);
+				}
+			}
 			continue;
 		}
 
@@ -2373,18 +2409,18 @@ bar_configure_slot(GowlModuleBar *self, GowlBarInstance *bar,
 
 			plugin_name = g_strndup(key,
 			                        strlen(key) - strlen("-color"));
-			bar_forward_legacy(self, bar, plugin_name, "color",
+			bar_forward_setting(self, bar, plugin_name, "color",
 			                   (const gchar *)v);
 			continue;
 		}
 
 		if (strncmp(key, "tag-", 4) == 0) {
-			bar_forward_legacy(self, bar, "tags", key + 4,
+			bar_forward_setting(self, bar, "tags", key + 4,
 			                   (const gchar *)v);
 			continue;
 		}
 		if (strncmp(key, "title-", 6) == 0) {
-			bar_forward_legacy(self, bar, "title", key + 6,
+			bar_forward_setting(self, bar, "title", key + 6,
 			                   (const gchar *)v);
 			continue;
 		}
@@ -2398,15 +2434,15 @@ bar_configure_slot(GowlModuleBar *self, GowlBarInstance *bar,
 
 	val = g_hash_table_lookup(settings, "show-tags");
 	if (val != NULL)
-		bar_forward_legacy(self, bar, "tags", "visible", val);
+		bar_forward_setting(self, bar, "tags", "visible", val);
 
 	val = g_hash_table_lookup(settings, "title");
 	if (val != NULL)
-		bar_forward_legacy(self, bar, "title", "text", val);
+		bar_forward_setting(self, bar, "title", "text", val);
 
 	val = g_hash_table_lookup(settings, "cmd-interval");
 	if (val != NULL)
-		bar_forward_legacy(self, bar, "cmd", "interval", val);
+		bar_forward_setting(self, bar, "cmd", "interval", val);
 }
 
 /*
@@ -2984,36 +3020,47 @@ bar_handle_key(GowlKeybindHandler *handler, guint modifiers, guint keysym,
 
 	if (self->panel.item == NULL)
 		return FALSE;
-	if (!pressed)
-		return TRUE;   /* the release of a key we claimed */
 
 	switch (keysym) {
 	case XKB_KEY_Escape:
-		bar_panel_close(self);
+		if (pressed)
+			bar_panel_close(self);
 		return TRUE;
 	case XKB_KEY_Down:
 	case XKB_KEY_j:
 	case XKB_KEY_Tab:
-		bar_panel_focus_step(self, 1);
+		if (pressed)
+			bar_panel_focus_step(self, 1);
 		return TRUE;
 	case XKB_KEY_Up:
 	case XKB_KEY_k:
 	case XKB_KEY_ISO_Left_Tab:
-		bar_panel_focus_step(self, -1);
+		if (pressed)
+			bar_panel_focus_step(self, -1);
 		return TRUE;
 	case XKB_KEY_Return:
 	case XKB_KEY_KP_Enter:
 	case XKB_KEY_space:
-		bar_panel_activate_focus(self);
+		if (pressed)
+			bar_panel_activate_focus(self);
 		return TRUE;
 	default:
 		break;
 	}
 
-	/* Everything else while a panel is open is swallowed rather than
-	   sent to whatever had focus: the user is looking at a dropdown,
-	   not typing into their editor. */
-	return TRUE;
+	/*
+	 * Anything else closes the panel and is NOT claimed.
+	 *
+	 * Swallowing every key while a dropdown is open would eat the
+	 * window-manager bindings that other modules provide -- alt-tab,
+	 * the overview, the cube -- and those are exactly the keys
+	 * somebody reaches for to get out of a panel they opened by
+	 * accident.  Closing and letting the key through does what they
+	 * meant.
+	 */
+	if (pressed)
+		bar_panel_close(self);
+	return FALSE;
 }
 
 /* ----------------------------------------------------------------

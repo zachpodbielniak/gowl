@@ -981,7 +981,7 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 	json = bar_run_argv(argv);
 	if (json == NULL) {
 		td->active = FALSE;
-		gowl_bar_plugin_set_icon(plugin, "\xef\x83\xa2");
+		gowl_bar_plugin_set_icon(plugin, "\xef\x95\x82");
 		gowl_bar_plugin_set_label(plugin,
 			gowl_bar_plugin_get_setting_bool(plugin, "labels",
 			                                 FALSE)
@@ -1021,7 +1021,7 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 
 	ts_parse_peers(td, json);
 
-	gowl_bar_plugin_set_icon(plugin, "\xef\x83\xa2");   /* U+F0E2 */
+	gowl_bar_plugin_set_icon(plugin, "\xef\x95\x82");   /* U+F0E2 */
 	if (gowl_bar_plugin_get_setting_bool(plugin, "labels", FALSE)) {
 		gowl_bar_plugin_set_label(plugin,
 			td->active ? (td->self_name != NULL ? td->self_name
@@ -1061,14 +1061,14 @@ ts_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_set_width(panel, 430);
 
 	if (!td->installed) {
-		gowl_bar_panel_add_hero(panel, "\xef\x83\xa2", "Tailscale",
+		gowl_bar_panel_add_hero(panel, "\xef\x95\x82", "Tailscale",
 		                        "Not installed");
 		gowl_bar_panel_add_label(panel,
 			"Install the tailscale package to use this widget.");
 		return panel;
 	}
 
-	item = gowl_bar_panel_add_hero(panel, "\xef\x83\xa2",
+	item = gowl_bar_panel_add_hero(panel, "\xef\x95\x82",
 		(td->self_name != NULL) ? td->self_name : "Tailscale",
 		td->active ? "Braiding packets" : "Sealed ports");
 	/* The hero's id is what makes its trailing switch live. */
@@ -1134,8 +1134,8 @@ ts_panel(GowlBarPlugin *plugin, gpointer data)
 
 				row_id = g_strdup_printf("peer:%s", fields[1]);
 				item = gowl_bar_panel_add_row(panel, row_id,
-					online ? "\xef\x84\xa1"
-					       : "\xef\x84\xa0",
+					online ? "\xef\x84\x91"
+					       : "\xef\x84\x8c",
 					fields[0], fields[1]);
 			}
 			gowl_bar_panel_item_set_value(item,

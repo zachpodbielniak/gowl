@@ -177,21 +177,24 @@ pass_draw_tracked(PanelPass *p, const gchar *text, gint x, gint center_y,
 	pango_attr_list_unref(attrs);
 }
 
-/* Right-align @text so its right edge lands on @right. */
+/* Right-align @text so its right edge lands on @right.
+ *
+ * The box is placed at @right - @box_w and Pango aligns inside it.
+ * Placing it at @right minus the *measured* width while also handing
+ * the layout a wider box pushes the text right by the difference --
+ * which is how a two-column readout ends up with its values in the
+ * next column, or outside the panel entirely. */
 static void
 pass_draw_text_right(PanelPass *p, const gchar *text, gint right,
                      gint center_y, GowlBarColor role, gdouble alpha,
-                     gint max_w)
+                     gint box_w)
 {
-	gint w;
-
 	if (p->cr == NULL || text == NULL || text[0] == '\0')
 		return;
+	if (box_w <= 0)
+		return;
 
-	pass_measure_text(p, text, &w, NULL);
-	if (max_w > 0 && w > max_w)
-		w = max_w;
-	pass_draw_text(p, text, right - w, center_y, role, alpha, max_w,
+	pass_draw_text(p, text, right - box_w, center_y, role, alpha, box_w,
 	               PANGO_ALIGN_RIGHT);
 }
 
@@ -353,9 +356,14 @@ pass_item_height(PanelPass *p, GowlBarPanelItem *item)
 		return p->gap * 2 + 1;
 	case GOWL_BAR_ITEM_SLIDER:
 		return (gint)((gdouble)p->row_h * 1.35);
+	case GOWL_BAR_ITEM_ROW:
+		/* Two stacked lines need more than one line's row. */
+		if (gowl_bar_panel_item_get_subtitle(item) != NULL &&
+		    gowl_bar_panel_item_get_subtitle(item)[0] != '\0')
+			return (gint)((gdouble)p->row_h * 1.24);
+		return p->row_h;
 	case GOWL_BAR_ITEM_TOGGLE:
 	case GOWL_BAR_ITEM_BUTTONS:
-	case GOWL_BAR_ITEM_ROW:
 		return p->row_h;
 	case GOWL_BAR_ITEM_PROGRESS:
 		return (gint)((gdouble)p->row_h * 0.9);
@@ -437,22 +445,35 @@ pass_draw_hero(PanelPass *p, GowlBarPanelItem *item, gint index,
 		right -= sw + p->pad_x;
 	}
 
-	pass_set_font(p, HERO_TITLE_SCALE, FALSE, TRUE);
-	pass_draw_text(p, gowl_bar_panel_item_get_title(item), text_x,
-	               center - (gint)((gdouble)p->row_h * 0.30),
-	               GOWL_BAR_COLOR_TEXT, 1.0, right - text_x,
-	               PANGO_ALIGN_LEFT);
-
-	pass_set_font(p, SECTION_SCALE, FALSE, FALSE);
 	{
 		g_autofree gchar *upper = NULL;
 		const gchar *sub;
+		gint title_h, sub_h, top;
 
 		sub = gowl_bar_panel_item_get_subtitle(item);
-		if (sub != NULL && sub[0] != '\0') {
+		if (sub != NULL && sub[0] != '\0')
 			upper = g_utf8_strup(sub, -1);
+
+		pass_set_font(p, HERO_TITLE_SCALE, FALSE, TRUE);
+		pass_measure_text(p, gowl_bar_panel_item_get_title(item),
+		                  NULL, &title_h);
+		sub_h = 0;
+		if (upper != NULL) {
+			pass_set_font(p, SECTION_SCALE, FALSE, FALSE);
+			pass_measure_text(p, upper, NULL, &sub_h);
+		}
+
+		top = center - (title_h + sub_h) / 2;
+
+		pass_set_font(p, HERO_TITLE_SCALE, FALSE, TRUE);
+		pass_draw_text(p, gowl_bar_panel_item_get_title(item), text_x,
+		               top + title_h / 2, GOWL_BAR_COLOR_TEXT, 1.0,
+		               right - text_x, PANGO_ALIGN_LEFT);
+
+		if (upper != NULL) {
+			pass_set_font(p, SECTION_SCALE, FALSE, FALSE);
 			pass_draw_tracked(p, upper, text_x,
-				center + (gint)((gdouble)p->row_h * 0.45),
+				top + title_h + sub_h / 2,
 				GOWL_BAR_COLOR_MUTED, 1.0,
 				HERO_SUBTITLE_TRACK, right - text_x);
 		}
@@ -508,12 +529,14 @@ pass_draw_field(PanelPass *p, GowlBarPanelItem *item, gint y, gint h,
 	half  = p->inner_w / 2;
 	col_w = half - p->gap;
 
+	/* Label left, value right, each in half the column: a label and a
+	   value that both run long would otherwise meet in the middle. */
 	pass_draw_text(p, gowl_bar_panel_item_get_title(item), p->pad_x,
 	               center, GOWL_BAR_COLOR_MUTED, 1.0, col_w / 2,
 	               PANGO_ALIGN_LEFT);
 	pass_draw_text_right(p, gowl_bar_panel_item_get_value(item),
 		p->pad_x + col_w, center,
-		gowl_bar_panel_item_get_value_color(item), 1.0, col_w);
+		gowl_bar_panel_item_get_value_color(item), 1.0, col_w / 2);
 
 	pass_draw_text(p, gowl_bar_panel_item_get_title2(item),
 	               p->pad_x + half + p->gap, center,
@@ -521,7 +544,7 @@ pass_draw_field(PanelPass *p, GowlBarPanelItem *item, gint y, gint h,
 	               PANGO_ALIGN_LEFT);
 	pass_draw_text_right(p, gowl_bar_panel_item_get_value2(item),
 		p->width - p->pad_x, center,
-		gowl_bar_panel_item_get_value_color(item), 1.0, col_w);
+		gowl_bar_panel_item_get_value_color(item), 1.0, col_w / 2);
 }
 
 static void
@@ -573,22 +596,34 @@ pass_draw_row(PanelPass *p, GowlBarPanelItem *item, gint index,
 		pass_measure_text(p, value, &vw, NULL);
 		if (vw > p->inner_w / 2)
 			vw = p->inner_w / 2;
-		pass_draw_text(p, value, right - vw, center,
-		               gowl_bar_panel_item_get_value_color(item),
-		               alpha, vw, PANGO_ALIGN_RIGHT);
+		pass_draw_text_right(p, value, right, center,
+		                     gowl_bar_panel_item_get_value_color(item),
+		                     alpha, vw);
 		right -= vw + p->gap;
 	}
 
 	subtitle = gowl_bar_panel_item_get_subtitle(item);
 	if (subtitle != NULL && subtitle[0] != '\0') {
+		gint title_h, sub_h, top;
+
+		/* Stack the two lines against their measured heights.
+		   Offsetting by a fraction of the row height instead makes
+		   them collide at any font the fraction was not tuned for,
+		   which is every font but one. */
+		pass_set_font(p, 1.0, FALSE, FALSE);
+		pass_measure_text(p, gowl_bar_panel_item_get_title(item),
+		                  NULL, &title_h);
+		pass_set_font(p, SMALL_SCALE, FALSE, FALSE);
+		pass_measure_text(p, subtitle, NULL, &sub_h);
+
+		top = center - (title_h + sub_h) / 2;
+
 		pass_set_font(p, 1.0, FALSE, FALSE);
 		pass_draw_text(p, gowl_bar_panel_item_get_title(item), x,
-		               center - (gint)((gdouble)h * 0.19),
-		               GOWL_BAR_COLOR_TEXT, alpha, right - x,
-		               PANGO_ALIGN_LEFT);
+		               top + title_h / 2, GOWL_BAR_COLOR_TEXT, alpha,
+		               right - x, PANGO_ALIGN_LEFT);
 		pass_set_font(p, SMALL_SCALE, FALSE, FALSE);
-		pass_draw_text(p, subtitle, x,
-		               center + (gint)((gdouble)h * 0.22),
+		pass_draw_text(p, subtitle, x, top + title_h + sub_h / 2,
 		               GOWL_BAR_COLOR_MUTED, alpha, right - x,
 		               PANGO_ALIGN_LEFT);
 	} else {

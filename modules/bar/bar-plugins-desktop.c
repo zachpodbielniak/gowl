@@ -787,7 +787,7 @@ podman_poll_async(GowlBarPlugin *plugin, gpointer data)
 
 	g_snprintf(buf, sizeof(buf), "POD %d", running);
 	gowl_bar_plugin_set_label(plugin, buf);
-	gowl_bar_plugin_set_icon(plugin, "\xef\x8c\x8d");
+	gowl_bar_plugin_set_icon(plugin, "\xef\x8c\x88");
 	gowl_bar_plugin_set_color(plugin,
 		(running > 0) ? GOWL_BAR_COLOR_PEACH : GOWL_BAR_COLOR_MUTED);
 }
@@ -807,7 +807,7 @@ podman_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_set_width(panel, 460);
 
 	if (!pd->have_podman) {
-		gowl_bar_panel_add_hero(panel, "\xef\x8c\x8d", "Containers",
+		gowl_bar_panel_add_hero(panel, "\xef\x8c\x88", "Containers",
 		                        "podman not found");
 		return panel;
 	}
@@ -819,7 +819,7 @@ podman_panel(GowlBarPlugin *plugin, gpointer data)
 	}
 
 	g_snprintf(buf, sizeof(buf), "%u", running);
-	gowl_bar_panel_add_hero(panel, "\xef\x8c\x8d", buf,
+	gowl_bar_panel_add_hero(panel, "\xef\x8c\x88", buf,
 	                        "Containers running");
 
 	g_snprintf(buf, sizeof(buf), "%d", pd->total);
@@ -846,7 +846,7 @@ podman_panel(GowlBarPlugin *plugin, gpointer data)
 
 		row_id = g_strdup_printf("container:%s", fields[1]);
 		item = gowl_bar_panel_add_row(panel, row_id,
-			up ? "\xef\x81\x92" : "\xef\x81\x8d",
+			up ? "\xef\x81\x98" : "\xef\x81\x97",
 			fields[1], fields[2]);
 		gowl_bar_panel_item_set_value(item, fields[3]);
 		gowl_bar_panel_item_set_value_color(item,
@@ -1131,13 +1131,13 @@ weather_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_set_width(panel, 420);
 
 	if (wd->temp == NULL) {
-		gowl_bar_panel_add_hero(panel, "\xef\x83\x85", "Weather",
+		gowl_bar_panel_add_hero(panel, "\xef\x83\x82", "Weather",
 		                        "No reading yet");
 		return panel;
 	}
 
 	gowl_bar_panel_add_hero(panel,
-		(wd->condition != NULL) ? wd->condition : "\xef\x86\x85",
+		(wd->condition != NULL) ? wd->condition : "\xef\x83\x82",
 		wd->temp,
 		(wd->location != NULL) ? wd->location : "Here");
 

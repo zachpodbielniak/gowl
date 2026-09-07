@@ -62,6 +62,10 @@ G_DECLARE_DERIVABLE_TYPE(GowlBarPlugin, gowl_bar_plugin,
  *   read /proc and nothing slower
  * @poll_async: refresh expensive state; runs on a worker thread and may
  *   spawn processes or block on the network
+ * @wants_async: whether @poll_async has anything to do; the default
+ *   answers from whether @poll_async is set, which is right for a
+ *   subclass but not for a proxy, whose @poll_async is always present
+ *   and forwards to a vtable slot that may be empty
  * @measure: the plugin's natural width in pixels; the default measures
  *   the icon and label
  * @draw: paint the plugin into its slot; the default draws the icon and
@@ -96,6 +100,7 @@ struct _GowlBarPluginClass {
 	gint     (*get_interval) (GowlBarPlugin *self);
 	void     (*poll)         (GowlBarPlugin *self);
 	void     (*poll_async)   (GowlBarPlugin *self);
+	gboolean (*wants_async)  (GowlBarPlugin *self);
 
 	gint     (*measure) (GowlBarPlugin      *self,
 	                     PangoLayout        *layout,

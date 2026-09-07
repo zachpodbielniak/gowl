@@ -243,6 +243,7 @@ gowl_bar_plugin_class_init(GowlBarPluginClass *klass)
 	klass->get_interval    = default_get_interval;
 	klass->poll            = default_poll;
 	klass->poll_async      = NULL;
+	klass->wants_async     = NULL;
 	klass->measure         = default_measure;
 	klass->draw            = default_draw;
 	klass->on_click        = NULL;
@@ -1095,8 +1096,14 @@ gowl_bar_plugin_poll_async(GowlBarPlugin *self)
 gboolean
 gowl_bar_plugin_wants_async(GowlBarPlugin *self)
 {
+	GowlBarPluginClass *klass;
+
 	g_return_val_if_fail(GOWL_IS_BAR_PLUGIN(self), FALSE);
-	return GOWL_BAR_PLUGIN_GET_CLASS(self)->poll_async != NULL;
+
+	klass = GOWL_BAR_PLUGIN_GET_CLASS(self);
+	if (klass->wants_async != NULL)
+		return klass->wants_async(self);
+	return klass->poll_async != NULL;
 }
 
 /**

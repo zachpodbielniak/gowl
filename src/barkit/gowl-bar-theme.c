@@ -211,7 +211,19 @@ gowl_bar_theme_new_for_palette(const GowlPalette *palette)
 	self = g_new0(GowlBarTheme, 1);
 	self->scale     = 1.0;
 	self->font      = g_strdup("monospace 11");
-	self->icon_font = NULL;
+	/* Panel heroes and widget icons are Nerd Font glyphs, which live
+	   in the private-use area -- a plain `monospace' resolves to
+	   whatever fontconfig picks and draws a tofu box for every one of
+	   them.  A family list gives fontconfig somewhere to find them
+	   and falls through to monospace when none is installed, at which
+	   point the icons are missing rather than wrong.  Override with
+	   `theme-icon-font' to name the font you actually use. */
+	self->icon_font = g_strdup("Symbols Nerd Font Mono,"
+	                           "Symbols Nerd Font,"
+	                           "Hack Nerd Font Mono,"
+	                           "FiraCode Nerd Font Mono,"
+	                           "JetBrainsMono Nerd Font Mono,"
+	                           "monospace 11");
 
 	for (i = 0; i < GOWL_BAR_METRIC_COUNT; i++)
 		self->metrics[i] = metric_defaults[i];

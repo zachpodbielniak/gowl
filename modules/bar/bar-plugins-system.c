@@ -99,6 +99,30 @@ sys_set_icon(GowlBarPlugin *plugin, const gchar *glyph)
 
 /* Build the panel every system widget opens.  @focus names the reading
    the clicked widget shows, which becomes the hero. */
+/*
+ * Which filesystem "the disk" means on this machine.
+ *
+ * On an ostree system -- Silverblue, Immutablue and friends -- `/' is a
+ * read-only overlay of the deployment, typically tens of megabytes with
+ * ZERO available.  Reporting it is not merely unhelpful, it is alarming
+ * and wrong: the bar reads "/ 0G" on a host with terabytes free, because
+ * everything writable lives under /var.
+ *
+ * /run/ostree-booted is the marker ostree itself sets, so this asks the
+ * system rather than guessing from a distro name.  An explicit
+ * `disk:<mount>' in the configuration still wins.
+ */
+static const gchar *
+disk_default_mount(void)
+{
+	static gint cached = -1;
+
+	if (cached < 0)
+		cached = g_file_test("/run/ostree-booted",
+		                     G_FILE_TEST_EXISTS) ? 1 : 0;
+	return cached ? "/var" : "/";
+}
+
 static GowlBarPanel *
 sys_build_panel(GowlBarPlugin *plugin, const gchar *focus)
 {
@@ -146,7 +170,7 @@ sys_build_panel(GowlBarPlugin *plugin, const gchar *focus)
 
 		mount = gowl_bar_plugin_get_setting(plugin, "param");
 		if (mount == NULL)
-			mount = "/";
+			mount = disk_default_mount();
 		bar_sysinfo_disk(info, mount, &free_gb, &total_gb);
 		g_snprintf(buf, sizeof(buf), "%ld GB", free_gb);
 		g_snprintf(buf2, sizeof(buf2), "Free on %s", mount);
@@ -236,7 +260,7 @@ sys_build_panel(GowlBarPlugin *plugin, const gchar *focus)
 
 		mount = gowl_bar_plugin_get_setting(plugin, "param");
 		if (mount == NULL || mount[0] == '\0')
-			mount = "/";
+			mount = disk_default_mount();
 
 		if (bar_sysinfo_disk(info, mount, &free_gb, &total_gb) &&
 		    total_gb > 0) {
@@ -523,7 +547,7 @@ disk_poll(GowlBarPlugin *plugin, gpointer data)
 		return;
 	mount = gowl_bar_plugin_get_setting(plugin, "param");
 	if (mount == NULL || mount[0] == '\0')
-		mount = "/";
+		mount = disk_default_mount();
 
 	if (!bar_sysinfo_disk(info, mount, &free_gb, &total_gb)) {
 		g_snprintf(buf, sizeof(buf), "%s ?", mount);

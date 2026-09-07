@@ -1915,8 +1915,10 @@ recorder_poll(GowlBarPlugin *plugin, gpointer data)
 			g_clear_pointer(&rd->scope, g_free);
 		}
 		gowl_bar_plugin_set_label(plugin, NULL);
-		gowl_bar_plugin_set_icon(plugin, "\xef\x8f\x9b");
-		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_TEXT);
+		/* Hollow circle (U+F10C) and dimmed while idle, so the
+		   recording state reads without looking twice. */
+		gowl_bar_plugin_set_icon(plugin, "\xef\x84\x8c");
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
 		gowl_bar_plugin_set_tooltip(plugin, "Record the screen");
 		return;
 	}
@@ -1928,7 +1930,11 @@ recorder_poll(GowlBarPlugin *plugin, gpointer data)
 	           (gint)((g_get_monotonic_time() - rd->started) / 60000000),
 	           (gint)(((g_get_monotonic_time() - rd->started) / 1000000) % 60));
 	gowl_bar_plugin_set_label(plugin, buf);
-	gowl_bar_plugin_set_icon(plugin, "\xef\x8f\x9b");
+	/* A FILLED circle while recording (U+F111), against the hollow
+	   one when idle -- the shape says it as well as the colour does,
+	   which matters at a glance and to anyone who cannot rely on the
+	   red. */
+	gowl_bar_plugin_set_icon(plugin, "\xef\x84\x91");
 	gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_RED);
 	gowl_bar_plugin_set_tooltip(plugin,
 		rd->scope != NULL ? rd->scope : "Recording");

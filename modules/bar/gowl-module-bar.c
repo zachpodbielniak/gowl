@@ -3849,9 +3849,19 @@ bar_apply_shipped_defaults(GowlModuleBar *self)
 		"sleep infinity &'",
 		"toggle:caffeine.command-off",
 		"pkill -f 'systemd-inhibit.*caffeine'",
-		"toggle:caffeine.icon-on",  "\xe2\x98\x95",
-		"toggle:caffeine.icon-off", "\xe2\x98\x95",
-		"toggle:caffeine.color-on", "yellow",
+		/*
+		 * A Nerd Font coffee cup (U+F0F4), NOT the emoji U+2615.
+		 *
+		 * A colour emoji is drawn from a bitmap font with its own
+		 * palette baked in, so set_color() does nothing to it: the
+		 * button looked exactly the same whether caffeine was on or
+		 * off, which is the entire signal the widget exists to give.
+		 * Monochrome glyphs take the theme colour.
+		 */
+		"toggle:caffeine.icon-on",  "\xef\x83\xb4",
+		"toggle:caffeine.icon-off", "\xef\x83\xb4",
+		"toggle:caffeine.color-on",  "yellow",
+		"toggle:caffeine.color-off", "muted",
 		NULL
 	};
 	static const gchar *const bottom_kv[] = {

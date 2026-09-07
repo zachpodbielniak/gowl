@@ -151,6 +151,17 @@ test_the_shipped_layout(void)
 	   would silently take that away. */
 	g_assert_cmpint(count_widget(listing, "tailscale"), ==, 1);
 
+	/*
+	 * The controls you go looking for have to be findable.  weather
+	 * sits beside the clock (a glanceable reading belongs next to the
+	 * time), and display and recorder ship because a settings control
+	 * nobody can find may as well not exist -- both were implemented
+	 * and then reachable only by hand-editing a config.
+	 */
+	g_assert_cmpint(count_widget(listing, "weather"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "display"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "recorder"), ==, 1);
+
 	g_object_unref(module);
 }
 

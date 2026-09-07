@@ -326,6 +326,21 @@ net_panel_opened(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_plugin_request_redraw(plugin);
 }
 
+/*
+ * Stop scanning once the panel is gone.
+ *
+ * Without this the flag is one-way: the first time a panel opened, the
+ * async poll kept rescanning every interval for the rest of the session
+ * -- which is exactly what the comment at the scan call warns about,
+ * since a rescan disrupts the connection it is measuring.
+ */
+static void
+net_panel_closed(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)data;
+	gowl_bar_plugin_set_setting(plugin, "panel-open", "false");
+}
+
 static GowlBarPanel *
 net_panel(GowlBarPlugin *plugin, gpointer data)
 {
@@ -571,7 +586,7 @@ static const GowlBarPluginVTable network_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	net_panel, net_panel_action,
-	net_panel_opened, NULL
+	net_panel_opened, net_panel_closed
 };
 
 /* ----------------------------------------------------------------
@@ -614,7 +629,7 @@ static const GowlBarPluginVTable rate_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	net_panel, net_panel_action,
-	NULL, NULL
+	net_panel_opened, net_panel_closed
 };
 
 /* ----------------------------------------------------------------
@@ -655,7 +670,7 @@ static const GowlBarPluginVTable ip_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	net_panel, net_panel_action,
-	NULL, NULL
+	net_panel_opened, net_panel_closed
 };
 
 static void
@@ -691,7 +706,7 @@ static const GowlBarPluginVTable wifi_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	net_panel, net_panel_action,
-	NULL, NULL
+	net_panel_opened, net_panel_closed
 };
 
 /* ----------------------------------------------------------------

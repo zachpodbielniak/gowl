@@ -89,4 +89,52 @@ for f in modules/bar/bar-plugins-*.c; do
 	fi
 done
 
+# Plugins that SHARE a panel function must share its panel_opened too.
+#
+# net_panel says "scanning..." until net_scan_wifi() has run, and that
+# only runs when the async poll sees the panel-open setting -- which is
+# set by net_panel_opened.  network wired it; wifi, ip and rate served
+# the very same net_panel with NULL in that slot, so their panel said
+# "scanning" forever.  Nothing warns: the slot is optional, and a
+# missing one looks exactly like a plugin that does not care.
+#
+# Grouping by panel function is what makes this checkable -- if one
+# vtable's panel needs to be told, every vtable serving that same panel
+# does.  panel_closed is required wherever panel_opened is, because
+# otherwise the flag is one-way and the plugin polls for the rest of the
+# session (which the scan's own comment warns disrupts what it measures).
+for f in modules/bar/bar-plugins-*.c; do
+	bad=$(awk '
+		/^static const GowlBarPluginVTable/ { name=$4; buf=""; in_v=1; next }
+		in_v { buf = buf $0 "\n" }
+		/^};/ && in_v {
+			panel = ""
+			if (match(buf, /[a-z_]+_panel, [a-z_]+_panel_action/)) {
+				panel = substr(buf, RSTART, RLENGTH)
+				sub(/,.*/, "", panel)
+			}
+			if (panel != "") {
+				vt[name] = panel
+				if (buf ~ /_panel_opened/) has_open[panel] = 1
+                                if (buf ~ /_panel_closed/) has_close[panel] = 1
+				opened[name] = (buf ~ /_panel_opened/)
+				closed[name] = (buf ~ /_panel_closed/)
+			}
+			in_v = 0
+		}
+		END {
+			for (n in vt) {
+				p = vt[n]
+				if (has_open[p] && !opened[n])
+					print "  " n " serves " p " but never wires its panel_opened"
+				if (has_open[p] && !closed[n])
+					print "  " n " wires panel_opened for " p " but no panel_closed"
+			}
+		}' "$f")
+	if [ -n "$bad" ]; then
+		echo "$bad" >&2
+		fail "$f: a shared panel is not told when it opens or closes"
+	fi
+done
+
 echo "PASS: bar source guards"

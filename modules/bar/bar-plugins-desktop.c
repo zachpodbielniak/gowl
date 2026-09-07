@@ -268,6 +268,18 @@ audio_panel_opened(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_plugin_request_redraw(plugin);
 }
 
+/*
+ * And stop when it closes.  Without this the flag is one-way: the first
+ * open leaves the async poll enumerating audio devices every interval
+ * for the rest of the session.
+ */
+static void
+audio_panel_closed(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)data;
+	gowl_bar_plugin_set_setting(plugin, "panel-open", "false");
+}
+
 static GowlBarPanel *
 audio_panel(GowlBarPlugin *plugin, gpointer data)
 {
@@ -472,7 +484,7 @@ static const GowlBarPluginVTable audio_vtable = {
 	NULL, NULL,
 	audio_click, audio_scroll,
 	audio_panel, audio_action,
-	audio_panel_opened, NULL
+	audio_panel_opened, audio_panel_closed
 };
 
 /* ----------------------------------------------------------------
@@ -1503,6 +1515,24 @@ display_poll(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_plugin_set_icon(plugin, "\xef\x84\x88");
 }
 
+/*
+ * The output scales offered, and the only place they are listed.  The
+ * panel builds its buttons from this and the action indexes back into
+ * it, so the two cannot drift into offering one scale and applying
+ * another.
+ */
+static const struct {
+	const gchar *label;
+	gdouble      value;
+} display_scales[] = {
+	{ "1x",    1.0  },
+	{ "1.25x", 1.25 },
+	{ "1.6x",  1.6  },
+	{ "2x",    2.0  },
+	{ "3.2x",  3.2  },
+	{ "4x",    4.0  }
+};
+
 static GowlBarPanel *
 display_panel(GowlBarPlugin *plugin, gpointer data)
 {
@@ -1550,6 +1580,32 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_add_button(item, "M", TRUE);
 	gowl_bar_panel_add_button(item, "L", FALSE);
 	gowl_bar_panel_add_button(item, "XL", FALSE);
+
+	/*
+	 * Output scale.  These apply immediately through
+	 * gowl_monitor_set_scale(); the row is built from the same table
+	 * the action reads, so the button that is lit is the scale the
+	 * output is actually running at rather than a guess.
+	 */
+	if (env != NULL && env->compositor != NULL) {
+		GowlMonitor *mon;
+
+		mon = gowl_compositor_get_selected_monitor(
+			GOWL_COMPOSITOR(env->compositor));
+		if (mon != NULL) {
+			gdouble cur = gowl_monitor_get_scale(mon);
+			gsize   i;
+
+			gowl_bar_panel_add_separator(panel);
+			gowl_bar_panel_add_section(panel, "Scale");
+			item = gowl_bar_panel_add_buttons(panel, "scale");
+			for (i = 0; i < G_N_ELEMENTS(display_scales); i++) {
+				gowl_bar_panel_add_button(item,
+					display_scales[i].label,
+					ABS(cur - display_scales[i].value) < 0.01);
+			}
+		}
+	}
 
 	gowl_bar_panel_add_separator(panel);
 	item = gowl_bar_panel_add_buttons(panel, "tool");
@@ -1612,6 +1668,30 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 		return;
 	}
 
+	if (g_strcmp0(item_id, "scale") == 0) {
+		const BarEnv *e = bar_env();
+		GowlMonitor  *mon;
+
+		if (index < 0 || (gsize)index >= G_N_ELEMENTS(display_scales))
+			return;
+		if (e == NULL || e->compositor == NULL)
+			return;
+		mon = gowl_compositor_get_selected_monitor(
+			GOWL_COMPOSITOR(e->compositor));
+		if (mon == NULL)
+			return;
+		if (gowl_monitor_set_scale(mon, display_scales[index].value)) {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+				"Display scale", display_scales[index].label);
+			gowl_bar_plugin_request_redraw(plugin);
+		} else {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+				"Display scale",
+				"The output refused that scale.");
+		}
+		return;
+	}
+
 	if (g_strcmp0(item_id, "tool") == 0) {
 		if (index == 0) {
 			const gchar *cmd;
@@ -1663,6 +1743,267 @@ static const GowlBarPluginVTable display_vtable = {
 	NULL, NULL
 };
 
+
+/* ----------------------------------------------------------------
+ * recorder
+ *
+ * A screen recorder that asks WHAT to record before it starts.
+ *
+ * The button it replaces ran one fixed command --- typically
+ * `wf-recorder -g "$(slurp)"' --- which quietly degrades into recording
+ * everything when slurp is not installed, because an empty -g is not an
+ * error.  Offering the choice explicitly also lets the compositor
+ * supply the geometry it already knows: for a window there is no reason
+ * to make the user draw a rectangle around something gowl can measure.
+ *
+ * Every command is a setting, so a different recorder can be dropped in
+ * without touching this.
+ * ---------------------------------------------------------------- */
+
+typedef struct {
+	gint64    started;      /* g_get_monotonic_time(), 0 when idle */
+	gchar    *scope;        /* what the running recording covers */
+} RecorderData;
+
+static gpointer
+recorder_create(GowlBarPlugin *plugin)
+{
+	(void)plugin;
+	return g_new0(RecorderData, 1);
+}
+
+static void
+recorder_destroy(GowlBarPlugin *plugin, gpointer data)
+{
+	RecorderData *rd = data;
+
+	(void)plugin;
+	if (rd == NULL)
+		return;
+	g_free(rd->scope);
+	g_free(rd);
+}
+
+/* Whether a recording this plugin started is still running.  Asking the
+   process table rather than trusting our own flag: the recorder can be
+   stopped from anywhere, and a button that says "Stop" for a process
+   that already exited is worse than no button. */
+static gboolean
+recorder_running(GowlBarPlugin *plugin)
+{
+	const gchar      *proc;
+	g_autofree gchar *line = NULL;
+	g_autofree gchar *out = NULL;
+
+	proc = gowl_bar_plugin_get_setting(plugin, "process");
+	if (proc == NULL || *proc == '\0')
+		proc = "wf-recorder";
+	if (!bar_have_command("pidof"))
+		return FALSE;
+	line = g_strdup_printf("pidof %s", proc);
+	out = bar_run_shell_line(line);
+	return out != NULL && *out != '\0';
+}
+
+static void
+recorder_poll(GowlBarPlugin *plugin, gpointer data)
+{
+	RecorderData *rd = data;
+	gchar buf[64];
+
+	if (rd == NULL)
+		return;
+
+	if (!recorder_running(plugin)) {
+		if (rd->started != 0) {
+			rd->started = 0;
+			g_clear_pointer(&rd->scope, g_free);
+		}
+		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_icon(plugin, "\xef\x8f\x9b");
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_TEXT);
+		gowl_bar_plugin_set_tooltip(plugin, "Record the screen");
+		return;
+	}
+
+	if (rd->started == 0)
+		rd->started = g_get_monotonic_time();
+
+	g_snprintf(buf, sizeof(buf), "%02d:%02d",
+	           (gint)((g_get_monotonic_time() - rd->started) / 60000000),
+	           (gint)(((g_get_monotonic_time() - rd->started) / 1000000) % 60));
+	gowl_bar_plugin_set_label(plugin, buf);
+	gowl_bar_plugin_set_icon(plugin, "\xef\x8f\x9b");
+	gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_RED);
+	gowl_bar_plugin_set_tooltip(plugin,
+		rd->scope != NULL ? rd->scope : "Recording");
+}
+
+static gint
+recorder_interval(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)plugin;
+	(void)data;
+	return 1;
+}
+
+static GowlBarPanel *
+recorder_panel(GowlBarPlugin *plugin, gpointer data)
+{
+	RecorderData     *rd = data;
+	GowlBarPanel     *panel;
+	GowlBarPanelItem *item;
+
+	panel = gowl_bar_panel_new();
+	gowl_bar_panel_set_width(panel, 380);
+
+	if (recorder_running(plugin)) {
+		gowl_bar_panel_add_hero(panel, "\xef\x8f\x9b", "Recording",
+			rd != NULL && rd->scope != NULL ? rd->scope : NULL);
+		gowl_bar_panel_add_separator(panel);
+		item = gowl_bar_panel_add_buttons(panel, "stop");
+		gowl_bar_panel_add_button(item, "Stop", TRUE);
+		return panel;
+	}
+
+	gowl_bar_panel_add_hero(panel, "\xef\x8f\x9b", "Record",
+	                        "Choose what to capture");
+	gowl_bar_panel_add_separator(panel);
+	gowl_bar_panel_add_section(panel, "Capture");
+	item = gowl_bar_panel_add_buttons(panel, "start");
+	gowl_bar_panel_add_button(item, "Screen", FALSE);
+	gowl_bar_panel_add_button(item, "Window", FALSE);
+	gowl_bar_panel_add_button(item, "Region", FALSE);
+
+	if (!bar_have_command("wf-recorder"))
+		gowl_bar_panel_add_field(panel, "Missing", "wf-recorder");
+	else if (!bar_have_command("slurp"))
+		gowl_bar_panel_add_field(panel, "Note",
+			"slurp is missing; Region is unavailable");
+
+	return panel;
+}
+
+/* The geometry for each scope, or NULL to let the recorder decide.
+   Window geometry comes from the compositor rather than from the user
+   drawing a box round something it already knows the bounds of. */
+static gchar *
+recorder_geometry(gint index, gchar **scope_out)
+{
+	const BarEnv *env = bar_env();
+	GowlClient   *c;
+	gint          x, y, w, h;
+
+	if (index == 1 && env != NULL && env->compositor != NULL) {
+		c = gowl_compositor_get_focused_client(
+			GOWL_COMPOSITOR(env->compositor));
+		if (c != NULL) {
+			gowl_client_get_geometry(c, &x, &y, &w, &h);
+			if (w > 0 && h > 0) {
+				*scope_out = g_strdup("Focused window");
+				return g_strdup_printf("%d,%d %dx%d",
+				                       x, y, w, h);
+			}
+		}
+		return NULL;
+	}
+
+	if (index == 2) {
+		*scope_out = g_strdup("Region");
+		return g_strdup("$(slurp)");
+	}
+
+	*scope_out = g_strdup("Whole screen");
+	return NULL;
+}
+
+static void
+recorder_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
+                gint index, gdouble value, guint button)
+{
+	RecorderData     *rd = data;
+	g_autofree gchar *geom = NULL;
+	g_autofree gchar *scope = NULL;
+	g_autofree gchar *line = NULL;
+	const gchar      *dir;
+	const gchar      *proc;
+
+	(void)value;
+	(void)button;
+
+	if (g_strcmp0(item_id, "stop") == 0) {
+		proc = gowl_bar_plugin_get_setting(plugin, "process");
+		if (proc == NULL || *proc == '\0')
+			proc = "wf-recorder";
+		line = g_strdup_printf("pkill -INT %s", proc);
+		gowl_bar_plugin_spawn(plugin, line);
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+			"Recording stopped", NULL);
+		return;
+	}
+
+	if (g_strcmp0(item_id, "start") != 0)
+		return;
+
+	if (!bar_have_command("wf-recorder")) {
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+			"Cannot record", "wf-recorder is not installed.");
+		return;
+	}
+	if (index == 2 && !bar_have_command("slurp")) {
+		/* Without this the command becomes -g "" and wf-recorder
+		   records the whole screen, which is not what was asked
+		   for and gives no hint that anything went wrong. */
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+			"Cannot record a region",
+			"slurp is not installed.");
+		return;
+	}
+
+	geom = recorder_geometry(index, &scope);
+	if (index == 1 && geom == NULL) {
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+			"Cannot record a window", "Nothing is focused.");
+		return;
+	}
+
+	dir = gowl_bar_plugin_get_setting(plugin, "directory");
+	if (dir == NULL || *dir == '\0')
+		dir = "~/Videos";
+
+	if (geom != NULL)
+		line = g_strdup_printf(
+			"mkdir -p %s && wf-recorder -g \"%s\" "
+			"-f %s/rec-$(date +%%F-%%H%%M%%S).mp4",
+			dir, geom, dir);
+	else
+		line = g_strdup_printf(
+			"mkdir -p %s && wf-recorder "
+			"-f %s/rec-$(date +%%F-%%H%%M%%S).mp4",
+			dir, dir);
+
+	gowl_bar_plugin_spawn(plugin, line);
+	if (rd != NULL) {
+		g_free(rd->scope);
+		rd->scope = g_steal_pointer(&scope);
+		rd->started = 0;   /* poll starts the clock once it is up */
+	}
+	gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+		"Recording", rd != NULL ? rd->scope : NULL);
+}
+
+static const GowlBarPluginVTable recorder_vtable = {
+	sizeof(GowlBarPluginVTable),
+	recorder_create, recorder_destroy,
+	NULL, NULL, NULL,
+	recorder_interval, recorder_poll, NULL,
+	NULL, NULL,
+	NULL, NULL,
+	recorder_panel, recorder_action,
+	NULL, NULL
+};
+
+
 /* ----------------------------------------------------------------
  * Registration
  * ---------------------------------------------------------------- */
@@ -1694,5 +2035,10 @@ bar_register_desktop_plugins(GowlBarRegistry *registry)
 	gowl_bar_registry_register_alias(registry, "volume", "audio");
 	gowl_bar_registry_register_alias(registry, "vol", "audio");
 	gowl_bar_registry_register_alias(registry, "pod", "podman");
+	gowl_bar_registry_register_vtable(registry, "recorder",
+		"Screen recorder",
+		"Record the screen, a window or a region", &recorder_vtable);
+
 	gowl_bar_registry_register_alias(registry, "brightness", "display");
+	gowl_bar_registry_register_alias(registry, "record", "recorder");
 }

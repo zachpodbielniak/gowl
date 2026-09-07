@@ -3764,14 +3764,20 @@ gowl_module_bar_init(GowlModuleBar *self)
 	top = &self->bars[GOWL_BAR_POSITION_TOP];
 	top->enabled = TRUE;
 	bar_set_region(self, top, GOWL_BAR_REGION_LEFT, "tags title");
-	bar_set_region(self, top, GOWL_BAR_REGION_CENTER, "clock");
+	/* weather sits in the centre group so it lands immediately right
+	   of the dead-centre clock, which is where a glanceable reading
+	   belongs -- next to the time, not lost among the gauges. */
+	bar_set_region(self, top, GOWL_BAR_REGION_CENTER, "clock weather");
 	/* tailscale is in the shipped list because it decides for itself
 	   whether it belongs: it stays invisible unless this host has
 	   actually joined a tailnet, and appears on its own the first
 	   time one is joined.  A widget that can answer that question
-	   should not have to be configured. */
+	   should not have to be configured.  display and recorder are here
+	   for the same reason a settings menu is: they are the controls you
+	   go looking for, and a control nobody can find may as well not
+	   exist. */
 	bar_set_region(self, top, GOWL_BAR_REGION_RIGHT,
-	               "cpu memory disk battery tailscale");
+	               "display recorder cpu memory disk battery tailscale");
 	top->anchor_id = g_strdup("clock");
 	bar_resolve_anchor(top);
 	top->defaults_pending = TRUE;

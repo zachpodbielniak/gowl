@@ -229,6 +229,12 @@ GIR_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR)
 GIR_FILE := $(GIR_NAMESPACE)-$(GIR_VERSION).gir
 TYPELIB_FILE := $(GIR_NAMESPACE)-$(GIR_VERSION).typelib
 
+# g-ir-scanner runs its own cpp pass over the public headers, so it needs the
+# same include dirs and defines the compiler gets: the barkit headers pull in
+# cairo.h, and every wlroots header #errors out without -DWLR_USE_UNSTABLE.
+# Only -I/-D survive the filter -- the scanner chokes on flags like -pthread.
+GIR_CPPFLAGS := $(filter -I% -D%,$(CFLAGS_BASE) $(CFLAGS_INC) $(CFLAGS_DEPS))
+
 # Test framework
 TEST_CFLAGS := $(CFLAGS) $(shell $(PKG_CONFIG) --cflags glib-2.0)
 TEST_LDFLAGS := $(LDFLAGS) -L$(OUTDIR) -lgowl -Wl,-rpath,$(OUTDIR)

@@ -219,6 +219,7 @@ $(OUTDIR)/$(GIR_FILE): $(LIB_SRCS) $(LIB_HDRS) | $(OUTDIR)/$(LIB_SHARED_FULL)
 		--pkg=gio-2.0 \
 		--output=$@ \
 		--warn-all \
+		$(GIR_CPPFLAGS) \
 		-Isrc \
 		$(LIB_HDRS) $(LIB_SRCS)
 

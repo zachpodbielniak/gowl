@@ -23,6 +23,17 @@
 | libinput          | =libinput=          | Input device handling       |
 | libyaml           | =yaml-0.1=          | YAML parser (for yaml-glib) |
 | json-glib         | =json-glib-1.0=     | JSON/GLib integration       |
+| cairo             | =cairo=             | Bar and panel rendering     |
+| pangocairo        | =pangocairo=        | Text layout for the bar kit |
+| EGL / GL / GLESv2 | =egl= =gl= =glesv2= | Shared effect layer (=src/fx=) |
+
+=pangocairo= is required because the bar kit (=src/barkit=) lives inside
+libgowl rather than in the bar module: panels, toasts and every plugin's
+label are laid out with Pango, and the kit has to be linkable by both the
+compositor and a standalone bar client.  =glesv2= joins =egl=/=gl= for
+=src/fx=, the shared effect layer the cube, expo, switcher, magnifier and
+blur modules draw through.  On Fedora all three GL modules come from
+=libglvnd-devel=, which =mesa-libGL-devel= pulls in.
 
 *** wlroots version (0.19 or 0.20)
 :PROPERTIES:
@@ -49,6 +60,43 @@ protocol stack, which exists only in *wlroots 0.20+*.  Built against
 0.19, gowl provides monitor (whole-output) capture only; built against
 0.20 it provides monitor *and* window capture.  Everything else is
 identical between the two.
+
+**** Test 0.19 explicitly; the default will not do it for you
+:PROPERTIES:
+:CUSTOM_ID: wlroots-test-019
+:END:
+The two versions differ in a way that a machine carrying both cannot
+show you, because "newest wins" means the 0.19 path never compiles
+there.
+
+0.19's public headers pull generated protocol headers in by bare name:
+
+#+begin_example
+/* wlr/types/wlr_pointer_constraints_v1.h, wlroots 0.19 */
+#include "pointer-constraints-unstable-v1-protocol.h"
+#+end_example
+
+so every consumer must run =wayland-scanner= over the XML itself.  0.20
+replaced these with =#include <wayland-protocols/...-enum.h>=, a header
+wayland-protocols installs, so nothing needs generating.  A protocol
+header missing from =PROTO_HDRS= is therefore invisible on a 0.20 box
+and a hard build failure on a 0.19-only distro --- which is what Fedora
+43 is, and what Immutablue pins.
+
+So before claiming a wlroots-facing change is safe:
+
+#+begin_example
+make clean && make WLROOTS=0.19
+#+end_example
+
+=tests/test-protocol-headers.sh= (run by =make test=) checks *every
+installed* wlroots version rather than the one that would be selected,
+for the same reason.  A guard that only inspected the selected version
+would reproduce the blind spot it exists to catch.
+
+The same shape applies to libeis: =EIS_EVENT_SEAT_DEVICE_REQUESTED= is
+a 1.6 addition, Fedora 43 ships 1.5, and the portal Makefile probes with
+=pkg-config --atleast-version=1.6 libeis-1.0= rather than requiring it.
 
 *** Optional
 :PROPERTIES:
@@ -99,8 +147,19 @@ sudo dnf install -y \
     libinput-devel \
     libyaml-devel \
     libxcb-devel \
-    xcb-util-wm-devel
+    xcb-util-wm-devel \
+    cairo-devel \
+    pango-devel \
+    mesa-libGL-devel \
+    libeis-devel
 #+end_src
+
+=pango-devel= carries =pangocairo.pc= as well as =pango.pc=;
+=mesa-libGL-devel= pulls in =libglvnd-devel=, which is what actually
+provides =egl.pc=, =gl.pc= and =glesv2.pc=.  =libeis-devel= is optional
+but gates the InputCapture/RemoteDesktop portal binary: without it the
+portal, its =.portal=, =portals.conf= and D-Bus =.service= are *silently*
+skipped and a software KVM fails later with "CreateSession failed".
 
 On Fedora 44+, =wlroots-devel= is 0.20 (window capture).  Fedora 42/43
 ship 0.19 only; install =wlroots0.19-devel= there and build with
@@ -343,6 +402,32 @@ Use =DESTDIR= for staged installs (packaging):
 #+begin_src sh
 make install DESTDIR=/tmp/gowl-pkg
 #+end_src
+
+*** Consumption by an image build (Immutablue)
+:PROPERTIES:
+:CUSTOM_ID: install-image-build
+:END:
+Immutablue builds gowl from a git submodule of its own tree
+(=artifacts/overrides/usr/src/gitlab/gowl=, copied to =/build/gowl= by
+=deps/Containerfile=) and installs the result with
+=cp -a /mnt-build-deps/gowl/usr/. /usr/=.  Two consequences worth
+knowing when a fix does not appear on a built system:
+
+- *The submodule pin is the version, not =master=.* A fix pushed to
+  gowl does not reach an image until that submodule is bumped and
+  Immutablue rebuilt.
+- *cmacs is copied afterwards and wins.* The cmacs container image
+  (=quay.io/zachpodbielniak/cmacs=, built by cmacs's =./build-container=)
+  is copied over =/usr= *after* gowl, and it ships some of the same
+  files --- notably =/usr/share/xdg-desktop-portal/gowl-portals.conf=
+  and =portals/=.  For those, the cmacs image is authoritative on a
+  cmacs-bearing system and bumping gowl alone changes nothing.
+  =data/gowl.desktop= is *not* in the cmacs image (which ships only
+  =cmacs.desktop=), so the standalone gowl session file does come from
+  here.
+
+Immutablue also pins *wlroots 0.19* (=wlroots0.19-devel=), which makes
+the 0.19 build path above load-bearing rather than theoretical.
 
 *** Uninstall
 :PROPERTIES:

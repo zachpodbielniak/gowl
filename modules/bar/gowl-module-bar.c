@@ -2715,17 +2715,17 @@ bar_handle_button(GowlBarProvider *provider, gpointer monitor, gint x, gint y,
 		return FALSE;
 
 	if (!pressed) {
+		/* Claim a release only when the bar has something in
+		   flight.  Claiming every release that happens to land over
+		   the bar would swallow the one ending a drag that started
+		   inside a window -- the client would sit believing its
+		   button was still held. */
 		if (self->panel.drag_active) {
 			self->panel.drag_active = FALSE;
 			g_clear_pointer(&self->panel.drag_id, g_free);
 			return TRUE;
 		}
-		/* A release over the bar belongs to the bar, so the client
-		   underneath never sees half a click. */
-		gowl_monitor_get_geometry(GOWL_MONITOR(monitor), &mon_x, &mon_y,
-		                          &mon_w, &mon_h);
-		return (bar_slot_at(self, y, mon_h, NULL) != NULL) ||
-		       bar_panel_point(self, x, y, NULL, NULL);
+		return FALSE;
 	}
 
 	gowl_monitor_get_geometry(GOWL_MONITOR(monitor), &mon_x, &mon_y,

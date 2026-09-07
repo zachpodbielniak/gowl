@@ -3821,8 +3821,8 @@ bar_apply_shipped_defaults(GowlModuleBar *self)
 		"height",          "26",
 
 		"widgets-left",    "user host git",
-		/* Reversed: reads as display, ip, podman left to right. */
-		"widgets-right",   "podman ip display",
+		/* Reversed: reads as ip, podman, display left to right. */
+		"widgets-right",   "display podman ip",
 
 		/* The tag row belongs to the top bar; two copies is noise. */
 		"tags.visible",    "false",

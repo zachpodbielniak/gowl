@@ -202,7 +202,10 @@ Colour is computed from pressure --- text, then peach past 75%, then red past 90
 | =ip=        | The interface's address    | Network                                  |
 | =wifi=      | Signal strength            | Network                                  |
 | =vpn=       | Whether a tunnel is up     | ---                                      |
+| =bluetooth= | Connected device, or off   | Power, scan, paired devices              |
 | =tailscale= | Tailnet state              | Peers, exit nodes, sign-in               |
+
+=bluetooth= runs =bluetoothctl= on the worker thread --- adapter state, paired and connected devices --- and connects or disconnects from the panel. It *hides itself where there is no adapter*, so a desktop without one carries no dead icon, and it ships in the default layout for the machine that does have one. =command= overrides the tool.
 
 The network panel reads what the kernel already knows, and uses =nmcli= only for the parts that genuinely need it --- so the readings still work on a machine with no NetworkManager, and only the actions disappear.
 

@@ -1429,6 +1429,379 @@ static const GowlBarPluginVTable tailscale_vtable = {
  * Registration
  * ---------------------------------------------------------------- */
 
+/* ----------------------------------------------------------------
+ * bluetooth
+ *
+ * Adapter power, what is connected, and one click to connect or
+ * disconnect a known device.
+ *
+ * bluetoothctl rather than BlueZ over D-Bus: the state this widget
+ * needs is four short lines of output, where the D-Bus equivalent is
+ * GetManagedObjects and a walk of a nested variant for every device on
+ * the machine.  Everything it runs is a setting, so a different tool
+ * can be dropped in without touching this.
+ * ---------------------------------------------------------------- */
+
+#define BT_MAX_DEVICES (12)
+
+typedef struct {
+	gchar    *mac;
+	gchar    *name;
+	gboolean  connected;
+} BtDevice;
+
+typedef struct {
+	gboolean  present;              /* an adapter exists at all */
+	gboolean  powered;
+	gboolean  scanning;
+	GPtrArray *devices;             /* element-type BtDevice */
+	/*
+	 * Filled by the ASYNC poll and read by everything else.  Each of
+	 * these costs a subprocess, and the sync poll, the panel and a
+	 * click all run on the compositor thread: doing it there would not
+	 * make the bar slow, it would freeze the editor.
+	 */
+} BtData;
+
+static void
+bt_device_free(gpointer data)
+{
+	BtDevice *d = data;
+
+	g_free(d->mac);
+	g_free(d->name);
+	g_free(d);
+}
+
+static gpointer
+bt_create(GowlBarPlugin *plugin)
+{
+	BtData *bd = g_new0(BtData, 1);
+
+	(void)plugin;
+	bd->devices = g_ptr_array_new_with_free_func(bt_device_free);
+	return bd;
+}
+
+static void
+bt_destroy(GowlBarPlugin *plugin, gpointer data)
+{
+	BtData *bd = data;
+
+	(void)plugin;
+	if (bd == NULL)
+		return;
+	g_ptr_array_unref(bd->devices);
+	g_free(bd);
+}
+
+static const gchar *
+bt_tool(GowlBarPlugin *plugin)
+{
+	const gchar *tool = gowl_bar_plugin_get_setting(plugin, "command");
+
+	return (tool != NULL && *tool != '\0') ? tool : "bluetoothctl";
+}
+
+/*
+ * `bluetoothctl devices' prints one device per line as
+ *   Device AA:BB:CC:DD:EE:FF Some Name
+ * The name is the rest of the line and may contain spaces, so it is
+ * taken whole rather than tokenised.
+ */
+static void
+bt_parse_devices(BtData *bd, const gchar *out, gboolean connected)
+{
+	g_auto(GStrv) lines = NULL;
+	gint i;
+
+	if (out == NULL)
+		return;
+
+	lines = g_strsplit(out, "\n", -1);
+	for (i = 0; lines[i] != NULL; i++) {
+		const gchar *mac, *name;
+		BtDevice    *dev;
+		guint        existing;
+
+		if (!g_str_has_prefix(lines[i], "Device "))
+			continue;
+		mac = lines[i] + strlen("Device ");
+		name = strchr(mac, ' ');
+		if (name == NULL)
+			continue;
+
+		/* A device can appear in both listings; the connected pass
+		   runs second and only needs to mark what it finds. */
+		for (existing = 0; existing < bd->devices->len; existing++) {
+			dev = g_ptr_array_index(bd->devices, existing);
+			if (strncmp(dev->mac, mac, (gsize)(name - mac)) == 0) {
+				if (connected)
+					dev->connected = TRUE;
+				break;
+			}
+		}
+		if (existing < bd->devices->len)
+			continue;
+
+		if (bd->devices->len >= BT_MAX_DEVICES)
+			continue;
+
+		dev = g_new0(BtDevice, 1);
+		dev->mac = g_strndup(mac, (gsize)(name - mac));
+		dev->name = g_strdup(name + 1);
+		dev->connected = connected;
+		g_ptr_array_add(bd->devices, dev);
+	}
+}
+
+static void
+bt_poll_async(GowlBarPlugin *plugin, gpointer data)
+{
+	BtData           *bd = data;
+	const gchar      *tool;
+	g_autofree gchar *show = NULL;
+	g_autofree gchar *paired = NULL;
+	g_autofree gchar *conn = NULL;
+	g_autofree gchar *line = NULL;
+
+	if (bd == NULL)
+		return;
+
+	tool = bt_tool(plugin);
+	if (!bar_have_command(tool)) {
+		bd->present = FALSE;
+		return;
+	}
+
+	line = g_strdup_printf("%s show 2>/dev/null", tool);
+	show = bar_run_shell_line(line);
+	g_clear_pointer(&line, g_free);
+
+	/* No adapter is not an error and not a state to report: the widget
+	   hides itself, the way the battery does on a desktop. */
+	bd->present = (show != NULL && *show != '\0'
+	               && strstr(show, "No default controller") == NULL);
+	if (!bd->present)
+		return;
+
+	bd->powered  = (strstr(show, "Powered: yes") != NULL);
+	bd->scanning = (strstr(show, "Discovering: yes") != NULL);
+
+	g_ptr_array_set_size(bd->devices, 0);
+	if (!bd->powered)
+		return;
+
+	line = g_strdup_printf("%s devices Paired 2>/dev/null", tool);
+	paired = bar_run_shell_line(line);
+	g_clear_pointer(&line, g_free);
+	bt_parse_devices(bd, paired, FALSE);
+
+	line = g_strdup_printf("%s devices Connected 2>/dev/null", tool);
+	conn = bar_run_shell_line(line);
+	bt_parse_devices(bd, conn, TRUE);
+}
+
+/* The connected device, or NULL.  The first is enough for a label. */
+static const BtDevice *
+bt_first_connected(BtData *bd)
+{
+	guint i;
+
+	if (bd == NULL)
+		return NULL;
+	for (i = 0; i < bd->devices->len; i++) {
+		BtDevice *d = g_ptr_array_index(bd->devices, i);
+
+		if (d->connected)
+			return d;
+	}
+	return NULL;
+}
+
+static void
+bt_poll(GowlBarPlugin *plugin, gpointer data)
+{
+	BtData         *bd = data;
+	const BtDevice *conn;
+	guint           n_conn = 0, i;
+
+	if (bd == NULL || !bd->present) {
+		/* Nothing to say and nothing to click: a machine with no
+		   adapter should not carry a dead icon forever. */
+		gowl_bar_plugin_set_visible(plugin, FALSE);
+		return;
+	}
+	gowl_bar_plugin_set_visible(plugin, TRUE);
+
+	for (i = 0; i < bd->devices->len; i++) {
+		if (((BtDevice *)g_ptr_array_index(bd->devices, i))->connected)
+			n_conn++;
+	}
+	conn = bt_first_connected(bd);
+
+	/* Nerd Font: bluetooth (U+F293), and bluetooth-off (U+F294) so the
+	   powered state reads from the shape as well as the colour. */
+	gowl_bar_plugin_set_icon(plugin,
+		bd->powered ? "\xef\x8a\x93" : "\xef\x8a\x94");
+
+	if (!bd->powered) {
+		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+		gowl_bar_plugin_set_tooltip(plugin, "Bluetooth is off");
+		return;
+	}
+
+	if (n_conn == 0) {
+		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_TEXT);
+		gowl_bar_plugin_set_tooltip(plugin, "Bluetooth on, nothing connected");
+		return;
+	}
+
+	if (n_conn == 1) {
+		gowl_bar_plugin_set_label(plugin, conn->name);
+		gowl_bar_plugin_set_tooltip(plugin, conn->name);
+	} else {
+		gchar buf[32];
+
+		g_snprintf(buf, sizeof(buf), "%u", n_conn);
+		gowl_bar_plugin_set_label(plugin, buf);
+		gowl_bar_plugin_set_tooltip(plugin, "Connected devices");
+	}
+	gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_BLUE);
+}
+
+static gint
+bt_interval(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)plugin;
+	(void)data;
+	return 5;
+}
+
+static GowlBarPanel *
+bt_panel(GowlBarPlugin *plugin, gpointer data)
+{
+	BtData           *bd = data;
+	GowlBarPanel     *panel;
+	GowlBarPanelItem *item;
+	guint             i;
+
+	panel = gowl_bar_panel_new();
+	gowl_bar_panel_set_width(panel, 380);
+
+	if (bd == NULL || !bd->present) {
+		gowl_bar_panel_add_hero(panel, "\xef\x8a\x94", "Bluetooth",
+		                        "No adapter");
+		if (!bar_have_command(bt_tool(plugin)))
+			gowl_bar_panel_add_field(panel, "Missing",
+			                         bt_tool(plugin));
+		return panel;
+	}
+
+	gowl_bar_panel_add_hero(panel,
+		bd->powered ? "\xef\x8a\x93" : "\xef\x8a\x94", "Bluetooth",
+		bd->powered ? "On" : "Off");
+	gowl_bar_panel_add_separator(panel);
+	gowl_bar_panel_add_toggle(panel, "power", "Bluetooth", bd->powered);
+
+	if (!bd->powered)
+		return panel;
+
+	gowl_bar_panel_add_toggle(panel, "scan", "Scan for devices",
+	                          bd->scanning);
+
+	if (bd->devices->len == 0) {
+		gowl_bar_panel_add_separator(panel);
+		gowl_bar_panel_add_field(panel, "Devices",
+			bd->scanning ? "Scanning..." : "None paired");
+		return panel;
+	}
+
+	gowl_bar_panel_add_separator(panel);
+	gowl_bar_panel_add_section(panel, "Devices");
+	for (i = 0; i < bd->devices->len; i++) {
+		BtDevice         *d = g_ptr_array_index(bd->devices, i);
+		g_autofree gchar *id = NULL;
+
+		/* The row id carries the index, so a click needs no lookup
+		   by name -- two devices may share one. */
+		id = g_strdup_printf("dev:%u", i);
+		item = gowl_bar_panel_add_row(panel, id,
+			d->connected ? "\xef\x8a\x93" : "\xef\x8a\x94",
+			d->name, d->connected ? "Connected" : d->mac);
+		(void)item;
+	}
+
+	return panel;
+}
+
+static void
+bt_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
+          gint index, gdouble value, guint button)
+{
+	BtData           *bd = data;
+	const gchar      *tool = bt_tool(plugin);
+	g_autofree gchar *line = NULL;
+
+	(void)value;
+	(void)button;
+
+	if (item_id == NULL || bd == NULL)
+		return;
+
+	if (g_strcmp0(item_id, "power") == 0) {
+		line = g_strdup_printf("%s power %s", tool,
+		                       bd->powered ? "off" : "on");
+		gowl_bar_plugin_spawn(plugin, line);
+		/* Optimistic, so the toggle moves under the finger rather
+		   than at the next poll five seconds later. */
+		bd->powered = !bd->powered;
+		gowl_bar_plugin_request_panel_refresh(plugin);
+		return;
+	}
+
+	if (g_strcmp0(item_id, "scan") == 0) {
+		line = g_strdup_printf("%s scan %s", tool,
+		                       bd->scanning ? "off" : "on");
+		gowl_bar_plugin_spawn(plugin, line);
+		bd->scanning = !bd->scanning;
+		gowl_bar_plugin_request_panel_refresh(plugin);
+		return;
+	}
+
+	if (g_str_has_prefix(item_id, "dev:")) {
+		guint     idx = (guint)g_ascii_strtoull(item_id + 4, NULL, 10);
+		BtDevice *d;
+
+		if (idx >= bd->devices->len)
+			return;
+		d = g_ptr_array_index(bd->devices, idx);
+		line = g_strdup_printf("%s %s %s", tool,
+			d->connected ? "disconnect" : "connect", d->mac);
+		gowl_bar_plugin_spawn(plugin, line);
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+			d->connected ? "Disconnecting" : "Connecting", d->name);
+		d->connected = !d->connected;
+		gowl_bar_plugin_request_panel_refresh(plugin);
+	}
+
+	(void)index;
+}
+
+static const GowlBarPluginVTable bluetooth_vtable = {
+	sizeof(GowlBarPluginVTable),
+	bt_create, bt_destroy,
+	NULL, NULL, NULL,
+	bt_interval, bt_poll, bt_poll_async,
+	NULL, NULL,
+	NULL, NULL,
+	bt_panel, bt_action,
+	NULL, NULL
+};
+
+
 /**
  * bar_register_net_plugins:
  * @registry: the registry to populate
@@ -1447,6 +1820,10 @@ bar_register_net_plugins(GowlBarRegistry *registry)
 		"Wireless signal strength", &wifi_vtable);
 	gowl_bar_registry_register_vtable(registry, "vpn", "VPN",
 		"Whether a tunnel interface is up", &vpn_vtable);
+	gowl_bar_registry_register_vtable(registry, "bluetooth", "Bluetooth",
+		"Adapter power and paired devices", &bluetooth_vtable);
+	gowl_bar_registry_register_alias(registry, "bt", "bluetooth");
+
 	gowl_bar_registry_register_vtable(registry, "tailscale", "Tailscale",
 		"Tailnet state, peers and exit nodes", &tailscale_vtable);
 

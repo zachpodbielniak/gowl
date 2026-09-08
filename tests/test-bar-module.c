@@ -183,6 +183,11 @@ test_the_shipped_layout(void)
 	   would silently take that away. */
 	g_assert_cmpint(count_widget(listing, "tailscale"), ==, 1);
 
+	/* Bluetooth ships too, and hides itself where there is no adapter
+	   rather than being left out of the layout -- a machine that grows
+	   one should not need a config edit to see it. */
+	g_assert_cmpint(count_widget(listing, "bluetooth"), ==, 1);
+
 	/*
 	 * The centre carries the two things you reach for rather than
 	 * read: the recorder and the caffeine toggle, to the left of the

@@ -1339,6 +1339,7 @@ gowl_compositor_inject_pointer_motion(
 
 	wlr_cursor_move(self->wlr_cursor, NULL, dx, dy);
 	gowl_compositor_motionnotify(self, inject_now_msec());
+	gowl_compositor_inject_frame(self);
 }
 
 void
@@ -1363,6 +1364,7 @@ gowl_compositor_inject_pointer_motion_absolute(
 	                        extents.x + nx * extents.width,
 	                        extents.y + ny * extents.height);
 	gowl_compositor_motionnotify(self, inject_now_msec());
+	gowl_compositor_inject_frame(self);
 }
 
 void
@@ -1379,6 +1381,32 @@ gowl_compositor_warp_cursor(
 	wlr_cursor_warp_closest(self->wlr_cursor, NULL, x, y);
 	self->prev_cursor_x = self->wlr_cursor->x;
 	self->prev_cursor_y = self->wlr_cursor->y;
+}
+
+/*
+ * Close the pointer event group.
+ *
+ * wl_pointer has required this since version 5: motion, button and axis
+ * are a BATCH, and a client is entitled to buffer every one of them
+ * until the frame arrives.  Firefox does exactly that; Chromium and GTK
+ * process eagerly, which is the whole reason an unframed injected click
+ * looked like one broken application.
+ *
+ * Real input gets its frame from wlr_cursor's own frame signal.
+ * Injected input never touches wlr_cursor's event path, so nothing was
+ * closing the group: an injected click sat in the client unprocessed
+ * until some later event happened to flush it -- which is what "I have
+ * to click two or three times" and "it half clicks" actually were.
+ */
+void
+gowl_compositor_inject_frame(GowlCompositor *self)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_seat == NULL)
+		return;
+
+	wlr_seat_pointer_notify_frame(self->wlr_seat);
 }
 
 void
@@ -1401,6 +1429,7 @@ gowl_compositor_inject_pointer_warp(
 	 */
 	wlr_cursor_warp_closest(self->wlr_cursor, NULL, x, y);
 	gowl_compositor_motionnotify(self, inject_now_msec());
+	gowl_compositor_inject_frame(self);
 }
 
 void
@@ -1430,6 +1459,9 @@ gowl_compositor_inject_button(
 		pressed ? WL_POINTER_BUTTON_STATE_PRESSED
 		        : WL_POINTER_BUTTON_STATE_RELEASED,
 		inject_now_msec(), TRUE);
+	/* Self-framing: a sender that never emits a frame of its own still
+	   produces clicks the client can act on. */
+	gowl_compositor_inject_frame(self);
 }
 
 void

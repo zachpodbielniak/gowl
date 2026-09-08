@@ -417,3 +417,22 @@ dropped, =zgowl_input_inject_v1.axis_discrete= (version 3) carries it,
 and the portal falls back to the deprecated =axis= request against an
 older compositor. =NotifyPointerAxisDiscrete= counts whole notches and
 converts the same way.
+
+** Injected pointer events close their own frame
+
+=wl_pointer.frame= has closed the event group since version 5. Motion,
+button and axis are a *batch*, and a client is entitled to buffer every
+one of them until the frame arrives. Firefox does; Chromium and GTK
+process eagerly.
+
+Real input is framed by =wlr_cursor='s own frame signal. Injected input
+never touches that path, so nothing closed the group: an injected click
+sat in the client unprocessed until some unrelated later event flushed
+it. What that looked like was having to click two or three times before
+anything happened, in one application and no other.
+
+Every injector now closes its own group, so a sender that never emits a
+frame of its own still produces usable clicks, and
+=zgowl_input_inject_v1.frame= sends a real frame for a sender that
+batches explicitly. It used to be a no-op documented as "a batching hint
+only" --- which is precisely the belief that caused this.

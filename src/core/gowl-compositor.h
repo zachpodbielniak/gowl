@@ -1248,6 +1248,20 @@ void gowl_compositor_inject_button (GowlCompositor *self,
                                     gboolean        pressed);
 
 /**
+ * gowl_compositor_inject_frame:
+ * @self: a #GowlCompositor
+ *
+ * Closes the current pointer event group.
+ *
+ * wl_pointer has required this since version 5: motion, button and axis
+ * are a batch, and a client is entitled to buffer all of them until the
+ * frame arrives.  Real input is framed by wlr_cursor; injected input
+ * never reaches that path, so every injector closes its own group and
+ * this is also exposed for a sender that batches explicitly.
+ */
+void gowl_compositor_inject_frame (GowlCompositor *self);
+
+/**
  * gowl_compositor_inject_axis:
  * @self: a #GowlCompositor
  * @horizontal: %TRUE for horizontal scroll, %FALSE for vertical

@@ -462,9 +462,16 @@ static void
 inject_frame(struct wl_client   *client,
              struct wl_resource *resource)
 {
+	GowlInputCaptureProtocol *p = wl_resource_get_user_data(resource);
+
 	(void)client;
-	(void)resource;
-	/* Events take effect immediately; frame is a batching hint only. */
+	/*
+	 * NOT a hint.  This was a no-op on the belief that events take
+	 * effect immediately, which is true of the compositor and false of
+	 * the client: wl_pointer.frame closes the event group, and a client
+	 * may buffer everything until it arrives.  Firefox does.
+	 */
+	gowl_compositor_inject_frame((GowlCompositor *)p->compositor);
 }
 
 static void

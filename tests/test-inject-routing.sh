@@ -155,6 +155,52 @@ if [ -f "$eis" ] && grep -q "EIS_EVENT_SCROLL_DISCRETE" "$eis"; then
 	fi
 fi
 
+# -- Every injected pointer event must close its frame ----------------
+#
+# wl_pointer.frame has closed the event group since version 5, and a
+# client is entitled to buffer motion, button and axis until it arrives.
+# Firefox does; Chromium and GTK process eagerly.
+#
+# Real input is framed by wlr_cursor's own frame signal.  Injected input
+# never touches that path, so an unframed injected click sat in the
+# client until some unrelated later event flushed it -- which is what
+# "I have to click two or three times" and "it half clicks" were.
+for fn in gowl_compositor_inject_pointer_motion \
+          gowl_compositor_inject_pointer_motion_absolute \
+          gowl_compositor_inject_pointer_warp \
+          gowl_compositor_inject_button \
+          gowl_compositor_inject_axis; do
+	fn_body=$(awk -v f="$fn" '
+		$0 ~ "^" f "\\(" { inside = 1 }
+		inside { print }
+		inside && /^}/ { exit }' "$comp")
+	if [ -z "$fn_body" ]; then
+		echo "FAIL: no $fn in gowl-compositor.c"
+		echo "      A guard naming a function that does not exist checks nothing."
+		fail=1
+		continue
+	fi
+	echo "$fn_body" | grep -qE "inject_frame|notify_frame" || {
+		echo "FAIL: $fn never closes the pointer frame"
+		echo "      A client that batches until frame will hold the event."
+		fail=1
+	}
+done
+
+# And the protocol's own frame request must actually frame.  It was a
+# no-op, documented as "a batching hint only" -- which is exactly the
+# belief that caused this.
+frame_body=$(awk '
+	/^inject_frame\(struct wl_client/ { inside = 1 }
+	inside { print }
+	inside && /^}/ { exit }' "$root/src/protocols/gowl-input-capture-protocol.c")
+if [ -n "$frame_body" ]; then
+	echo "$frame_body" | grep -q "inject_frame((GowlCompositor" || {
+		echo "FAIL: the inject frame request does not send a pointer frame"
+		fail=1
+	}
+fi
+
 if [ "$fail" -eq 0 ]; then
 	echo "inject-routing guard PASSED (injection takes the real path)"
 fi

@@ -285,6 +285,16 @@ Without that module it falls back to =grim= (plus =slurp= for a selection, and =
 
 =directory= overrides where a fallback capture is written; the module's own =save-directory= governs the native path.
 
+The same three captures are on the keyboard by default, reaching the module by name through =ipc_command= --- so the binds need to know nothing about how a capture works, and are inert rather than broken in a session with no screenshot module:
+
+| Key                 | Captures            |
+|---------------------+---------------------|
+| =Super+Shift+S=     | a dragged selection |
+| =Super+Print=       | the focused window  |
+| =Print=             | the whole screen    |
+
+=Escape= cancels a selection in progress, and so does =screenshot-cancel=. The other names are =screenshot-area= (=screenshot-select=), =screenshot-window=, =screenshot-screen= (=screenshot=) and =screenshot-all= for every monitor stitched together; all of them work from =gowl <command>= too.
+
 The wheel over =audio= changes the volume and over =display= changes the brightness. A bar widget may claim the wheel without a modifier only because the pointer is over it --- there is no ambiguity about what it means.
 
 *** Generic

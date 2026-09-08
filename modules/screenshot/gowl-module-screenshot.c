@@ -59,6 +59,7 @@
 #include "interfaces/gowl-shutdown-handler.h"
 #include "interfaces/gowl-keybind-handler.h"
 #include "interfaces/gowl-mouse-handler.h"
+#include "interfaces/gowl-ipc-handler.h"
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"
 #include "core/gowl-monitor.h"
@@ -121,6 +122,7 @@ static void screenshot_startup_init    (GowlStartupHandlerInterface *iface);
 static void screenshot_shutdown_init   (GowlShutdownHandlerInterface *iface);
 static void screenshot_keybind_init    (GowlKeybindHandlerInterface *iface);
 static void screenshot_mouse_init      (GowlMouseHandlerInterface *iface);
+static void screenshot_ipc_init        (GowlIpcHandlerInterface *iface);
 
 G_DEFINE_TYPE_WITH_CODE(GowlModuleScreenshot, gowl_module_screenshot,
     GOWL_TYPE_MODULE,
@@ -128,7 +130,8 @@ G_DEFINE_TYPE_WITH_CODE(GowlModuleScreenshot, gowl_module_screenshot,
     G_IMPLEMENT_INTERFACE(GOWL_TYPE_STARTUP_HANDLER, screenshot_startup_init)
     G_IMPLEMENT_INTERFACE(GOWL_TYPE_SHUTDOWN_HANDLER, screenshot_shutdown_init)
     G_IMPLEMENT_INTERFACE(GOWL_TYPE_KEYBIND_HANDLER, screenshot_keybind_init)
-    G_IMPLEMENT_INTERFACE(GOWL_TYPE_MOUSE_HANDLER, screenshot_mouse_init))
+    G_IMPLEMENT_INTERFACE(GOWL_TYPE_MOUSE_HANDLER, screenshot_mouse_init)
+    G_IMPLEMENT_INTERFACE(GOWL_TYPE_IPC_HANDLER, screenshot_ipc_init))
 
 /* ----------------------------------------------------------------
  * Helpers
@@ -556,6 +559,81 @@ static void
 screenshot_shutdown_init(GowlShutdownHandlerInterface *iface)
 {
 	iface->on_shutdown = screenshot_on_shutdown;
+}
+
+/* ----------------------------------------------------------------
+ * GowlIpcHandler interface
+ * ---------------------------------------------------------------- */
+
+/*
+ * The module's entry points, reachable from a keybind
+ * (`{ action: ipc_command, arg: "screenshot-area" }'), from the IPC
+ * socket, and from an embedder.  A module .so cannot export a function
+ * for the compositor to call, so it exports a name instead --- the
+ * same shape expo and the switcher use.
+ *
+ * This is what makes Super+Shift+S possible without any of the
+ * keybind, the CLI or cmacs knowing that this module exists.
+ */
+static gchar *
+screenshot_handle_command(GowlIpcHandler *handler, const gchar *command,
+                          const gchar *args)
+{
+	GowlModuleScreenshot *self = GOWL_MODULE_SCREENSHOT(handler);
+	GowlCaptureMode       mode;
+	gpointer              client = NULL;
+
+	if (command == NULL || self->compositor == NULL)
+		return NULL;
+
+	if (g_strcmp0(command, "screenshot-cancel") == 0) {
+		if (!self->selecting)
+			return g_strdup("ERROR no selection in progress");
+		screenshot_cancel(GOWL_SCREENSHOT_PROVIDER(self));
+		return g_strdup("OK selection cancelled");
+	}
+
+	if (g_strcmp0(command, "screenshot-area") == 0
+	    || g_strcmp0(command, "screenshot-select") == 0) {
+		/* Starting a second rubber band while one is up would
+		   strand the first one's callback, and the user cannot
+		   see two selections at once anyway. */
+		if (self->selecting)
+			return g_strdup("ERROR a selection is already in progress");
+		mode = GOWL_CAPTURE_MODE_AREA;
+	} else if (g_strcmp0(command, "screenshot-window") == 0) {
+		client = gowl_compositor_get_focused_client(self->compositor);
+		if (client == NULL)
+			return g_strdup("ERROR nothing is focused");
+		mode = GOWL_CAPTURE_MODE_WINDOW;
+	} else if (g_strcmp0(command, "screenshot-screen") == 0
+	           || g_strcmp0(command, "screenshot") == 0) {
+		mode = GOWL_CAPTURE_MODE_DESKTOP;
+	} else if (g_strcmp0(command, "screenshot-all") == 0) {
+		mode = GOWL_CAPTURE_MODE_ALL;
+	} else {
+		return NULL;
+	}
+
+	/*
+	 * No callback: the module saves the file and sets the clipboard
+	 * itself, and an area capture completes long after this returns.
+	 * The reply says what was STARTED, which for the area mode is all
+	 * that can honestly be said at this point.
+	 */
+	screenshot_capture(GOWL_SCREENSHOT_PROVIDER(self), mode,
+	                   (args != NULL && *args != '\0') ? args : NULL,
+	                   client, NULL, NULL);
+
+	if (mode == GOWL_CAPTURE_MODE_AREA)
+		return g_strdup("OK drag to select, Escape to cancel");
+	return g_strdup("OK capture taken");
+}
+
+static void
+screenshot_ipc_init(GowlIpcHandlerInterface *iface)
+{
+	iface->handle_command = screenshot_handle_command;
 }
 
 /* ----------------------------------------------------------------

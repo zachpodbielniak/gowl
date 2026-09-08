@@ -648,9 +648,18 @@ modules:
     copy-to-clipboard: true
 #+end_src
 
-CMacs loads it by default. It is reached through
-=GowlScreenshotProvider=, which the bar's =screenshot= widget uses; with
-no module loaded that widget falls back to =grim= and =slurp=.
+CMacs loads it by default. It is reached three ways: through
+=GowlScreenshotProvider= (which the bar's =screenshot= widget uses; with
+no module loaded that widget falls back to =grim= and =slurp=), through
+=ipc_command= from a keybind, and through =gowl <command>= on the IPC
+socket. The commands are =screenshot-area= (=screenshot-select=),
+=screenshot-window=, =screenshot-screen= (=screenshot=),
+=screenshot-all= and =screenshot-cancel=; the shipped config binds the
+first three to =Super+Shift+S=, =Super+Print= and =Print=.
+
+A bind reaching the module by name is what keeps the keybind, the CLI
+and cmacs from having to know that this module exists --- and what makes
+a missing module inert rather than broken.
 
 A clipboard payload is written to the pasting client *by the main loop*,
 not from the =wlr_data_source= send callback. That callback runs on the

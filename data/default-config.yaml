@@ -274,6 +274,14 @@ keybinds:
   "Super+Shift+Ctrl+8": { action: tag_toggle, arg: "128" }
   "Super+Shift+Ctrl+9": { action: tag_toggle, arg: "256" }
 
+  # Screenshot.  Reaches the screenshot module by NAME through
+  # ipc_command, so this line needs to know nothing about it -- and
+  # does nothing at all when the module is not loaded.  The capture is
+  # saved under ~/Pictures/Screenshots and put on the clipboard.
+  "Super+Shift+s": { action: ipc_command, arg: "screenshot-area", desc: "Screenshot: select a region" }
+  "Super+Print": { action: ipc_command, arg: "screenshot-window", desc: "Screenshot: focused window" }
+  "Print": { action: ipc_command, arg: "screenshot-screen", desc: "Screenshot: whole screen" }
+
   # Session
   "Super+Shift+q": { action: quit, desc: "Quit gowl" }
   "Super+Shift+r": { action: reload_config, desc: "Reload config" }

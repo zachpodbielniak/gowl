@@ -90,5 +90,25 @@ if grep -q "gowl_screenshot_provider_capture" "$desk"; then
 		fail "$desk never resolves the weak ref; the completion path is using something it did not check is alive"
 fi
 
+# 5. A shipped keybind must name a command something answers.
+#
+# `ipc_command' dispatches by NAME, and a name nothing handles is not
+# an error: run_command finds no taker, the key is consumed because it
+# matched a bind, and nothing happens.  So a renamed IPC command leaves
+# Super+Shift+S silently inert -- the worst possible failure for a
+# keybind, because it looks exactly like the key not being pressed.
+for arg in $(grep -oE 'action: ipc_command, arg: "screenshot[a-z-]*"' \
+		data/default-config.yaml | grep -oE '"screenshot[a-z-]*"' \
+		| tr -d '"' | sort -u); do
+	grep -q "\"$arg\"" "$shot" ||
+		fail "default-config.yaml binds ipc_command $arg, which $shot does not handle"
+done
+
+# And the reverse for the one the user actually presses: the shipped
+# config must still carry it.  Dropping the bind is a silent loss of a
+# documented default.
+grep -q 'Super+Shift+s.*ipc_command.*screenshot-area' data/default-config.yaml ||
+	fail "default-config.yaml no longer binds Super+Shift+s to screenshot-area"
+
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: screenshot source guards"

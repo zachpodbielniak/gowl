@@ -424,8 +424,25 @@ inject_axis(struct wl_client   *client,
 	GowlInputCaptureProtocol *p = wl_resource_get_user_data(resource);
 
 	(void)client;
+	/* Version 2 and older carry no discrete component, so there is
+	   none to report -- and reporting one anyway is the bug this
+	   request was deprecated for. */
 	gowl_compositor_inject_axis((GowlCompositor *)p->compositor,
-		axis == 1, wl_fixed_to_double(value));
+		axis == 1, wl_fixed_to_double(value), 0);
+}
+
+static void
+inject_axis_discrete(struct wl_client   *client,
+                     struct wl_resource *resource,
+                     uint32_t            axis,
+                     wl_fixed_t          value,
+                     int32_t             discrete)
+{
+	GowlInputCaptureProtocol *p = wl_resource_get_user_data(resource);
+
+	(void)client;
+	gowl_compositor_inject_axis((GowlCompositor *)p->compositor,
+		axis == 1, wl_fixed_to_double(value), discrete);
 }
 
 static void
@@ -465,6 +482,7 @@ static const struct zgowl_input_inject_v1_interface inject_impl = {
 	.pointer_motion_absolute_layout = inject_pointer_motion_absolute_layout,
 	.button                  = inject_button,
 	.axis                    = inject_axis,
+	.axis_discrete           = inject_axis_discrete,
 	.key                     = inject_key,
 	.frame                   = inject_frame,
 };
@@ -578,8 +596,10 @@ gowl_input_capture_protocol_register(gpointer            compositor,
 	 * version 1 still works: it gets the normalized request and its
 	 * eight fractional bits, which is all it ever had.
 	 */
+	/* 3: the inject resource inherits the manager's bound version, so
+	   axis_discrete is only reachable once the manager advertises 3. */
 	self->global = wl_global_create(display,
-		&zgowl_input_capture_manager_v1_interface, 2, self,
+		&zgowl_input_capture_manager_v1_interface, 3, self,
 		manager_bind);
 	if (self->global == NULL) {
 		g_free(self);

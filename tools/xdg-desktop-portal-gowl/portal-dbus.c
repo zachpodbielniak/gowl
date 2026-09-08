@@ -500,9 +500,11 @@ inject_button_cb(gpointer user_data, uint32_t button, bool pressed)
 }
 
 static void
-inject_axis_cb(gpointer user_data, uint32_t axis, double value)
+inject_axis_cb(gpointer user_data, uint32_t axis, double value,
+               int32_t discrete)
 {
-	portal_wayland_inject_axis(((PortalDbus *)user_data)->wl, axis, value);
+	portal_wayland_inject_axis(((PortalDbus *)user_data)->wl, axis, value,
+		discrete);
 }
 
 static void
@@ -1002,7 +1004,15 @@ rd_method(GDBusConnection *conn, const gchar *sender, const gchar *path,
 		g_variant_get(params, "(&o@a{sv}ui)", &sh, &opts, &axis,
 			&steps);
 		g_variant_unref(opts);
-		portal_wayland_inject_axis(self->wl, axis, (double)steps);
+		/*
+		 * NotifyPointerAxisDiscrete counts whole notches, which is
+		 * exactly the case where the compositor may honestly call
+		 * the source a wheel -- so send the v120 amount rather than
+		 * only a continuous value of "1 per notch", which is a
+		 * pixel and scrolls nothing anybody can see.
+		 */
+		portal_wayland_inject_axis(self->wl, axis,
+			(double)steps * 15.0, steps * 120);
 		portal_wayland_inject_frame(self->wl);
 		g_dbus_method_invocation_return_value(invocation, NULL);
 		return;

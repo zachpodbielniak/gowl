@@ -39,7 +39,7 @@
     may be made; the 'z' prefix and version suffix are bumped accordingly.
   </description>
 
-  <interface name="zgowl_input_capture_manager_v1" version="2">
+  <interface name="zgowl_input_capture_manager_v1" version="3">
     <description summary="input capture/injection manager">
       The manager is the global the portal binds.  It hands out capture
       sessions (egress) and injection objects (ingress).
@@ -278,7 +278,7 @@
     </event>
   </interface>
 
-  <interface name="zgowl_input_inject_v1" version="2">
+  <interface name="zgowl_input_inject_v1" version="3">
     <description summary="input injection (RemoteDesktop)">
       Drives the compositor's virtual pointer/keyboard to emulate input
       for the RemoteDesktop portal.  Each motion/button/axis/key request
@@ -323,6 +323,13 @@
     <request name="axis">
       <description summary="inject scroll">
         axis 0 is vertical, 1 horizontal.
+
+        Deprecated since version 3: carries no discrete component, so the
+        compositor cannot tell a wheel notch from a continuous drag and
+        had to guess.  It guessed "wheel", which makes the high-resolution
+        value authoritative -- and there was none to send.  Clients that
+        trust axis_source therefore scrolled by nothing at all.  Use
+        axis_discrete.
       </description>
       <arg name="axis" type="uint"/>
       <arg name="value" type="fixed"/>
@@ -363,6 +370,23 @@
       </description>
       <arg name="x" type="fixed"/>
       <arg name="y" type="fixed"/>
+    </request>
+
+    <request name="axis_discrete" since="3">
+      <description summary="inject scroll with a discrete component">
+        axis 0 is vertical, 1 horizontal.  value is the continuous
+        amount in surface units; discrete is the high-resolution wheel
+        amount in 120ths of a notch, the same unit libei and
+        wl_pointer.axis_value120 use, and zero for a device that has no
+        notches.
+
+        The compositor reports the scroll as coming from a wheel only
+        when discrete is non-zero, because that is the only case where
+        the discrete amount it sends is real.
+      </description>
+      <arg name="axis" type="uint"/>
+      <arg name="value" type="fixed"/>
+      <arg name="discrete" type="int"/>
     </request>
   </interface>
 </protocol>

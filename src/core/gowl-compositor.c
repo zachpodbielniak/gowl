@@ -43,6 +43,7 @@
 #include <wlr/types/wlr_damage_ring.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_pointer_gestures_v1.h>
+#include <wlr/types/wlr_cursor_shape_v1.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include "gowl-tablet.h"
 #include "gowl-layout-registry.h"
@@ -187,6 +188,7 @@ static void on_cursor_motion_abs  (struct wl_listener *listener, void *data);
 static void on_cursor_button      (struct wl_listener *listener, void *data);
 static void on_cursor_axis        (struct wl_listener *listener, void *data);
 static void on_cursor_frame       (struct wl_listener *listener, void *data);
+static void on_request_set_shape  (struct wl_listener *listener, void *data);
 static void on_cursor_swipe_begin (struct wl_listener *listener, void *data);
 static void on_cursor_swipe_update(struct wl_listener *listener, void *data);
 static void on_cursor_swipe_end   (struct wl_listener *listener, void *data);
@@ -1434,17 +1436,38 @@ void
 gowl_compositor_inject_axis(
 	GowlCompositor *self,
 	gboolean        horizontal,
-	gdouble         value
+	gdouble         value,
+	gint            discrete
 ){
+	enum wl_pointer_axis_source source;
+
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
 	if (self->wlr_seat == NULL)
 		return;
 
+	/*
+	 * Say WHEEL only when there is a wheel amount to back it up.
+	 *
+	 * This used to send WHEEL unconditionally with a discrete value of
+	 * zero, which is a contradiction: axis_source WHEEL tells the
+	 * client the device has notches and that axis_value120 is the
+	 * authoritative amount -- and then hands it nothing.  A client that
+	 * believes the source scrolls by exactly zero.  A client that falls
+	 * back to the continuous value scrolls fine, which is why injected
+	 * scroll worked in Chromium and GTK and did nothing whatsoever in
+	 * Firefox, on the same machine, from the same KVM.
+	 *
+	 * CONTINUOUS is the honest description of a delta with no notches:
+	 * no discrete amount is promised and none is expected.
+	 */
+	source = (discrete != 0) ? WL_POINTER_AXIS_SOURCE_WHEEL
+	                         : WL_POINTER_AXIS_SOURCE_CONTINUOUS;
+
 	wlr_seat_pointer_notify_axis(self->wlr_seat, inject_now_msec(),
 		horizontal ? WL_POINTER_AXIS_HORIZONTAL_SCROLL
 		           : WL_POINTER_AXIS_VERTICAL_SCROLL,
-		value, 0, WL_POINTER_AXIS_SOURCE_WHEEL,
+		value, discrete, source,
 		WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
 	wlr_seat_pointer_notify_frame(self->wlr_seat);
 }
@@ -3141,7 +3164,15 @@ gowl_compositor_start(
 	       &self->cursor_hold_end, on_cursor_hold_end);
 
 	/* Cursor shape manager */
-	wlr_cursor_shape_manager_v1_create(self->wl_display, 1);
+	{
+		struct wlr_cursor_shape_manager_v1 *shape_mgr;
+
+		shape_mgr = wlr_cursor_shape_manager_v1_create(
+			self->wl_display, 1);
+		if (shape_mgr != NULL)
+			LISTEN(&shape_mgr->events.request_set_shape,
+			       &self->request_set_shape, on_request_set_shape);
+	}
 
 	/* 15. Input device listener */
 	LISTEN(&self->backend->events.new_input,
@@ -8211,6 +8242,44 @@ on_request_cursor(struct wl_listener *listener, void *data)
 		                       event->surface,
 		                       event->hotspot_x,
 		                       event->hotspot_y);
+}
+
+/*
+ * cursor-shape-v1: a client naming a cursor instead of drawing one.
+ *
+ * gowl created the manager -- advertising the protocol -- and then
+ * listened to nothing, so every request was dropped on the floor.  The
+ * cursor simply kept whatever it had, which for a client that had
+ * previously hidden it meant it stayed hidden.  Only newer toolkits use
+ * this path (GTK4, Firefox); GTK3 and Chromium still attach a cursor
+ * surface and went through on_request_cursor, which is why the cursor
+ * misbehaved in one application and nowhere else.
+ */
+static void
+on_request_set_shape(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+	struct wlr_cursor_shape_manager_v1_request_set_shape_event *event;
+	const char *name;
+
+	self = wl_container_of(listener, self, request_set_shape);
+	event = (struct wlr_cursor_shape_manager_v1_request_set_shape_event *)
+		data;
+
+	/* Tablet tools carry their own cursor; this is the pointer's. */
+	if (event->device_type
+	    != WLR_CURSOR_SHAPE_MANAGER_V1_DEVICE_TYPE_POINTER)
+		return;
+
+	/* Same rule as wl_pointer.set_cursor: only the client the pointer
+	   is actually over may change it. */
+	if (self->wlr_seat->pointer_state.focused_client != event->seat_client)
+		return;
+
+	name = wlr_cursor_shape_v1_name(event->shape);
+	if (name != NULL)
+		wlr_cursor_set_xcursor(self->wlr_cursor, self->xcursor_mgr,
+		                       name);
 }
 
 static void

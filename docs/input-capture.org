@@ -394,3 +394,26 @@ deliberately not a public/stable interface.
   once per key. Grant it real X11 access:
   =flatpak override --user --socket=x11 org.deskflow.deskflow=, then restart
   deskflow. (A native, non-flatpak deskflow already inherits =DISPLAY=.)
+
+** Injected scroll and the axis source
+
+An injected scroll carries a *discrete* amount in 120ths of a notch ---
+the same unit libei and =wl_pointer.axis_value120= use --- alongside the
+continuous value, and the compositor reports the source as a *wheel only
+when that amount is non-zero*.
+
+This is not bookkeeping. =axis_source = wheel= tells the client the
+device has notches and that the high-resolution amount is authoritative.
+Sending =wheel= with a discrete value of zero therefore says "scroll by
+exactly nothing" to any client that believes the source, while a client
+that falls back to the continuous value scrolls normally --- so injected
+scrolling worked in Chromium and GTK and did nothing at all in Firefox,
+on the same machine, from the same KVM, with no error anywhere to
+connect the two.
+
+The v120 amount now survives end to end: =EIS_EVENT_SCROLL_DISCRETE= is
+passed through unchanged rather than divided into a continuous value and
+dropped, =zgowl_input_inject_v1.axis_discrete= (version 3) carries it,
+and the portal falls back to the deprecated =axis= request against an
+older compositor. =NotifyPointerAxisDiscrete= counts whole notches and
+converts the same way.

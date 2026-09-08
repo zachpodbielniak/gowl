@@ -357,6 +357,7 @@ struct _GowlCompositor {
 
 	/* seat listeners */
 	struct wl_listener request_cursor;
+	struct wl_listener request_set_shape;
 	struct wl_listener request_set_sel;
 	struct wl_listener request_set_psel;
 	struct wl_listener request_start_drag;

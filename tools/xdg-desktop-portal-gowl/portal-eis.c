@@ -30,6 +30,12 @@
 #include <sys/mman.h>
 #include <xkbcommon/xkbcommon.h>
 
+/* Surface units one wheel notch is worth, for the continuous value that
+   accompanies a discrete scroll.  15 is what libinput reports for a
+   normal wheel, so a client that uses the continuous value scrolls the
+   same distance here as it would from the machine's own mouse. */
+#define NOTCH_UNITS (15.0)
+
 /*
  * The EIS server.  deskflow connects as a receiver libei client; this
  * server (the "sender" half) creates a virtual pointer+keyboard device
@@ -548,26 +554,39 @@ handle_event(PortalEis *self, struct eis_event *event)
 			double dx = eis_event_scroll_get_dx(event);
 			double dy = eis_event_scroll_get_dy(event);
 
+			/* A delta with no notches behind it.  Passing zero
+			   discrete is what lets the compositor describe it
+			   as continuous rather than inventing a wheel. */
 			if (dy != 0.0)
-				self->inject->axis(self->inject_data, 0, dy);
+				self->inject->axis(self->inject_data, 0, dy, 0);
 			if (dx != 0.0)
-				self->inject->axis(self->inject_data, 1, dx);
+				self->inject->axis(self->inject_data, 1, dx, 0);
 		}
 		break;
 
 	case EIS_EVENT_SCROLL_DISCRETE:
 		if (inject_ready(self, event) && self->inject->axis != NULL) {
-			/* libei counts discrete scroll in 120ths of a step, the
-			 * same unit the high-resolution wheel protocol uses; the
-			 * compositor wants surface units, and 10 per step is what
-			 * a notch has always been worth on a wheel. */
-			double dx = eis_event_scroll_get_discrete_dx(event) / 120.0;
-			double dy = eis_event_scroll_get_discrete_dy(event) / 120.0;
+			/*
+			 * libei counts discrete scroll in 120ths of a step,
+			 * the same unit wl_pointer.axis_value120 uses, so the
+			 * v120 amount is passed straight through.
+			 *
+			 * It used to be divided down to a continuous value and
+			 * DROPPED, which left the compositor announcing a
+			 * wheel with no wheel amount attached.  Clients that
+			 * trust axis_source then scrolled by exactly nothing:
+			 * Firefox did, Chromium and GTK fell back to the
+			 * continuous value and appeared to work.
+			 */
+			int32_t v120x = eis_event_scroll_get_discrete_dx(event);
+			int32_t v120y = eis_event_scroll_get_discrete_dy(event);
 
-			if (dy != 0.0)
-				self->inject->axis(self->inject_data, 0, dy * 10.0);
-			if (dx != 0.0)
-				self->inject->axis(self->inject_data, 1, dx * 10.0);
+			if (v120y != 0)
+				self->inject->axis(self->inject_data, 0,
+					v120y / 120.0 * NOTCH_UNITS, v120y);
+			if (v120x != 0)
+				self->inject->axis(self->inject_data, 1,
+					v120x / 120.0 * NOTCH_UNITS, v120x);
 		}
 		break;
 

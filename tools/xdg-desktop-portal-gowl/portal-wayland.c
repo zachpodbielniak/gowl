@@ -576,10 +576,24 @@ portal_wayland_inject_button(PortalWayland *self, uint32_t button,
 }
 
 void
-portal_wayland_inject_axis(PortalWayland *self, uint32_t axis, double value)
+portal_wayland_inject_axis(PortalWayland *self, uint32_t axis, double value,
+                           int32_t discrete)
 {
 	if (self == NULL || self->inject == NULL)
 		return;
+
+	/*
+	 * axis_discrete arrived in version 3.  Against an older compositor
+	 * the discrete amount simply cannot be carried, so send the
+	 * deprecated request rather than nothing -- a continuous-only
+	 * scroll is what that compositor was always doing anyway.
+	 */
+	if (zgowl_input_inject_v1_get_version(self->inject)
+	    >= ZGOWL_INPUT_INJECT_V1_AXIS_DISCRETE_SINCE_VERSION) {
+		zgowl_input_inject_v1_axis_discrete(self->inject, axis,
+			wl_fixed_from_double(value), discrete);
+		return;
+	}
 	zgowl_input_inject_v1_axis(self->inject, axis,
 		wl_fixed_from_double(value));
 }

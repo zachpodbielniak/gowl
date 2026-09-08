@@ -110,7 +110,7 @@ void portal_wayland_inject_abs_motion (PortalWayland *self, double nx,
 void portal_wayland_inject_button     (PortalWayland *self, uint32_t button,
                                        gboolean pressed);
 void portal_wayland_inject_axis       (PortalWayland *self, uint32_t axis,
-                                       double value);
+                                        double value, int32_t discrete);
 void portal_wayland_inject_key        (PortalWayland *self, uint32_t keycode,
                                        gboolean pressed);
 void portal_wayland_inject_frame      (PortalWayland *self);

@@ -1251,13 +1251,21 @@ void gowl_compositor_inject_button (GowlCompositor *self,
  * gowl_compositor_inject_axis:
  * @self: a #GowlCompositor
  * @horizontal: %TRUE for horizontal scroll, %FALSE for vertical
- * @value: scroll delta
+ * @value: scroll delta in surface units
+ * @discrete: the wheel amount in 120ths of a notch, or 0 for a device
+ *   with no notches
  *
  * Injects a scroll event to the focused surface.
+ *
+ * The scroll is reported as coming from a wheel ONLY when @discrete is
+ * non-zero.  Claiming a wheel while sending no discrete amount tells a
+ * client that the authoritative value is zero, and a client that
+ * believes the source scrolls by nothing at all.
  */
 void gowl_compositor_inject_axis (GowlCompositor *self,
-                                  gboolean        horizontal,
-                                  gdouble         value);
+                                   gboolean        horizontal,
+                                   gdouble         value,
+                                   gint            discrete);
 
 /**
  * gowl_compositor_inject_key:

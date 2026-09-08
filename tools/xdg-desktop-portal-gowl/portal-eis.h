@@ -58,7 +58,10 @@ typedef struct _PortalEis PortalEis;
  * @abs_motion: absolute pointer position, in LAYOUT coordinates (the
  *   same space the zones use), not normalised
  * @button: a pointer button, evdev code
- * @axis: scroll; @axis is 0 for vertical and 1 for horizontal
+ * @axis: scroll; @axis is 0 for vertical and 1 for horizontal.
+ *   @discrete is the wheel amount in 120ths of a notch, and zero for
+ *   a device with no notches -- the compositor needs it to know
+ *   whether it may honestly call the source a wheel
  * @key: a key, evdev keycode
  * @frame: end of one logical input frame
  *
@@ -69,7 +72,8 @@ typedef struct {
 	void (*rel_motion) (gpointer user_data, double dx, double dy);
 	void (*abs_motion) (gpointer user_data, double x, double y);
 	void (*button)     (gpointer user_data, uint32_t button, bool pressed);
-	void (*axis)       (gpointer user_data, uint32_t axis, double value);
+	void (*axis)       (gpointer user_data, uint32_t axis, double value,
+	                    int32_t discrete);
 	void (*key)        (gpointer user_data, uint32_t keycode, bool pressed);
 	void (*frame)      (gpointer user_data);
 } PortalEisInjectOps;

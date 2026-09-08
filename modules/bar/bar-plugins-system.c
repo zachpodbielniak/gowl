@@ -869,6 +869,68 @@ battery_poll(GowlBarPlugin *plugin, gpointer data)
 		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_TEXT);
 }
 
+/*
+ * The active power profile, and how to change it.
+ *
+ * Asked over D-Bus rather than through powerprofilesctl, because that
+ * binary is not always installed even where power profiles work.
+ * Fedora 44 ships tuned-ppd in the base image, which CONFLICTS with
+ * power-profiles-daemon -- only one can be present -- and tuned-ppd
+ * provides the same net.hadess.PowerProfiles interface without
+ * providing powerprofilesctl.  Keying on the binary meant the panel
+ * reported "not installed" on a machine whose power profiles were
+ * working perfectly.
+ *
+ * busctl comes from systemd, so it is there on any host that has either
+ * implementation.  powerprofilesctl is still preferred when present:
+ * it is the documented interface and it is what a user will have read
+ * about.
+ */
+static gchar *
+power_profile_get(void)
+{
+	const gchar *ppd[] = { "powerprofilesctl", "get", NULL };
+	const gchar *bus[] = { "busctl", "--system", "get-property",
+	                       "net.hadess.PowerProfiles",
+	                       "/net/hadess/PowerProfiles",
+	                       "net.hadess.PowerProfiles",
+	                       "ActiveProfile", NULL };
+	g_autofree gchar *out = NULL;
+	gchar *start, *end;
+
+	if (bar_have_command("powerprofilesctl"))
+		return bar_run_argv_line(ppd);
+
+	if (!bar_have_command("busctl"))
+		return NULL;
+
+	/* busctl prints a typed value: s "balanced" */
+	out = bar_run_argv_line(bus);
+	if (out == NULL)
+		return NULL;
+	start = strchr(out, '"');
+	if (start == NULL)
+		return NULL;
+	start++;
+	end = strchr(start, '"');
+	if (end == NULL)
+		return NULL;
+	return g_strndup(start, (gsize)(end - start));
+}
+
+static gchar *
+power_profile_set_command(const gchar *name)
+{
+	if (bar_have_command("powerprofilesctl"))
+		return g_strdup_printf("powerprofilesctl set %s", name);
+	if (bar_have_command("busctl"))
+		return g_strdup_printf(
+			"busctl --system set-property "
+			"net.hadess.PowerProfiles /net/hadess/PowerProfiles "
+			"net.hadess.PowerProfiles ActiveProfile s %s", name);
+	return NULL;
+}
+
 static GowlBarPanel *
 power_panel(GowlBarPlugin *plugin, gpointer data)
 {
@@ -929,23 +991,18 @@ power_panel(GowlBarPlugin *plugin, gpointer data)
 		                          "performance" };
 		gint i;
 
-		if (bar_have_command("powerprofilesctl")) {
-			const gchar *argv[] = { "powerprofilesctl", "get",
-			                        NULL };
-
-			profile = bar_run_argv_line(argv);
-		}
+		profile = power_profile_get();
 		item = gowl_bar_panel_add_buttons(panel, "profile");
 		for (i = 0; i < 3; i++) {
 			gowl_bar_panel_add_button(item, names[i],
 				g_strcmp0(profile, names[i]) == 0);
 		}
 		if (profile == NULL) {
-			/* Without powerprofilesctl the buttons cannot know
-			   or change anything, so say so instead of offering
-			   three controls that do nothing. */
+			/* Nothing answers on either interface, so say so
+			   rather than offering three controls that do
+			   nothing. */
 			gowl_bar_panel_add_label(panel,
-				"powerprofilesctl is not installed");
+				"no power-profiles service is running");
 		}
 	}
 
@@ -974,10 +1031,9 @@ power_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 
 		if (index < 0 || index > 2)
 			return;
-		if (!bar_have_command("powerprofilesctl"))
+		line = power_profile_set_command(names[index]);
+		if (line == NULL)
 			return;
-		line = g_strdup_printf("powerprofilesctl set %s",
-		                       names[index]);
 		gowl_bar_plugin_spawn(plugin, line);
 		return;
 	}

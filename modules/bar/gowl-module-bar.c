@@ -3859,7 +3859,9 @@ bar_instance_init(GowlBarInstance *bar, GowlBarPosition position)
  * ORDER.  The right region packs leftwards from the far edge, so the
  * first entry here ends up FURTHEST RIGHT.  The list below therefore
  * reads backwards from what appears on screen, which left to right is:
- * tailscale, cpu, memory, disk, network, bluetooth, battery.  The centre is the
+ * tailscale, cpu, memory, disk, network, bluetooth, battery,
+ * notifications --- the bell last, at the very edge, where a bell
+ * conventionally lives.  The centre is the
  * other way round -- entries before the anchor sit to its left -- so it
  * reads as it appears: the screenshot, recorder and caffeine buttons,
  * then the clock dead centre, then the weather.
@@ -3877,7 +3879,7 @@ bar_apply_shipped_defaults(GowlModuleBar *self)
 		"widgets-left",      "tags title",
 		"widgets-center",    "screenshot recorder toggle:caffeine clock weather",
 		/* Reversed: first entry lands furthest right. */
-		"widgets-right",     "battery bluetooth network disk memory cpu tailscale",
+		"widgets-right",     "notifications battery bluetooth network disk memory cpu tailscale",
 		"center-anchor",     "clock",
 
 		"cpu-color",         "green",

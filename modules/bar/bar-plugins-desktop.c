@@ -2655,6 +2655,184 @@ static const GowlBarPluginVTable screenshot_vtable = {
 
 
 /* ----------------------------------------------------------------
+ * notifications
+ *
+ * How many are waiting, whether Do Not Disturb is on, and one click to
+ * the backlog.
+ *
+ * The daemon is cmacs-side elisp, and the widget does NOT ask it
+ * anything: every poll, panel and click here runs on the compositor
+ * thread, and a round trip into the Lisp VM from there is a deadlock
+ * waiting for a quiet afternoon.  So the daemon PUSHES -- it sets this
+ * widget's settings through gowl-bar-configure whenever the count or
+ * the mode changes, and the widget only ever renders what it was last
+ * told.  A daemon that is not running simply never pushes, and the
+ * widget reads zero.
+ * ---------------------------------------------------------------- */
+
+static gint
+notif_count(GowlBarPlugin *plugin)
+{
+	const gchar *v = gowl_bar_plugin_get_setting(plugin, "count");
+
+	return (v != NULL) ? (gint)g_ascii_strtoll(v, NULL, 10) : 0;
+}
+
+static gboolean
+notif_dnd(GowlBarPlugin *plugin)
+{
+	const gchar *v = gowl_bar_plugin_get_setting(plugin, "dnd");
+
+	return (v != NULL
+	        && (g_strcmp0(v, "1") == 0 || g_strcmp0(v, "true") == 0
+	            || g_strcmp0(v, "yes") == 0));
+}
+
+/* A command setting, or its default.  Every action is overridable for
+   the same reason the recorder's are: a different daemon can be dropped
+   in without touching this. */
+static const gchar *
+notif_command(GowlBarPlugin *plugin, const gchar *key, const gchar *fallback)
+{
+	const gchar *v = gowl_bar_plugin_get_setting(plugin, key);
+
+	return (v != NULL && *v != '\0') ? v : fallback;
+}
+
+static void
+notif_poll(GowlBarPlugin *plugin, gpointer data)
+{
+	gint     count = notif_count(plugin);
+	gboolean dnd = notif_dnd(plugin);
+	gchar    buf[32];
+
+	(void)data;
+
+	if (dnd) {
+		/* Bell with a slash (U+F1F6): the mode reads from the shape
+		   as well as the colour, which matters at a glance. */
+		gowl_bar_plugin_set_icon(plugin, "\xef\x87\xb6");
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+		if (count > 0) {
+			g_snprintf(buf, sizeof(buf), "%d", count);
+			gowl_bar_plugin_set_label(plugin, buf);
+		} else {
+			gowl_bar_plugin_set_label(plugin, NULL);
+		}
+		gowl_bar_plugin_set_tooltip(plugin, "Do not disturb");
+		return;
+	}
+
+	gowl_bar_plugin_set_icon(plugin, "\xef\x83\xb3");   /* bell */
+
+	if (count <= 0) {
+		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+		gowl_bar_plugin_set_tooltip(plugin, "No new notifications");
+		return;
+	}
+
+	g_snprintf(buf, sizeof(buf), "%d", count);
+	gowl_bar_plugin_set_label(plugin, buf);
+	gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_YELLOW);
+	gowl_bar_plugin_set_tooltip(plugin,
+		notif_command(plugin, "last", "Unread notifications"));
+}
+
+static gint
+notif_interval(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)plugin;
+	(void)data;
+	/*
+	 * The state is pushed, not polled, so this only has to be often
+	 * enough that a push lands promptly -- the settings are already
+	 * in memory when it runs.
+	 */
+	return 1;
+}
+
+static GowlBarPanel *
+notif_panel(GowlBarPlugin *plugin, gpointer data)
+{
+	GowlBarPanel     *panel;
+	GowlBarPanelItem *item;
+	const gchar      *last;
+	gint              count = notif_count(plugin);
+	gchar             sub[64];
+
+	(void)data;
+
+	panel = gowl_bar_panel_new();
+	gowl_bar_panel_set_width(panel, 380);
+
+	if (count > 0)
+		g_snprintf(sub, sizeof(sub), "%d waiting", count);
+	else
+		g_snprintf(sub, sizeof(sub), "Nothing waiting");
+
+	gowl_bar_panel_add_hero(panel, "\xef\x83\xb3", "Notifications", sub);
+	gowl_bar_panel_add_separator(panel);
+	gowl_bar_panel_add_toggle(panel, "dnd", "Do not disturb",
+	                          notif_dnd(plugin));
+
+	last = gowl_bar_plugin_get_setting(plugin, "last");
+	if (last != NULL && *last != '\0') {
+		gowl_bar_panel_add_separator(panel);
+		gowl_bar_panel_add_field(panel, "Last", last);
+	}
+
+	gowl_bar_panel_add_separator(panel);
+	item = gowl_bar_panel_add_buttons(panel, "act");
+	gowl_bar_panel_add_button(item, "History", FALSE);
+	gowl_bar_panel_add_button(item, "Clear", FALSE);
+
+	return panel;
+}
+
+static void
+notif_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
+             gint index, gdouble value, guint button)
+{
+	(void)data;
+	(void)value;
+	(void)button;
+
+	if (g_strcmp0(item_id, "dnd") == 0) {
+		gowl_bar_plugin_spawn(plugin,
+			notif_command(plugin, "command-dnd",
+				"emacsctl eval '(cmacs-notify-bar-toggle-dnd)'"));
+		return;
+	}
+
+	if (g_strcmp0(item_id, "act") != 0)
+		return;
+
+	if (index == 1) {
+		gowl_bar_plugin_spawn(plugin,
+			notif_command(plugin, "command-clear",
+				"emacsctl eval '(cmacs-notify-bar-clear)'"));
+		return;
+	}
+
+	gowl_bar_plugin_spawn(plugin,
+		notif_command(plugin, "command-open",
+			"emacsctl eval '(cmacs-notify-bar-show-history)'"));
+}
+
+static const GowlBarPluginVTable notifications_vtable = {
+	sizeof(GowlBarPluginVTable),
+	NULL, NULL,
+	NULL, NULL, NULL,
+	notif_interval, notif_poll, NULL,
+	NULL, NULL,
+	NULL, NULL,
+	notif_panel, notif_action,
+	NULL, NULL
+};
+
+
+/* ----------------------------------------------------------------
  * Registration
  * ---------------------------------------------------------------- */
 
@@ -2688,6 +2866,14 @@ bar_register_desktop_plugins(GowlBarRegistry *registry)
 	gowl_bar_registry_register_vtable(registry, "recorder",
 		"Screen recorder",
 		"Record the screen, a window or a region", &recorder_vtable);
+
+	gowl_bar_registry_register_vtable(registry, "notifications",
+		"Notifications",
+		"Unread count, do-not-disturb, and the backlog",
+		&notifications_vtable);
+	gowl_bar_registry_register_alias(registry, "notify", "notifications");
+	gowl_bar_registry_register_alias(registry, "notification",
+	                                 "notifications");
 
 	gowl_bar_registry_register_vtable(registry, "screenshot",
 		"Screenshot",

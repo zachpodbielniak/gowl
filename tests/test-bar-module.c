@@ -188,6 +188,11 @@ test_the_shipped_layout(void)
 	   one should not need a config edit to see it. */
 	g_assert_cmpint(count_widget(listing, "bluetooth"), ==, 1);
 
+	/* The bell ships at the very edge of the top bar.  It renders what
+	   the daemon pushed and nothing else, so it is quiet rather than
+	   wrong on a session with no daemon running. */
+	g_assert_cmpint(count_widget(listing, "notifications"), ==, 1);
+
 	/*
 	 * The centre carries the two things you reach for rather than
 	 * read: the recorder and the caffeine toggle, to the left of the

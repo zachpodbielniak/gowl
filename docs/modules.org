@@ -906,6 +906,26 @@ modules:
 - Return =TRUE= from =handle_key= / =handle_button= only if you actually consumed the event; returning =TRUE= prevents other handlers from seeing it.
 - The module =.so= stays loaded for the lifetime of the compositor. Do not call =g_module_close()= on yourself.
 
+** Scene-effect dispatch order
+
+Every provider is offered each event in priority order and the first to
+*claim* a consumable one owns it. Two things follow, and both were
+learned by breaking them:
+
+- *Being first means nothing about whether a module should act.* A
+  module that checks whether it is =gowl_module_manager_get_scene_effect=
+  and stands down otherwise will switch itself off the moment anything
+  else sorts ahead of it. The animation module did exactly that, so
+  adding unrelated modules to the default set silently ended every
+  window animation --- no error, no warning, nothing in the config to
+  explain it. =tests/test-effect-order-guard.sh= now refuses that
+  pattern.
+- *Equal priorities resolve to registration order.* Every shipped effect
+  module carries the same default priority and =g_ptr_array_sort= is not
+  stable, so index 0 was previously unspecified and moved whenever the
+  loaded set changed. Ties now break on the order modules were
+  registered, which is what callers assumed all along.
+
 ** Animation and native scene effects
 
 The =animation= module implements =GowlSceneEffect= and is opt-in in

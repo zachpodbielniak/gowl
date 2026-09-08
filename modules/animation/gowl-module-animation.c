@@ -98,8 +98,27 @@ gowl_animation_enabled(GowlCompositor *self)
 {
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
 
-	if (self->config == NULL || animation_context(self) == NULL
-	    || gowl_module_manager_get_scene_effect(self->module_mgr) != animation_context(self))
+	/*
+	 * Being LOADED is the requirement, not being first.
+	 *
+	 * This used to also demand that
+	 * gowl_module_manager_get_scene_effect() -- the first provider in
+	 * priority order -- be this module, which dates from when gowl
+	 * handed the whole scene-effect interface to a single provider.
+	 * Dispatch is per-event now: gowl-effects.c offers each event to
+	 * every provider in turn and the first to CLAIM it owns it, which
+	 * is why the cube can own a tag reveal while animation still owns
+	 * window geometry.
+	 *
+	 * Every effect module carries the same default priority and
+	 * g_ptr_array_sort is not stable, so which one lands at index 0 is
+	 * unspecified and shifts with load order.  Animation therefore
+	 * switched itself off -- pops, reveals, settling jiggles, all of
+	 * it -- whenever another effect module happened to sort ahead of
+	 * it.  Adding modules to the default set was enough to do it, and
+	 * nothing reported a thing.
+	 */
+	if (self->config == NULL || animation_context(self) == NULL)
 		return FALSE;
 	if (!gowl_config_get_animations(self->config))
 		return FALSE;

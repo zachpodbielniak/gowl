@@ -93,6 +93,11 @@ typedef GType (*GowlModuleRegisterFunc)(void);
 
 /* --- Priority comparison helper --- */
 
+/* Registration order, stamped on each module as it is classified and
+   used to break priority ties deterministically. */
+#define GOWL_MODULE_SEQ_KEY "gowl-dispatch-seq"
+
+
 /**
  * compare_modules_by_priority:
  *
@@ -106,12 +111,33 @@ compare_modules_by_priority(
 ){
 	GowlModule *mod_a;
 	GowlModule *mod_b;
+	gint        d;
 
 	mod_a = *(GowlModule **)a;
 	mod_b = *(GowlModule **)b;
 
-	return gowl_module_get_priority(mod_a) - gowl_module_get_priority(mod_b);
+	d = gowl_module_get_priority(mod_a) - gowl_module_get_priority(mod_b);
+	if (d != 0)
+		return d;
+
+	/*
+	 * Ties break by registration order, because g_ptr_array_sort is
+	 * NOT stable and every shipped effect module carries the same
+	 * default priority.  Which one landed at index 0 was therefore
+	 * unspecified and moved when the set of loaded modules changed --
+	 * and the animation module switched itself off whenever it was
+	 * not the one there.  Load order is what everybody assumes this
+	 * is; now it actually is.
+	 */
+	return GPOINTER_TO_INT(g_object_get_data(G_OBJECT(mod_a),
+	                                         GOWL_MODULE_SEQ_KEY))
+	     - GPOINTER_TO_INT(g_object_get_data(G_OBJECT(mod_b),
+	                                         GOWL_MODULE_SEQ_KEY));
 }
+
+/* Registration order, stamped on each module as it is classified and
+   used to break priority ties deterministically. */
+#define GOWL_MODULE_SEQ_KEY "gowl-dispatch-seq"
 
 /* --- Internal: sort a dispatch array by module priority --- */
 
@@ -297,6 +323,15 @@ classify_module(
 	GowlModuleManager *self,
 	GowlModule        *mod
 ){
+	/* Stamp the registration order once, before any array sorts on it.
+	   Counted from 1 so an unstamped module cannot tie with a real
+	   one. */
+	static gint seq = 0;
+
+	if (g_object_get_data(G_OBJECT(mod), GOWL_MODULE_SEQ_KEY) == NULL)
+		g_object_set_data(G_OBJECT(mod), GOWL_MODULE_SEQ_KEY,
+		                  GINT_TO_POINTER(++seq));
+
 	if (GOWL_IS_SCENE_EFFECT(mod)) {
 		g_ptr_array_add(self->scene_effects, mod);
 		sort_dispatch_array(self->scene_effects);

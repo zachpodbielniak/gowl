@@ -212,6 +212,53 @@ teardown(Fixture *f, gconstpointer data)
 /* ── Ordering ────────────────────────────────────────────────────── */
 
 /* Lower number first, whatever order they were registered in. */
+/*
+ * Equal priorities must resolve to REGISTRATION order, not to whatever
+ * qsort happened to do.
+ *
+ * Every shipped effect module carries the same default priority, and
+ * g_ptr_array_sort is not stable, so index 0 was unspecified and moved
+ * whenever the set of loaded modules changed.  That is not academic:
+ * the animation module gated every animation on being the provider at
+ * index 0, so adding an unrelated module to the default set silently
+ * turned off window pops, reveals and settling jiggles.
+ *
+ * What this test can and cannot do: glibc's qsort happens to be a
+ * stable mergesort at these sizes, so deleting the tie-break does NOT
+ * fail it here -- it would on a libc that sorts differently, and it
+ * does fail for any comparator that actively reorders equal
+ * priorities.  What it pins is the contract callers rely on: equal
+ * priority means registration order.  The self-disabling pattern that
+ * caused the outage is caught by tests/test-effect-order-guard.sh.
+ */
+static void
+test_equal_priorities_keep_registration_order(Fixture *f, gconstpointer data)
+{
+	TestEffect *a, *b, *c;
+	GPtrArray  *set;
+
+	/* All three at the same priority as f->second (0), registered in
+	   a known order and deliberately not in name order. */
+	a = add_provider(f, 0, "zeta");
+	b = add_provider(f, 0, "alpha");
+	c = add_provider(f, 0, "mid");
+
+	set = gowl_module_manager_get_scene_effects(f->compositor->module_mgr);
+
+	/* f->first still wins on priority (-10). */
+	g_assert_true(g_ptr_array_index(set, 0) == f->first);
+	/* Then the priority-0 group, in the order they were registered. */
+	g_assert_true(g_ptr_array_index(set, 1) == f->second);
+	g_assert_true(g_ptr_array_index(set, 2) == a);
+	g_assert_true(g_ptr_array_index(set, 3) == b);
+	g_assert_true(g_ptr_array_index(set, 4) == c);
+	g_ptr_array_unref(set);
+
+	/* And the singular getter agrees with the list it comes from. */
+	g_assert_true(gowl_module_manager_get_scene_effect(
+			f->compositor->module_mgr) == (gpointer)f->first);
+}
+
 static void
 test_priority_orders_providers(Fixture *f, gconstpointer data)
 {
@@ -438,6 +485,8 @@ main(int argc, char **argv)
 	           setup, test_teardown_hooks_reach_every_provider, teardown);
 	g_test_add("/effects/claim-does-not-block-broadcast", Fixture, NULL,
 	           setup, test_claiming_does_not_affect_broadcast, teardown);
+	g_test_add("/effects/equal-priority-registration-order", Fixture, NULL,
+	           setup, test_equal_priorities_keep_registration_order, teardown);
 	g_test_add_func("/effects/no-providers", test_no_providers_is_quiet);
 
 	return g_test_run();

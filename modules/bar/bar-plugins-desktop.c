@@ -31,6 +31,9 @@
 
 #include "bar-internal.h"
 #include "interfaces/gowl-recording-provider.h"
+#include "interfaces/gowl-screenshot-provider.h"
+#include "boxed/gowl-capture-result.h"
+#include "barkit/gowl-bar-plugin-proxy.h"
 #include "module/gowl-module-manager.h"
 
 /**
@@ -2196,6 +2199,359 @@ static const GowlBarPluginVTable recorder_vtable = {
 
 
 /* ----------------------------------------------------------------
+ * screenshot
+ *
+ * The recorder's still sibling: it asks WHAT to capture, then hands
+ * the job to the compositor's own screenshot module, which saves a PNG
+ * under ~/Pictures/Screenshots and puts it on the clipboard.
+ *
+ * The native path is preferred for the same reason the recorder
+ * prefers its provider: gowl already knows where a window is, so
+ * capturing one needs no rectangle drawn round it and no slurp, and a
+ * window is the window rather than whatever happens to be on top of
+ * it.  grim and slurp remain the fallback for a session where the
+ * screenshot module is not loaded.
+ * ---------------------------------------------------------------- */
+
+typedef struct {
+	/*
+	 * What the last capture produced, for the tooltip and the panel.
+	 * There is no running state to track -- a screenshot is over
+	 * before the poll comes round again -- so this is the only thing
+	 * worth remembering.
+	 */
+	gchar *last_path;
+} ShotData;
+
+/*
+ * The plugin a pending capture belongs to, held weakly.
+ *
+ * An area selection finishes whenever the user finishes dragging,
+ * which may be after the plugin was hot-reloaded out from under it.
+ * A raw pointer would be dangling by then; a weak ref just comes back
+ * NULL and the result is dropped.
+ */
+typedef struct {
+	GWeakRef plugin;
+} ShotPending;
+
+static gpointer
+shot_create(GowlBarPlugin *plugin)
+{
+	(void)plugin;
+	return g_new0(ShotData, 1);
+}
+
+static void
+shot_destroy(GowlBarPlugin *plugin, gpointer data)
+{
+	ShotData *sd = data;
+
+	(void)plugin;
+	if (sd == NULL)
+		return;
+	g_free(sd->last_path);
+	g_free(sd);
+}
+
+/* The compositor's screenshot module, or NULL when none is loaded. */
+static GowlScreenshotProvider *
+shot_provider(void)
+{
+	const BarEnv *env = bar_env();
+
+	if (env == NULL || env->compositor == NULL)
+		return NULL;
+	return (GowlScreenshotProvider *)
+		gowl_module_manager_get_screenshot_provider(
+			gowl_compositor_get_module_manager(
+				GOWL_COMPOSITOR(env->compositor)));
+}
+
+/* Where a fallback capture is written.  Kept in step with the
+   screenshot module's own default so both paths land in one place. */
+static const gchar *
+shot_directory(GowlBarPlugin *plugin)
+{
+	const gchar *dir = gowl_bar_plugin_get_setting(plugin, "directory");
+
+	if (dir == NULL || *dir == '\0')
+		return "~/Pictures/Screenshots";
+	return dir;
+}
+
+static void
+shot_poll(GowlBarPlugin *plugin, gpointer data)
+{
+	ShotData               *sd = data;
+	GowlScreenshotProvider *prov;
+
+	gowl_bar_plugin_set_label(plugin, NULL);
+	gowl_bar_plugin_set_icon(plugin, "\xef\x80\xb0");   /* camera */
+
+	prov = shot_provider();
+	if (prov != NULL && gowl_screenshot_provider_is_selecting(prov)) {
+		/* Lit while a selection is up, dim otherwise -- the same
+		   language the toggle buttons use, and the only state a
+		   screenshot button actually has. */
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_YELLOW);
+		gowl_bar_plugin_set_tooltip(plugin,
+			"Drag to select, Escape to cancel");
+		return;
+	}
+
+	gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+	gowl_bar_plugin_set_tooltip(plugin,
+		sd != NULL && sd->last_path != NULL
+			? sd->last_path : "Take a screenshot");
+}
+
+static gint
+shot_interval(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)plugin;
+	(void)data;
+	return 1;
+}
+
+static GowlBarPanel *
+shot_panel(GowlBarPlugin *plugin, gpointer data)
+{
+	ShotData         *sd = data;
+	GowlBarPanel     *panel;
+	GowlBarPanelItem *item;
+
+	panel = gowl_bar_panel_new();
+	gowl_bar_panel_set_width(panel, 380);
+
+	gowl_bar_panel_add_hero(panel, "\xef\x80\xb0", "Screenshot",
+	                        "Choose what to capture");
+	gowl_bar_panel_add_separator(panel);
+	gowl_bar_panel_add_section(panel, "Capture");
+	item = gowl_bar_panel_add_buttons(panel, "shot");
+	gowl_bar_panel_add_button(item, "Screen", FALSE);
+	gowl_bar_panel_add_button(item, "Window", FALSE);
+	gowl_bar_panel_add_button(item, "Selection", FALSE);
+
+	gowl_bar_panel_add_separator(panel);
+	gowl_bar_panel_add_field(panel, "Saved to", shot_directory(plugin));
+	if (sd != NULL && sd->last_path != NULL)
+		gowl_bar_panel_add_field(panel, "Last", sd->last_path);
+
+	/*
+	 * Only worth warning about when there is no native provider:
+	 * with the screenshot module loaded, grim and slurp are never
+	 * reached and saying they are missing would be a lie.
+	 */
+	if (shot_provider() == NULL) {
+		if (!bar_have_command("grim"))
+			gowl_bar_panel_add_field(panel, "Missing", "grim");
+		else if (!bar_have_command("slurp"))
+			gowl_bar_panel_add_field(panel, "Note",
+				"slurp is missing; Selection is unavailable");
+	}
+
+	return panel;
+}
+
+/*
+ * Where the capture ended up, once the module says it is done.
+ *
+ * Runs on the compositor thread, as every provider callback does, so
+ * it does no work beyond a toast and a string copy.
+ */
+static void
+shot_finished(GowlCaptureResult *result, gpointer user_data)
+{
+	ShotPending            *pending = user_data;
+	g_autoptr(GowlBarPlugin) plugin = NULL;
+	const gchar            *path;
+
+	plugin = g_weak_ref_get(&pending->plugin);
+	g_weak_ref_clear(&pending->plugin);
+	g_free(pending);
+
+	if (plugin == NULL) {
+		/* Reloaded mid-selection.  The capture still happened and
+		   was still saved; there is just nobody left to tell. */
+		gowl_capture_result_free(result);
+		return;
+	}
+
+	if (gowl_capture_result_is_cancelled(result)) {
+		gowl_capture_result_free(result);
+		return;
+	}
+
+	path = gowl_capture_result_get_path(result);
+	if (path != NULL) {
+		ShotData *sd = NULL;
+
+		/* The plugin handed to a vtable callback IS the proxy, so
+		   its instance data is reachable -- and it is alive for as
+		   long as the weak ref above resolved. */
+		if (GOWL_IS_BAR_PLUGIN_PROXY(plugin))
+			sd = gowl_bar_plugin_proxy_get_data(
+				GOWL_BAR_PLUGIN_PROXY(plugin));
+
+		if (sd != NULL) {
+			g_free(sd->last_path);
+			sd->last_path = g_strdup(path);
+		}
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+			"Screenshot copied", path);
+	} else {
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+			"Screenshot failed", NULL);
+	}
+	gowl_capture_result_free(result);
+}
+
+/*
+ * Capture through the compositor's module.  FALSE means there was
+ * nothing to capture with, or nothing to capture, so the caller falls
+ * back to grim.
+ */
+static gboolean
+shot_capture_native(GowlBarPlugin *plugin, gint index)
+{
+	GowlScreenshotProvider *prov = shot_provider();
+	const BarEnv           *env = bar_env();
+	GowlCompositor         *comp;
+	GowlClient             *client = NULL;
+	GowlMonitor            *mon;
+	GowlCaptureMode         mode;
+	const gchar            *mon_name = NULL;
+	ShotPending            *pending;
+
+	if (prov == NULL || env == NULL || env->compositor == NULL)
+		return FALSE;
+	comp = GOWL_COMPOSITOR(env->compositor);
+
+	switch (index) {
+	case 1:
+		mode = GOWL_CAPTURE_MODE_WINDOW;
+		client = gowl_compositor_get_focused_client(comp);
+		if (client == NULL)
+			return FALSE;
+		break;
+	case 2:
+		mode = GOWL_CAPTURE_MODE_AREA;
+		break;
+	default:
+		mode = GOWL_CAPTURE_MODE_DESKTOP;
+		mon = gowl_compositor_get_selected_monitor(comp);
+		if (mon != NULL)
+			mon_name = gowl_monitor_get_name(mon);
+		break;
+	}
+
+	pending = g_new0(ShotPending, 1);
+	g_weak_ref_init(&pending->plugin, plugin);
+	gowl_screenshot_provider_capture(prov, mode, mon_name, client,
+	                                 shot_finished, pending);
+	return TRUE;
+}
+
+static void
+shot_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
+            gint index, gdouble value, guint button)
+{
+	g_autofree gchar *line = NULL;
+	g_autofree gchar *geom = NULL;
+	const gchar      *dir;
+
+	(void)data;
+	(void)value;
+	(void)button;
+
+	if (g_strcmp0(item_id, "shot") != 0)
+		return;
+
+	if (shot_capture_native(plugin, index))
+		return;
+
+	if (!bar_have_command("grim")) {
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+			"Cannot take a screenshot",
+			"No screenshot module is loaded and grim "
+			"is not installed.");
+		return;
+	}
+
+	if (index == 1) {
+		const BarEnv *env = bar_env();
+		GowlClient   *c = NULL;
+		gint          x, y, w, h;
+
+		if (env != NULL && env->compositor != NULL)
+			c = gowl_compositor_get_focused_client(
+				GOWL_COMPOSITOR(env->compositor));
+		if (c != NULL) {
+			gowl_client_get_geometry(c, &x, &y, &w, &h);
+			if (w > 0 && h > 0)
+				geom = g_strdup_printf("%d,%d %dx%d",
+				                       x, y, w, h);
+		}
+		if (geom == NULL) {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+				"Cannot capture a window",
+				"Nothing is focused.");
+			return;
+		}
+	} else if (index == 2) {
+		if (!bar_have_command("slurp")) {
+			/* An empty -g is not an error to grim: it would
+			   silently capture everything, which is not what
+			   was asked for. */
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+				"Cannot capture a selection",
+				"slurp is not installed.");
+			return;
+		}
+		geom = g_strdup("$(slurp)");
+	}
+
+	dir = shot_directory(plugin);
+
+	/*
+	 * wl-copy is allowed to be missing: the file is the deliverable
+	 * and the clipboard is the convenience, so a session without
+	 * wl-clipboard still gets its screenshot.
+	 */
+	if (geom != NULL)
+		line = g_strdup_printf(
+			"mkdir -p %s && f=%s/shot-$(date +%%F-%%H%%M%%S).png "
+			"&& grim -g \"%s\" \"$f\" "
+			"&& { command -v wl-copy >/dev/null 2>&1 "
+			"&& wl-copy --type image/png < \"$f\"; true; }",
+			dir, dir, geom);
+	else
+		line = g_strdup_printf(
+			"mkdir -p %s && f=%s/shot-$(date +%%F-%%H%%M%%S).png "
+			"&& grim \"$f\" "
+			"&& { command -v wl-copy >/dev/null 2>&1 "
+			"&& wl-copy --type image/png < \"$f\"; true; }",
+			dir, dir);
+
+	gowl_bar_plugin_spawn(plugin, line);
+	gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+		"Screenshot saved", dir);
+}
+
+static const GowlBarPluginVTable screenshot_vtable = {
+	sizeof(GowlBarPluginVTable),
+	shot_create, shot_destroy,
+	NULL, NULL, NULL,
+	shot_interval, shot_poll, NULL,
+	NULL, NULL,
+	NULL, NULL,
+	shot_panel, shot_action,
+	NULL, NULL
+};
+
+
+/* ----------------------------------------------------------------
  * Registration
  * ---------------------------------------------------------------- */
 
@@ -2230,6 +2586,13 @@ bar_register_desktop_plugins(GowlBarRegistry *registry)
 		"Screen recorder",
 		"Record the screen, a window or a region", &recorder_vtable);
 
+	gowl_bar_registry_register_vtable(registry, "screenshot",
+		"Screenshot",
+		"Capture the screen, a window or a selection",
+		&screenshot_vtable);
+
 	gowl_bar_registry_register_alias(registry, "brightness", "display");
 	gowl_bar_registry_register_alias(registry, "record", "recorder");
+	gowl_bar_registry_register_alias(registry, "shot", "screenshot");
+	gowl_bar_registry_register_alias(registry, "screencap", "screenshot");
 }

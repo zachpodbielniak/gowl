@@ -62,6 +62,7 @@
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"
 #include "core/gowl-monitor.h"
+#include "core/gowl-seat.h"
 #include "boxed/gowl-capture-result.h"
 
 /* ----------------------------------------------------------------
@@ -273,9 +274,53 @@ update_overlay(GowlModuleScreenshot *self)
  * Core capture logic
  * ---------------------------------------------------------------- */
 
+/*
+ * Put the capture on the clipboard, if the config asks for it.
+ *
+ * `copy-to-clipboard' was parsed and defaulted to TRUE from the day
+ * this module was written and then never read by anything, so every
+ * screenshot went to disk and nowhere else.
+ *
+ * The PNG is read back from the file we just wrote rather than encoded
+ * a second time in memory: cairo's writer takes a path, the bytes are
+ * still in the page cache, and one encode is enough.  The clipboard
+ * itself is gowl's own selection -- no wl-copy, no second process
+ * holding the offer, and the write to the pasting client is drained by
+ * the main loop rather than on this thread.
+ */
+static void
+copy_result_to_clipboard(GowlModuleScreenshot *self, const gchar *path)
+{
+	g_autofree gchar  *contents = NULL;
+	g_autoptr(GBytes)  bytes = NULL;
+	g_autoptr(GError)  error = NULL;
+	GowlSeat          *seat;
+	gsize              length = 0;
+
+	if (!self->copy_to_clipboard || path == NULL || self->compositor == NULL)
+		return;
+
+	seat = gowl_compositor_get_seat(self->compositor);
+	if (seat == NULL)
+		return;
+
+	if (!g_file_get_contents(path, &contents, &length, &error)) {
+		g_warning("gowl-screenshot: cannot read back '%s': %s",
+		          path, error->message);
+		return;
+	}
+
+	bytes = g_bytes_new_take(g_steal_pointer(&contents), length);
+	gowl_seat_set_clipboard_bytes(seat, bytes, "image/png");
+}
+
 static void
 deliver_result(GowlModuleScreenshot *self, GowlCaptureResult *result)
 {
+	if (!gowl_capture_result_is_cancelled(result))
+		copy_result_to_clipboard(self,
+			gowl_capture_result_get_path(result));
+
 	g_signal_emit(self, screenshot_signals[SIGNAL_CAPTURE_COMPLETE],
 	              0, result);
 

@@ -628,6 +628,35 @@ Gowl ships with several modules in the =modules/= directory:
 | =copyhighlight=  | Sync primary selection to clipboard on text highlight |
 | =alpha=          | Per-client window opacity with focus dimming          |
 | =bar=            | Compositor status bar with title and system info      |
+| =screenshot=     | Capture an output, a window or a dragged selection    |
+| =recording=      | Record an output, a window or a region                |
+
+*** The screenshot module
+
+Captures through the scene, so a window is *the window* rather than the
+rectangle it happens to occupy, and an area selection is an
+in-compositor rubber band rather than a call out to =slurp=. Results are
+written as PNG (via cairo) under =save-directory= and, unless
+=copy-to-clipboard= is turned off, offered on gowl's own selection as
+=image/png=.
+
+#+begin_src yaml
+modules:
+  screenshot:
+    save-directory: ~/Pictures/Screenshots
+    filename-format: "shot-%Y-%m-%d-%H%M%S.png"
+    copy-to-clipboard: true
+#+end_src
+
+CMacs loads it by default. It is reached through
+=GowlScreenshotProvider=, which the bar's =screenshot= widget uses; with
+no module loaded that widget falls back to =grim= and =slurp=.
+
+A clipboard payload is written to the pasting client *by the main loop*,
+not from the =wlr_data_source= send callback. That callback runs on the
+compositor thread, and a screenshot is megabytes: a client that reads
+slowly would otherwise hold the whole session for as long as it felt
+like, and one that never reads would hold it forever.
 
 *** Layout plugins and switching
 

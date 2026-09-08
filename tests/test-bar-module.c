@@ -126,6 +126,38 @@ layout_of(GowlModule *module)
 	                                       "bar-widgets", NULL);
 }
 
+
+/*
+ * Which line of the listing a widget is on, or -1.  Order matters for
+ * the centre region: entries before the anchor sit to its left, in the
+ * order given, so "screenshot is left of recorder" is a claim about
+ * position and not just about presence.
+ */
+static gint
+line_index_of(const gchar *listing, const gchar *spec)
+{
+	g_auto(GStrv) lines = NULL;
+	gint i;
+
+	if (listing == NULL)
+		return -1;
+
+	lines = g_strsplit(listing, "\n", -1);
+	for (i = 0; lines[i] != NULL; i++) {
+		g_auto(GStrv) fields = NULL;
+		gint f;
+
+		if (lines[i][0] != ' ')
+			continue;
+		fields = g_strsplit_set(lines[i], " \t", -1);
+		for (f = 0; fields[f] != NULL; f++) {
+			if (g_strcmp0(fields[f], spec) == 0)
+				return i;
+		}
+	}
+	return -1;
+}
+
 static void
 test_the_shipped_layout(void)
 {
@@ -159,6 +191,17 @@ test_the_shipped_layout(void)
 	g_assert_cmpint(count_widget(listing, "weather"), ==, 1);
 	g_assert_cmpint(count_widget(listing, "recorder"), ==, 1);
 	g_assert_cmpint(count_widget(listing, "toggle:caffeine"), ==, 1);
+
+	/*
+	 * The screenshot button ships beside the recorder, and to its
+	 * LEFT.  The pair reads as one group -- still capture then moving
+	 * capture -- and a shipped default that merely contains both
+	 * without saying where would let a reordering pass unnoticed.
+	 */
+	g_assert_cmpint(count_widget(listing, "screenshot"), ==, 1);
+	g_assert_cmpint(line_index_of(listing, "screenshot"), >=, 0);
+	g_assert_cmpint(line_index_of(listing, "screenshot"), <,
+	                line_index_of(listing, "recorder"));
 
 	/* The bottom bar ships enabled, and its tag row is off -- two
 	   copies of the tags is noise, not information. */

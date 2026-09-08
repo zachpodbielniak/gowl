@@ -3861,8 +3861,8 @@ bar_instance_init(GowlBarInstance *bar, GowlBarPosition position)
  * reads backwards from what appears on screen, which left to right is:
  * tailscale, cpu, memory, disk, network, battery.  The centre is the
  * other way round -- entries before the anchor sit to its left -- so it
- * reads as it appears: the recorder and caffeine buttons, then the
- * clock dead centre, then the weather.
+ * reads as it appears: the screenshot, recorder and caffeine buttons,
+ * then the clock dead centre, then the weather.
  *
  * Colours name palette ROLES rather than hex, so the whole bar --
  * panels, toasts and third-party widgets included -- follows the
@@ -3875,7 +3875,7 @@ bar_apply_shipped_defaults(GowlModuleBar *self)
 		"height",            "30",
 
 		"widgets-left",      "tags title",
-		"widgets-center",    "recorder toggle:caffeine clock weather",
+		"widgets-center",    "screenshot recorder toggle:caffeine clock weather",
 		/* Reversed: first entry lands furthest right. */
 		"widgets-right",     "battery network disk memory cpu tailscale",
 		"center-anchor",     "clock",

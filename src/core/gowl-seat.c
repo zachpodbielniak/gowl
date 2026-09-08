@@ -20,6 +20,8 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <glib-unix.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -513,6 +515,123 @@ static const struct wlr_data_source_impl gowl_text_source_impl = {
 };
 
 /*
+ * A data source serving arbitrary bytes under one MIME type.
+ *
+ * Deliberately NOT the text source with a different mime string.  The
+ * text source writes its whole payload inside the send callback, which
+ * runs on the compositor thread; that is fine for a line of text (it
+ * fits in the pipe buffer) and is a desktop freeze for a screenshot,
+ * because a client that reads a megabyte slowly holds the compositor
+ * for exactly as long as it takes.  Here the fd goes non-blocking and
+ * the main loop writes what the pipe will take, whenever it will take
+ * it.
+ */
+struct gowl_bytes_source {
+	struct wlr_data_source base;
+	GBytes *data;
+};
+
+typedef struct {
+	GBytes *data;
+	gsize   offset;
+	gint    fd;
+} GowlClipboardWrite;
+
+static void
+gowl_clipboard_write_free(gpointer user_data)
+{
+	GowlClipboardWrite *w = user_data;
+
+	/* The source owns the fd: the requesting client is waiting on EOF
+	   to know the paste is complete, so this close IS the terminator. */
+	if (w->fd >= 0)
+		close(w->fd);
+	g_bytes_unref(w->data);
+	g_free(w);
+}
+
+static gboolean
+gowl_clipboard_write_cb(gint fd, GIOCondition condition, gpointer user_data)
+{
+	GowlClipboardWrite *w = user_data;
+	const guchar       *bytes;
+	gsize               len;
+
+	if ((condition & (G_IO_ERR | G_IO_HUP)) != 0)
+		return G_SOURCE_REMOVE;
+
+	bytes = g_bytes_get_data(w->data, &len);
+	while (w->offset < len) {
+		gsize   remaining = len - w->offset;
+		ssize_t written;
+
+		written = write(fd, bytes + w->offset,
+		                MIN(remaining, (gsize)65536));
+		if (written > 0) {
+			w->offset += (gsize)written;
+			continue;
+		}
+		if (written < 0 && errno == EINTR)
+			continue;
+		if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+			return G_SOURCE_CONTINUE;
+		/* EPIPE and friends: the reader gave up.  Nothing to
+		   report -- a cancelled paste is not an error. */
+		break;
+	}
+	return G_SOURCE_REMOVE;
+}
+
+static void
+gowl_bytes_source_send(
+	struct wlr_data_source *source,
+	const char             *mime_type,
+	int32_t                 fd
+){
+	struct gowl_bytes_source *bs;
+	GowlClipboardWrite       *w;
+
+	bs = wl_container_of(source, bs, base);
+	(void)mime_type;
+
+	if (bs->data == NULL) {
+		close(fd);
+		return;
+	}
+
+	/* Non-blocking, or the very first write of a large payload fills
+	   the pipe and blocks here -- which is the thing this source
+	   exists to avoid. */
+	if (!g_unix_set_fd_nonblocking(fd, TRUE, NULL)) {
+		close(fd);
+		return;
+	}
+
+	w = g_new0(GowlClipboardWrite, 1);
+	w->data = g_bytes_ref(bs->data);
+	w->fd = fd;
+	g_unix_fd_add_full(G_PRIORITY_DEFAULT, fd,
+	                   G_IO_OUT | G_IO_ERR | G_IO_HUP,
+	                   gowl_clipboard_write_cb, w,
+	                   gowl_clipboard_write_free);
+}
+
+static void
+gowl_bytes_source_destroy(struct wlr_data_source *source)
+{
+	struct gowl_bytes_source *bs;
+
+	bs = wl_container_of(source, bs, base);
+	g_clear_pointer(&bs->data, g_bytes_unref);
+	g_free(bs);
+}
+
+static const struct wlr_data_source_impl gowl_bytes_source_impl = {
+	.send    = gowl_bytes_source_send,
+	.destroy = gowl_bytes_source_destroy,
+};
+
+/*
  * Custom wlr_primary_selection_source that serves a text string.
  * Used by gowl_seat_set_primary_selection().
  */
@@ -700,6 +819,57 @@ gowl_seat_set_clipboard(
 	}
 
 	wlr_seat_set_selection(seat, &ts->base,
+	                       wl_display_next_serial(seat->display));
+}
+
+/**
+ * gowl_seat_set_clipboard_bytes:
+ * @self: a #GowlSeat
+ * @data: (transfer none): the bytes to offer
+ * @mime_type: the MIME type to advertise, e.g. "image/png"
+ *
+ * Offer @data on the clipboard as @mime_type.  See the header for why
+ * this is not gowl_seat_set_clipboard() with a different MIME string.
+ */
+void
+gowl_seat_set_clipboard_bytes(
+	GowlSeat    *self,
+	GBytes      *data,
+	const gchar *mime_type
+){
+	static gsize sigpipe_once = 0;
+	struct wlr_seat *seat;
+	struct gowl_bytes_source *bs;
+	char **slot;
+
+	g_return_if_fail(GOWL_IS_SEAT(self));
+	g_return_if_fail(data != NULL);
+	g_return_if_fail(mime_type != NULL);
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL)
+		return;
+
+	/*
+	 * A compositor must not die because a client stopped reading a
+	 * paste half way through.  Inside cmacs this is already the case
+	 * (Emacs ignores SIGPIPE outside batch mode), but standalone gowl
+	 * would take the default action and disappear, killing every
+	 * window on the desktop over an abandoned clipboard read.
+	 */
+	if (g_once_init_enter(&sigpipe_once)) {
+		signal(SIGPIPE, SIG_IGN);
+		g_once_init_leave(&sigpipe_once, 1);
+	}
+
+	bs = g_new0(struct gowl_bytes_source, 1);
+	bs->data = g_bytes_ref(data);
+	wlr_data_source_init(&bs->base, &gowl_bytes_source_impl);
+
+	slot = wl_array_add(&bs->base.mime_types, sizeof(char *));
+	*slot = g_strdup(mime_type);
+
+	wlr_seat_set_selection(seat, &bs->base,
 	                       wl_display_next_serial(seat->display));
 }
 

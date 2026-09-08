@@ -203,6 +203,22 @@ gpointer            gowl_module_manager_get_decorator (GowlModuleManager *self);
 gpointer            gowl_module_manager_get_recording_provider (GowlModuleManager *self);
 
 /**
+ * gowl_module_manager_get_screenshot_provider:
+ * @self: a #GowlModuleManager
+ *
+ * Returns the first active #GowlScreenshotProvider module, or %NULL if
+ * none is loaded.
+ *
+ * Sibling of gowl_module_manager_get_recording_provider(), and added
+ * for the same reason: the screenshot module knows how to capture an
+ * output, a client and an interactively-selected area, and save the
+ * result --- but nothing inside the tree could reach it.
+ *
+ * Returns: (transfer none) (nullable): the active screenshot provider
+ */
+gpointer            gowl_module_manager_get_screenshot_provider (GowlModuleManager *self);
+
+/**
  * gowl_module_manager_get_layout_providers:
  * @self: a #GowlModuleManager
  *

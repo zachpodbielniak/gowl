@@ -265,6 +265,25 @@ Membership is read from =HaveNodeKey= in =tailscale status --json=, which stays 
 | =git=      | The focused window's branch  | ---                                   |
 | =keymap=   | Keyboard layout              | ---                                   |
 | =display=  | Brightness                   | Brightness, text size, night light    |
+| =screenshot= | A camera; lit while selecting | Screen / Window / Selection        |
+| =recorder= | Elapsed time while recording | Screen / Window / Region, and Stop    |
+
+**** Screenshot
+:PROPERTIES:
+:CUSTOM_ID: screenshot
+:END:
+
+=screenshot= ships in the centre of the default layout, immediately left of =recorder= --- still capture next to moving capture. Clicking it opens a panel offering *Screen*, *Window* and *Selection*; the result is written to =~/Pictures/Screenshots= and placed on the clipboard, so it can be pasted straight into a chat or a buffer.
+
+It prefers the compositor's own =screenshot= module, which cmacs loads by default:
+
+- *Window* needs no rectangle drawn around anything. gowl already knows where the window is, and captures the window rather than whatever pixels happen to be on top of it.
+- *Selection* is an in-compositor rubber band --- drag to choose, =Escape= to cancel --- so it needs no =slurp=. The widget lights up while a selection is in progress.
+- The clipboard is gowl's own selection, offered as =image/png=. No =wl-copy=, and no second process sitting around holding the offer.
+
+Without that module it falls back to =grim= (plus =slurp= for a selection, and =wl-copy= for the clipboard if it is installed), and the panel says which of those is missing. It only names a missing tool when the fallback is what would actually run --- with the module loaded, =grim= is never reached and reporting it absent would be a lie.
+
+=directory= overrides where a fallback capture is written; the module's own =save-directory= governs the native path.
 
 The wheel over =audio= changes the volume and over =display= changes the brightness. A bar widget may claim the wheel without a modifier only because the pointer is over it --- there is no ambiguity about what it means.
 

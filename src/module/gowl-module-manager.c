@@ -1616,6 +1616,17 @@ gowl_module_manager_get_recording_provider(GowlModuleManager *self)
 }
 
 gpointer
+gowl_module_manager_get_screenshot_provider(GowlModuleManager *self)
+{
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+
+	if (self->screenshot_providers == NULL
+	    || self->screenshot_providers->len == 0)
+		return NULL;
+	return g_ptr_array_index(self->screenshot_providers, 0);
+}
+
+gpointer
 gowl_module_manager_get_decorator(GowlModuleManager *self)
 {
 	guint i;

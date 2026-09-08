@@ -141,6 +141,26 @@ void      gowl_seat_set_clipboard       (GowlSeat     *self,
                                           const gchar  *text);
 
 /**
+ * gowl_seat_set_clipboard_bytes:
+ * @self: a #GowlSeat
+ * @data: (transfer none): the bytes to offer
+ * @mime_type: the MIME type to advertise them as, e.g. "image/png"
+ *
+ * Place arbitrary bytes on the clipboard under a single MIME type.
+ *
+ * This is the non-text sibling of gowl_seat_set_clipboard(), and the
+ * reason it exists separately: a paste of an image is megabytes, and
+ * the text source writes the whole payload from the send callback --
+ * which runs on the compositor thread.  A client that reads slowly
+ * would therefore block the compositor for as long as it felt like.
+ * This one hands the payload to the main loop and dribbles it out as
+ * the pipe accepts it, so a slow or dead reader costs nothing.
+ */
+void      gowl_seat_set_clipboard_bytes (GowlSeat     *self,
+                                          GBytes       *data,
+                                          const gchar  *mime_type);
+
+/**
  * gowl_seat_get_primary_selection:
  * @self: a #GowlSeat
  *

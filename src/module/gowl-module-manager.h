@@ -76,6 +76,22 @@ gboolean            gowl_module_manager_dispatch_key     (GowlModuleManager *sel
                                                            guint              keysym,
                                                            gboolean           pressed);
 
+/**
+ * gowl_module_manager_dispatch_motion:
+ * @self: a #GowlModuleManager
+ * @lx: pointer X in layout coordinates
+ * @ly: pointer Y in layout coordinates
+ *
+ * Offers pointer motion to every active #GowlMouseHandler, in priority
+ * order, stopping at the first that claims it.
+ *
+ * Returns: %TRUE when a module took the motion, so the compositor must
+ *   not also resolve pointer focus for it
+ */
+gboolean            gowl_module_manager_dispatch_motion  (GowlModuleManager *self,
+                                                          gdouble            lx,
+                                                          gdouble            ly);
+
 gboolean            gowl_module_manager_dispatch_button  (GowlModuleManager *self,
                                                            guint              button,
                                                            guint              state,

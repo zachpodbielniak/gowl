@@ -110,5 +110,87 @@ done
 grep -q 'Super+Shift+s.*ipc_command.*screenshot-area' data/default-config.yaml ||
 	fail "default-config.yaml no longer binds Super+Shift+s to screenshot-area"
 
+# 6. The mouse-handler interface must stay connected to the cursor.
+#
+# This is the bug that made the whole feature look broken.  Modules
+# implement GowlMouseHandler; the manager has dispatch functions for
+# it; and NOTHING in the compositor called them.  handle_motion had no
+# callers anywhere in the tree, and dispatch_button had none either --
+# so every module implementing the interface was writing functions that
+# could never run.
+#
+# The screenshot selection armed correctly, drew nothing (there is
+# nothing to draw before the first press), and then waited forever for
+# a press that could not arrive.  From the outside that is
+# indistinguishable from a keybind that does nothing.
+#
+# Checked against the source with comments stripped, and for a CALL
+# rather than a mention: the hunk that fixes this carries a comment
+# naming both functions, so a plain grep would be satisfied by the
+# prose that explains the call after the call itself was deleted.
+comp_code=$(sed -e 's://.*::' "$root/src/core/gowl-compositor.c" \
+	| awk 'BEGIN{c=0} {line=$0
+		while (1) {
+			if (c) { i=index(line,"*/"); if (!i) { line=""; break }
+				line=substr(line,i+2); c=0; continue }
+			i=index(line,"/*"); if (!i) break
+			j=index(substr(line,i+2),"*/")
+			if (!j) { line=substr(line,1,i-1); c=1; break }
+			line=substr(line,1,i-1) substr(line,i+2+j+1) }
+		print line}')
+
+echo "$comp_code" | grep -q "gowl_module_manager_dispatch_motion(" ||
+	fail "the compositor never CALLS gowl_module_manager_dispatch_motion; every GowlMouseHandler::handle_motion is dead code again"
+echo "$comp_code" | grep -q "gowl_module_manager_dispatch_button(" ||
+	fail "the compositor never CALLS gowl_module_manager_dispatch_button; an interactive module can arm but never finish"
+
+# 7. An armed interactive mode must be visible before the first click.
+#
+# The overlay used to be drawn only once an anchor was set, so an armed
+# selection looked exactly like nothing having happened -- which is
+# precisely how the dead dispatch above went unnoticed.  The dim wash
+# is the feedback that says the mode is on.
+overlay_body=$(awk '
+	/^create_overlay\(/ { inside = 1 }
+	inside { print }
+	inside && /^}/ { exit }' "$shot")
+if [ -z "$overlay_body" ]; then
+	fail "$shot has no create_overlay; this guard would check nothing"
+else
+	echo "$overlay_body" | grep -q "sel_dim" ||
+		fail "create_overlay draws nothing until the first press; an armed selection is invisible"
+fi
+
+# 8. Nothing the module drew may end up in the picture.
+#
+# Every capture path destroys the overlay first.  Forgetting it in one
+# path produces a screenshot with a blue rubber band across it, which
+# is obvious once seen and easy to not see in review.
+for fn in finish_area_selection finish_window_pick; do
+	fn_body=$(awk -v f="$fn" '
+		$0 ~ "^" f "\\(" { inside = 1 }
+		inside { print }
+		inside && /^}/ { exit }' "$shot")
+	if [ -z "$fn_body" ]; then
+		fail "$shot has no $fn; this guard would check nothing"
+		continue
+	fi
+	echo "$fn_body" | grep -q "destroy_overlay" ||
+		fail "$fn captures without destroying the overlay; the selection UI lands in the image"
+done
+
+# 9. The bar must close its panel before capturing.
+#
+# A capture renders the scene as it stands, so a screen capture started
+# from an open dropdown photographs the dropdown.
+if grep -q "shot_action" "$desk"; then
+	action_body=$(awk '
+		/^shot_action\(/ { inside = 1 }
+		inside { print }
+		inside && /^}/ { exit }' "$desk")
+	echo "$action_body" | grep -q "close_panel" ||
+		fail "$desk captures without closing the panel; the dropdown ends up in the screenshot"
+fi
+
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: screenshot source guards"

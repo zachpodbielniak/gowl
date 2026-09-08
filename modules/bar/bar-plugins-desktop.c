@@ -2430,10 +2430,11 @@ shot_capture_native(GowlBarPlugin *plugin, gint index)
 
 	switch (index) {
 	case 1:
+		/* No client: the module arms its picker and captures the
+		   window you click.  Passing the focused one would
+		   photograph whatever was focused when the panel opened,
+		   which is not the window you were pointing at. */
 		mode = GOWL_CAPTURE_MODE_WINDOW;
-		client = gowl_compositor_get_focused_client(comp);
-		if (client == NULL)
-			return FALSE;
 		break;
 	case 2:
 		mode = GOWL_CAPTURE_MODE_AREA;
@@ -2453,13 +2454,43 @@ shot_capture_native(GowlBarPlugin *plugin, gint index)
 	return TRUE;
 }
 
+/*
+ * A capture deferred by one frame, holding its plugin weakly: the bar
+ * can be reloaded in the 120ms between closing the panel and taking
+ * the picture.
+ */
+typedef struct {
+	GWeakRef plugin;
+	gint     index;
+} ShotDeferred;
+
+static void shot_take(GowlBarPlugin *plugin, gint index);
+
+static void
+shot_deferred_free(gpointer user_data)
+{
+	ShotDeferred *d = user_data;
+
+	g_weak_ref_clear(&d->plugin);
+	g_free(d);
+}
+
+static gboolean
+shot_deferred_fire(gpointer user_data)
+{
+	ShotDeferred            *d = user_data;
+	g_autoptr(GowlBarPlugin) plugin = g_weak_ref_get(&d->plugin);
+
+	if (plugin != NULL)
+		shot_take(plugin, d->index);
+	return G_SOURCE_REMOVE;
+}
+
 static void
 shot_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
             gint index, gdouble value, guint button)
 {
-	g_autofree gchar *line = NULL;
-	g_autofree gchar *geom = NULL;
-	const gchar      *dir;
+	GowlBarHost *host;
 
 	(void)data;
 	(void)value;
@@ -2467,6 +2498,46 @@ shot_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 
 	if (g_strcmp0(item_id, "shot") != 0)
 		return;
+
+	/*
+	 * Close the dropdown before capturing anything.
+	 *
+	 * The panel is a scene node like any other, and a capture renders
+	 * the scene as it stands -- so a screen capture taken straight
+	 * from the panel photographs the panel.  The two interactive
+	 * modes want it gone as well: dragging a selection or picking a
+	 * window under an open dropdown is nonsense.
+	 */
+	host = gowl_bar_plugin_get_host(plugin);
+	if (host != NULL)
+		gowl_bar_host_close_panel(host);
+
+	/*
+	 * ...and give it a frame to actually leave.  Closing marks the
+	 * bar for redraw; the redraw happens on the next frame, so a
+	 * capture issued in this call stack would still find the old
+	 * contents in the scene.  A screenshot is not time-critical to
+	 * the millisecond, and this is the difference between the picture
+	 * being right and being wrong.
+	 */
+	{
+		ShotDeferred *d = g_new0(ShotDeferred, 1);
+
+		g_weak_ref_init(&d->plugin, plugin);
+		d->index = index;
+		g_timeout_add_full(G_PRIORITY_DEFAULT, 120,
+		                   shot_deferred_fire, d, shot_deferred_free);
+	}
+	return;
+}
+
+/* The capture itself, once the panel is off the screen. */
+static void
+shot_take(GowlBarPlugin *plugin, gint index)
+{
+	g_autofree gchar *line = NULL;
+	g_autofree gchar *geom = NULL;
+	const gchar      *dir;
 
 	if (shot_capture_native(plugin, index))
 		return;
@@ -2480,25 +2551,57 @@ shot_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	}
 
 	if (index == 1) {
+		/*
+		 * Window picking without the module: feed slurp every
+		 * window's box on stdin, which makes it snap to whole
+		 * windows and return the one clicked.  gowl knows where
+		 * the windows are, so the fallback can pick a window
+		 * rather than settling for the focused one -- which is
+		 * the window you were NOT pointing at.
+		 */
 		const BarEnv *env = bar_env();
-		GowlClient   *c = NULL;
-		gint          x, y, w, h;
+		g_autoptr(GString) boxes = g_string_new(NULL);
+		GList *clients, *l;
 
-		if (env != NULL && env->compositor != NULL)
-			c = gowl_compositor_get_focused_client(
-				GOWL_COMPOSITOR(env->compositor));
-		if (c != NULL) {
-			gowl_client_get_geometry(c, &x, &y, &w, &h);
-			if (w > 0 && h > 0)
-				geom = g_strdup_printf("%d,%d %dx%d",
-				                       x, y, w, h);
-		}
-		if (geom == NULL) {
+		if (!bar_have_command("slurp")) {
 			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
-				"Cannot capture a window",
-				"Nothing is focused.");
+				"Cannot pick a window",
+				"slurp is not installed.");
 			return;
 		}
+
+		clients = (env != NULL && env->compositor != NULL)
+			? gowl_compositor_get_clients(
+				GOWL_COMPOSITOR(env->compositor))
+			: NULL;
+		for (l = clients; l != NULL; l = l->next) {
+			GowlClient  *c = GOWL_CLIENT(l->data);
+			GowlMonitor *m = gowl_client_get_monitor(c);
+			gint x, y, w, h;
+
+			/* Only what is actually on screen.  Offering a box
+			   for a window on another tag would let you "pick"
+			   something you cannot see, and grim would then
+			   photograph whatever is in that rectangle now. */
+			if (m == NULL)
+				continue;
+			if ((gowl_client_get_tags(c)
+			     & gowl_monitor_get_tags(m)) == 0)
+				continue;
+
+			gowl_client_get_geometry(c, &x, &y, &w, &h);
+			if (w > 0 && h > 0)
+				g_string_append_printf(boxes,
+					"%d,%d %dx%d\n", x, y, w, h);
+		}
+
+		if (boxes->len == 0) {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+				"Cannot pick a window",
+				"There are no windows open.");
+			return;
+		}
+		geom = g_strdup_printf("$(printf '%s' | slurp)", boxes->str);
 	} else if (index == 2) {
 		if (!bar_have_command("slurp")) {
 			/* An empty -g is not an error to grim: it would

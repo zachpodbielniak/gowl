@@ -90,8 +90,14 @@ struct _GowlModuleScreenshot {
 	gdouble     sel_current_y;
 
 	/* Overlay scene rects for rubber-band visualization */
+	struct wlr_scene_rect *sel_dim;       /* armed indicator, whole layout */
 	struct wlr_scene_rect *sel_fill;      /* semi-transparent fill */
 	struct wlr_scene_rect *sel_border[4]; /* top, bottom, left, right */
+
+	/* Window picking: click the window to capture rather than taking
+	   whatever happens to be focused. */
+	gboolean    picking;
+	gpointer    pick_client;              /* GowlClient*, unowned */
 
 	/* Async completion */
 	GowlScreenshotCallback finish_cb;
@@ -173,6 +179,52 @@ generate_filename(GowlModuleScreenshot *self)
  * Overlay management for area selection
  * ---------------------------------------------------------------- */
 
+/*
+ * The bounding box of every monitor.  Used for the dim wash, which has
+ * to cover the whole desktop rather than one output --- a selection
+ * spanning two screens is perfectly ordinary.
+ */
+static void
+layout_extent(GowlModuleScreenshot *self, gint *x, gint *y, gint *w, gint *h)
+{
+	GList *monitors, *l;
+	gint   x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+	gboolean first = TRUE;
+
+	*x = *y = 0;
+	*w = *h = 0;
+
+	if (self->compositor == NULL)
+		return;
+
+	monitors = gowl_compositor_get_monitors(self->compositor);
+	for (l = monitors; l != NULL; l = l->next) {
+		gint mx, my, mw, mh;
+
+		gowl_monitor_get_geometry(GOWL_MONITOR(l->data),
+		                          &mx, &my, &mw, &mh);
+		if (mw <= 0 || mh <= 0)
+			continue;
+		if (first) {
+			x0 = mx; y0 = my; x1 = mx + mw; y1 = my + mh;
+			first = FALSE;
+			continue;
+		}
+		if (mx < x0) x0 = mx;
+		if (my < y0) y0 = my;
+		if (mx + mw > x1) x1 = mx + mw;
+		if (my + mh > y1) y1 = my + mh;
+	}
+
+	if (first)
+		return;
+
+	*x = x0;
+	*y = y0;
+	*w = x1 - x0;
+	*h = y1 - y0;
+}
+
 static void
 create_overlay(GowlModuleScreenshot *self)
 {
@@ -185,6 +237,27 @@ create_overlay(GowlModuleScreenshot *self)
 	              self->compositor, GOWL_SCENE_LAYER_OVERLAY);
 	if (overlay == NULL)
 		return;
+
+	/*
+	 * A dim wash over the whole layout, shown the INSTANT the mode
+	 * arms.  Without it nothing was drawn until the first press, so
+	 * an armed selection and a keybind that did nothing looked
+	 * identical -- and since the input that sets the anchor never
+	 * arrived, it was always the second one.
+	 *
+	 * It is destroyed before any capture, so it never appears in the
+	 * image.
+	 */
+	{
+		float dim_color[4] = { 0.0f, 0.0f, 0.0f, 0.25f };
+		gint  lx, ly, lw, lh;
+
+		layout_extent(self, &lx, &ly, &lw, &lh);
+		self->sel_dim = wlr_scene_rect_create(overlay, lw, lh,
+		                                      dim_color);
+		wlr_scene_node_set_position(&self->sel_dim->node, lx, ly);
+		wlr_scene_node_set_enabled(&self->sel_dim->node, TRUE);
+	}
 
 	self->sel_fill = wlr_scene_rect_create(overlay, 0, 0, fill_color);
 	wlr_scene_node_set_enabled(&self->sel_fill->node, FALSE);
@@ -200,6 +273,11 @@ static void
 destroy_overlay(GowlModuleScreenshot *self)
 {
 	gint i;
+
+	if (self->sel_dim != NULL) {
+		wlr_scene_node_destroy(&self->sel_dim->node);
+		self->sel_dim = NULL;
+	}
 
 	if (self->sel_fill != NULL) {
 		wlr_scene_node_destroy(&self->sel_fill->node);
@@ -339,6 +417,78 @@ deliver_result(GowlModuleScreenshot *self, GowlCaptureResult *result)
 	}
 }
 
+/*
+ * Window picking.
+ *
+ * `Window' used to mean whatever happened to be focused, which is
+ * almost never the window you want a picture of: clicking the bar
+ * button, or pressing the keybind, focuses or is dispatched from
+ * somewhere else entirely, and you get a shot of the thing you were
+ * using to ask for the shot.  So the mode now arms, highlights the
+ * window under the pointer, and captures the one you click.
+ */
+static void
+update_pick_highlight(GowlModuleScreenshot *self)
+{
+	GowlClient *c = self->pick_client;
+	gint        x, y, w, h;
+
+	if (self->sel_fill == NULL)
+		return;
+
+	if (c == NULL) {
+		wlr_scene_node_set_enabled(&self->sel_fill->node, FALSE);
+		return;
+	}
+
+	gowl_client_get_geometry(c, &x, &y, &w, &h);
+	if (w < 1 || h < 1) {
+		wlr_scene_node_set_enabled(&self->sel_fill->node, FALSE);
+		return;
+	}
+
+	wlr_scene_rect_set_size(self->sel_fill, w, h);
+	wlr_scene_node_set_position(&self->sel_fill->node, x, y);
+	wlr_scene_node_set_enabled(&self->sel_fill->node, TRUE);
+}
+
+static void
+finish_window_pick(GowlModuleScreenshot *self, gboolean cancelled)
+{
+	GowlCaptureResult *result;
+	GowlClient        *client = self->pick_client;
+	GBytes            *data = NULL;
+	gint               w = 0, h = 0;
+
+	self->picking = FALSE;
+	self->pick_client = NULL;
+	destroy_overlay(self);
+	g_signal_emit(self, screenshot_signals[SIGNAL_SELECTION_ACTIVE],
+	              0, FALSE);
+
+	if (cancelled || client == NULL) {
+		deliver_result(self,
+			gowl_capture_result_new(NULL, 0, 0, 0, NULL, TRUE));
+		return;
+	}
+
+	/* The overlay is gone by now, so the highlight is not in the
+	   picture -- the same reason the area path destroys it first. */
+	data = gowl_compositor_screenshot_client(self->compositor, client,
+	                                         &w, &h, NULL);
+	if (data != NULL) {
+		g_autofree gchar *path = generate_filename(self);
+
+		gowl_compositor_save_png(data, w, h, path, NULL);
+		result = gowl_capture_result_new(data, w, h, w * 4, path,
+		                                 FALSE);
+		g_bytes_unref(data);
+	} else {
+		result = gowl_capture_result_new(NULL, 0, 0, 0, NULL, TRUE);
+	}
+	deliver_result(self, result);
+}
+
 static void
 finish_area_selection(GowlModuleScreenshot *self)
 {
@@ -426,15 +576,21 @@ do_capture(GowlModuleScreenshot *self,
 			           self->compositor,
 			           GOWL_CLIENT(client), &w, &h, NULL);
 		} else {
-			GowlClient *focused;
-
-			focused = gowl_compositor_get_focused_client(
-			              self->compositor);
-			if (focused != NULL) {
-				data = gowl_compositor_screenshot_client(
-				           self->compositor,
-				           focused, &w, &h, NULL);
-			}
+			/*
+			 * No client named: arm the picker rather than
+			 * falling back to the focused window.  Whatever
+			 * asked for this -- a keybind, a bar button -- is
+			 * itself why something else is focused, so the
+			 * focused window is the one answer that is almost
+			 * certainly wrong.
+			 */
+			self->picking = TRUE;
+			self->pick_client = NULL;
+			create_overlay(self);
+			g_signal_emit(self,
+			              screenshot_signals[SIGNAL_SELECTION_ACTIVE],
+			              0, TRUE);
+			return;
 		}
 		break;
 	case GOWL_CAPTURE_MODE_ALL:
@@ -484,10 +640,15 @@ screenshot_capture(GowlScreenshotProvider *provider,
 	do_capture(self, mode, output_name, client);
 }
 
+/* Picking counts as selecting: both are interactive modes with an
+   overlay up, and every caller asks this to find out whether one is in
+   progress. */
 static gboolean
 screenshot_is_selecting(GowlScreenshotProvider *provider)
 {
-	return GOWL_MODULE_SCREENSHOT(provider)->selecting;
+	GowlModuleScreenshot *self = GOWL_MODULE_SCREENSHOT(provider);
+
+	return self->selecting || self->picking;
 }
 
 static void
@@ -495,6 +656,11 @@ screenshot_cancel(GowlScreenshotProvider *provider)
 {
 	GowlModuleScreenshot *self = GOWL_MODULE_SCREENSHOT(provider);
 	GowlCaptureResult *result;
+
+	if (self->picking) {
+		finish_window_pick(self, TRUE);
+		return;
+	}
 
 	if (!self->selecting)
 		return;
@@ -602,9 +768,11 @@ screenshot_handle_command(GowlIpcHandler *handler, const gchar *command,
 			return g_strdup("ERROR a selection is already in progress");
 		mode = GOWL_CAPTURE_MODE_AREA;
 	} else if (g_strcmp0(command, "screenshot-window") == 0) {
-		client = gowl_compositor_get_focused_client(self->compositor);
-		if (client == NULL)
-			return g_strdup("ERROR nothing is focused");
+		/* NULL client: arm the picker.  Naming the focused window
+		   here would photograph whatever the keybind was pressed
+		   from, which is the one window nobody wants a picture of. */
+		if (self->picking)
+			return g_strdup("ERROR a window pick is already in progress");
 		mode = GOWL_CAPTURE_MODE_WINDOW;
 	} else if (g_strcmp0(command, "screenshot-screen") == 0
 	           || g_strcmp0(command, "screenshot") == 0) {
@@ -627,6 +795,8 @@ screenshot_handle_command(GowlIpcHandler *handler, const gchar *command,
 
 	if (mode == GOWL_CAPTURE_MODE_AREA)
 		return g_strdup("OK drag to select, Escape to cancel");
+	if (mode == GOWL_CAPTURE_MODE_WINDOW)
+		return g_strdup("OK click a window, Escape to cancel");
 	return g_strdup("OK capture taken");
 }
 
@@ -649,6 +819,12 @@ screenshot_handle_key(GowlKeybindHandler *handler,
 	GowlModuleScreenshot *self = GOWL_MODULE_SCREENSHOT(handler);
 
 	(void)modifiers;
+
+	if (self->picking) {
+		if (pressed && keysym == XKB_KEY_Escape)
+			finish_window_pick(self, TRUE);
+		return TRUE;
+	}
 
 	if (!self->selecting)
 		return FALSE;
@@ -682,6 +858,17 @@ screenshot_handle_button(GowlMouseHandler *handler,
 
 	(void)modifiers;
 
+	if (self->picking) {
+		if (button == 0x111 && state == 1)          /* BTN_RIGHT */
+			finish_window_pick(self, TRUE);
+		else if (button == 0x110 && state == 0)     /* BTN_LEFT up */
+			finish_window_pick(self, self->pick_client == NULL);
+		/* Every button is consumed while picking: a press that
+		   reached the client under the cursor would raise or focus
+		   the very window we are about to photograph. */
+		return TRUE;
+	}
+
 	if (!self->selecting)
 		return FALSE;
 
@@ -714,6 +901,19 @@ screenshot_handle_motion(GowlMouseHandler *handler,
                          gdouble           y)
 {
 	GowlModuleScreenshot *self = GOWL_MODULE_SCREENSHOT(handler);
+
+	if (self->picking) {
+		GowlClient *c;
+
+		self->sel_current_x = x;
+		self->sel_current_y = y;
+		c = gowl_compositor_client_at(self->compositor, x, y);
+		if (c != self->pick_client) {
+			self->pick_client = c;
+			update_pick_highlight(self);
+		}
+		return TRUE;
+	}
 
 	if (!self->selecting)
 		return FALSE;

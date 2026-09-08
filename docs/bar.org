@@ -277,11 +277,12 @@ Membership is read from =HaveNodeKey= in =tailscale status --json=, which stays 
 
 It prefers the compositor's own =screenshot= module, which cmacs loads by default:
 
-- *Window* needs no rectangle drawn around anything. gowl already knows where the window is, and captures the window rather than whatever pixels happen to be on top of it.
-- *Selection* is an in-compositor rubber band --- drag to choose, =Escape= to cancel --- so it needs no =slurp=. The widget lights up while a selection is in progress.
+- *Window* arms a picker: the window under the pointer is highlighted and the one you click is captured. It does *not* photograph the focused window --- whatever you used to ask for the shot (the panel, the keybind) is itself the reason something else has focus, so the focused window is the one answer that is almost always wrong. gowl knows where the window is, so no rectangle has to be drawn round it either.
+- *Selection* is an in-compositor rubber band --- drag to choose, =Escape= or right-click to cancel --- so it needs no =slurp=. Both interactive modes dim the desktop the moment they arm, so an armed capture never looks like a keybind that did nothing, and the widget lights up while one is in progress.
+- The panel closes before anything is captured, and the capture waits a frame for it to actually leave the scene. A capture renders the scene as it stands, so a screen shot taken from an open dropdown would otherwise contain the dropdown.
 - The clipboard is gowl's own selection, offered as =image/png=. No =wl-copy=, and no second process sitting around holding the offer.
 
-Without that module it falls back to =grim= (plus =slurp= for a selection, and =wl-copy= for the clipboard if it is installed), and the panel says which of those is missing. It only names a missing tool when the fallback is what would actually run --- with the module loaded, =grim= is never reached and reporting it absent would be a lie.
+Without that module it falls back to =grim= (plus =slurp=, and =wl-copy= for the clipboard if it is installed), and the panel says which of those is missing. The fallback still picks a window rather than settling for the focused one: gowl feeds =slurp= a box for every visible window on stdin, so it snaps to whole windows and returns the one clicked. It only names a missing tool when the fallback is what would actually run --- with the module loaded, =grim= is never reached and reporting it absent would be a lie.
 
 =directory= overrides where a fallback capture is written; the module's own =save-directory= governs the native path.
 

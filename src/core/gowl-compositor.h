@@ -1075,6 +1075,24 @@ void gowl_compositor_scroll_by (GowlCompositor *self,
  *
  * Returns: %TRUE when a surface was found.
  */
+/**
+ * gowl_compositor_client_at:
+ * @self: a #GowlCompositor
+ * @lx: layout X
+ * @ly: layout Y
+ *
+ * The client under a layout position, resolved through the scene graph
+ * exactly as pointer focus is --- so it is the window you would click,
+ * not merely one whose geometry contains the point.  A module running
+ * a window picker needs precisely this, and hit-testing client
+ * geometry itself would get overlapping windows wrong.
+ *
+ * Returns: (transfer none) (nullable): the client there, or %NULL
+ */
+GowlClient *gowl_compositor_client_at (GowlCompositor *self,
+                                        gdouble         lx,
+                                        gdouble         ly);
+
 gboolean gowl_compositor_surface_at (GowlCompositor      *self,
                                       gdouble              lx,
                                       gdouble              ly,

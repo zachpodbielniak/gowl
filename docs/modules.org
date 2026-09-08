@@ -635,7 +635,20 @@ Gowl ships with several modules in the =modules/= directory:
 
 Captures through the scene, so a window is *the window* rather than the
 rectangle it happens to occupy, and an area selection is an
-in-compositor rubber band rather than a call out to =slurp=. Results are
+in-compositor rubber band rather than a call out to =slurp=.
+
+Both interactive modes --- =screenshot-area= and =screenshot-window=
+with no client named --- dim the desktop as soon as they arm, drag or
+highlight, and take =Escape= or a right-click as a cancel. The overlay
+is destroyed before the capture, so none of it appears in the image.
+
+They depend on =GowlMouseHandler= reaching modules at all, which the
+compositor does from =gowl_compositor_motionnotify= and
+=compositor_handle_button=. Those two calls did not exist for the
+interface's whole life: =handle_motion= had no callers anywhere in the
+tree and =dispatch_button= had none either, so an interactive module
+could arm itself and then wait forever for input that could not
+arrive. Results are
 written as PNG (via cairo) under =save-directory= and, unless
 =copy-to-clipboard= is turned off, offered on gowl's own selection as
 =image/png=.

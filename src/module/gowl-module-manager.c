@@ -886,6 +886,32 @@ gowl_module_manager_dispatch_axis(
 }
 
 gboolean
+gowl_module_manager_dispatch_motion(
+	GowlModuleManager *self,
+	gdouble            lx,
+	gdouble            ly
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), FALSE);
+
+	for (i = 0; i < self->mouse_handlers->len; i++) {
+		GowlMouseHandler *handler;
+
+		handler = (GowlMouseHandler *)g_ptr_array_index(
+			self->mouse_handlers, i);
+
+		if (!gowl_module_get_is_active(GOWL_MODULE(handler)))
+			continue;
+
+		if (gowl_mouse_handler_handle_motion(handler, lx, ly))
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+gboolean
 gowl_module_manager_dispatch_button(
 	GowlModuleManager *self,
 	guint              button,

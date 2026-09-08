@@ -7289,6 +7289,23 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 		                            (gint)round(self->wlr_cursor->x),
 		                            (gint)round(self->wlr_cursor->y));
 
+	/*
+	 * Modules get the motion before focus is resolved, so one that is
+	 * running an interactive gesture -- a screenshot rubber band, a
+	 * window pick -- can own the pointer while it lasts.
+	 *
+	 * Until this call existed GowlMouseHandler::handle_motion had NO
+	 * callers anywhere in the tree: every module implementing it was
+	 * writing a function nothing would ever run.  That is why the
+	 * screenshot module's selection never appeared -- it was waiting
+	 * for motion and button events that could not reach it.
+	 */
+	if (self->module_mgr != NULL
+	    && gowl_module_manager_dispatch_motion(self->module_mgr,
+	                                           self->wlr_cursor->x,
+	                                           self->wlr_cursor->y))
+		return;
+
 	/* Handle interactive move */
 	if (self->cursor_mode == GOWL_CURSOR_MODE_MOVE) {
 		struct wlr_box geo;
@@ -7572,6 +7589,34 @@ constraint_allows_position(GowlCompositor *self, gdouble x, gdouble y)
 	                                      NULL);
 }
 
+/**
+ * gowl_compositor_client_at:
+ * @self: a #GowlCompositor
+ * @lx: layout X
+ * @ly: layout Y
+ *
+ * The client under a layout position, resolved through the scene graph
+ * exactly as pointer focus is --- so it is the window you would click,
+ * not merely one whose geometry contains the point.
+ *
+ * Returns: (transfer none) (nullable): the client there, or %NULL
+ */
+GowlClient *
+gowl_compositor_client_at(
+	GowlCompositor *self,
+	gdouble         lx,
+	gdouble         ly
+){
+	struct wlr_surface *surface = NULL;
+	GowlClient         *c = NULL;
+	gdouble             sx = 0, sy = 0;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	xytonode(self, lx, ly, &surface, &c, &sx, &sy);
+	return c;
+}
+
 gboolean
 gowl_compositor_surface_at(GowlCompositor      *self,
                             gdouble              lx,
@@ -7815,6 +7860,25 @@ compositor_handle_button(
 		           ? 1 : 0;
 		gowl_input_capture_emit(self->input_capture, &ev);
 		return;
+	}
+
+	/*
+	 * Modules first, for the same reason as motion above: a module
+	 * running an interactive gesture must see the click that ends it
+	 * before the bar or a client does.  gowl_module_manager_dispatch_button
+	 * existed with no callers, which is half of why the screenshot
+	 * selection could never be completed.
+	 */
+	if (self->module_mgr != NULL && !self->locked) {
+		struct wlr_keyboard *mkbd;
+		guint                mmods;
+
+		mkbd = wlr_seat_get_keyboard(self->wlr_seat);
+		mmods = mkbd != NULL ? wlr_keyboard_get_modifiers(mkbd) : 0;
+		if (gowl_module_manager_dispatch_button(self->module_mgr,
+		                                        button, state == WL_POINTER_BUTTON_STATE_PRESSED ? 1 : 0,
+		                                        mmods))
+			return;
 	}
 
 	switch (state) {

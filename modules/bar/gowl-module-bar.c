@@ -278,6 +278,8 @@ struct _GowlModuleBar {
 
 	gchar            *state_dir;
 	gchar            *plugin_dir;
+	GStrv             plugin_dirs;
+	GHashTable       *scanned_dirs;
 
 	/* Coalescing: a plugin may ask for a redraw from anywhere, and
 	   several will in one tick.  The flag is checked once per tick
@@ -294,6 +296,9 @@ static void bar_provider_iface_init(GowlBarProviderInterface *iface);
 static void bar_startup_iface_init(GowlStartupHandlerInterface *iface);
 static void bar_shutdown_iface_init(GowlShutdownHandlerInterface *iface);
 static void bar_host_iface_init(GowlBarHostInterface *iface);
+static void bar_rebuild_plugin_search_path(GowlModuleBar *self,
+                                           const gchar   *configured);
+static void bar_scan_plugin_dirs(GowlModuleBar *self);
 static void bar_ipc_iface_init(GowlIpcHandlerInterface *iface);
 static void bar_keybind_iface_init(GowlKeybindHandlerInterface *iface);
 
@@ -2470,6 +2475,54 @@ bar_configure_slot(GowlModuleBar *self, GowlBarInstance *bar,
 
 	/* Widget lists.  `widgets' without a region keeps its historical
 	   meaning: the right-hand status list. */
+	/*
+	 * Plugin loading comes BEFORE the widget lists, so a plugin named
+	 * in `widgets-right' is registered by the time that list is
+	 * parsed.  The other order silently drops the widget: an unknown
+	 * name is skipped rather than being an error, which is right for a
+	 * typo and wrong for a plugin that simply had not loaded yet.
+	 */
+	val = g_hash_table_lookup(settings, "plugin-dir");
+	if (val == NULL)
+		val = g_hash_table_lookup(settings, "plugin-path");
+	if (val != NULL) {
+		bar_rebuild_plugin_search_path(self, val);
+		/* Configuration can arrive either side of attach.  Scanning
+		   again is safe -- a directory is scanned at most once -- and
+		   without it a plugin-dir named in a config read after attach
+		   is searched but never auto-loaded. */
+		if (self->compositor != NULL)
+			bar_scan_plugin_dirs(self);
+	}
+
+	val = g_hash_table_lookup(settings, "plugins");
+	if (val != NULL) {
+		g_auto(GStrv) names = g_strsplit_set(val, " \t,", -1);
+		gint pi;
+
+		for (pi = 0; names[pi] != NULL; pi++) {
+			g_autoptr(GError) perr = NULL;
+			g_autofree gchar *resolved = NULL;
+
+			if (names[pi][0] == '\0')
+				continue;
+			resolved = gowl_bar_registry_resolve_file(
+				self->registry, names[pi], &perr);
+			if (resolved == NULL
+			    || !gowl_bar_registry_load_file(self->registry,
+			                                    resolved, &perr)) {
+				/* Loud, because a plugin the user asked for
+				   by name and did not get is not something
+				   to discover from an empty space on the
+				   bar. */
+				g_warning("gowl-bar: %s", perr->message);
+				continue;
+			}
+			g_message("gowl-bar: loaded plugin '%s' from %s",
+			          names[pi], resolved);
+		}
+	}
+
 	val = g_hash_table_lookup(settings, "widgets-left");
 	if (val != NULL)
 		bar_set_region(self, bar, GOWL_BAR_REGION_LEFT, val);
@@ -3387,11 +3440,20 @@ bar_handle_command(GowlIpcHandler *handler, const gchar *command,
 	}
 
 	if (strcmp(command, "bar-plugin-load") == 0) {
+		g_autofree gchar *resolved = NULL;
+
 		if (args == NULL || args[0] == '\0')
-			return g_strdup("error: a path is required\n");
-		if (!gowl_bar_registry_load_file(self->registry, args, &error))
+			return g_strdup("error: a name or path is required\n");
+		/* A bare name is searched for, so this matches what the
+		   configuration accepts. */
+		resolved = gowl_bar_registry_resolve_file(self->registry,
+		                                          args, &error);
+		if (resolved == NULL)
 			return g_strdup_printf("error: %s\n", error->message);
-		return g_strdup_printf("loaded %s\n", args);
+		if (!gowl_bar_registry_load_file(self->registry, resolved,
+		                                 &error))
+			return g_strdup_printf("error: %s\n", error->message);
+		return g_strdup_printf("loaded %s\n", resolved);
 	}
 
 	if (strcmp(command, "bar-plugin-unload") == 0) {
@@ -3621,9 +3683,7 @@ bar_on_startup(GowlStartupHandler *handler, gpointer compositor)
 	   session down must be held back before it gets a second try. */
 	culprit = gowl_bar_registry_recover_journal(self->registry);
 
-	if (self->plugin_dir != NULL)
-		gowl_bar_registry_load_directory(self->registry,
-		                                 self->plugin_dir);
+	bar_scan_plugin_dirs(self);
 
 	self->focus_handler_id = g_signal_connect(compositor, "focus-changed",
 		G_CALLBACK(bar_on_focus_changed), self);
@@ -3726,6 +3786,8 @@ gowl_module_bar_finalize(GObject *object)
 	g_clear_pointer(&self->widget_data, g_hash_table_unref);
 	g_free(self->state_dir);
 	g_free(self->plugin_dir);
+	g_clear_pointer(&self->plugin_dirs, g_strfreev);
+	g_clear_pointer(&self->scanned_dirs, g_hash_table_unref);
 
 	g_clear_object(&self->measure_layout);
 	if (self->measure_cr != NULL) {
@@ -3910,6 +3972,90 @@ bar_apply_shipped_defaults(GowlModuleBar *self)
 	}
 }
 
+/*
+ * Where a plugin named without a path is looked for, most specific
+ * first.
+ *
+ * @configured is the `plugin-dir' setting, which may name several
+ * directories separated by ':' the way PATH does.  It comes first so a
+ * user or a development tree can shadow anything shipped, and the
+ * remaining entries are always searched, so setting it ADDS somewhere
+ * to look rather than cutting off the defaults -- which is what a
+ * config key like this is nearly always meant to do.
+ *
+ * The first entry doubles as the directory scanned wholesale at
+ * startup, so dropping a file in it is enough and naming it is
+ * optional.
+ */
+/*
+ * Auto-load every plugin sitting in the search path.  Each directory is
+ * remembered, so a later rebuild of the path only scans what is new: the
+ * registry has no notion of "already loaded this file", and scanning a
+ * directory twice would load each plugin in it twice.
+ */
+static void
+bar_scan_plugin_dirs(GowlModuleBar *self)
+{
+	gint i;
+
+	if (self->plugin_dirs == NULL)
+		return;
+
+	for (i = 0; self->plugin_dirs[i] != NULL; i++) {
+		const gchar *dir = self->plugin_dirs[i];
+
+		if (g_hash_table_contains(self->scanned_dirs, dir))
+			continue;
+		g_hash_table_add(self->scanned_dirs, g_strdup(dir));
+		gowl_bar_registry_load_directory(self->registry, dir);
+	}
+}
+
+static void
+bar_rebuild_plugin_search_path(GowlModuleBar *self, const gchar *configured)
+{
+	g_autoptr(GPtrArray) dirs = NULL;
+	const gchar *env_dir;
+
+	dirs = g_ptr_array_new_with_free_func(g_free);
+
+	if (configured != NULL && configured[0] != '\0') {
+		g_auto(GStrv) parts = g_strsplit(configured, ":", -1);
+		gint i;
+
+		for (i = 0; parts[i] != NULL; i++) {
+			if (parts[i][0] != '\0')
+				g_ptr_array_add(dirs, g_strdup(parts[i]));
+		}
+	}
+
+	env_dir = g_getenv("GOWL_BAR_PLUGIN_DIR");
+	if (env_dir != NULL && env_dir[0] != '\0')
+		g_ptr_array_add(dirs, g_strdup(env_dir));
+
+	g_ptr_array_add(dirs, g_build_filename(g_get_user_config_dir(),
+	                                       "gowl", "bar-plugins", NULL));
+	g_ptr_array_add(dirs, g_build_filename(g_get_user_data_dir(),
+	                                       "gowl", "bar-plugins", NULL));
+	/*
+	 * System locations spelled out rather than taken from
+	 * GOWL_DATADIR: that macro reaches a module through a sub-make
+	 * which eats the quoting, so -DGOWL_DATADIR=\"/usr/share\" arrives
+	 * as a bare path and the expansion is a syntax error.  The same
+	 * trap already bit G_LOG_DOMAIN here.
+	 */
+	g_ptr_array_add(dirs, g_strdup("/usr/local/share/gowl/bar-plugins"));
+	g_ptr_array_add(dirs, g_strdup("/usr/share/gowl/bar-plugins"));
+	g_ptr_array_add(dirs, NULL);
+
+	g_free(self->plugin_dir);
+	self->plugin_dir = g_strdup(g_ptr_array_index(dirs, 0));
+	g_strfreev(self->plugin_dirs);
+	self->plugin_dirs = g_strdupv((GStrv)dirs->pdata);
+	gowl_bar_registry_set_search_path(self->registry,
+		(const gchar * const *)dirs->pdata);
+}
+
 static void
 gowl_module_bar_init(GowlModuleBar *self)
 {
@@ -3928,21 +4074,9 @@ gowl_module_bar_init(GowlModuleBar *self)
 	self->widget_data = g_hash_table_new_full(g_str_hash, g_str_equal,
 	                                          g_free, g_free);
 
-	/* Where a user drops their own plugins.  Overridable so a
-	   development tree can point at its own directory without
-	   installing anything. */
-	{
-		const gchar *env_dir;
-
-		env_dir = g_getenv("GOWL_BAR_PLUGIN_DIR");
-		if (env_dir != NULL && env_dir[0] != '\0') {
-			self->plugin_dir = g_strdup(env_dir);
-		} else {
-			self->plugin_dir = g_build_filename(
-				g_get_user_config_dir(), "gowl", "bar-plugins",
-				NULL);
-		}
-	}
+	self->scanned_dirs = g_hash_table_new_full(g_str_hash, g_str_equal,
+	                                           g_free, NULL);
+	bar_rebuild_plugin_search_path(self, NULL);
 
 	self->env.sysinfo    = self->sysinfo;
 	self->env.registry   = self->registry;

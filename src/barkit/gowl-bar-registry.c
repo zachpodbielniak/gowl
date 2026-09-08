@@ -77,6 +77,9 @@ struct _GowlBarRegistry {
 	gchar      *state_dir;
 	gchar      *journal_path;
 
+	/* Where a plugin named without a path is looked for. */
+	GPtrArray  *search_path;   /* gchar*, owned */
+
 	/* The crispy toolchain, created lazily: a session that never
 	   loads a .c plugin should not pay for probing gcc. */
 	CrispyGccCompiler *compiler;
@@ -134,6 +137,7 @@ gowl_bar_registry_finalize(GObject *object)
 	g_clear_pointer(&self->quarantine, g_hash_table_unref);
 	g_clear_object(&self->compiler);
 	g_clear_object(&self->cache);
+	g_clear_pointer(&self->search_path, g_ptr_array_unref);
 	g_free(self->state_dir);
 	g_free(self->journal_path);
 
@@ -1079,6 +1083,81 @@ registry_load_body(gpointer data)
 	ctx->registered = registry_take_descs(ctx->registry, module,
 	                                      ctx->source_path,
 	                                      ctx->so_path, &ctx->error);
+}
+
+void
+gowl_bar_registry_set_search_path(GowlBarRegistry *self,
+                                  const gchar * const *dirs)
+{
+	gsize i;
+
+	g_return_if_fail(GOWL_IS_BAR_REGISTRY(self));
+
+	if (self->search_path != NULL)
+		g_ptr_array_set_size(self->search_path, 0);
+	else
+		self->search_path = g_ptr_array_new_with_free_func(g_free);
+
+	if (dirs == NULL)
+		return;
+	for (i = 0; dirs[i] != NULL; i++) {
+		if (dirs[i][0] != '\0')
+			g_ptr_array_add(self->search_path, g_strdup(dirs[i]));
+	}
+}
+
+gchar *
+gowl_bar_registry_resolve_file(GowlBarRegistry *self, const gchar *spec,
+                               GError **error)
+{
+	/* Compiled first: with foo.so and foo.c side by side, the object
+	   is what the user last built, and silently preferring the source
+	   would recompile over the top of it. */
+	static const gchar *const suffixes[] = { "", ".so", ".c" };
+	GString *tried;
+	guint    d;
+	gsize    e;
+
+	g_return_val_if_fail(GOWL_IS_BAR_REGISTRY(self), NULL);
+	g_return_val_if_fail(spec != NULL, NULL);
+
+	/* A path the caller spelled out wins, and is not searched for. */
+	if (strchr(spec, '/') != NULL || g_file_test(spec, G_FILE_TEST_EXISTS)) {
+		if (g_file_test(spec, G_FILE_TEST_EXISTS))
+			return g_strdup(spec);
+		g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+		            "no such plugin file: %s", spec);
+		return NULL;
+	}
+
+	tried = g_string_new(NULL);
+	for (d = 0; self->search_path != NULL && d < self->search_path->len;
+	     d++) {
+		const gchar *dir = g_ptr_array_index(self->search_path, d);
+
+		for (e = 0; e < G_N_ELEMENTS(suffixes); e++) {
+			g_autofree gchar *name = NULL;
+			g_autofree gchar *path = NULL;
+
+			name = g_strconcat(spec, suffixes[e], NULL);
+			path = g_build_filename(dir, name, NULL);
+			if (g_file_test(path, G_FILE_TEST_IS_REGULAR)) {
+				g_string_free(tried, TRUE);
+				return g_steal_pointer(&path);
+			}
+		}
+		g_string_append_printf(tried, "%s%s",
+		                       tried->len > 0 ? ", " : "", dir);
+	}
+
+	/* Name every directory that was looked in: "not found" without
+	   saying where is the least useful thing a loader can say. */
+	g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+	            "no plugin '%s' (tried %s.so and %s.c in: %s)",
+	            spec, spec, spec,
+	            tried->len > 0 ? tried->str : "no search directories");
+	g_string_free(tried, TRUE);
+	return NULL;
 }
 
 /**

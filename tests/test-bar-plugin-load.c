@@ -28,6 +28,8 @@
  */
 
 #include <string.h>
+#include <gio/gio.h>
+#include <glib/gstdio.h>
 
 #include "barkit/gowl-bar-plugin.h"
 #include "barkit/gowl-bar-registry.h"
@@ -262,6 +264,148 @@ test_a_quarantined_plugin_is_not_loaded(void)
 	g_assert_false(gowl_bar_registry_has(registry, "tiny"));
 }
 
+/*
+ * Search-path resolution.  A plugin named in the configuration is a bare
+ * name, not a path: the point of these is that the user drops
+ * `weather.c' in ~/.config/gowl/bar-plugins and writes `weather'.
+ */
+static void
+test_a_bare_name_resolves_against_the_search_path(void)
+{
+	g_autoptr(GowlBarRegistry) registry = NULL;
+	g_autofree gchar *state = NULL;
+	g_autofree gchar *dir_a = NULL;
+	g_autofree gchar *dir_b = NULL;
+	g_autofree gchar *so_path = NULL;
+	g_autofree gchar *c_path = NULL;
+	g_autofree gchar *resolved = NULL;
+	g_autoptr(GError) error = NULL;
+	const gchar *path[3];
+
+	state = g_dir_make_tmp("gowl-search-state-XXXXXX", NULL);
+	registry = gowl_bar_registry_new(state);
+	dir_a = g_dir_make_tmp("gowl-search-a-XXXXXX", NULL);
+	dir_b = g_dir_make_tmp("gowl-search-b-XXXXXX", NULL);
+	g_assert_nonnull(dir_a);
+	g_assert_nonnull(dir_b);
+
+	path[0] = dir_a;
+	path[1] = dir_b;
+	path[2] = NULL;
+	gowl_bar_registry_set_search_path(registry, path);
+
+	/* Only in the second directory: the search continues past a miss
+	   rather than stopping at the first entry. */
+	c_path = g_build_filename(dir_b, "later.c", NULL);
+	g_assert_true(g_file_set_contents(c_path, "/* stub */\n", -1, NULL));
+
+	resolved = gowl_bar_registry_resolve_file(registry, "later", &error);
+	g_assert_no_error(error);
+	g_assert_cmpstr(resolved, ==, c_path);
+	g_clear_pointer(&resolved, g_free);
+
+	/* Compiled wins over source in the SAME directory --- the object
+	   is what the user last built, and preferring the source would
+	   quietly rebuild over the top of it. */
+	so_path = g_build_filename(dir_a, "both.so", NULL);
+	g_assert_true(g_file_set_contents(so_path, "x", -1, NULL));
+	{
+		g_autofree gchar *both_c = g_build_filename(dir_a, "both.c",
+		                                            NULL);
+		g_assert_true(g_file_set_contents(both_c, "x", -1, NULL));
+	}
+
+	resolved = gowl_bar_registry_resolve_file(registry, "both", &error);
+	g_assert_no_error(error);
+	g_assert_cmpstr(resolved, ==, so_path);
+	g_clear_pointer(&resolved, g_free);
+
+	/* A miss names every directory it looked in.  "not found" without
+	   saying where is the least useful thing a loader can say, and is
+	   exactly what the user hits after a typo. */
+	resolved = gowl_bar_registry_resolve_file(registry, "absent", &error);
+	g_assert_null(resolved);
+	g_assert_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+	g_assert_nonnull(strstr(error->message, dir_a));
+	g_assert_nonnull(strstr(error->message, dir_b));
+
+	{
+		g_autofree gchar *p = g_build_filename(dir_b, "later.c", NULL);
+		g_autofree gchar *q = g_build_filename(dir_a, "both.so", NULL);
+		g_autofree gchar *r = g_build_filename(dir_a, "both.c", NULL);
+		g_unlink(p);
+		g_unlink(q);
+		g_unlink(r);
+	}
+	g_rmdir(dir_a);
+	g_rmdir(dir_b);
+	g_rmdir(state);
+}
+
+/*
+ * An explicit path must NOT be searched for.  Configuration that names
+ * /opt/thing/plugin.so has to mean that file, and a same-named plugin
+ * earlier in the search path must not shadow it.
+ */
+static void
+test_an_explicit_path_bypasses_the_search_path(void)
+{
+	g_autoptr(GowlBarRegistry) registry = NULL;
+	g_autofree gchar *state = NULL;
+	g_autofree gchar *dir = NULL;
+	g_autofree gchar *real = NULL;
+	g_autofree gchar *resolved = NULL;
+	g_autoptr(GError) error = NULL;
+	const gchar *path[2];
+
+	state = g_dir_make_tmp("gowl-search-state2-XXXXXX", NULL);
+	registry = gowl_bar_registry_new(state);
+	dir = g_dir_make_tmp("gowl-search-x-XXXXXX", NULL);
+	g_assert_nonnull(dir);
+	path[0] = dir;
+	path[1] = NULL;
+	gowl_bar_registry_set_search_path(registry, path);
+
+	real = g_build_filename(dir, "shadow.so", NULL);
+	g_assert_true(g_file_set_contents(real, "x", -1, NULL));
+
+	/* Same stem, but spelled as a path that does not exist: this is a
+	   hard error, not a fall-back onto the search path. */
+	resolved = gowl_bar_registry_resolve_file(registry,
+	                                          "/nonexistent/shadow.so",
+	                                          &error);
+	g_assert_null(resolved);
+	g_assert_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+	g_clear_error(&error);
+
+	resolved = gowl_bar_registry_resolve_file(registry, real, &error);
+	g_assert_no_error(error);
+	g_assert_cmpstr(resolved, ==, real);
+
+	g_unlink(real);
+	g_rmdir(dir);
+	g_rmdir(state);
+}
+
+/* With no search path at all, a bare name fails cleanly instead of
+   crashing on a NULL array. */
+static void
+test_resolution_without_a_search_path_is_an_error(void)
+{
+	g_autoptr(GowlBarRegistry) registry = NULL;
+	g_autofree gchar *state = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *resolved = NULL;
+
+	state = g_dir_make_tmp("gowl-search-state3-XXXXXX", NULL);
+	registry = gowl_bar_registry_new(state);
+
+	resolved = gowl_bar_registry_resolve_file(registry, "anything", &error);
+	g_assert_null(resolved);
+	g_assert_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+}
+
+
 int
 main(int argc, char *argv[])
 {
@@ -275,6 +419,12 @@ main(int argc, char *argv[])
 	                test_a_file_that_is_not_a_plugin_is_refused);
 	g_test_add_func("/bar-plugin-load/quarantine-blocks-load",
 	                test_a_quarantined_plugin_is_not_loaded);
+	g_test_add_func("/bar-plugin-load/search-path-resolves-bare-name",
+	                test_a_bare_name_resolves_against_the_search_path);
+	g_test_add_func("/bar-plugin-load/explicit-path-bypasses-search",
+	                test_an_explicit_path_bypasses_the_search_path);
+	g_test_add_func("/bar-plugin-load/no-search-path-is-an-error",
+	                test_resolution_without_a_search_path_is_an_error);
 
 	return g_test_run();
 }

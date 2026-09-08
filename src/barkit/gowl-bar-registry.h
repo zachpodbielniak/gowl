@@ -193,6 +193,41 @@ void gowl_bar_registry_register_alias (GowlBarRegistry *self,
  *
  * Returns: %TRUE when at least one plugin was registered
  */
+/**
+ * gowl_bar_registry_set_search_path:
+ * @self: a registry
+ * @dirs: (array zero-terminated=1) (nullable): directories to search
+ *
+ * Sets where a plugin named without a path is looked for.
+ *
+ * Naming a plugin rather than spelling out a path is the point: a
+ * configuration that has to carry `/home/<user>/.config/gowl/
+ * bar-plugins/foo.c' is not portable between machines and not
+ * copy-pasteable between people.
+ */
+void gowl_bar_registry_set_search_path (GowlBarRegistry     *self,
+                                         const gchar * const *dirs);
+
+/**
+ * gowl_bar_registry_resolve_file:
+ * @self: a registry
+ * @spec: a path, or a bare plugin name
+ * @error: (nullable): return location for a #GError
+ *
+ * Turns @spec into a plugin file.
+ *
+ * An existing path is used as given.  Otherwise each search directory
+ * is tried in turn for @spec, `@spec.so' and `@spec.c' --- in that
+ * order, so a compiled plugin wins over the source it was built from
+ * when a user has both sitting side by side.
+ *
+ * Returns: (transfer full) (nullable): the resolved path, or %NULL with
+ *   @error set to a message naming every directory that was searched
+ */
+gchar *gowl_bar_registry_resolve_file (GowlBarRegistry *self,
+                                        const gchar     *spec,
+                                        GError         **error);
+
 gboolean gowl_bar_registry_load_file (GowlBarRegistry  *self,
                                        const gchar      *path,
                                        GError          **error);

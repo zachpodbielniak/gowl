@@ -20,7 +20,7 @@ This document covers configuring the bar, then writing a plugin.
 - Two bars: top and bottom. Both are optional; both are configured the same way.
 - A click on a widget opens its *panel*: a dropdown the plugin describes and the bar renders, hit-tests, scrolls and gives keyboard navigation to.
 - *Toasts*: on-screen notifications the bar owns. A toast can name a panel, so "Wi-Fi is not configured" becomes one click away from the network dropdown.
-- Plugins load from =~/.config/gowl/bar-plugins/= as a compiled =.so= *or as a plain =.c= file*, compiled on demand through crispy --- no build system, no install step, and =gowl bar-plugin-reload= to pick up an edit without restarting.
+- Plugins load from a search path --- =~/.config/gowl/bar-plugins/= by default, extendable with =plugin-dir= --- as a compiled =.so= *or as a plain =.c= file*, compiled on demand through crispy --- no build system, no install step, and =gowl bar-plugin-reload= to pick up an edit without restarting.
 - Every colour is a named *theme role* resolved out of the session palette, so one =palette:= setting restyles the bar, its panels, its toasts, and every third-party widget in it.
 - A plugin that faults is caught, unloaded and reported rather than taking the session down. See [[#containment][Containment]] for what that does and does not promise.
 
@@ -502,14 +502,55 @@ The =action= callback is given the item's id, a child index for a button row, an
 #+begin_src sh
 gowl bar-widgets                    # the laid-out bar, per slot and region
 gowl bar-plugins                    # what is registered
-gowl bar-plugin-load ~/x/thing.c    # load one now
+gowl bar-plugin-load ~/x/thing.c    # load one now, by path
+gowl bar-plugin-load weather        # ...or by name, through the search path
 gowl bar-plugin-reload pomodoro     # recompile and swap in an edit
 gowl bar-plugin-unload pomodoro     # drop it
 gowl bar-quarantined                # what is being held back, and why
 gowl bar-plugin-clear pomodoro      # let a held-back plugin load again
 #+end_src
 
-=~/.config/gowl/bar-plugins/= is scanned at startup, in name order. =GOWL_BAR_PLUGIN_DIR= overrides the location, which is what a development tree wants.
+*** Where plugins are found
+
+Every directory in the search path is scanned at startup, in name order,
+and is also what a bare plugin *name* resolves against. The path, in
+order of precedence:
+
+1. the =plugin-dir= setting (=plugin-path= is accepted as a synonym) --- colon-separated, so a config can name several
+2. =$GOWL_BAR_PLUGIN_DIR=, which is what a development tree wants
+3. =$XDG_CONFIG_HOME/gowl/bar-plugins= (=~/.config/gowl/bar-plugins=)
+4. =$XDG_DATA_HOME/gowl/bar-plugins= (=~/.local/share/gowl/bar-plugins=)
+5. =/usr/local/share/gowl/bar-plugins= and =/usr/share/gowl/bar-plugins=
+
+A configured directory *adds to* the search path rather than replacing
+it, so naming one does not cost you the plugins already in
+=~/.config=. Each directory is scanned at most once, however the path is
+rebuilt.
+
+A name resolves to =<name>=, then =<name>.so=, then =<name>.c= in each
+directory in turn. Compiled wins over source in the same directory: the
+object is what you last built, and quietly preferring the source would
+recompile over the top of it. A spec containing =/= is a path, taken as
+written and never searched for --- so a plugin you name explicitly
+cannot be shadowed by a same-named one earlier in the path. When nothing
+matches, the error names every directory it looked in.
+
+#+begin_src conf
+[bar]
+plugin-dir = ~/src/mybar/plugins:/opt/gowl/plugins
+plugins = weather stocks          # bare names, resolved as above
+widgets-right = weather clock battery
+#+end_src
+
+=plugins= is loaded *before* the widget lists are read, so a plugin named
+there is registered by the time =widgets-right= mentions it. The other
+order silently drops the widget: an unknown widget name is skipped rather
+than being an error, which is right for a typo and wrong for a plugin
+that simply had not loaded yet. A =plugins= entry that does not resolve
+is a warning naming the directories searched --- a plugin you asked for
+by name and did not get is not something to discover from an empty space
+on the bar.
+
 
 A =.c= file is compiled to a cached shared object keyed on a hash of its contents and its flags, so an unchanged source loads without invoking the compiler. Set =CRISPY_PARAMS= in the source for extra flags:
 

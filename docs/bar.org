@@ -370,6 +370,25 @@ Without that module it falls back to =grim= (plus =slurp=, and =wl-copy= for the
 
 =directory= overrides where a fallback capture is written; the module's own =save-directory= governs the native path.
 
+***** Annotating
+
+The panel's *Annotate* button opens the last capture for marking up, and
+the *Annotate after capture* toggle does it automatically as each one
+lands. The capture is saved and on the clipboard either way ---
+annotation is the extra, not the deliverable.
+
+Where it opens, in order: =annotate-command= if you set one (the path is
+appended), then =satty=, then =swappy=, then cmacs itself. There is no
+fourth case where nothing happens: =cmacs-screenshot-annotate= opens the
+image in =cmacs-imgedit= on a build that has it and in an ordinary image
+buffer on one that does not, so the last link in the chain always
+resolves.
+
+That last point is deliberate. imgedit is an optional subsystem, and a
+capture that cannot be opened at all on a build without it is a worse
+outcome than one opened read-only --- so cmacs says which it gave you
+rather than failing.
+
 The same three captures are on the keyboard by default, reaching the module by name through =ipc_command= --- so the binds need to know nothing about how a capture works, and are inert rather than broken in a session with no screenshot module:
 
 | Key                 | Captures            |

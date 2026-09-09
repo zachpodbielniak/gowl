@@ -192,5 +192,19 @@ if grep -q "shot_action" "$desk"; then
 		fail "$desk captures without closing the panel; the dropdown ends up in the screenshot"
 fi
 
+# 10. Annotation must always land somewhere.
+#
+# satty and swappy are optional and cmacs may be built without imgedit,
+# so every one of those can be absent.  The chain must still end in
+# something that opens the capture -- an "Annotate" button that does
+# nothing on a machine missing two optional tools is worse than no
+# button, because the capture is already saved and the user is left
+# wondering whether it worked.
+if grep -q "shot_annotate" "$desk"; then
+	awk '/^shot_annotate\(GowlBarPlugin/,/^}/' "$desk" \
+		| grep -q "cmacs-screenshot-annotate" ||
+		fail "$desk has no final fallback for annotation; with satty and swappy absent the button does nothing"
+fi
+
 [ "$fail" -eq 0 ] || exit 1
 echo "PASS: screenshot source guards"

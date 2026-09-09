@@ -2285,6 +2285,48 @@ shot_provider(void)
 				GOWL_COMPOSITOR(env->compositor)));
 }
 
+/*
+ * Hand a capture to an annotator.
+ *
+ * `annotate-command' wins if set; it is given the path as its last
+ * argument.  Otherwise the first of satty or swappy that is installed,
+ * and failing those cmacs itself -- which always works, because
+ * cmacs-screenshot-annotate falls back to an ordinary image buffer on
+ * a build without imgedit rather than refusing.
+ *
+ * So the order is "what you asked for", "what the desktop has", "the
+ * editor that is already running", and there is no fourth case where
+ * nothing happens.
+ */
+static gboolean shot_annotate_after(GowlBarPlugin *plugin);
+
+static void
+shot_annotate(GowlBarPlugin *plugin, const gchar *path)
+{
+	const gchar      *cmd;
+	g_autofree gchar *line = NULL;
+
+	if (path == NULL || *path == '\0') {
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+			"Nothing to annotate", "No capture yet.");
+		return;
+	}
+
+	cmd = gowl_bar_plugin_get_setting(plugin, "annotate-command");
+	if (cmd != NULL && *cmd != '\0')
+		line = g_strdup_printf("%s '%s'", cmd, path);
+	else if (bar_have_command("satty"))
+		line = g_strdup_printf("satty --filename '%s'", path);
+	else if (bar_have_command("swappy"))
+		line = g_strdup_printf("swappy -f '%s'", path);
+	else
+		line = g_strdup_printf(
+			"emacsctl eval '(cmacs-screenshot-annotate \"%s\")'",
+			path);
+
+	gowl_bar_plugin_spawn(plugin, line);
+}
+
 /* Where a fallback capture is written.  Kept in step with the
    screenshot module's own default so both paths land in one place. */
 static const gchar *
@@ -2295,6 +2337,17 @@ shot_directory(GowlBarPlugin *plugin)
 	if (dir == NULL || *dir == '\0')
 		return "~/Pictures/Screenshots";
 	return dir;
+}
+
+/* Whether a capture opens in an annotator as soon as it lands. */
+static gboolean
+shot_annotate_after(GowlBarPlugin *plugin)
+{
+	const gchar *v = gowl_bar_plugin_get_setting(plugin, "annotate-after");
+
+	return (v != NULL && (g_strcmp0(v, "1") == 0
+	                      || g_strcmp0(v, "true") == 0
+	                      || g_strcmp0(v, "yes") == 0));
 }
 
 static void
@@ -2351,9 +2404,17 @@ shot_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_add_button(item, "Selection", FALSE);
 
 	gowl_bar_panel_add_separator(panel);
+	gowl_bar_panel_add_toggle(panel, "auto", "Annotate after capture",
+		shot_annotate_after(plugin));
 	gowl_bar_panel_add_field(panel, "Saved to", shot_directory(plugin));
-	if (sd != NULL && sd->last_path != NULL)
+
+	if (sd != NULL && sd->last_path != NULL) {
+		GowlBarPanelItem *row;
+
 		gowl_bar_panel_add_field(panel, "Last", sd->last_path);
+		row = gowl_bar_panel_add_buttons(panel, "last");
+		gowl_bar_panel_add_button(row, "Annotate", FALSE);
+	}
 
 	/*
 	 * Only worth warning about when there is no native provider:
@@ -2403,6 +2464,7 @@ shot_finished(GowlCaptureResult *result, gpointer user_data)
 	path = gowl_capture_result_get_path(result);
 	if (path != NULL) {
 		ShotData *sd = NULL;
+		gboolean  annotate = shot_annotate_after(plugin);
 
 		/* The plugin handed to a vtable callback IS the proxy, so
 		   its instance data is reachable -- and it is alive for as
@@ -2416,7 +2478,10 @@ shot_finished(GowlCaptureResult *result, gpointer user_data)
 			sd->last_path = g_strdup(path);
 		}
 		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
-			"Screenshot copied", path);
+			annotate ? "Screenshot -- annotating"
+			         : "Screenshot copied", path);
+		if (annotate)
+			shot_annotate(plugin, path);
 	} else {
 		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
 			"Screenshot failed", NULL);
@@ -2512,6 +2577,21 @@ shot_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	(void)data;
 	(void)value;
 	(void)button;
+
+	if (g_strcmp0(item_id, "auto") == 0) {
+		gowl_bar_plugin_set_setting(plugin, "annotate-after",
+			shot_annotate_after(plugin) ? "0" : "1");
+		gowl_bar_plugin_request_panel_refresh(plugin);
+		return;
+	}
+
+	if (g_strcmp0(item_id, "last") == 0) {
+		ShotData *sd = data;
+
+		if (sd != NULL)
+			shot_annotate(plugin, sd->last_path);
+		return;
+	}
 
 	if (g_strcmp0(item_id, "shot") != 0)
 		return;

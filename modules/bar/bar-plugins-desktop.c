@@ -2818,9 +2818,23 @@ notif_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	(void)button;
 
 	if (g_strcmp0(item_id, "dnd") == 0) {
+		/*
+		 * Move the switch now and let the daemon's push correct it.
+		 *
+		 * The command is asynchronous -- it spawns emacsctl, which
+		 * talks to the daemon, which pushes the new state back --
+		 * so waiting for the truth means the toggle sits under the
+		 * finger doing nothing for as long as that round trip
+		 * takes.  It looked like the button did not work, and only
+		 * appeared to catch up when some LATER action rebuilt the
+		 * panel.
+		 */
+		gowl_bar_plugin_set_setting(plugin, "dnd",
+		                            notif_dnd(plugin) ? "0" : "1");
 		gowl_bar_plugin_spawn(plugin,
 			notif_command(plugin, "command-dnd",
 				"emacsctl eval '(cmacs-notify-bar-toggle-dnd)'"));
+		gowl_bar_plugin_request_panel_refresh(plugin);
 		return;
 	}
 
@@ -2828,9 +2842,11 @@ notif_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 		return;
 
 	if (index == 1) {
+		gowl_bar_plugin_set_setting(plugin, "count", "0");
 		gowl_bar_plugin_spawn(plugin,
 			notif_command(plugin, "command-clear",
 				"emacsctl eval '(cmacs-notify-bar-clear)'"));
+		gowl_bar_plugin_request_panel_refresh(plugin);
 		return;
 	}
 
@@ -2877,6 +2893,16 @@ typedef struct {
 typedef struct {
 	GPtrArray *entries;           /* element-type ClipwEntry, newest first */
 	/*
+	 * Guards @entries.  It is written by the async poll on a worker
+	 * and read by the sync poll, the panel builder and the key
+	 * handler on the dispatch thread, and the host serialises none of
+	 * that -- its async_inflight flag only stops a poll overlapping
+	 * itself.  Rebuilding this array frees every ClipwEntry, so
+	 * without the lock the panel can be walking strings that have
+	 * just been freed.
+	 */
+	GMutex     lock;
+	/*
 	 * Panel item index -> entry index, filled while the panel is
 	 * built.  A panel has a hero, a separator and a section before its
 	 * first row, so the focused item index is not the row number and
@@ -2904,6 +2930,7 @@ clipw_create(GowlBarPlugin *plugin)
 	(void)plugin;
 	cd->entries = g_ptr_array_new_with_free_func(clipw_entry_free);
 	cd->row_map = g_array_new(FALSE, FALSE, sizeof(gint));
+	g_mutex_init(&cd->lock);
 	return cd;
 }
 
@@ -2917,6 +2944,7 @@ clipw_destroy(GowlBarPlugin *plugin, gpointer data)
 		return;
 	g_ptr_array_unref(cd->entries);
 	g_array_unref(cd->row_map);
+	g_mutex_clear(&cd->lock);
 	g_free(cd);
 }
 
@@ -2927,6 +2955,17 @@ clipw_index_path(void)
 	                        "index", NULL);
 }
 
+/* Replace the visible list with a freshly built one.  The old array is
+   dropped only while the lock is held, so nothing can be reading it. */
+static void
+clipw_swap(ClipwData *cd, GPtrArray **fresh)
+{
+	g_mutex_lock(&cd->lock);
+	g_ptr_array_unref(cd->entries);
+	cd->entries = g_steal_pointer(fresh);
+	g_mutex_unlock(&cd->lock);
+}
+
 /* Reading the index is a file read, so it belongs on the worker. */
 static void
 clipw_poll_async(GowlBarPlugin *plugin, gpointer data)
@@ -2935,18 +2974,20 @@ clipw_poll_async(GowlBarPlugin *plugin, gpointer data)
 	g_autofree gchar *path = NULL;
 	g_autofree gchar *body = NULL;
 	g_auto(GStrv)     lines = NULL;
+	g_autoptr(GPtrArray) fresh = NULL;
 	gint              i;
 
 	if (cd == NULL)
 		return;
 
 	path = clipw_index_path();
+	fresh = g_ptr_array_new_with_free_func(clipw_entry_free);
+
 	if (!g_file_get_contents(path, &body, NULL, NULL)) {
-		g_ptr_array_set_size(cd->entries, 0);
+		clipw_swap(cd, &fresh);
 		return;
 	}
 
-	g_ptr_array_set_size(cd->entries, 0);
 	lines = g_strsplit(body, "\n", -1);
 	for (i = 0; lines[i] != NULL; i++) {
 		g_auto(GStrv) f = NULL;
@@ -2964,16 +3005,23 @@ clipw_poll_async(GowlBarPlugin *plugin, gpointer data)
 		e->preview = g_strdup(f[3]);
 		e->is_image = (f[1] != NULL
 		               && g_str_has_prefix(f[1], "image/"));
-		g_ptr_array_add(cd->entries, e);
+		g_ptr_array_add(fresh, e);
 	}
+	clipw_swap(cd, &fresh);
 }
 
 static void
 clipw_poll(GowlBarPlugin *plugin, gpointer data)
 {
 	ClipwData *cd = data;
-	guint      n = (cd != NULL) ? cd->entries->len : 0;
+	guint      n = 0;
 	gchar      buf[32];
+
+	if (cd != NULL) {
+		g_mutex_lock(&cd->lock);
+		n = cd->entries->len;
+		g_mutex_unlock(&cd->lock);
+	}
 
 	gowl_bar_plugin_set_icon(plugin, "\xef\x83\x8a");     /* clipboard */
 
@@ -3041,7 +3089,16 @@ clipw_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_add_separator(panel);
 	item_index++;
 
-	if (cd == NULL || cd->entries->len == 0) {
+	if (cd == NULL) {
+		gowl_bar_panel_add_field(panel, "History", "Empty");
+		return panel;
+	}
+
+	/* Held across the whole build: every preview string below belongs
+	   to the array, and the worker may replace it at any moment. */
+	g_mutex_lock(&cd->lock);
+	if (cd->entries->len == 0) {
+		g_mutex_unlock(&cd->lock);
 		gowl_bar_panel_add_field(panel, "History", "Empty");
 		return panel;
 	}
@@ -3070,6 +3127,8 @@ clipw_panel(GowlBarPlugin *plugin, gpointer data)
 		}
 		item_index++;
 	}
+
+	g_mutex_unlock(&cd->lock);
 
 	gowl_bar_panel_add_separator(panel);
 	item = gowl_bar_panel_add_buttons(panel, "act");
@@ -3136,28 +3195,48 @@ clipw_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
 
 	(void)modifiers;
 
-	e = clipw_entry_for_item(cd, focused_item);
-	if (e == NULL)
+	if (cd == NULL)
 		return FALSE;
 
+	/* Copy what is needed out from under the lock: the commands below
+	   can run for a while, and the worker must not be blocked on this
+	   for the length of a file read. */
+	g_mutex_lock(&cd->lock);
+	e = clipw_entry_for_item(cd, focused_item);
+	if (e == NULL) {
+		g_mutex_unlock(&cd->lock);
+		return FALSE;
+	}
+
 	switch (keysym) {
-	case XKB_KEY_y:
-		clipw_command("clipboard-copy %s", e->id);
+	case XKB_KEY_y: {
+		g_autofree gchar *id = g_strdup(e->id);
+		g_autofree gchar *preview = g_strdup(e->preview);
+
+		g_mutex_unlock(&cd->lock);
+		clipw_command("clipboard-copy %s", id);
 		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
-			"Copied", e->preview);
+			"Copied", preview);
 		return TRUE;
+	}
 	case XKB_KEY_x:
 	case XKB_KEY_Delete:
-	case XKB_KEY_BackSpace:
-		clipw_command("clipboard-delete %s", e->id);
+	case XKB_KEY_BackSpace: {
+		g_autofree gchar *id = g_strdup(e->id);
+
 		/* Drop it locally too, so the panel redraws without it
 		   rather than waiting for the next poll to notice. */
 		g_ptr_array_remove(cd->entries, e);
+		g_mutex_unlock(&cd->lock);
+
+		clipw_command("clipboard-delete %s", id);
 		gowl_bar_plugin_request_panel_refresh(plugin);
 		return TRUE;
+	}
 	default:
 		break;
 	}
+	g_mutex_unlock(&cd->lock);
 	return FALSE;
 }
 

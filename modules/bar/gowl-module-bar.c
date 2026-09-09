@@ -4309,7 +4309,7 @@ bar_instance_init(GowlBarInstance *bar, GowlBarPosition position)
  * ORDER.  The right region packs leftwards from the far edge, so the
  * first entry here ends up FURTHEST RIGHT.  The list below therefore
  * reads backwards from what appears on screen, which left to right is:
- * tailscale, cpu, memory, disk, network, bluetooth, battery,
+ * tailscale, cpu, memory, disk, network, battery,
  * notifications --- the bell last, at the very edge, where a bell
  * conventionally lives.  The centre is the
  * other way round -- entries before the anchor sit to its left -- so it
@@ -4329,7 +4329,7 @@ bar_apply_shipped_defaults(GowlModuleBar *self)
 		"widgets-left",      "tags title",
 		"widgets-center",    "screenshot recorder toggle:caffeine clock weather",
 		/* Reversed: first entry lands furthest right. */
-		"widgets-right",     "notifications battery bluetooth network disk memory cpu tailscale",
+		"widgets-right",     "notifications battery network disk memory cpu tailscale",
 		"center-anchor",     "clock",
 
 		"cpu-color",         "green",
@@ -4389,10 +4389,11 @@ bar_apply_shipped_defaults(GowlModuleBar *self)
 		"height",          "26",
 
 		"widgets-left",    "user host git",
-		/* Reversed: reads as ip, podman, display, clipboard left to
-		   right.  The clipboard sits at the edge because it is a
-		   thing you go to, not a reading you glance at. */
-		"widgets-right",   "clipboard display podman ip",
+		/* Reversed: reads as ip, podman, bluetooth, display,
+		   clipboard left to right.  The clipboard sits at the edge
+		   because it is a thing you go to, not a reading you glance
+		   at. */
+		"widgets-right",   "clipboard display bluetooth podman ip",
 
 		/* The tag row belongs to the top bar; two copies is noise. */
 		"tags.visible",    "false",

@@ -53,9 +53,16 @@ net_info(void)
  * Shared network state
  *
  * One struct per widget instance.  Everything in it is written by the
- * async poll and read by the panel builder, both of which the host
- * serialises: the async poll for an instance never overlaps itself,
- * and a panel is built on the dispatch thread between polls.
+ * async poll and read by the sync poll, the panel builder and clicks.
+ *
+ * The host serialises LESS than this comment used to claim.  An
+ * async_inflight flag stops a plugin's async poll overlapping ITSELF,
+ * and that is all: the poll runs on a worker while the dispatch thread
+ * is free to build a panel from the same struct.  Anything that frees
+ * what the other side may be reading -- rebuilding a GPtrArray of heap
+ * structs, say -- needs a lock of its own.  Scalars written by one
+ * thread and read by the other are the only case that is safe without
+ * one, which is what this struct sticks to.
  * ---------------------------------------------------------------- */
 
 typedef struct {
@@ -1464,15 +1471,25 @@ typedef struct {
 
 typedef struct {
 	gboolean  present;              /* an adapter exists at all */
+	gboolean  tool_missing;         /* bluetoothctl is not installed */
 	gboolean  powered;
 	gboolean  scanning;
 	GPtrArray *devices;             /* element-type BtDevice */
 	/*
-	 * Filled by the ASYNC poll and read by everything else.  Each of
-	 * these costs a subprocess, and the sync poll, the panel and a
-	 * click all run on the compositor thread: doing it there would not
-	 * make the bar slow, it would freeze the editor.
+	 * Filled by the ASYNC poll -- each listing costs a subprocess, and
+	 * the sync poll, the panel and a click all run on the compositor
+	 * thread, where that would not make the bar slow but freeze the
+	 * editor.
+	 *
+	 * The device list is guarded because it is the one thing here that
+	 * is FREED rather than overwritten.  Rebuilding it drops every
+	 * BtDevice, and the dispatch thread is free to be walking the same
+	 * array building a panel at that moment: the host only stops an
+	 * async poll from overlapping itself.  A use-after-free here
+	 * corrupts the heap and surfaces much later, in another thread,
+	 * as an abort nothing can be traced back from.
 	 */
+	GMutex    lock;
 } BtData;
 
 static void
@@ -1492,6 +1509,7 @@ bt_create(GowlBarPlugin *plugin)
 
 	(void)plugin;
 	bd->devices = g_ptr_array_new_with_free_func(bt_device_free);
+	g_mutex_init(&bd->lock);
 	return bd;
 }
 
@@ -1504,6 +1522,7 @@ bt_destroy(GowlBarPlugin *plugin, gpointer data)
 	if (bd == NULL)
 		return;
 	g_ptr_array_unref(bd->devices);
+	g_mutex_clear(&bd->lock);
 	g_free(bd);
 }
 
@@ -1522,7 +1541,7 @@ bt_tool(GowlBarPlugin *plugin)
  * taken whole rather than tokenised.
  */
 static void
-bt_parse_devices(BtData *bd, const gchar *out, gboolean connected)
+bt_parse_devices(GPtrArray *devices, const gchar *out, gboolean connected)
 {
 	g_auto(GStrv) lines = NULL;
 	gint i;
@@ -1545,25 +1564,25 @@ bt_parse_devices(BtData *bd, const gchar *out, gboolean connected)
 
 		/* A device can appear in both listings; the connected pass
 		   runs second and only needs to mark what it finds. */
-		for (existing = 0; existing < bd->devices->len; existing++) {
-			dev = g_ptr_array_index(bd->devices, existing);
+		for (existing = 0; existing < devices->len; existing++) {
+			dev = g_ptr_array_index(devices, existing);
 			if (strncmp(dev->mac, mac, (gsize)(name - mac)) == 0) {
 				if (connected)
 					dev->connected = TRUE;
 				break;
 			}
 		}
-		if (existing < bd->devices->len)
+		if (existing < devices->len)
 			continue;
 
-		if (bd->devices->len >= BT_MAX_DEVICES)
+		if (devices->len >= BT_MAX_DEVICES)
 			continue;
 
 		dev = g_new0(BtDevice, 1);
 		dev->mac = g_strndup(mac, (gsize)(name - mac));
 		dev->name = g_strdup(name + 1);
 		dev->connected = connected;
-		g_ptr_array_add(bd->devices, dev);
+		g_ptr_array_add(devices, dev);
 	}
 }
 
@@ -1575,20 +1594,30 @@ bt_poll_async(GowlBarPlugin *plugin, gpointer data)
 	g_autofree gchar *show = NULL;
 	g_autofree gchar *paired = NULL;
 	g_autofree gchar *conn = NULL;
-	g_autofree gchar *line = NULL;
+	g_autoptr(GPtrArray) fresh = NULL;
+	const gchar      *argv[4];
 
 	if (bd == NULL)
 		return;
 
 	tool = bt_tool(plugin);
 	if (!bar_have_command(tool)) {
+		bd->tool_missing = TRUE;
 		bd->present = FALSE;
 		return;
 	}
+	bd->tool_missing = FALSE;
 
-	line = g_strdup_printf("%s show 2>/dev/null", tool);
-	show = bar_run_shell_line(line);
-	g_clear_pointer(&line, g_free);
+	/*
+	 * bar_run_argv, not bar_run_shell_line: these outputs are several
+	 * lines and the `_line' helper returns only the first, which
+	 * silently threw away every line that mattered.  There is no shell
+	 * here either -- an argv is not parsed by one -- so a `2>/dev/null'
+	 * would arrive as a literal argument to bluetoothctl rather than a
+	 * redirection.  bar_run_argv already sends stderr to /dev/null.
+	 */
+	argv[0] = tool; argv[1] = "show"; argv[2] = NULL;
+	show = bar_run_argv(argv);
 
 	/* No adapter is not an error and not a state to report: the widget
 	   hides itself, the way the battery does on a desktop. */
@@ -1600,18 +1629,28 @@ bt_poll_async(GowlBarPlugin *plugin, gpointer data)
 	bd->powered  = (strstr(show, "Powered: yes") != NULL);
 	bd->scanning = (strstr(show, "Discovering: yes") != NULL);
 
-	g_ptr_array_set_size(bd->devices, 0);
-	if (!bd->powered)
-		return;
+	/*
+	 * Built into a fresh array and swapped in under the lock, rather
+	 * than clearing the live one: the dispatch thread may be walking
+	 * it right now, and freeing what it is reading is how a heap gets
+	 * corrupted.
+	 */
+	fresh = g_ptr_array_new_with_free_func(bt_device_free);
+	if (bd->powered) {
+		argv[0] = tool; argv[1] = "devices"; argv[2] = "Paired";
+		argv[3] = NULL;
+		paired = bar_run_argv(argv);
+		bt_parse_devices(fresh, paired, FALSE);
 
-	line = g_strdup_printf("%s devices Paired 2>/dev/null", tool);
-	paired = bar_run_shell_line(line);
-	g_clear_pointer(&line, g_free);
-	bt_parse_devices(bd, paired, FALSE);
+		argv[2] = "Connected";
+		conn = bar_run_argv(argv);
+		bt_parse_devices(fresh, conn, TRUE);
+	}
 
-	line = g_strdup_printf("%s devices Connected 2>/dev/null", tool);
-	conn = bar_run_shell_line(line);
-	bt_parse_devices(bd, conn, TRUE);
+	g_mutex_lock(&bd->lock);
+	g_ptr_array_unref(bd->devices);
+	bd->devices = g_steal_pointer(&fresh);
+	g_mutex_unlock(&bd->lock);
 }
 
 /* The connected device, or NULL.  The first is enough for a label. */
@@ -1638,6 +1677,22 @@ bt_poll(GowlBarPlugin *plugin, gpointer data)
 	const BtDevice *conn;
 	guint           n_conn = 0, i;
 
+	if (bd != NULL && bd->tool_missing) {
+		/*
+		 * Visible but plainly not working.  Hiding is right for a
+		 * machine with no adapter; hiding because the TOOL is
+		 * absent looks identical to a widget that was never
+		 * added, and leaves nothing to diagnose from.
+		 */
+		gowl_bar_plugin_set_visible(plugin, TRUE);
+		gowl_bar_plugin_set_icon(plugin, "\xef\x8a\x94");
+		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+		gowl_bar_plugin_set_tooltip(plugin,
+			"Bluetooth: bluetoothctl is not installed");
+		return;
+	}
+
 	if (bd == NULL || !bd->present) {
 		/* Nothing to say and nothing to click: a machine with no
 		   adapter should not carry a dead icon forever. */
@@ -1646,6 +1701,7 @@ bt_poll(GowlBarPlugin *plugin, gpointer data)
 	}
 	gowl_bar_plugin_set_visible(plugin, TRUE);
 
+	g_mutex_lock(&bd->lock);
 	for (i = 0; i < bd->devices->len; i++) {
 		if (((BtDevice *)g_ptr_array_index(bd->devices, i))->connected)
 			n_conn++;
@@ -1661,27 +1717,26 @@ bt_poll(GowlBarPlugin *plugin, gpointer data)
 		gowl_bar_plugin_set_label(plugin, NULL);
 		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
 		gowl_bar_plugin_set_tooltip(plugin, "Bluetooth is off");
-		return;
-	}
-
-	if (n_conn == 0) {
+	} else if (n_conn == 0) {
 		gowl_bar_plugin_set_label(plugin, NULL);
 		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_TEXT);
-		gowl_bar_plugin_set_tooltip(plugin, "Bluetooth on, nothing connected");
-		return;
-	}
-
-	if (n_conn == 1) {
-		gowl_bar_plugin_set_label(plugin, conn->name);
-		gowl_bar_plugin_set_tooltip(plugin, conn->name);
+		gowl_bar_plugin_set_tooltip(plugin,
+			"Bluetooth on, nothing connected");
 	} else {
-		gchar buf[32];
+		if (n_conn == 1) {
+			gowl_bar_plugin_set_label(plugin, conn->name);
+			gowl_bar_plugin_set_tooltip(plugin, conn->name);
+		} else {
+			gchar buf[32];
 
-		g_snprintf(buf, sizeof(buf), "%u", n_conn);
-		gowl_bar_plugin_set_label(plugin, buf);
-		gowl_bar_plugin_set_tooltip(plugin, "Connected devices");
+			g_snprintf(buf, sizeof(buf), "%u", n_conn);
+			gowl_bar_plugin_set_label(plugin, buf);
+			gowl_bar_plugin_set_tooltip(plugin,
+				"Connected devices");
+		}
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_BLUE);
 	}
-	gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_BLUE);
+	g_mutex_unlock(&bd->lock);
 }
 
 static gint
@@ -1724,7 +1779,10 @@ bt_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_add_toggle(panel, "scan", "Scan for devices",
 	                          bd->scanning);
 
-	if (bd->devices->len == 0) {
+	g_mutex_lock(&bd->lock);
+	i = bd->devices->len;
+	g_mutex_unlock(&bd->lock);
+	if (i == 0) {
 		gowl_bar_panel_add_separator(panel);
 		gowl_bar_panel_add_field(panel, "Devices",
 			bd->scanning ? "Scanning..." : "None paired");
@@ -1733,6 +1791,7 @@ bt_panel(GowlBarPlugin *plugin, gpointer data)
 
 	gowl_bar_panel_add_separator(panel);
 	gowl_bar_panel_add_section(panel, "Devices");
+	g_mutex_lock(&bd->lock);
 	for (i = 0; i < bd->devices->len; i++) {
 		BtDevice         *d = g_ptr_array_index(bd->devices, i);
 		g_autofree gchar *id = NULL;
@@ -1745,6 +1804,7 @@ bt_panel(GowlBarPlugin *plugin, gpointer data)
 			d->name, d->connected ? "Connected" : d->mac);
 		(void)item;
 	}
+	g_mutex_unlock(&bd->lock);
 
 	return panel;
 }
@@ -1787,15 +1847,25 @@ bt_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 		guint     idx = (guint)g_ascii_strtoull(item_id + 4, NULL, 10);
 		BtDevice *d;
 
-		if (idx >= bd->devices->len)
+		g_mutex_lock(&bd->lock);
+		if (idx >= bd->devices->len) {
+			g_mutex_unlock(&bd->lock);
 			return;
+		}
 		d = g_ptr_array_index(bd->devices, idx);
 		line = g_strdup_printf("%s %s %s", tool,
 			d->connected ? "disconnect" : "connect", d->mac);
-		gowl_bar_plugin_spawn(plugin, line);
-		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
-			d->connected ? "Disconnecting" : "Connecting", d->name);
-		d->connected = !d->connected;
+		{
+			g_autofree gchar *name = g_strdup(d->name);
+			gboolean was = d->connected;
+
+			d->connected = !d->connected;
+			g_mutex_unlock(&bd->lock);
+
+			gowl_bar_plugin_spawn(plugin, line);
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+				was ? "Disconnecting" : "Connecting", name);
+		}
 		gowl_bar_plugin_request_panel_refresh(plugin);
 	}
 

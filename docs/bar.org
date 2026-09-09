@@ -524,6 +524,26 @@ This is the one rule that matters more than the rest.
 
 If you need a subprocess in response to a click, use =gowl_bar_plugin_spawn()=, which is fire-and-forget, or =gowl_bar_plugin_queue_work()= to run something blocking on a worker.
 
+**** State shared between the two
+
+The host serialises less than it looks like it does. An =async_inflight=
+flag stops a plugin's =poll_async= overlapping *itself*, and that is
+all: the poll runs on a worker while the dispatch thread is free to
+build a panel, run a click or handle a panel key from the same struct.
+
+Scalars written by one side and read by the other are fine. Anything
+that *frees* what the other side may be reading is not --- rebuilding a
+=GPtrArray= of heap structs drops every element, and the panel builder
+may be walking those strings at that moment. The result is a corrupted
+heap that surfaces much later, in an unrelated thread, as an abort with
+nothing in the backtrace pointing here.
+
+The shipped =bluetooth= and =clipboard= widgets show the shape: the
+worker builds a *fresh* array and swaps it in under a =GMutex=, and
+every reader takes the same lock. A key handler copies the strings it
+needs out from under the lock before running anything slow, so the
+worker is never blocked on a file read.
+
 *** Talking to a CLI
 :PROPERTIES:
 :CUSTOM_ID: plugin-json

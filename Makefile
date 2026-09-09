@@ -221,29 +221,25 @@ LIB_HDRS := \
 	src/protocols/gowl-ext-workspace.h
 
 # yaml-glib sources (built-in dependency)
-YAMLGLIB_SRCS := \
-	deps/yaml-glib/src/yaml-builder.c \
-	deps/yaml-glib/src/yaml-document.c \
-	deps/yaml-glib/src/yaml-generator.c \
-	deps/yaml-glib/src/yaml-gobject.c \
-	deps/yaml-glib/src/yaml-mapping.c \
-	deps/yaml-glib/src/yaml-node.c \
-	deps/yaml-glib/src/yaml-parser.c \
-	deps/yaml-glib/src/yaml-schema.c \
-	deps/yaml-glib/src/yaml-sequence.c \
-	deps/yaml-glib/src/yaml-serializable.c
+# Discovered, not listed.  A hand-picked list is fine while the copy is
+# the submodule pinned beside it and silently wrong the moment
+# YAMLGLIB_DIR points at a newer one: current yaml-glib grew a writer and
+# a comment index, and the link failed on their symbols with nothing to
+# say they were new files.
+YAMLGLIB_SRCS := $(wildcard $(YAMLGLIB_DIR)/src/*.c)
 
 # crispy sources (built-in dependency for C config compilation)
-CRISPY_SRCS := \
-	deps/crispy/src/interfaces/crispy-compiler.c \
-	deps/crispy/src/interfaces/crispy-cache-provider.c \
-	deps/crispy/src/core/crispy-gcc-compiler.c \
-	deps/crispy/src/core/crispy-file-cache.c \
-	deps/crispy/src/core/crispy-plugin-engine.c \
-	deps/crispy/src/core/crispy-script.c \
-	deps/crispy/src/core/crispy-source-utils-private.c \
-	deps/crispy/src/core/crispy-config-context.c \
-	deps/crispy/src/core/crispy-config-loader.c
+# Likewise discovered, minus two CLI-only files: main.c is crispy's entry
+# point, and crispy-repl.c pulls in readline, which a compositor has no
+# business linking for a REPL it never opens.  crispy's own LIB_SRCS has
+# both; gowl wants the library without the front end.
+#
+# A future crispy file with an external dependency fails at link with its
+# undefined symbols -- loudly, and naming the file.  That is the intended
+# trade against a list that silently misses new sources.
+CRISPY_SRCS := $(filter-out %/main.c %/crispy-repl.c, \
+	$(wildcard $(CRISPY_DIR)/src/interfaces/*.c) \
+	$(wildcard $(CRISPY_DIR)/src/core/*.c))
 
 # Test sources
 TEST_SRCS := $(wildcard tests/test-*.c)
@@ -291,8 +287,10 @@ LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
 LIB_OBJS += $(OBJDIR)/ext-workspace-v1-protocol.o
 LIB_OBJS += $(OBJDIR)/gowl-input-capture-v1-protocol.o
 
-YAMLGLIB_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(YAMLGLIB_SRCS))
-CRISPY_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(CRISPY_SRCS))
+# Keyed on the DIR variables, so an overridden (possibly absolute) path
+# still lands its objects in the same place under OBJDIR.
+YAMLGLIB_OBJS := $(patsubst $(YAMLGLIB_DIR)/%.c,$(OBJDIR)/deps/yaml-glib/%.o,$(YAMLGLIB_SRCS))
+CRISPY_OBJS := $(patsubst $(CRISPY_DIR)/%.c,$(OBJDIR)/deps/crispy/%.o,$(CRISPY_SRCS))
 MAIN_OBJ := $(OBJDIR)/main.o
 BAR_OBJS := $(patsubst src/bar/%.c,$(OBJDIR)/bar/%.o,$(BAR_SRCS))
 TEST_OBJS := $(patsubst tests/%.c,$(OBJDIR)/tests/%.o,$(TEST_SRCS))
@@ -531,6 +529,29 @@ help:
 	@echo "  help                  - Show this help message"
 
 # Dependency tracking
+# Which copy the vendored objects under OBJDIR were built from.
+#
+# Object paths are fixed regardless of YAMLGLIB_DIR / CRISPY_DIR, so switching copies leaves
+# objects -- and .d files -- describing the other one.  A stale .d naming
+# a source that no longer exists makes make fail during graph
+# construction with "No rule to make target", before any recipe could
+# have cleaned it up.  Hence a parse-time check rather than a rule:
+# `-include' of the .d files happens at parse time too, and this has to
+# win that race.
+_yaml-glib_stamp := $(OBJDIR)/deps/.yaml-glib-dir
+_yaml-glib_prev := $(shell cat $(_yaml-glib_stamp) 2>/dev/null)
+ifneq ($(_yaml-glib_prev),$(YAMLGLIB_DIR))
+$(shell rm -rf $(OBJDIR)/deps/yaml-glib)
+$(shell mkdir -p $(dir $(_yaml-glib_stamp)) && printf '%s' '$(YAMLGLIB_DIR)' > $(_yaml-glib_stamp))
+endif
+
+_crispy_stamp := $(OBJDIR)/deps/.crispy-dir
+_crispy_prev := $(shell cat $(_crispy_stamp) 2>/dev/null)
+ifneq ($(_crispy_prev),$(CRISPY_DIR))
+$(shell rm -rf $(OBJDIR)/deps/crispy)
+$(shell mkdir -p $(dir $(_crispy_stamp)) && printf '%s' '$(CRISPY_DIR)' > $(_crispy_stamp))
+endif
+
 -include $(LIB_OBJS:.o=.d)
 -include $(MAIN_OBJ:.o=.d)
 # Test objects too.  Without this a test that #includes a pure translation

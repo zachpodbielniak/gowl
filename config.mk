@@ -251,7 +251,21 @@ ifeq ($(LIBDECOR_AVAILABLE),1)
 endif
 
 # Include paths
-CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src -Ideps/crispy/src
+# Where the vendored yaml-glib and crispy come from.
+#
+# gowl compiles both straight into libgowl.a rather than linking their
+# archives, so an embedder that also ships them ends up with two copies
+# of every yaml_* and crispy_* symbol in one binary and picks between
+# them with `ar d'.  cmacs does exactly that.  Set these on the make
+# command line to point at the embedder's canonical checkout:
+#
+#   make YAMLGLIB_DIR=/path/to/yaml-glib CRISPY_DIR=/path/to/crispy
+#
+# `?=' so a bare `make' in a standalone clone still uses the submodules.
+YAMLGLIB_DIR ?= deps/yaml-glib
+CRISPY_DIR   ?= deps/crispy
+
+CFLAGS_INC := -I. -Isrc -I$(YAMLGLIB_DIR)/src -I$(CRISPY_DIR)/src
 
 # Combine all CFLAGS
 # Header dependency tracking.  -MMD writes a .d file next to each .o
@@ -294,7 +308,7 @@ TEST_CFLAGS := $(CFLAGS) $(shell $(PKG_CONFIG) --cflags glib-2.0)
 TEST_LDFLAGS := $(LDFLAGS) -L$(OUTDIR) -lgowl -Wl,-rpath,$(OUTDIR)
 
 # Module flags
-MODULE_CFLAGS_INC := -I$(CURDIR) -I$(CURDIR)/src -I$(CURDIR)/deps/yaml-glib/src -I$(CURDIR)/deps/crispy/src
+MODULE_CFLAGS_INC := -I$(CURDIR) -I$(CURDIR)/src -I$(abspath $(YAMLGLIB_DIR))/src -I$(abspath $(CRISPY_DIR))/src
 MODULE_CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(MODULE_CFLAGS_INC) $(CFLAGS_DEPS)
 MODULE_LDFLAGS := -shared -fPIC
 
@@ -311,7 +325,7 @@ BAR_CFLAGS += -DGOWL_DATADIR=\"$(DATADIR)\"
 BAR_CFLAGS += -DGOWLBAR_MODULEDIR=\"$(BAR_MODULEDIR)\"
 BAR_CFLAGS += -DGOWL_DEV_INCLUDE_DIR=\"$(CURDIR)/$(BUILDDIR)/include\"
 BAR_CFLAGS += $(CFLAGS_BUILD)
-BAR_CFLAGS += -I. -Isrc/bar -Ideps/yaml-glib/src -Ideps/crispy/src
+BAR_CFLAGS += -I. -Isrc/bar -I$(YAMLGLIB_DIR)/src -I$(CRISPY_DIR)/src
 BAR_CFLAGS += $(BAR_CFLAGS_DEPS)
 
 BAR_LDFLAGS := $(BAR_LDFLAGS_DEPS) $(LDFLAGS_ASAN)

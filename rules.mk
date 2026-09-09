@@ -122,21 +122,21 @@ $(OUTDIR)/modules/%.so: modules/%/*.c | $(OUTDIR)/modules
 	$(CC) $(MODULE_CFLAGS) $(MODULE_LDFLAGS) -o $@ $^ $(LDFLAGS) -L$(OUTDIR) -lgowl
 
 # yaml-glib dependency compilation (suppress warnings in vendored code)
-$(OBJDIR)/deps/yaml-glib/src/%.o: deps/yaml-glib/src/%.c | $(OBJDIR)
+$(OBJDIR)/deps/yaml-glib/src/%.o: $(YAMLGLIB_DIR)/src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -w -c $< -o $@
 
 # crispy dependency compilation (suppress warnings in vendored code)
-$(OBJDIR)/deps/crispy/src/interfaces/%.o: deps/crispy/src/interfaces/%.c deps/crispy/src/crispy-version.h | $(OBJDIR)
+$(OBJDIR)/deps/crispy/src/interfaces/%.o: $(CRISPY_DIR)/src/interfaces/%.c $(CRISPY_DIR)/src/crispy-version.h | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -w -c $< -o $@
 
-$(OBJDIR)/deps/crispy/src/core/%.o: deps/crispy/src/core/%.c deps/crispy/src/crispy-version.h | $(OBJDIR)
+$(OBJDIR)/deps/crispy/src/core/%.o: $(CRISPY_DIR)/src/core/%.c $(CRISPY_DIR)/src/crispy-version.h | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -w -c $< -o $@
 
 # crispy version header generation
-deps/crispy/src/crispy-version.h: deps/crispy/src/crispy-version.h.in
+$(CRISPY_DIR)/src/crispy-version.h: $(CRISPY_DIR)/src/crispy-version.h.in
 	sed \
 		-e 's|@CRISPY_VERSION_MAJOR@|0|g' \
 		-e 's|@CRISPY_VERSION_MINOR@|1|g' \
@@ -326,7 +326,7 @@ src/gowl-version.h: src/gowl-version.h.in
 clean:
 	rm -rf $(BUILDDIR)/$(BUILD_TYPE)
 	rm -f src/gowl-version.h
-	rm -f deps/crispy/src/crispy-version.h
+	rm -f $(CRISPY_DIR)/src/crispy-version.h
 	rm -f $(PROTO_HDRS)
 	rm -f wlr-layer-shell-unstable-v1-client-protocol.h
 	rm -f wlr-layer-shell-unstable-v1-protocol.c
@@ -336,7 +336,7 @@ clean:
 clean-all:
 	rm -rf $(BUILDDIR)
 	rm -f src/gowl-version.h
-	rm -f deps/crispy/src/crispy-version.h
+	rm -f $(CRISPY_DIR)/src/crispy-version.h
 	rm -f $(PROTO_HDRS)
 	rm -f wlr-layer-shell-unstable-v1-client-protocol.h
 	rm -f wlr-layer-shell-unstable-v1-protocol.c
@@ -500,3 +500,7 @@ uninstall:
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl.desktop
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gowl.png
+
+# Always out of date, so the stamps above are re-evaluated every run.
+.PHONY: FORCE
+FORCE:

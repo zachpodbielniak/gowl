@@ -1704,6 +1704,60 @@ bar_panel_action_body(gpointer data)
 	                            ctx->value, ctx->button);
 }
 
+typedef struct {
+	GowlBarPlugin *plugin;
+	guint          keysym;
+	guint          modifiers;
+	gint           focused;
+	gboolean       claimed;
+} KeyCtx;
+
+static void
+bar_panel_key_body(gpointer data)
+{
+	KeyCtx *ctx = data;
+
+	ctx->claimed = gowl_bar_plugin_panel_key(ctx->plugin, ctx->keysym,
+	                                         ctx->modifiers,
+	                                         ctx->focused);
+}
+
+/*
+ * Offer a key to the panel's plugin, under the fault guard.
+ *
+ * Returns %FALSE when the plugin faulted -- it has been quarantined by
+ * then, and the caller should behave as though the key was declined.
+ */
+static gboolean
+bar_guard_call_key(GowlModuleBar *self, GowlBarPlugin *plugin, guint keysym,
+                   guint modifiers, gint focused, gboolean *claimed)
+{
+	KeyCtx ctx;
+	gint   signo = 0;
+
+	ctx.plugin    = plugin;
+	ctx.keysym    = keysym;
+	ctx.modifiers = modifiers;
+	ctx.focused   = focused;
+	ctx.claimed   = FALSE;
+
+	if (!gowl_bar_guard_call(bar_panel_key_body, &ctx, &signo,
+	                         gowl_bar_plugin_get_id(plugin))) {
+		const gchar *name;
+
+		name = gowl_bar_plugin_get_setting(plugin, "name");
+		gowl_bar_registry_quarantine(self->registry,
+			name != NULL ? name
+			             : gowl_bar_plugin_get_id(plugin),
+			"faulted handling a panel key");
+		bar_panel_close(self);
+		return FALSE;
+	}
+
+	*claimed = ctx.claimed;
+	return TRUE;
+}
+
 static void
 bar_panel_deliver(GowlModuleBar *self, const gchar *item_id, gint index,
                   gdouble value, guint button)
@@ -3590,6 +3644,25 @@ bar_handle_key(GowlKeybindHandler *handler, guint modifiers, guint keysym,
 	}
 
 	/*
+	 * The plugin gets first refusal on anything the navigation above
+	 * did not want.  `y' and `x' mean nothing in a Wi-Fi list and
+	 * everything in a clipboard history, so the keys that are worth
+	 * binding are exactly the ones the host cannot know about.
+	 *
+	 * Guarded like every other entry into a plugin: a panel key
+	 * handler that faults costs the panel, not the session.
+	 */
+	if (pressed && self->panel.item != NULL) {
+		BarItem *item = self->panel.item;
+		gboolean claimed = FALSE;
+
+		if (bar_guard_call_key(self, item->plugin, keysym, modifiers,
+		                       self->panel.focus_item, &claimed)
+		    && claimed)
+			return TRUE;
+	}
+
+	/*
 	 * Anything else closes the panel and is NOT claimed.
 	 *
 	 * Swallowing every key while a dropdown is open would eat the
@@ -4316,8 +4389,10 @@ bar_apply_shipped_defaults(GowlModuleBar *self)
 		"height",          "26",
 
 		"widgets-left",    "user host git",
-		/* Reversed: reads as ip, podman, display left to right. */
-		"widgets-right",   "display podman ip",
+		/* Reversed: reads as ip, podman, display, clipboard left to
+		   right.  The clipboard sits at the edge because it is a
+		   thing you go to, not a reading you glance at. */
+		"widgets-right",   "clipboard display podman ip",
 
 		/* The tag row belongs to the top bar; two copies is noise. */
 		"tags.visible",    "false",

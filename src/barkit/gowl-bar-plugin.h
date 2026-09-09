@@ -79,6 +79,7 @@ G_DECLARE_DERIVABLE_TYPE(GowlBarPlugin, gowl_bar_plugin,
  * @panel_action: an item in the open panel was activated
  * @panel_opened: the panel just became visible
  * @panel_closed: the panel was dismissed
+ * @panel_key: a key the panel's own navigation declined
  * @padding: reserved for ABI-compatible expansion
  *
  * The contract a bar plugin implements.
@@ -127,6 +128,8 @@ struct _GowlBarPluginClass {
 	                               guint          button);
 	void          (*panel_opened) (GowlBarPlugin *self);
 	void          (*panel_closed) (GowlBarPlugin *self);
+	gboolean      (*panel_key)    (GowlBarPlugin *self, guint keysym,
+	                               guint modifiers, gint focused_item);
 
 	gpointer padding[8];
 };
@@ -389,6 +392,26 @@ void          gowl_bar_plugin_panel_action (GowlBarPlugin *self,
                                              guint          button);
 void          gowl_bar_plugin_panel_opened (GowlBarPlugin *self);
 void          gowl_bar_plugin_panel_closed (GowlBarPlugin *self);
+
+/**
+ * gowl_bar_plugin_panel_key:
+ * @self: a #GowlBarPlugin
+ * @keysym: the xkb keysym
+ * @modifiers: the modifier mask
+ * @focused_item: index of the panel item under the selection, or -1
+ *
+ * Offers a key the panel's own navigation did not want.
+ *
+ * The host keeps Escape, j/k, Tab and Return because they mean the same
+ * thing in every panel; everything else belongs to the plugin, where
+ * the keys can mean something.
+ *
+ * Returns: %TRUE when the plugin consumed the key
+ */
+gboolean      gowl_bar_plugin_panel_key (GowlBarPlugin *self,
+                                          guint          keysym,
+                                          guint          modifiers,
+                                          gint           focused_item);
 
 /* --- Helpers for subclasses --------------------------------------- */
 

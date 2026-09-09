@@ -253,6 +253,7 @@ gowl_bar_plugin_class_init(GowlBarPluginClass *klass)
 	klass->panel_action    = NULL;
 	klass->panel_opened    = NULL;
 	klass->panel_closed    = NULL;
+	klass->panel_key       = NULL;
 
 	/**
 	 * GowlBarPlugin:id:
@@ -1333,6 +1334,20 @@ gowl_bar_plugin_panel_opened(GowlBarPlugin *self)
  * gowl_bar_plugin_panel_closed:
  * @self: a plugin
  */
+gboolean
+gowl_bar_plugin_panel_key(GowlBarPlugin *self, guint keysym, guint modifiers,
+                          gint focused_item)
+{
+	GowlBarPluginClass *klass;
+
+	g_return_val_if_fail(GOWL_IS_BAR_PLUGIN(self), FALSE);
+
+	klass = GOWL_BAR_PLUGIN_GET_CLASS(self);
+	if (klass->panel_key != NULL)
+		return klass->panel_key(self, keysym, modifiers, focused_item);
+	return FALSE;
+}
+
 void
 gowl_bar_plugin_panel_closed(GowlBarPlugin *self)
 {

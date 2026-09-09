@@ -426,7 +426,9 @@ static const GowlBarPluginVTable cpu_vtable = {
 	sys_interval_fast, cpu_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	cpu_panel, sys_panel_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -472,7 +474,9 @@ static const GowlBarPluginVTable memory_vtable = {
 	NULL, memory_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	memory_panel, sys_panel_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 static void
@@ -518,7 +522,9 @@ static const GowlBarPluginVTable swap_vtable = {
 	NULL, swap_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	swap_panel, sys_panel_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -581,7 +587,9 @@ static const GowlBarPluginVTable disk_vtable = {
 	sys_interval_slow, disk_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	disk_panel, sys_panel_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -622,7 +630,9 @@ static const GowlBarPluginVTable load_vtable = {
 	NULL, load_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	load_panel, sys_panel_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 static void
@@ -663,7 +673,9 @@ static const GowlBarPluginVTable temp_vtable = {
 	NULL, temp_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	temp_panel, sys_panel_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 static void
@@ -700,7 +712,9 @@ static const GowlBarPluginVTable gpu_vtable = {
 	sys_interval_fast, gpu_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	gpu_panel, sys_panel_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 static void
@@ -735,7 +749,9 @@ static const GowlBarPluginVTable io_vtable = {
 	sys_interval_fast, io_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	io_panel, sys_panel_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 static void
@@ -767,7 +783,9 @@ static const GowlBarPluginVTable uptime_vtable = {
 	sys_interval_slow, uptime_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	uptime_panel, sys_panel_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 static void
@@ -788,7 +806,9 @@ static const GowlBarPluginVTable host_vtable = {
 	sys_interval_slow, host_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 static void
@@ -809,7 +829,9 @@ static const GowlBarPluginVTable user_vtable = {
 	sys_interval_slow, user_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -1072,7 +1094,9 @@ static const GowlBarPluginVTable battery_vtable = {
 	sys_interval_slow, battery_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	power_panel, power_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* A power widget with no battery still wants its panel: the session
@@ -1103,7 +1127,9 @@ static const GowlBarPluginVTable power_vtable = {
 	sys_interval_slow, power_poll, NULL,
 	NULL, NULL, NULL, NULL,
 	power_panel, power_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------

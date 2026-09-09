@@ -193,6 +193,10 @@ test_the_shipped_layout(void)
 	   wrong on a session with no daemon running. */
 	g_assert_cmpint(count_widget(listing, "notifications"), ==, 1);
 
+	/* Clipboard history is on the bottom bar's right edge: something
+	   you go to rather than a reading you glance at. */
+	g_assert_cmpint(count_widget(listing, "clipboard"), ==, 1);
+
 	/*
 	 * The centre carries the two things you reach for rather than
 	 * read: the recorder and the caffeine toggle, to the left of the

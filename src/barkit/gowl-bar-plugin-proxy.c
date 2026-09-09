@@ -227,6 +227,18 @@ proxy_panel_opened(GowlBarPlugin *plugin)
 		self->vt->panel_opened(plugin, self->data);
 }
 
+static gboolean
+proxy_panel_key(GowlBarPlugin *plugin, guint keysym, guint modifiers,
+                gint focused_item)
+{
+	GowlBarPluginProxy *self = GOWL_BAR_PLUGIN_PROXY(plugin);
+
+	if (GOWL_BAR_PLUGIN_VTABLE_HAS(self->vt, panel_key))
+		return self->vt->panel_key(plugin, self->data, keysym,
+		                           modifiers, focused_item);
+	return FALSE;
+}
+
 static void
 proxy_panel_closed(GowlBarPlugin *plugin)
 {
@@ -281,6 +293,7 @@ gowl_bar_plugin_proxy_class_init(GowlBarPluginProxyClass *klass)
 	plugin_class->panel_action    = proxy_panel_action;
 	plugin_class->panel_opened    = proxy_panel_opened;
 	plugin_class->panel_closed    = proxy_panel_closed;
+	plugin_class->panel_key       = proxy_panel_key;
 }
 
 static void

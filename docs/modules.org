@@ -630,7 +630,45 @@ Gowl ships with several modules in the =modules/= directory:
 | =bar=            | Compositor status bar with title and system info      |
 | =screenshot=     | Capture an output, a window or a dragged selection    |
 | =osd=            | Centred level overlay for volume, brightness and mic  |
+| =clipboard=      | History of everything that has been on the clipboard  |
 | =recording=      | Record an output, a window or a region                |
+
+*** The clipboard module
+
+A history of everything that has been on the clipboard, text and
+images. The compositor is the only thing that sees every selection
+change, so this is where the history belongs --- a client that copies
+and exits still leaves its text behind, and nothing has to be running in
+the background to notice.
+
+*Reading a selection is the part that needs care.* The data lives in the
+owning client, and getting it means asking that client to write it down
+a pipe. A synchronous read of that pipe on the compositor thread is fine
+for a line of text and a frozen desktop for a megabyte of PNG: a client
+that writes slowly holds the compositor for as long as it likes, and one
+that never writes holds it forever. Every read here is driven by the
+main loop, capped at 16 MiB, and abandoned after four seconds.
+
+The store is =$XDG_STATE_HOME/gowl/clipboard=: an =index= of one
+tab-separated row per entry (id, MIME type, size, single-line preview)
+and one blob per entry, mode 0600. Two surfaces read it --- the bar's
+=clipboard= widget and =M-x cmacs-clipboard= --- and they share the
+store rather than a protocol, because both want the same list and either
+may delete from it.
+
+#+begin_src sh
+gowl clipboard-list          # the index, newest first
+gowl clipboard-copy 12       # put entry 12 back on the clipboard
+gowl clipboard-delete 12
+gowl clipboard-clear
+gowl clipboard-path 12       # where the bytes are
+#+end_src
+
+Putting an entry back is itself a selection change, so the module
+ignores its own writes; without that, pasting from the history would add
+a duplicate every time. An exact repeat of the newest entry is skipped
+too --- selections are re-announced for reasons that have nothing to do
+with copying, and a history of one repeated line is not a history.
 
 *** The osd module
 

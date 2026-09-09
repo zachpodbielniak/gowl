@@ -320,8 +320,29 @@ Membership is read from =HaveNodeKey= in =tailscale status --json=, which stays 
 | =keymap=   | Keyboard layout              | ---                                   |
 | =display=  | Brightness                   | Brightness, text size, night light    |
 | =notifications= | Unread count, or DND     | Do not disturb, last, history, clear  |
+| =clipboard= | Entries held             | The history: pick, yank, delete       |
 | =screenshot= | A camera; lit while selecting | Screen / Window / Selection        |
 | =recorder= | Elapsed time while recording | Screen / Window / Region, and Stop    |
+
+**** Clipboard history
+
+Lists what the =clipboard= module has kept. =j= and =k= move, =RET=
+picks, and two keys belong to this panel specifically: =y= copies the
+focused entry back to the clipboard and =x= (or =Delete=) forgets it.
+Deleting a password out of the history is the case this exists for, so
+it is one key rather than a menu.
+
+Those two arrive through =panel_key=, a vtable entry the host offers
+after its own navigation declines a key. The host keeps =Escape=, =j=,
+=k=, =Tab= and =Return= because they mean the same thing in every panel;
+=x= does not, and would be alarming in a Wi-Fi list.
+
+The widget reads the store's index directly on the worker thread rather
+than going through the module's IPC, because reading it is a file read
+and IPC would have to happen on the compositor thread.
+
+The same history is an editable buffer in cmacs --- =M-x
+cmacs-clipboard=, where killing a line and saving deletes that entry.
 
 **** Notifications
 

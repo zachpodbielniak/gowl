@@ -20,6 +20,7 @@
 #define G_LOG_DOMAIN "gowl-bar"
 
 #include <linux/input-event-codes.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -498,7 +499,9 @@ static const GowlBarPluginVTable audio_vtable = {
 	NULL, NULL,
 	audio_click, audio_scroll,
 	audio_panel, audio_action,
-	audio_panel_opened, audio_panel_closed
+	audio_panel_opened, audio_panel_closed,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -727,7 +730,9 @@ static const GowlBarPluginVTable media_vtable = {
 	NULL, NULL,
 	media_click, media_scroll,
 	media_panel, media_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -947,7 +952,9 @@ static const GowlBarPluginVTable podman_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	podman_panel, podman_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -1217,7 +1224,9 @@ static const GowlBarPluginVTable weather_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	weather_panel, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -1373,7 +1382,9 @@ static const GowlBarPluginVTable git_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -1437,7 +1448,9 @@ static const GowlBarPluginVTable keymap_vtable = {
 	keymap_interval, NULL, keymap_poll_async,
 	NULL, NULL, NULL, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -1792,7 +1805,9 @@ static const GowlBarPluginVTable display_vtable = {
 	NULL, NULL,
 	NULL, display_scroll,
 	display_panel, display_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 
@@ -2194,7 +2209,9 @@ static const GowlBarPluginVTable recorder_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	recorder_panel, recorder_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 
@@ -2650,7 +2667,9 @@ static const GowlBarPluginVTable screenshot_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	shot_panel, shot_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 
@@ -2828,7 +2847,330 @@ static const GowlBarPluginVTable notifications_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	notif_panel, notif_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
+};
+
+
+/* ----------------------------------------------------------------
+ * clipboard
+ *
+ * The history the `clipboard' module keeps, as a list you can pick
+ * from, yank with `y' and delete with `x'.
+ *
+ * The store is read straight off disk rather than through the module's
+ * IPC, because reading it is a file read and IPC would have to happen
+ * on the compositor thread.  The path is derived the same way the
+ * module derives it -- the one duplicated fact here, and the reason
+ * both spell it out rather than one asking the other.
+ * ---------------------------------------------------------------- */
+
+#define CLIPW_MAX_ROWS (14)
+
+typedef struct {
+	gchar    *id;                 /* the store's id, as text */
+	gchar    *preview;
+	gboolean  is_image;
+} ClipwEntry;
+
+typedef struct {
+	GPtrArray *entries;           /* element-type ClipwEntry, newest first */
+	/*
+	 * Panel item index -> entry index, filled while the panel is
+	 * built.  A panel has a hero, a separator and a section before its
+	 * first row, so the focused item index is not the row number and
+	 * guessing the offset would break the first time the panel grows a
+	 * line.
+	 */
+	GArray    *row_map;
+} ClipwData;
+
+static void
+clipw_entry_free(gpointer data)
+{
+	ClipwEntry *e = data;
+
+	g_free(e->id);
+	g_free(e->preview);
+	g_free(e);
+}
+
+static gpointer
+clipw_create(GowlBarPlugin *plugin)
+{
+	ClipwData *cd = g_new0(ClipwData, 1);
+
+	(void)plugin;
+	cd->entries = g_ptr_array_new_with_free_func(clipw_entry_free);
+	cd->row_map = g_array_new(FALSE, FALSE, sizeof(gint));
+	return cd;
+}
+
+static void
+clipw_destroy(GowlBarPlugin *plugin, gpointer data)
+{
+	ClipwData *cd = data;
+
+	(void)plugin;
+	if (cd == NULL)
+		return;
+	g_ptr_array_unref(cd->entries);
+	g_array_unref(cd->row_map);
+	g_free(cd);
+}
+
+static gchar *
+clipw_index_path(void)
+{
+	return g_build_filename(g_get_user_state_dir(), "gowl", "clipboard",
+	                        "index", NULL);
+}
+
+/* Reading the index is a file read, so it belongs on the worker. */
+static void
+clipw_poll_async(GowlBarPlugin *plugin, gpointer data)
+{
+	ClipwData        *cd = data;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *body = NULL;
+	g_auto(GStrv)     lines = NULL;
+	gint              i;
+
+	if (cd == NULL)
+		return;
+
+	path = clipw_index_path();
+	if (!g_file_get_contents(path, &body, NULL, NULL)) {
+		g_ptr_array_set_size(cd->entries, 0);
+		return;
+	}
+
+	g_ptr_array_set_size(cd->entries, 0);
+	lines = g_strsplit(body, "\n", -1);
+	for (i = 0; lines[i] != NULL; i++) {
+		g_auto(GStrv) f = NULL;
+		ClipwEntry   *e;
+
+		if (*lines[i] == '\0')
+			continue;
+		/* id \t mime \t bytes \t preview */
+		f = g_strsplit(lines[i], "\t", 4);
+		if (f[0] == NULL || f[3] == NULL)
+			continue;
+
+		e = g_new0(ClipwEntry, 1);
+		e->id = g_strdup(f[0]);
+		e->preview = g_strdup(f[3]);
+		e->is_image = (f[1] != NULL
+		               && g_str_has_prefix(f[1], "image/"));
+		g_ptr_array_add(cd->entries, e);
+	}
+}
+
+static void
+clipw_poll(GowlBarPlugin *plugin, gpointer data)
+{
+	ClipwData *cd = data;
+	guint      n = (cd != NULL) ? cd->entries->len : 0;
+	gchar      buf[32];
+
+	gowl_bar_plugin_set_icon(plugin, "\xef\x83\x8a");     /* clipboard */
+
+	if (n == 0) {
+		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+		gowl_bar_plugin_set_tooltip(plugin, "Clipboard history (empty)");
+		return;
+	}
+
+	g_snprintf(buf, sizeof(buf), "%u", n);
+	gowl_bar_plugin_set_label(plugin, buf);
+	gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_TEXT);
+	gowl_bar_plugin_set_tooltip(plugin,
+		"Clipboard history -- j/k to move, y to copy, x to delete");
+}
+
+static gint
+clipw_interval(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)plugin;
+	(void)data;
+	return 2;
+}
+
+/* Run one of the clipboard module's commands.  In-process: the module
+   is loaded in this compositor, so this is a call, not a subprocess. */
+static void
+clipw_command(const gchar *fmt, ...)
+{
+	const BarEnv     *env = bar_env();
+	g_autofree gchar *line = NULL;
+	g_autofree gchar *reply = NULL;
+	va_list           ap;
+
+	if (env == NULL || env->compositor == NULL)
+		return;
+
+	va_start(ap, fmt);
+	line = g_strdup_vprintf(fmt, ap);
+	va_end(ap);
+
+	reply = gowl_compositor_run_command(GOWL_COMPOSITOR(env->compositor),
+	                                   line);
+}
+
+static GowlBarPanel *
+clipw_panel(GowlBarPlugin *plugin, gpointer data)
+{
+	ClipwData        *cd = data;
+	GowlBarPanel     *panel;
+	GowlBarPanelItem *item;
+	guint             i, shown;
+	gint              item_index = 0;
+
+	panel = gowl_bar_panel_new();
+	gowl_bar_panel_set_width(panel, 460);
+
+	if (cd != NULL)
+		g_array_set_size(cd->row_map, 0);
+
+	gowl_bar_panel_add_hero(panel, "\xef\x83\x8a", "Clipboard",
+		"y copy   x delete   j/k move");
+	item_index++;
+	gowl_bar_panel_add_separator(panel);
+	item_index++;
+
+	if (cd == NULL || cd->entries->len == 0) {
+		gowl_bar_panel_add_field(panel, "History", "Empty");
+		return panel;
+	}
+
+	shown = MIN(cd->entries->len, (guint)CLIPW_MAX_ROWS);
+	for (i = 0; i < shown; i++) {
+		ClipwEntry       *e = g_ptr_array_index(cd->entries, i);
+		g_autofree gchar *row_id = NULL;
+		gint              entry_index = (gint)i;
+
+		row_id = g_strdup_printf("clip:%s", e->id);
+		item = gowl_bar_panel_add_row(panel, row_id,
+			e->is_image ? "\xef\x87\x85" : "\xef\x83\x9c",
+			e->preview, NULL);
+		(void)item;
+
+		/* Remember which entry this panel item is, so a key with a
+		   focused item can act on the right one. */
+		if (cd != NULL) {
+			while ((gint)cd->row_map->len < item_index) {
+				gint none = -1;
+
+				g_array_append_val(cd->row_map, none);
+			}
+			g_array_append_val(cd->row_map, entry_index);
+		}
+		item_index++;
+	}
+
+	gowl_bar_panel_add_separator(panel);
+	item = gowl_bar_panel_add_buttons(panel, "act");
+	gowl_bar_panel_add_button(item, "Clear all", FALSE);
+
+	return panel;
+}
+
+/* The entry a focused panel item stands for, or NULL. */
+static ClipwEntry *
+clipw_entry_for_item(ClipwData *cd, gint item_index)
+{
+	gint entry_index;
+
+	if (cd == NULL || item_index < 0
+	    || item_index >= (gint)cd->row_map->len)
+		return NULL;
+	entry_index = g_array_index(cd->row_map, gint, item_index);
+	if (entry_index < 0 || entry_index >= (gint)cd->entries->len)
+		return NULL;
+	return g_ptr_array_index(cd->entries, entry_index);
+}
+
+static void
+clipw_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
+             gint index, gdouble value, guint button)
+{
+	(void)data;
+	(void)index;
+	(void)value;
+	(void)button;
+
+	if (item_id == NULL)
+		return;
+
+	if (g_strcmp0(item_id, "act") == 0) {
+		clipw_command("clipboard-clear");
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+			"Clipboard history cleared", NULL);
+		gowl_bar_plugin_request_panel_refresh(plugin);
+		return;
+	}
+
+	if (g_str_has_prefix(item_id, "clip:")) {
+		clipw_command("clipboard-copy %s", item_id + 5);
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+			"Copied", NULL);
+	}
+}
+
+/*
+ * The keys that make this a picker rather than a list.
+ *
+ * j/k, Escape and Return are the host's, because they mean the same
+ * thing in every panel.  These two do not: `x' in a Wi-Fi list would
+ * be alarming.
+ */
+static gboolean
+clipw_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
+                guint modifiers, gint focused_item)
+{
+	ClipwData  *cd = data;
+	ClipwEntry *e;
+
+	(void)modifiers;
+
+	e = clipw_entry_for_item(cd, focused_item);
+	if (e == NULL)
+		return FALSE;
+
+	switch (keysym) {
+	case XKB_KEY_y:
+		clipw_command("clipboard-copy %s", e->id);
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+			"Copied", e->preview);
+		return TRUE;
+	case XKB_KEY_x:
+	case XKB_KEY_Delete:
+	case XKB_KEY_BackSpace:
+		clipw_command("clipboard-delete %s", e->id);
+		/* Drop it locally too, so the panel redraws without it
+		   rather than waiting for the next poll to notice. */
+		g_ptr_array_remove(cd->entries, e);
+		gowl_bar_plugin_request_panel_refresh(plugin);
+		return TRUE;
+	default:
+		break;
+	}
+	return FALSE;
+}
+
+static const GowlBarPluginVTable clipboard_vtable = {
+	sizeof(GowlBarPluginVTable),
+	clipw_create, clipw_destroy,
+	NULL, NULL, NULL,
+	clipw_interval, clipw_poll, clipw_poll_async,
+	NULL, NULL,
+	NULL, NULL,
+	clipw_panel, clipw_action,
+	NULL, NULL,
+	clipw_panel_key
 };
 
 
@@ -2866,6 +3208,12 @@ bar_register_desktop_plugins(GowlBarRegistry *registry)
 	gowl_bar_registry_register_vtable(registry, "recorder",
 		"Screen recorder",
 		"Record the screen, a window or a region", &recorder_vtable);
+
+	gowl_bar_registry_register_vtable(registry, "clipboard",
+		"Clipboard history",
+		"Recent clipboard entries; y copies, x deletes",
+		&clipboard_vtable);
+	gowl_bar_registry_register_alias(registry, "clip", "clipboard");
 
 	gowl_bar_registry_register_vtable(registry, "notifications",
 		"Notifications",

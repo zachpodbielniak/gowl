@@ -99,6 +99,19 @@ struct _GowlBarPluginVTable {
 	   the shorter struct still loads. */
 	void     (*panel_opened) (GowlBarPlugin *plugin, gpointer data);
 	void     (*panel_closed) (GowlBarPlugin *plugin, gpointer data);
+
+	/*
+	 * A key the panel's own navigation did not want, with the item
+	 * currently focused.  %TRUE consumes it.
+	 *
+	 * The host already owns Escape, j/k, Tab and Return, because those
+	 * mean the same thing in every panel.  Anything else is the
+	 * plugin's business: `y' and `x' mean nothing in a Wi-Fi list and
+	 * everything in a clipboard history.
+	 */
+	gboolean (*panel_key)    (GowlBarPlugin *plugin, gpointer data,
+	                          guint keysym, guint modifiers,
+	                          gint focused_item);
 };
 
 /**

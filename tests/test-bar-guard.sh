@@ -230,4 +230,22 @@ awk '/^toggle_apply\(/,/^}/' modules/bar/bar-plugins-core.c \
 	| grep -q "set_tooltip" ||
 	fail "the generic toggle sets no tooltip; a bare glyph cannot be identified"
 
+# 11. Reading a selection must not block the compositor.
+#
+# The clipboard data lives in the OWNING CLIENT, and getting it means
+# asking that client to write it down a pipe.  A synchronous read of
+# that pipe on the compositor thread is fine for a line of text and a
+# frozen desktop for a megabyte of PNG: a client that writes slowly
+# holds the compositor for as long as it likes, and one that never
+# writes holds it forever.
+clip="modules/clipboard/gowl-module-clipboard.c"
+if [ -f "$clip" ]; then
+	grep -q "g_unix_fd_add" "$clip" ||
+		fail "$clip does not read the selection from the main loop; a slow client now freezes the desktop"
+	grep -q "CLIP_READ_TIMEOUT_MS" "$clip" ||
+		fail "$clip has no read deadline; a client that stops writing holds the pipe forever"
+	grep -q "restoring" "$clip" ||
+		fail "$clip does not guard against its own writes; pasting from history will duplicate the entry"
+fi
+
 echo "PASS: bar source guards"

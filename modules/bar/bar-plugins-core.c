@@ -321,7 +321,9 @@ static const GowlBarPluginVTable tags_vtable = {
 	tags_measure, tags_draw,
 	NULL, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -542,7 +544,9 @@ static const GowlBarPluginVTable title_vtable = {
 	title_measure, title_draw,
 	NULL, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -604,7 +608,9 @@ static const GowlBarPluginVTable layout_vtable = {
 	NULL, NULL,
 	layout_click, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -872,7 +878,9 @@ static const GowlBarPluginVTable clock_vtable = {
 	NULL, NULL,
 	NULL, clock_scroll,
 	clock_panel, clock_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -920,7 +928,9 @@ static const GowlBarPluginVTable spacer_vtable = {
 	spacer_measure, spacer_draw,
 	NULL, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -993,7 +1003,9 @@ static const GowlBarPluginVTable button_vtable = {
 	NULL, NULL,
 	button_click, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -1163,7 +1175,9 @@ static const GowlBarPluginVTable toggle_vtable = {
 	NULL, NULL,
 	toggle_click, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -1257,7 +1271,9 @@ static const GowlBarPluginVTable cmd_vtable = {
 	NULL, NULL,
 	cmd_click, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------
@@ -1289,7 +1305,9 @@ static const GowlBarPluginVTable label_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL, NULL,
-	NULL, NULL
+	NULL, NULL,
+	NULL
+
 };
 
 /* ----------------------------------------------------------------

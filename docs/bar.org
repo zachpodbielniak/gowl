@@ -129,6 +129,40 @@ modules:
 
 A configuration pushed from Elisp or from =config.c= uses =position: bottom= instead and arrives as its own call; both routes end in the same place.
 
+*** Filtering notifications
+
+The bar drops a toast before it is ever shown when it matches
+=notify-discard=, and while =notify-dnd= is on it drops everything that
+does *not* match =notify-dnd-allow=. All three are ordinary bar
+settings, so they live in the gowl config next to the layout:
+
+#+begin_src yaml
+modules:
+  bar:
+    notify-discard: "^Spotify;screenshot saved"
+    notify-dnd: false
+    notify-dnd-allow: "battery;^Calendar"
+#+end_src
+
+Patterns are newline- or semicolon-separated case-insensitive regexes,
+tested against the toast's summary and body. An unparsable pattern is
+reported once and skipped rather than quietly matching nothing --- a
+filter that silently does nothing is worse than no filter, because it
+looks like it is working.
+
+Discard and Do Not Disturb are different things on purpose. A discarded
+notification is gone in both modes; that is for the sender never worth
+hearing from. Do Not Disturb suppresses the interruption for a while,
+and the allow list is what keeps it usable --- a mode that hides
+absolutely everything is one people switch off and never switch back on.
+
+cmacs has the same two lists on its own side, in the notification
+subsystem rather than the bar: =cmacs-notify-daemon-discard-rules= and
+=cmacs-notify-daemon-dnd-allow-rules=, matching on =:app=, =:summary=,
+=:body= and =:urgency=. There the discard happens before the
+notification is recorded at all, so a discarded one never reaches the
+history, the log or the hook.
+
 *** Hover tooltips
 
 Resting the pointer on a widget names it. The text is whatever the

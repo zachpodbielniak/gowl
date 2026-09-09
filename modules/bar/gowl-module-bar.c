@@ -288,6 +288,14 @@ struct _GowlModuleBar {
 	BarPanelState     panel;
 	BarToastLayer     toast_layer;
 	BarTipLayer       tip;
+	/*
+	 * Notification filtering.  Module-level rather than per-bar: a
+	 * notification is suppressed for the session, not for one edge of
+	 * one screen.
+	 */
+	gchar            *notify_discard;
+	gchar            *notify_dnd_allow;
+	gboolean          notify_dnd;
 
 	/* A scratch cairo context kept alive purely so plugins can be
 	   measured without a real surface; recreated only if it is lost. */
@@ -2242,10 +2250,79 @@ host_close_panel(GowlBarHost *host)
 	bar_panel_close(GOWL_MODULE_BAR(host));
 }
 
+/*
+ * Does @toast match any pattern in @setting?
+ *
+ * Patterns are newline- or semicolon-separated extended regexes, tested
+ * against the summary and the body.  An unparsable pattern is reported
+ * once and then ignored rather than silently matching nothing --- a
+ * filter that quietly does nothing is worse than no filter, because it
+ * looks like it is working.
+ */
+static gboolean
+bar_notify_matches(GowlModuleBar *self, const GowlBarToast *toast,
+                   const gchar *spec, const gchar *what)
+{
+	g_auto(GStrv) patterns = NULL;
+	const gchar *summary, *body;
+	gint i;
+
+	if (spec == NULL || *spec == '\0')
+		return FALSE;
+
+	summary = gowl_bar_toast_get_summary(toast);
+	body    = gowl_bar_toast_get_body(toast);
+
+	patterns = g_strsplit_set(spec, "\n;", -1);
+	for (i = 0; patterns[i] != NULL; i++) {
+		g_autoptr(GError) error = NULL;
+		g_autoptr(GRegex) re = NULL;
+		const gchar *pat = g_strstrip(patterns[i]);
+
+		if (*pat == '\0')
+			continue;
+
+		re = g_regex_new(pat, G_REGEX_CASELESS, 0, &error);
+		if (re == NULL) {
+			g_warning("gowl-bar: %s: bad pattern '%s': %s",
+			          what, pat, error->message);
+			continue;
+		}
+		if ((summary != NULL
+		     && g_regex_match(re, summary, 0, NULL))
+		    || (body != NULL && g_regex_match(re, body, 0, NULL)))
+			return TRUE;
+	}
+	return FALSE;
+}
+
 static void
 host_notify(GowlBarHost *host, GowlBarToast *toast)
 {
 	GowlModuleBar *self = GOWL_MODULE_BAR(host);
+
+	/*
+	 * Discard outright: a notification nobody ever wants to see should
+	 * not be shown and should not be kept.  Checked before DND,
+	 * because a discarded notification is discarded in both modes.
+	 */
+	if (bar_notify_matches(self, toast, self->notify_discard,
+	                       "notify-discard")) {
+		gowl_bar_toast_free(toast);
+		return;
+	}
+
+	/*
+	 * Do not disturb suppresses the interruption, and the allow list
+	 * is what keeps it usable: a mode that hides everything is a mode
+	 * people turn off and never turn back on.
+	 */
+	if (self->notify_dnd
+	    && !bar_notify_matches(self, toast, self->notify_dnd_allow,
+	                           "notify-dnd-allow")) {
+		gowl_bar_toast_free(toast);
+		return;
+	}
 
 	gowl_bar_toast_stack_push(self->toasts, toast);
 	g_atomic_int_set(&self->redraw_pending, 1);
@@ -2631,6 +2708,22 @@ bar_configure_slot(GowlModuleBar *self, GowlBarInstance *bar,
 		return;
 	}
 	bar->enabled = TRUE;
+
+	val = g_hash_table_lookup(settings, "notify-discard");
+	if (val != NULL) {
+		g_free(self->notify_discard);
+		self->notify_discard = g_strdup(val);
+	}
+	val = g_hash_table_lookup(settings, "notify-dnd-allow");
+	if (val != NULL) {
+		g_free(self->notify_dnd_allow);
+		self->notify_dnd_allow = g_strdup(val);
+	}
+	val = g_hash_table_lookup(settings, "notify-dnd");
+	if (val != NULL)
+		self->notify_dnd = (g_strcmp0(val, "1") == 0
+		                    || g_strcmp0(val, "true") == 0
+		                    || g_strcmp0(val, "yes") == 0);
 
 	val = g_hash_table_lookup(settings, "height");
 	if (val != NULL)
@@ -4068,6 +4161,8 @@ gowl_module_bar_finalize(GObject *object)
 	g_clear_pointer(&self->widget_data, g_hash_table_unref);
 	g_free(self->state_dir);
 	g_free(self->plugin_dir);
+	g_free(self->notify_discard);
+	g_free(self->notify_dnd_allow);
 	g_clear_pointer(&self->plugin_dirs, g_strfreev);
 	g_clear_pointer(&self->scanned_dirs, g_hash_table_unref);
 

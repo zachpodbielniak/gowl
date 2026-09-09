@@ -390,6 +390,33 @@ Two pieces address it, in =src/util/gowl-wayland-socket.c=:
   is subject to the same staleness, since it is imported into the
   systemd user manager at session start and nothing unsets it at
   session end.
+- =gowl_wayland_detect_parent_session()= applies that to the whole
+  environment, and is where the *direction* of the answer is decided.
+
+*** Three answers, not two
+
+A probe can also fail to reach a verdict: no =$XDG_RUNTIME_DIR= to
+resolve a relative name against, a path too long for =sockaddr_un=, an
+exhausted fd table.  Folding that into "nothing is there" is more
+dangerous than the original bug, because the variables this evidence
+feeds are exactly what =gowl_systemd_should_manage_session()= reads.
+Concluding "no parent" while nested inside GNOME makes gowl start
+=gowl-session.target= and, on the way out, stop
+=graphical-session.target= --- which is GNOME's, and stopping it ends
+the user's entire desktop.  That has happened once already (=e4164d4=).
+
+Hence the deliberately awkward pair =gowl_wayland_socket_live()= /
+=gowl_wayland_socket_absent()=: both are false when the probe reached no
+verdict, so a caller cannot read uncertainty as either answer by
+checking only one of them.  =detect_parent_session= errs toward "there
+is a parent", which costs a nested compositor nothing.  The reverse
+holds for =$DISPLAY=, where *keeping* it is the cautious choice, so only
+a display proven dead (the plain =:N= form, no socket in
+=/tmp/.X11-unix=) is cleared.
+
+The tests for this are the ones to keep: =/wayland-socket/detect/=
+covers a live parent, a stale one, and two different ways for a probe to
+be inconclusive --- each asserting the environment is left untouched.
 
 =tests/test-wayland-socket.c= covers the stale case specifically --
 a test that only checks a live socket passes just as happily against

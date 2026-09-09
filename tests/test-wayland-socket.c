@@ -278,6 +278,326 @@ test_unlink_on_exit(void)
 	g_rmdir(dir);
 }
 
+/* ------------------------------------------------------------------
+ * Which way an uncertain probe must fall.
+ *
+ * These are the GNOME tests.  gowl_wayland_detect_parent_session()
+ * clears $WAYLAND_DISPLAY and $DISPLAY when it can prove they name
+ * nothing, and those two variables are precisely what
+ * gowl_systemd_should_manage_session() reads to decide whether gowl
+ * owns the systemd user session.  Concluding "no parent" while nested
+ * inside GNOME makes gowl start gowl-session.target and, on the way
+ * out, stop graphical-session.target -- GNOME's -- ending the user's
+ * whole desktop.  That has happened once already (gowl e4164d4); it
+ * must not happen through this door.
+ *
+ * So the asymmetry is the thing under test.  A live socket and a
+ * *proven* dead one are the easy cases; what matters is that a probe
+ * which could not reach a verdict at all leaves the environment alone.
+ */
+
+/* Save and restore the three variables these tests move around: the
+ * suite is one process, so a test that leaked $WAYLAND_DISPLAY would
+ * silently change the meaning of every test after it. */
+typedef struct {
+	gchar	*wayland_display;
+	gchar	*wayland_socket;
+	gchar	*runtime_dir;
+	gchar	*display;
+} SavedEnv;
+
+static void
+env_save(SavedEnv *e)
+{
+	e->wayland_display = g_strdup(g_getenv("WAYLAND_DISPLAY"));
+	e->wayland_socket = g_strdup(g_getenv("WAYLAND_SOCKET"));
+	e->runtime_dir = g_strdup(g_getenv("XDG_RUNTIME_DIR"));
+	e->display = g_strdup(g_getenv("DISPLAY"));
+}
+
+static void
+env_restore_one(const gchar *name, gchar *value)
+{
+	if (value != NULL) {
+		g_setenv(name, value, TRUE);
+		g_free(value);
+	} else {
+		g_unsetenv(name);
+	}
+}
+
+static void
+env_restore(SavedEnv *e)
+{
+	env_restore_one("WAYLAND_DISPLAY", e->wayland_display);
+	env_restore_one("WAYLAND_SOCKET", e->wayland_socket);
+	env_restore_one("XDG_RUNTIME_DIR", e->runtime_dir);
+	env_restore_one("DISPLAY", e->display);
+}
+
+/* A parent compositor is a parent compositor. */
+static void
+test_detect_live_parent(void)
+{
+	g_autofree gchar	*dir = NULL;
+	g_autofree gchar	*path = NULL;
+	SavedEnv		 saved;
+	gint			 fd;
+
+	env_save(&saved);
+	dir = g_dir_make_tmp("gowl-wl-XXXXXX", NULL);
+	g_assert_nonnull(dir);
+	path = g_build_filename(dir, "wayland-9", NULL);
+	fd = listen_at(path);
+
+	g_setenv("XDG_RUNTIME_DIR", dir, TRUE);
+	g_setenv("WAYLAND_DISPLAY", "wayland-9", TRUE);
+	g_unsetenv("WAYLAND_SOCKET");
+
+	g_assert_true(gowl_wayland_detect_parent_session());
+	g_assert_cmpstr(g_getenv("WAYLAND_DISPLAY"), ==, "wayland-9");
+
+	close(fd);
+	g_unlink(path);
+	g_rmdir(dir);
+	env_restore(&saved);
+}
+
+/* The login wedge: a name whose socket refuses the connection. */
+static void
+test_detect_stale_parent(void)
+{
+	g_autofree gchar	*dir = NULL;
+	g_autofree gchar	*path = NULL;
+	SavedEnv		 saved;
+	gint			 fd;
+
+	env_save(&saved);
+	dir = g_dir_make_tmp("gowl-wl-XXXXXX", NULL);
+	g_assert_nonnull(dir);
+	path = g_build_filename(dir, "wayland-9", NULL);
+	fd = listen_at(path);
+	close(fd);	/* the file survives its compositor */
+
+	g_setenv("XDG_RUNTIME_DIR", dir, TRUE);
+	g_setenv("WAYLAND_DISPLAY", "wayland-9", TRUE);
+	g_unsetenv("WAYLAND_SOCKET");
+	g_unsetenv("DISPLAY");
+
+	g_assert_false(gowl_wayland_detect_parent_session());
+	g_assert_null(g_getenv("WAYLAND_DISPLAY"));
+
+	g_unlink(path);
+	g_rmdir(dir);
+	env_restore(&saved);
+}
+
+/*
+ * An unprobeable name must be LEFT ALONE.  Here $XDG_RUNTIME_DIR is
+ * missing, so a relative display name cannot be resolved at all -- the
+ * probe has nothing to say, and saying "dead" would be an invention.
+ */
+static void
+test_detect_unprobeable_name_is_kept(void)
+{
+	SavedEnv	saved;
+
+	env_save(&saved);
+	g_unsetenv("XDG_RUNTIME_DIR");
+	g_unsetenv("WAYLAND_SOCKET");
+	g_setenv("WAYLAND_DISPLAY", "wayland-0", TRUE);
+
+	g_assert_true(gowl_wayland_detect_parent_session());
+	g_assert_cmpstr(g_getenv("WAYLAND_DISPLAY"), ==, "wayland-0");
+
+	env_restore(&saved);
+}
+
+/*
+ * Same requirement, different reason to fail: a socket path longer than
+ * sockaddr_un's 108 bytes cannot be connected to, which says nothing
+ * about whether a compositor is running.
+ */
+static void
+test_detect_overlong_path_is_kept(void)
+{
+	g_autofree gchar	*dir = NULL;
+	g_autofree gchar	*deep = NULL;
+	SavedEnv		 saved;
+	GString			*buf;
+	gint			 i;
+
+	env_save(&saved);
+	dir = g_dir_make_tmp("gowl-wl-XXXXXX", NULL);
+	g_assert_nonnull(dir);
+
+	buf = g_string_new(dir);
+	for (i = 0; i < 12; i++) {
+		g_string_append(buf, "/0123456789");
+		g_assert_cmpint(g_mkdir(buf->str, 0700), ==, 0);
+	}
+	deep = g_string_free(buf, FALSE);
+	g_assert_cmpuint(strlen(deep) + strlen("/wayland-9"), >=, 108);
+
+	g_setenv("XDG_RUNTIME_DIR", deep, TRUE);
+	g_setenv("WAYLAND_DISPLAY", "wayland-9", TRUE);
+	g_unsetenv("WAYLAND_SOCKET");
+
+	g_assert_true(gowl_wayland_detect_parent_session());
+	g_assert_cmpstr(g_getenv("WAYLAND_DISPLAY"), ==, "wayland-9");
+
+	/* Unwind the nesting from the inside out. */
+	for (i = 0; i < 12; i++) {
+		g_assert_cmpint(g_rmdir(deep), ==, 0);
+		*strrchr(deep, '/') = '\0';
+	}
+	g_rmdir(dir);
+	env_restore(&saved);
+}
+
+/* A connected fd from a parent settles it without any probing. */
+static void
+test_detect_wayland_socket_fd(void)
+{
+	SavedEnv	saved;
+
+	env_save(&saved);
+	g_unsetenv("WAYLAND_DISPLAY");
+	g_setenv("WAYLAND_SOCKET", "7", TRUE);
+
+	g_assert_true(gowl_wayland_detect_parent_session());
+
+	env_restore(&saved);
+}
+
+/* A seat: nothing named, nothing listening, nothing invented. */
+static void
+test_detect_seat_session(void)
+{
+	g_autofree gchar	*dir = NULL;
+	SavedEnv		 saved;
+
+	env_save(&saved);
+	dir = g_dir_make_tmp("gowl-wl-XXXXXX", NULL);
+	g_assert_nonnull(dir);
+
+	g_setenv("XDG_RUNTIME_DIR", dir, TRUE);
+	g_unsetenv("WAYLAND_DISPLAY");
+	g_unsetenv("WAYLAND_SOCKET");
+	g_unsetenv("DISPLAY");
+
+	g_assert_false(gowl_wayland_detect_parent_session());
+	g_assert_null(g_getenv("WAYLAND_DISPLAY"));
+
+	g_rmdir(dir);
+	env_restore(&saved);
+}
+
+/* The unnamed-parent case: no variable, but a live socket to find. */
+static void
+test_detect_scan_finds_live_socket(void)
+{
+	g_autofree gchar	*dir = NULL;
+	g_autofree gchar	*live = NULL;
+	g_autofree gchar	*stale = NULL;
+	SavedEnv		 saved;
+	gint			 fd;
+	gint			 dead;
+
+	env_save(&saved);
+	dir = g_dir_make_tmp("gowl-wl-XXXXXX", NULL);
+	g_assert_nonnull(dir);
+
+	/* wayland-0 stale, wayland-1 live: the scan must walk past the
+	 * leftover rather than stopping at the first file it sees. */
+	stale = g_build_filename(dir, "wayland-0", NULL);
+	dead = listen_at(stale);
+	close(dead);
+
+	live = g_build_filename(dir, "wayland-1", NULL);
+	fd = listen_at(live);
+
+	g_setenv("XDG_RUNTIME_DIR", dir, TRUE);
+	g_unsetenv("WAYLAND_DISPLAY");
+	g_unsetenv("WAYLAND_SOCKET");
+
+	g_assert_true(gowl_wayland_detect_parent_session());
+	g_assert_cmpstr(g_getenv("WAYLAND_DISPLAY"), ==, "wayland-1");
+
+	close(fd);
+	g_unlink(live);
+	g_unlink(stale);
+	g_rmdir(dir);
+	env_restore(&saved);
+}
+
+/* A $DISPLAY naming no X server, with no Wayland parent, is cleared. */
+static void
+test_detect_clears_dead_x_display(void)
+{
+	g_autofree gchar	*dir = NULL;
+	SavedEnv		 saved;
+
+	env_save(&saved);
+	dir = g_dir_make_tmp("gowl-wl-XXXXXX", NULL);
+	g_assert_nonnull(dir);
+
+	g_setenv("XDG_RUNTIME_DIR", dir, TRUE);
+	g_unsetenv("WAYLAND_DISPLAY");
+	g_unsetenv("WAYLAND_SOCKET");
+	/* :97 has no /tmp/.X11-unix/X97 on any machine running this. */
+	g_setenv("DISPLAY", ":97", TRUE);
+
+	g_assert_false(gowl_wayland_detect_parent_session());
+	g_assert_null(g_getenv("DISPLAY"));
+
+	g_rmdir(dir);
+	env_restore(&saved);
+}
+
+/* A $DISPLAY we cannot interpret is somebody's deliberate choice. */
+static void
+test_detect_keeps_remote_x_display(void)
+{
+	g_autofree gchar	*dir = NULL;
+	SavedEnv		 saved;
+
+	env_save(&saved);
+	dir = g_dir_make_tmp("gowl-wl-XXXXXX", NULL);
+	g_assert_nonnull(dir);
+
+	g_setenv("XDG_RUNTIME_DIR", dir, TRUE);
+	g_unsetenv("WAYLAND_DISPLAY");
+	g_unsetenv("WAYLAND_SOCKET");
+	g_setenv("DISPLAY", "somehost:0", TRUE);
+
+	g_assert_false(gowl_wayland_detect_parent_session());
+	g_assert_cmpstr(g_getenv("DISPLAY"), ==, "somehost:0");
+
+	g_rmdir(dir);
+	env_restore(&saved);
+}
+
+/* live and absent are not each other's negation. */
+static void
+test_predicates_disagree_on_uncertainty(void)
+{
+	SavedEnv	saved;
+
+	env_save(&saved);
+	g_unsetenv("XDG_RUNTIME_DIR");
+
+	/* Unresolvable: neither predicate may claim it. */
+	g_assert_false(gowl_wayland_socket_live("wayland-0"));
+	g_assert_false(gowl_wayland_socket_absent("wayland-0"));
+
+	/* An absolute path that does not exist IS answerable. */
+	g_assert_true(gowl_wayland_socket_absent("/nonexistent/wayland-9"));
+	g_assert_false(gowl_wayland_socket_live("/nonexistent/wayland-9"));
+
+	env_restore(&saved);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -297,6 +617,26 @@ main(int argc, char *argv[])
 	                test_unlink_on_exit);
 	g_test_add_func("/wayland-socket/unlink-on-exit/subprocess",
 	                test_unlink_on_exit_subprocess);
+
+	g_test_add_func("/wayland-socket/detect/live-parent",
+	                test_detect_live_parent);
+	g_test_add_func("/wayland-socket/detect/stale-parent",
+	                test_detect_stale_parent);
+	g_test_add_func("/wayland-socket/detect/unprobeable-name-kept",
+	                test_detect_unprobeable_name_is_kept);
+	g_test_add_func("/wayland-socket/detect/overlong-path-kept",
+	                test_detect_overlong_path_is_kept);
+	g_test_add_func("/wayland-socket/detect/wayland-socket-fd",
+	                test_detect_wayland_socket_fd);
+	g_test_add_func("/wayland-socket/detect/seat", test_detect_seat_session);
+	g_test_add_func("/wayland-socket/detect/scan-finds-live",
+	                test_detect_scan_finds_live_socket);
+	g_test_add_func("/wayland-socket/detect/dead-x-display",
+	                test_detect_clears_dead_x_display);
+	g_test_add_func("/wayland-socket/detect/remote-x-display",
+	                test_detect_keeps_remote_x_display);
+	g_test_add_func("/wayland-socket/predicates-disagree",
+	                test_predicates_disagree_on_uncertainty);
 
 	return g_test_run();
 }

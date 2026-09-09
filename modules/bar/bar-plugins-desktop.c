@@ -2300,8 +2300,32 @@ shot_provider(void)
  */
 static gboolean shot_annotate_after(GowlBarPlugin *plugin);
 
+/* The command that opens @path in cmacs.  Always available: the elisp
+   side falls back to an image buffer on a build without imgedit. */
+static gchar *
+shot_cmacs_line(const gchar *path)
+{
+	return g_strdup_printf(
+		"emacsctl eval '(cmacs-screenshot-annotate \"%s\")'", path);
+}
+
+/*
+ * Hand a capture to an annotator.
+ *
+ * @how names one explicitly -- "cmacs", "satty", "swappy", or a
+ * command line to append the path to -- and is NULL for "whatever the
+ * configuration says", which is the `annotate-with' setting and
+ * otherwise auto.
+ *
+ * Auto is: annotate-command if set, then satty, then swappy, then
+ * cmacs.  cmacs is last there because it is the one that always
+ * resolves, so the chain can never run out; it is NOT last in the
+ * sense of least preferred, which is why it also has its own button
+ * and its own setting value.  A machine with satty installed should
+ * still be able to send a capture to the editor it is already running.
+ */
 static void
-shot_annotate(GowlBarPlugin *plugin, const gchar *path)
+shot_annotate(GowlBarPlugin *plugin, const gchar *path, const gchar *how)
 {
 	const gchar      *cmd;
 	g_autofree gchar *line = NULL;
@@ -2312,17 +2336,30 @@ shot_annotate(GowlBarPlugin *plugin, const gchar *path)
 		return;
 	}
 
-	cmd = gowl_bar_plugin_get_setting(plugin, "annotate-command");
-	if (cmd != NULL && *cmd != '\0')
-		line = g_strdup_printf("%s '%s'", cmd, path);
-	else if (bar_have_command("satty"))
+	if (how == NULL || *how == '\0')
+		how = gowl_bar_plugin_get_setting(plugin, "annotate-with");
+
+	if (g_strcmp0(how, "cmacs") == 0) {
+		line = shot_cmacs_line(path);
+	} else if (g_strcmp0(how, "satty") == 0) {
 		line = g_strdup_printf("satty --filename '%s'", path);
-	else if (bar_have_command("swappy"))
+	} else if (g_strcmp0(how, "swappy") == 0) {
 		line = g_strdup_printf("swappy -f '%s'", path);
-	else
-		line = g_strdup_printf(
-			"emacsctl eval '(cmacs-screenshot-annotate \"%s\")'",
-			path);
+	} else if (how != NULL && *how != '\0'
+	           && g_strcmp0(how, "auto") != 0) {
+		/* A command line of the user's own; the path is appended. */
+		line = g_strdup_printf("%s '%s'", how, path);
+	} else {
+		cmd = gowl_bar_plugin_get_setting(plugin, "annotate-command");
+		if (cmd != NULL && *cmd != '\0')
+			line = g_strdup_printf("%s '%s'", cmd, path);
+		else if (bar_have_command("satty"))
+			line = g_strdup_printf("satty --filename '%s'", path);
+		else if (bar_have_command("swappy"))
+			line = g_strdup_printf("swappy -f '%s'", path);
+		else
+			line = shot_cmacs_line(path);
+	}
 
 	gowl_bar_plugin_spawn(plugin, line);
 }
@@ -2414,6 +2451,7 @@ shot_panel(GowlBarPlugin *plugin, gpointer data)
 		gowl_bar_panel_add_field(panel, "Last", sd->last_path);
 		row = gowl_bar_panel_add_buttons(panel, "last");
 		gowl_bar_panel_add_button(row, "Annotate", FALSE);
+		gowl_bar_panel_add_button(row, "In cmacs", FALSE);
 	}
 
 	/*
@@ -2481,7 +2519,7 @@ shot_finished(GowlCaptureResult *result, gpointer user_data)
 			annotate ? "Screenshot -- annotating"
 			         : "Screenshot copied", path);
 		if (annotate)
-			shot_annotate(plugin, path);
+			shot_annotate(plugin, path, NULL);
 	} else {
 		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
 			"Screenshot failed", NULL);
@@ -2589,7 +2627,8 @@ shot_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 		ShotData *sd = data;
 
 		if (sd != NULL)
-			shot_annotate(plugin, sd->last_path);
+			shot_annotate(plugin, sd->last_path,
+			              (index == 1) ? "cmacs" : NULL);
 		return;
 	}
 

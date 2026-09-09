@@ -201,9 +201,14 @@ fi
 # button, because the capture is already saved and the user is left
 # wondering whether it worked.
 if grep -q "shot_annotate" "$desk"; then
+	# The terminal branch may call a helper rather than spelling the
+	# command out, so accept either -- but the helper must exist and
+	# must itself reach cmacs.
 	awk '/^shot_annotate\(GowlBarPlugin/,/^}/' "$desk" \
-		| grep -q "cmacs-screenshot-annotate" ||
+		| grep -qE "cmacs-screenshot-annotate|shot_cmacs_line" ||
 		fail "$desk has no final fallback for annotation; with satty and swappy absent the button does nothing"
+	grep -q "cmacs-screenshot-annotate" "$desk" ||
+		fail "$desk never names cmacs-screenshot-annotate; the fallback resolves to nothing"
 fi
 
 [ "$fail" -eq 0 ] || exit 1

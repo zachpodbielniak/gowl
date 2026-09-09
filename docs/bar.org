@@ -377,12 +377,22 @@ the *Annotate after capture* toggle does it automatically as each one
 lands. The capture is saved and on the clipboard either way ---
 annotation is the extra, not the deliverable.
 
-Where it opens, in order: =annotate-command= if you set one (the path is
-appended), then =satty=, then =swappy=, then cmacs itself. There is no
-fourth case where nothing happens: =cmacs-screenshot-annotate= opens the
-image in =cmacs-imgedit= on a build that has it and in an ordinary image
-buffer on one that does not, so the last link in the chain always
-resolves.
+*In cmacs* is its own button, next to *Annotate*, and sends the capture
+straight to the editor whatever else is installed. =annotate-with= makes
+that the default: =cmacs=, =satty=, =swappy=, a command line of your own
+(the path is appended), or =auto=.
+
+=auto= tries =annotate-command=, then =satty=, then =swappy=, then
+cmacs. cmacs is last *there* because it is the one that always resolves,
+so the chain can never run out --- not because it is least preferred,
+which is exactly why it also has a button and a setting value of its
+own. A machine with satty installed should still be able to send a
+capture to the editor it is already running.
+
+There is no case where nothing happens:
+=cmacs-screenshot-annotate= opens the image in =cmacs-imgedit= on a
+build that has it and in an ordinary image buffer on one that does not,
+so the last link always resolves.
 
 That last point is deliberate. imgedit is an optional subsystem, and a
 capture that cannot be opened at all on a build without it is a worse

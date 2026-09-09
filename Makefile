@@ -98,6 +98,7 @@ LIB_SRCS := \
 	src/fx/gowl-fx-capture.c \
 	src/fx/gowl-fx-sheet.c \
 	src/util/gowl-systemd.c \
+	src/util/gowl-wayland-socket.c \
 	src/util/gowl-wallpaper-scale.c \
 	src/core/gowl-compositor.c \
 	src/core/gowl-capture-wlroots.c \
@@ -198,6 +199,7 @@ LIB_HDRS := \
 	src/util/gowl-easing.h \
 	src/fx/gowl-fx.h \
 	src/util/gowl-systemd.h \
+	src/util/gowl-wayland-socket.h \
 	src/core/gowl-compositor.h \
 	src/core/gowl-monitor.h \
 	src/core/gowl-client.h \

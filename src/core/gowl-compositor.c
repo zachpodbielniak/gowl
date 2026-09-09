@@ -25,6 +25,7 @@
 #include "core/gowl-capture-wlroots.h"
 #include "core/gowl-frame-sink.h"
 #include "util/gowl-systemd.h"
+#include "util/gowl-wayland-socket.h"
 
 #ifdef GOWL_HAVE_LIBDECOR
 #include "gowl-decor.h"
@@ -3400,6 +3401,13 @@ gowl_compositor_start(
 		                    "Failed to add Wayland socket");
 		return FALSE;
 	}
+
+	/* libwayland removes this file in wl_display_destroy(), which
+	 * neither gowl's main() nor cmacs reaches: both exit() with the
+	 * compositor still alive.  The leftover is not merely untidy --- it
+	 * is indistinguishable from a running compositor to anything that
+	 * tests for the file, and that is what wedges the next login. */
+	gowl_wayland_socket_unlink_on_exit(self->socket_name);
 #ifdef GOWL_HAVE_LIBDECOR
 	/* Save the parent compositor's display name before we overwrite it.
 	 * libdecor's GTK plugin calls gtk_init_check() which connects to

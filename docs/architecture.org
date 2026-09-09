@@ -354,6 +354,47 @@ silently fails.  Restarting the frontend makes it re-read the live
 seat-only guard is =nested_wl_backend == NULL=; a nested gowl never
 touches the host session's portal.
 
+** The Wayland socket outlives the compositor
+
+=wl_display_add_socket_auto= creates =$XDG_RUNTIME_DIR/wayland-N=, and
+libwayland removes it in =wl_display_destroy= -- which neither gowl's
+=main()= nor cmacs reaches: both =exit()= with the compositor still
+alive.  So without help the file survives every quit, for the rest of
+the boot.
+
+That leftover is not merely untidy.  Nothing about a socket file says
+whether anything is behind it, so any code that tests for the file --
+=access(F_OK)=, =g_file_test= -- reads a dead session as a live one.
+cmacs did exactly that when deciding nested-vs-seat, and the effect was
+delayed by one login: a cmacs session left its socket behind, the next
+launch found the file, forced =WLR_BACKENDS=wayland=, failed to connect
+to a socket with nothing on the other end, and died before drawing
+anything.  Logging into another desktop and out again "fixed" it,
+because that desktop's clean shutdown removed its own socket.
+
+Two pieces address it, in =src/util/gowl-wayland-socket.c=:
+
+- =gowl_wayland_socket_unlink_on_exit()=, called right after the socket
+  is created, removes it at =atexit= time -- doing what
+  =wl_display_destroy= would have done.  It is a no-op in a forked
+  child (the pid is recorded), because there the parent is still
+  serving that socket.  The =.lock= file is deliberately left alone:
+  it carries no data, the next compositor =flock=s it in place, and
+  removing one from under a compositor that holds it would let two bind
+  the same name.  Best-effort: =atexit= does not run for a process
+  killed by a signal, so this reduces leftovers rather than abolishing
+  them -- which is why it is not the load-bearing half.
+- =gowl_wayland_socket_live()= answers the question the file cannot, by
+  connecting.  Use it instead of a stat wherever "is a compositor
+  running on this display" is the actual question; =$WAYLAND_DISPLAY=
+  is subject to the same staleness, since it is imported into the
+  systemd user manager at session start and nothing unsets it at
+  session end.
+
+=tests/test-wayland-socket.c= covers the stale case specifically --
+a test that only checks a live socket passes just as happily against
+=access(F_OK)=.
+
 ** wlroots Version Abstraction
 :PROPERTIES:
 :CUSTOM_ID: wlroots-version-abstraction

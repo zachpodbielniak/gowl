@@ -111,5 +111,6 @@
 
 /* Utilities */
 #include "util/gowl-log.h"
+#include "util/gowl-wayland-socket.h"
 
 #endif /* GOWL_H */

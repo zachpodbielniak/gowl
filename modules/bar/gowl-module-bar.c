@@ -1427,6 +1427,8 @@ bar_panel_open(GowlModuleBar *self, GowlBarInstance *bar, BarItem *item,
 	if (self->panel.hits == NULL) {
 		self->panel.hits = g_array_new(FALSE, FALSE,
 		                               sizeof(GowlBarHitRect));
+		g_array_set_clear_func(self->panel.hits,
+		                       gowl_bar_hit_rect_clear);
 	}
 
 	gowl_bar_plugin_panel_opened(item->plugin);
@@ -1447,6 +1449,15 @@ bar_panel_rebuild(GowlModuleBar *self)
 		bar_panel_close(self);
 		return;
 	}
+
+	/*
+	 * Hits first.  They describe the panel that is about to go, and a
+	 * render that returns early -- no monitor, a faulting plugin --
+	 * would otherwise leave them pointing at an object that no longer
+	 * exists.  They are rebuilt by the render below.
+	 */
+	if (self->panel.hits != NULL)
+		g_array_set_size(self->panel.hits, 0);
 
 	g_clear_object(&self->panel.panel);
 	self->panel.panel = panel;
@@ -1763,6 +1774,7 @@ bar_panel_deliver(GowlModuleBar *self, const gchar *item_id, gint index,
                   gdouble value, guint button)
 {
 	ActionCtx ctx;
+	g_autofree gchar *owned_id = NULL;
 	gint signo = 0;
 	BarItem *item;
 
@@ -1770,8 +1782,15 @@ bar_panel_deliver(GowlModuleBar *self, const gchar *item_id, gint index,
 	if (item == NULL || item_id == NULL)
 		return;
 
+	/*
+	 * Copied: a plugin acting on a click routinely asks for its panel
+	 * to be rebuilt, and the id it is holding belongs to the panel
+	 * being replaced.
+	 */
+	owned_id = g_strdup(item_id);
+
 	ctx.plugin  = item->plugin;
-	ctx.item_id = item_id;
+	ctx.item_id = owned_id;
 	ctx.index   = index;
 	ctx.value   = value;
 	ctx.button  = button;
@@ -2051,6 +2070,8 @@ bar_toast_render(GowlModuleBar *self)
 	if (self->toast_layer.hits == NULL) {
 		self->toast_layer.hits = g_array_new(FALSE, FALSE,
 		                                     sizeof(GowlBarHitRect));
+		g_array_set_clear_func(self->toast_layer.hits,
+		                       gowl_bar_hit_rect_clear);
 	}
 	g_array_set_size(self->toast_layer.hits, 0);
 

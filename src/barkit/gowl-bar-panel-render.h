@@ -50,12 +50,33 @@ typedef struct {
 	gint             item_index;
 	gint             child_index;
 	GowlBarItemKind  kind;
-	const gchar     *id;
+	/*
+	 * OWNED.  It used to be borrowed from the panel item, which tied
+	 * the lifetime of every hit rect to the panel object -- and a
+	 * plugin asking for its own panel to be rebuilt (which is the
+	 * normal thing to do after a click) freed the strings the hit
+	 * rects still pointed at.  A later click then dispatched whatever
+	 * had been allocated over the top: clicking "Scan for devices"
+	 * turned Bluetooth off, because the freed "scan" had become
+	 * "power".
+	 *
+	 * Set a clear function on the array holding these
+	 * (gowl_bar_hit_rect_clear) so the copies are freed with it.
+	 */
+	gchar           *id;
 	gint             x;
 	gint             y;
 	gint             width;
 	gint             height;
 } GowlBarHitRect;
+
+/**
+ * gowl_bar_hit_rect_clear:
+ * @rect: (type gpointer): a #GowlBarHitRect being discarded
+ *
+ * GDestroyNotify for a GArray of hit rects, freeing the owned id.
+ */
+void gowl_bar_hit_rect_clear (gpointer rect);
 
 /**
  * GowlBarPanelRenderCtx:

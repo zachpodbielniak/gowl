@@ -252,6 +252,14 @@ pass_draw_text_right(PanelPass *p, const gchar *text, gint right,
  * Hit regions
  * ---------------------------------------------------------------- */
 
+void
+gowl_bar_hit_rect_clear(gpointer data)
+{
+	GowlBarHitRect *rect = data;
+
+	g_clear_pointer(&rect->id, g_free);
+}
+
 static void
 pass_emit_hit(PanelPass *p, gint item_index, gint child_index,
               GowlBarItemKind kind, const gchar *id,
@@ -265,7 +273,7 @@ pass_emit_hit(PanelPass *p, gint item_index, gint child_index,
 	rect.item_index  = item_index;
 	rect.child_index = child_index;
 	rect.kind        = kind;
-	rect.id          = id;
+	rect.id          = g_strdup(id);
 	rect.x           = x;
 	rect.y           = y;
 	rect.width       = w;

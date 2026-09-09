@@ -129,6 +129,23 @@ modules:
 
 A configuration pushed from Elisp or from =config.c= uses =position: bottom= instead and arrives as its own call; both routes end in the same place.
 
+*** Hover tooltips
+
+Resting the pointer on a widget names it. The text is whatever the
+plugin last set through =gowl_bar_plugin_set_tooltip()=, falling back to
+the plugin's registered title, and it appears after a short delay ---
+sweeping the pointer across the bar on the way somewhere else should not
+flash six tips. A click or an opening panel dismisses it, and the tip
+itself is click-through: it explains the thing under it, so a click
+belongs to that thing.
+
+A =toggle= takes =tooltip=, or =tooltip-on= and =tooltip-off= for text
+that changes with the state. This matters more for toggles than for
+anything else --- a toggle is a single glyph whose meaning lives
+entirely in its configuration, so without hover text the widget that
+most needs naming is the one that cannot be named. The shipped caffeine
+toggle sets both.
+
 *** Theming
 :PROPERTIES:
 :CUSTOM_ID: theming

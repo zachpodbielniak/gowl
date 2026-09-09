@@ -241,6 +241,26 @@ typedef struct {
 	gchar   *dirty_signature;
 } BarPanelState;
 
+/*
+ * The hover tooltip.
+ *
+ * Every plugin has always set one through gowl_bar_plugin_set_tooltip()
+ * and nothing ever drew it -- dup_tooltip() had no callers at all.  A
+ * bar of glyphs with no hover text is a row of small mysteries, and the
+ * caffeine toggle was the one nobody could name.
+ */
+typedef struct {
+	struct wlr_scene_buffer *scene_buf;
+	gpointer                 monitor;
+	struct wl_event_source  *timer;
+	gint                     bar_index;    /* which bar, -1 for none */
+	gint                     item_index;   /* item under the pointer */
+	gint                     anchor_x;     /* centre of that item */
+	gint                     anchor_y;     /* the bar edge to sit against */
+	gboolean                 below;        /* hangs down from the bar */
+	gchar                   *text;
+} BarTipLayer;
+
 /* The toast overlay, drawn on one monitor at a time. */
 typedef struct {
 	struct wlr_scene_buffer *scene_buf;
@@ -267,6 +287,7 @@ struct _GowlModuleBar {
 
 	BarPanelState     panel;
 	BarToastLayer     toast_layer;
+	BarTipLayer       tip;
 
 	/* A scratch cairo context kept alive purely so plugins can be
 	   measured without a real surface; recreated only if it is lost. */
@@ -1071,6 +1092,218 @@ bar_redraw_all(GowlModuleBar *self)
 	}
 
 	self->in_render = FALSE;
+}
+
+/* ----------------------------------------------------------------
+ * Hover tooltip
+ * ---------------------------------------------------------------- */
+
+/* A tip explains the thing under it, so a click belongs to that thing
+   and not to the explanation. */
+static bool
+bar_layer_passthrough(struct wlr_scene_buffer *buffer, double *x, double *y)
+{
+	(void)buffer;
+	(void)x;
+	(void)y;
+	return false;
+}
+
+static void
+bar_tip_hide(GowlModuleBar *self)
+{
+	if (self->tip.scene_buf != NULL) {
+		wlr_scene_node_destroy(&self->tip.scene_buf->node);
+		self->tip.scene_buf = NULL;
+	}
+	g_clear_pointer(&self->tip.text, g_free);
+	self->tip.bar_index = -1;
+	self->tip.item_index = -1;
+	if (self->tip.timer != NULL)
+		wl_event_source_timer_update(self->tip.timer, 0);
+}
+
+/*
+ * Draw the tip against the bar it belongs to.
+ *
+ * Deliberately plain: one line, the widget's own tooltip text, on the
+ * panel's ground so it reads as part of the same furniture.  It is
+ * click-through -- a tip is an explanation, and a click belongs to the
+ * widget underneath it.
+ */
+static void
+bar_tip_render(GowlModuleBar *self)
+{
+	GowlCompositor       *comp;
+	GowlMonitor          *mon;
+	struct wlr_scene_tree *overlay;
+	const GowlBarTheme   *theme;
+	cairo_surface_t      *cs;
+	cairo_t              *cr;
+	PangoLayout          *layout;
+	BarBuffer            *buf;
+	const gdouble        *fg, *bg, *line;
+	PangoFontDescription *font;
+	gint                  mon_x, mon_y, mon_w, mon_h;
+	gint                  tw = 0, th = 0, pad, w, h, x, y;
+
+	if (self->tip.text == NULL || self->compositor == NULL
+	    || self->tip.monitor == NULL)
+		return;
+
+	comp = GOWL_COMPOSITOR(self->compositor);
+	mon = GOWL_MONITOR(self->tip.monitor);
+	theme = self->bars[GOWL_BAR_POSITION_TOP].theme;
+	gowl_monitor_get_geometry(mon, &mon_x, &mon_y, &mon_w, &mon_h);
+	pad = gowl_bar_theme_metric(theme, GOWL_BAR_METRIC_PAD_X);
+
+	/* Measure first, on a throwaway surface: the tip is exactly as
+	   wide as its text and no wider. */
+	cs = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+	cr = cairo_create(cs);
+	layout = pango_cairo_create_layout(cr);
+	font = pango_font_description_from_string(
+		gowl_bar_theme_get_font(theme));
+	pango_layout_set_font_description(layout, font);
+	pango_layout_set_text(layout, self->tip.text, -1);
+	pango_layout_get_pixel_size(layout, &tw, &th);
+	g_object_unref(layout);
+	pango_font_description_free(font);
+	cairo_destroy(cr);
+	cairo_surface_destroy(cs);
+
+	if (tw <= 0 || th <= 0)
+		return;
+
+	w = tw + 2 * pad;
+	h = th + pad;
+
+	cs = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+	cr = cairo_create(cs);
+	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+	cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.0);
+	cairo_paint(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
+	bg   = gowl_bar_theme_color(theme, GOWL_BAR_COLOR_MANTLE);
+	fg   = gowl_bar_theme_color(theme, GOWL_BAR_COLOR_TEXT);
+	line = gowl_bar_theme_color(theme, GOWL_BAR_COLOR_OVERLAY);
+
+	gowl_bar_cairo_rounded_rect(cr, 0.5, 0.5, w - 1.0, h - 1.0, 6.0);
+	cairo_set_source_rgba(cr, bg[0], bg[1], bg[2], 0.98);
+	cairo_fill_preserve(cr);
+	cairo_set_source_rgba(cr, line[0], line[1], line[2], 0.9);
+	cairo_set_line_width(cr, 1.0);
+	cairo_stroke(cr);
+
+	layout = pango_cairo_create_layout(cr);
+	font = pango_font_description_from_string(
+		gowl_bar_theme_get_font(theme));
+	pango_layout_set_font_description(layout, font);
+	pango_layout_set_text(layout, self->tip.text, -1);
+	cairo_set_source_rgba(cr, fg[0], fg[1], fg[2], 1.0);
+	cairo_move_to(cr, pad, (h - th) / 2.0);
+	pango_cairo_show_layout(cr, layout);
+	g_object_unref(layout);
+	pango_font_description_free(font);
+
+	buf = bar_buffer_from_cairo(cs, w, h);
+	cairo_destroy(cr);
+	cairo_surface_destroy(cs);
+	if (buf == NULL)
+		return;
+
+	overlay = gowl_compositor_get_scene_layer(comp,
+	                                          GOWL_SCENE_LAYER_OVERLAY);
+	if (overlay == NULL) {
+		wlr_buffer_drop(&buf->base);
+		return;
+	}
+
+	/* Centred on the widget, clamped so a tip for the widget at either
+	   end of the bar does not hang off the output. */
+	x = self->tip.anchor_x - w / 2;
+	x = CLAMP(x, 4, MAX(4, mon_w - w - 4));
+	y = self->tip.below ? self->tip.anchor_y + 4
+	                    : self->tip.anchor_y - h - 4;
+
+	if (self->tip.scene_buf == NULL) {
+		self->tip.scene_buf = wlr_scene_buffer_create(overlay,
+		                                              &buf->base);
+		if (self->tip.scene_buf == NULL) {
+			wlr_buffer_drop(&buf->base);
+			return;
+		}
+		self->tip.scene_buf->point_accepts_input = bar_layer_passthrough;
+	} else {
+		wlr_scene_buffer_set_buffer(self->tip.scene_buf, &buf->base);
+	}
+	wlr_scene_buffer_set_dest_size(self->tip.scene_buf, w, h);
+	wlr_scene_node_set_position(&self->tip.scene_buf->node,
+	                            mon_x + x, mon_y + y);
+	wlr_scene_node_raise_to_top(&self->tip.scene_buf->node);
+	wlr_buffer_drop(&buf->base);
+}
+
+static int
+bar_tip_expire(void *data)
+{
+	bar_tip_render((GowlModuleBar *)data);
+	return 0;
+}
+
+/*
+ * The pointer moved over @item on @bar.  Arm, move or cancel the tip.
+ *
+ * The delay is what keeps it from being noise: sweeping the pointer
+ * across the bar on the way somewhere else should not flash six tips.
+ */
+static void
+bar_tip_track(GowlModuleBar *self, gint bar_index, GowlBarInstance *bar,
+              gint item_index, gpointer monitor)
+{
+	BarItem          *item;
+	g_autofree gchar *text = NULL;
+	gint              mon_x, mon_y, mon_w, mon_h;
+
+	if (item_index < 0 || bar == NULL
+	    || item_index >= (gint)bar->items->len) {
+		bar_tip_hide(self);
+		return;
+	}
+
+	if (bar_index == self->tip.bar_index
+	    && item_index == self->tip.item_index)
+		return;                       /* same widget, nothing to do */
+
+	bar_tip_hide(self);
+
+	item = g_ptr_array_index(bar->items, item_index);
+	text = gowl_bar_plugin_dup_tooltip(item->plugin);
+	if (text == NULL || *text == '\0') {
+		/* Nothing to say.  The widget's own name is better than
+		   silence for a glyph nobody can read, so fall back to it. */
+		g_free(text);
+		text = g_strdup(gowl_bar_plugin_get_title(item->plugin));
+		if (text == NULL || *text == '\0')
+			return;
+	}
+
+	gowl_monitor_get_geometry(GOWL_MONITOR(monitor), &mon_x, &mon_y,
+	                          &mon_w, &mon_h);
+
+	self->tip.bar_index  = bar_index;
+	self->tip.item_index = item_index;
+	self->tip.monitor    = monitor;
+	self->tip.text       = g_steal_pointer(&text);
+	self->tip.anchor_x   = item->slot.x + item->slot.width / 2;
+	self->tip.below      = (bar_index == GOWL_BAR_POSITION_TOP);
+	self->tip.anchor_y   = self->tip.below
+		? bar->bar_height
+		: mon_h - bar->bar_height;
+
+	if (self->tip.timer != NULL)
+		wl_event_source_timer_update(self->tip.timer, 420);
 }
 
 /* ----------------------------------------------------------------
@@ -2959,6 +3192,10 @@ bar_handle_button(GowlBarProvider *provider, gpointer monitor, gint x, gint y,
 	if (bar == NULL)
 		return FALSE;
 
+	/* A click answers the question the tip was asking, and an opening
+	   panel would be drawn underneath it. */
+	bar_tip_hide(self);
+
 	item = bar_item_at(bar, x, &local_x);
 	if (item == NULL) {
 		/* Empty bar space: consumed so a stray click does not
@@ -3063,7 +3300,38 @@ bar_handle_motion(GowlBarProvider *provider, gpointer monitor, gint x, gint y)
 			bar_panel_render(self);
 	}
 
-	bar = bar_slot_at(self, y, mon_h, NULL);
+	{
+		bar = bar_slot_at(self, y, mon_h, NULL);
+		if (bar != NULL) {
+			/* Which of the two bars this is, derived from the
+			   instance rather than passed back: bar_slot_at's
+			   out parameter is a local y, not an index. */
+			gint slot_index =
+				(bar == &self->bars[GOWL_BAR_POSITION_TOP])
+					? GOWL_BAR_POSITION_TOP
+					: GOWL_BAR_POSITION_BOTTOM;
+			gint local_x = 0;
+			BarItem *hit = bar_item_at(bar, x, &local_x);
+			gint idx = -1;
+
+			if (hit != NULL) {
+				guint i;
+
+				for (i = 0; i < bar->items->len; i++) {
+					if (g_ptr_array_index(bar->items, i)
+					    == hit) {
+						idx = (gint)i;
+						break;
+					}
+				}
+			}
+			bar_tip_track(self, slot_index, bar, idx, monitor);
+		} else {
+			/* Off the bar entirely: the tip goes with it. */
+			bar_tip_hide(self);
+		}
+	}
+
 	/* A bar's own pixels are claimed so the window behind never sees
 	   the pointer; an open panel claims the rest of the output so a
 	   drag started in it keeps arriving. */
@@ -3593,6 +3861,12 @@ bar_deactivate(GowlModule *mod)
 		self->tick_timer = NULL;
 	}
 
+	bar_tip_hide(self);
+	if (self->tip.timer != NULL) {
+		wl_event_source_remove(self->tip.timer);
+		self->tip.timer = NULL;
+	}
+
 	bar_panel_clear_state(self);
 	bar_toast_destroy_surface(self);
 	bar_destroy_all_surfaces(self);
@@ -3706,6 +3980,8 @@ bar_on_startup(GowlStartupHandler *handler, gpointer compositor)
 	loop = wl_display_get_event_loop(gowl_compositor_get_wl_display(comp));
 	if (loop != NULL) {
 		self->tick_timer = wl_event_loop_add_timer(loop, bar_tick, self);
+		self->tip.timer = wl_event_loop_add_timer(loop, bar_tip_expire,
+		                                          self);
 		if (self->tick_timer != NULL)
 			wl_event_source_timer_update(self->tick_timer,
 			                             bar_tick_ms(self));
@@ -3734,6 +4010,12 @@ bar_on_shutdown(GowlShutdownHandler *handler, gpointer compositor)
 	if (self->tick_timer != NULL) {
 		wl_event_source_remove(self->tick_timer);
 		self->tick_timer = NULL;
+	}
+
+	bar_tip_hide(self);
+	if (self->tip.timer != NULL) {
+		wl_event_source_remove(self->tip.timer);
+		self->tip.timer = NULL;
 	}
 
 	bar_panel_clear_state(self);
@@ -3922,6 +4204,12 @@ bar_apply_shipped_defaults(GowlModuleBar *self)
 		 * off, which is the entire signal the widget exists to give.
 		 * Monochrome glyphs take the theme colour.
 		 */
+		/* Named on hover: the cup says nothing on its own, and this
+		   is the widget people could never identify. */
+		"toggle:caffeine.tooltip-on",
+		"Caffeine on -- the screen will not sleep",
+		"toggle:caffeine.tooltip-off",
+		"Caffeine off -- click to keep the screen awake",
 		"toggle:caffeine.icon-on",  "\xef\x83\xb4",
 		"toggle:caffeine.icon-off", "\xef\x83\xb4",
 		"toggle:caffeine.color-on",  "yellow",

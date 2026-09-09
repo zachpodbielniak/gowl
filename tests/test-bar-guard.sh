@@ -214,4 +214,20 @@ done
 grep -rq "gowl_recording_provider_start" modules/ src/core/ ||
 	fail "nothing calls gowl_recording_provider_start; the recording module is unreachable again"
 
+# 10. A widget's tooltip must actually be drawn.
+#
+# Every plugin has always called set_tooltip and for a long time nothing
+# read it back: dup_tooltip had no callers anywhere in the tree.  A bar
+# of glyphs with no hover text is a row of small mysteries, and the one
+# that needed naming most -- a `toggle' whose meaning is entirely in its
+# configuration -- was the one that could not be named at all.
+grep -q "gowl_bar_plugin_dup_tooltip" modules/bar/gowl-module-bar.c ||
+	fail "nothing reads a plugin's tooltip; hover text is dead again"
+
+# And a toggle must set one, because its glyph carries no meaning by
+# itself.
+awk '/^toggle_apply\(/,/^}/' modules/bar/bar-plugins-core.c \
+	| grep -q "set_tooltip" ||
+	fail "the generic toggle sets no tooltip; a bare glyph cannot be identified"
+
 echo "PASS: bar source guards"

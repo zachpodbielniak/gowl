@@ -1052,6 +1052,24 @@ toggle_apply(GowlBarPlugin *plugin, ToggleData *td)
 		gowl_bar_plugin_set_icon(plugin,
 			td->active ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
 
+	/*
+	 * Hover text.  A toggle is a single glyph whose meaning is entirely
+	 * in the configuration -- `toggle:caffeine' renders a cup and
+	 * nothing else -- so without this the one widget that most needs
+	 * naming is the one that cannot be named.
+	 */
+	{
+		const gchar *tip;
+
+		tip = gowl_bar_plugin_get_setting(plugin,
+			td->active ? "tooltip-on" : "tooltip-off");
+		if (tip == NULL)
+			tip = gowl_bar_plugin_get_setting(plugin, "tooltip");
+		if (tip == NULL)
+			tip = label;      /* better than the type's name */
+		gowl_bar_plugin_set_tooltip(plugin, tip);
+	}
+
 	{
 		const gchar *spec;
 		GowlBarColor role;

@@ -629,7 +629,33 @@ Gowl ships with several modules in the =modules/= directory:
 | =alpha=          | Per-client window opacity with focus dimming          |
 | =bar=            | Compositor status bar with title and system info      |
 | =screenshot=     | Capture an output, a window or a dragged selection    |
+| =osd=            | Centred level overlay for volume, brightness and mic  |
 | =recording=      | Record an output, a window or a region                |
+
+*** The osd module
+
+The centred overlay for a level that just changed. A bar toast is the
+wrong shape for that --- it is a message, it lives at the edge, and it
+queues behind other messages. This is one transient pill in the middle
+of the focused output, *replaced* rather than queued, with a filled
+track because the number is not the point.
+
+Reached by name through =ipc_command=, so a keybind, =gowl osd ...= and
+cmacs all reach it identically and none of them needs to know the module
+exists:
+
+#+begin_src sh
+gowl osd volume 45           # a level, 0..100
+gowl osd volume 0 muted      # a level with a state word
+gowl osd brightness 70
+gowl osd show "Something"    # a message with no level
+#+end_src
+
+=cmacs-gowl-media= draws through it by default
+(=cmacs-gowl-media-osd-function=) and falls back to the echo area when
+the module is not loaded, so a session without it still reports the
+level rather than going silent. The pill is click-through: it is
+decoration, and a click belongs to whatever is beneath it.
 
 *** The screenshot module
 

@@ -2376,6 +2376,52 @@ shot_directory(GowlBarPlugin *plugin)
 	return dir;
 }
 
+/*
+ * The annotators offered, in the order they are shown.
+ *
+ * Computed in ONE place because the panel adds the buttons and the
+ * action indexes back into them: satty and swappy only appear when
+ * they are installed, so a hard-coded index would select the wrong
+ * one on a machine missing either.  Auto and cmacs are always there --
+ * cmacs needs nothing installed, which is what makes it safe to offer
+ * unconditionally.
+ *
+ * Returns the count; @out must hold at least 4.
+ */
+static gint
+shot_annotators(const gchar **out)
+{
+	gint n = 0;
+
+	out[n++] = "auto";
+	out[n++] = "cmacs";
+	if (bar_have_command("satty"))
+		out[n++] = "satty";
+	if (bar_have_command("swappy"))
+		out[n++] = "swappy";
+	return n;
+}
+
+/* The chosen annotator, as it would be written in the setting. */
+static const gchar *
+shot_annotate_with(GowlBarPlugin *plugin)
+{
+	const gchar *v = gowl_bar_plugin_get_setting(plugin, "annotate-with");
+
+	return (v != NULL && *v != '\0') ? v : "auto";
+}
+
+/* A label for a name, so the row reads as prose rather than config. */
+static const gchar *
+shot_annotator_label(const gchar *name)
+{
+	if (g_strcmp0(name, "auto") == 0)
+		return "Auto";
+	if (g_strcmp0(name, "cmacs") == 0)
+		return "cmacs";
+	return name;
+}
+
 /* Whether a capture opens in an annotator as soon as it lands. */
 static gboolean
 shot_annotate_after(GowlBarPlugin *plugin)
@@ -2441,6 +2487,20 @@ shot_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_add_button(item, "Selection", FALSE);
 
 	gowl_bar_panel_add_separator(panel);
+	gowl_bar_panel_add_section(panel, "Annotate");
+	{
+		const gchar *names[4];
+		const gchar *chosen = shot_annotate_with(plugin);
+		gint         n, i;
+
+		item = gowl_bar_panel_add_buttons(panel, "with");
+		n = shot_annotators(names);
+		for (i = 0; i < n; i++) {
+			gowl_bar_panel_add_button(item,
+				shot_annotator_label(names[i]),
+				g_strcmp0(names[i], chosen) == 0);
+		}
+	}
 	gowl_bar_panel_add_toggle(panel, "auto", "Annotate after capture",
 		shot_annotate_after(plugin));
 	gowl_bar_panel_add_field(panel, "Saved to", shot_directory(plugin));
@@ -2615,6 +2675,18 @@ shot_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	(void)data;
 	(void)value;
 	(void)button;
+
+	if (g_strcmp0(item_id, "with") == 0) {
+		const gchar *names[4];
+		gint         n = shot_annotators(names);
+
+		if (index < 0 || index >= n)
+			return;
+		gowl_bar_plugin_set_setting(plugin, "annotate-with",
+		                            names[index]);
+		gowl_bar_plugin_request_panel_refresh(plugin);
+		return;
+	}
 
 	if (g_strcmp0(item_id, "auto") == 0) {
 		gowl_bar_plugin_set_setting(plugin, "annotate-after",

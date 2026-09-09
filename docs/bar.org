@@ -377,10 +377,20 @@ the *Annotate after capture* toggle does it automatically as each one
 lands. The capture is saved and on the clipboard either way ---
 annotation is the extra, not the deliverable.
 
-*In cmacs* is its own button, next to *Annotate*, and sends the capture
-straight to the editor whatever else is installed. =annotate-with= makes
-that the default: =cmacs=, =satty=, =swappy=, a command line of your own
-(the path is appended), or =auto=.
+The panel carries an *Annotate* row --- =Auto=, =cmacs=, and =satty= or
+=swappy= when they are installed --- which sets =annotate-with= and shows
+which one is current. It is always there, so the choice can be made
+before the first capture rather than only after one exists.
+
+=Auto= and =cmacs= are offered unconditionally because neither can be
+missing; satty and swappy appear only when installed, so the row never
+offers a choice that would do nothing. The list is computed in one
+place for both the buttons and the click, since a hard-coded index
+would select the wrong entry on a machine without one of them.
+
+*In cmacs* also appears beside *Annotate* once there is a capture to
+act on, for a one-off that ignores the setting. =annotate-with= accepts
+a command line of your own too (the path is appended).
 
 =auto= tries =annotate-command=, then =satty=, then =swappy=, then
 cmacs. cmacs is last *there* because it is the one that always resolves,

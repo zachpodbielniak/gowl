@@ -137,7 +137,10 @@ The =GowlModuleManager= loads the =.so= via =g_module_open()=, calls =gowl_modul
 4. *Classify* -- The module manager checks which interfaces the instance implements and adds it to the corresponding dispatch arrays.
 5. *Activate* -- =gowl_module_activate()= calls the virtual =activate= method.
 6. *Dispatch* -- Events are dispatched to interface-specific arrays in priority order.
-7. *Deactivate* -- =gowl_module_deactivate()= on shutdown or removal.
+7. *Shut down* -- =gowl_module_manager_dispatch_shutdown()= calls every =GowlShutdownHandler= while the compositor is still alive.
+8. *Deactivate* -- =gowl_module_deactivate()= when a module is disabled, and from the module manager's dispose for every module still active.
+
+The compositor only borrows the module manager, so at exit the manager goes last: =main()= dispatches shutdown, finalizes the compositor, then releases the manager. Step 8 therefore runs with the compositor already gone, and a module must not touch it there: it holds the compositor with a weak pointer, or connects with =g_signal_connect_object()=, and does not count on step 7, which an embedder may skip (cmacs's =gowl-stop= does). See /A module outlives the compositor/ in =docs/modules.org=; =tests/test-compositor-teardown.c= holds it.
 
 *** Module Priority
 :PROPERTIES:

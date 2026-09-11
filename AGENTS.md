@@ -51,10 +51,7 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   every command's reply, focus elsewhere rolling it away, members that
   unmap or are destroyed, strict settings, and switching it off giving
   every window back
-- `test-compositor-teardown` -- Starts a real compositor (headless
-  backend, pixman renderer, a private runtime dir, systemd off) and
-  finalizes it in a subprocess: wlroots aborts if any listener is still
-  on a signal when its object is destroyed
+- `test-compositor-teardown` -- Starts a real compositor (headless backend, pixman renderer, a private runtime dir, systemd off) and finalizes it in a subprocess: wlroots aborts if any listener is still on a signal when its object is destroyed. Then does it again under everything cmacs --gowl loads but the bar and releases the module manager last, once with a shutdown dispatch first and once without: any GLib critical fails it, and a module that disconnects from the dead compositor in `deactivate` prints two
 - `test-gpu-reset` -- Loses a real headless compositor's renderer: the swap
   waits for the event loop, destroys the old renderer and allocator, moves
   every output (a window capture's too) to the new pair, restores the
@@ -281,6 +278,8 @@ tests. These assert invariants no unit test can reach:
 > gowl and cmacs `--gowl` exit with the compositor alive, so only the
 > tests and cmacs's `gowl-stop` finalize one --
 > `tests/test-compositor-teardown.c` does it for real.
+
+> **A module outlives the compositor, so it may not keep a pointer to it that it cannot tell is dead.** The compositor only *borrows* its module manager, so the manager is released after the compositor (`main()`: dispatch shutdown, unref the compositor, unref the manager) and its dispose deactivates every module still active -- with the compositor already finalized. A module that touches the compositor from `deactivate` or `finalize` must hold it with `g_object_add_weak_pointer()` -- GObject NULLs it and destroys the handlers connected to the compositor when it goes -- and take the weak pointer back itself when it detaches or is finalized first (one `*_detach()`, as windowrules, alpha, osd, clipboard and layout-indicator have), or connect with `g_signal_connect_object()` and never disconnect by hand (roundcorners, wallpaper, screenlock). A shutdown handler alone is not enough: nothing makes an embedder dispatch shutdown, and cmacs's `gowl-stop` does not. windowrules held a borrowed pointer and ended every teardown with two GLib criticals (`g_signal_handler_disconnect()` on freed memory); alpha did too whenever shutdown was skipped. `tests/test-compositor-teardown.c` loads everything cmacs --gowl loads but the bar and fails on any critical, in both orders. See *A module outlives the compositor* in `docs/modules.org`.
 
 > **A lost renderer is swapped on the next loop iteration, never inside the
 > signal.** wlroots can emit `events.lost` from inside a render pass, and

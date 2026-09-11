@@ -107,6 +107,10 @@ typedef struct {
 
 struct _GowlModuleWindowrules {
 	GowlModule       parent_instance;
+
+	/* A weak pointer: GObject clears it when the compositor goes,
+	 * which is how wr_detach() knows there is nothing left to
+	 * disconnect. */
 	GowlCompositor  *compositor;
 	gulong           pre_map_handler_id;
 	WRBind           binds[WR_ACTION_COUNT];
@@ -261,6 +265,39 @@ wr_apply_defaults(GowlModuleWindowrules *self)
 	}
 }
 
+/* --- Attaching to the compositor --- */
+
+/**
+ * wr_detach:
+ * @self: the module
+ *
+ * Takes the module off the compositor it was started with: the
+ * #GowlCompositor::client-pre-map handler, then the weak pointer.  Safe
+ * at any point and any number of times.
+ *
+ * The module manager is released after the compositor -- the
+ * compositor only borrows it -- and deactivates every module that is
+ * still active, so this routinely runs with the compositor already
+ * finalized.  By then GObject has cleared @self->compositor through the
+ * weak pointer and destroyed the handler along with the instance it was
+ * connected to: there is nothing left to disconnect, and nothing that
+ * may be touched.  With a borrowed pointer here, every teardown ended
+ * by disconnecting a handler from freed memory.
+ */
+static void
+wr_detach(GowlModuleWindowrules *self)
+{
+	if (self->compositor != NULL) {
+		if (self->pre_map_handler_id != 0)
+			g_signal_handler_disconnect(self->compositor,
+			                            self->pre_map_handler_id);
+		g_object_remove_weak_pointer(G_OBJECT(self->compositor),
+		                             (gpointer *)&self->compositor);
+		self->compositor = NULL;
+	}
+	self->pre_map_handler_id = 0;
+}
+
 /* --- GowlModule virtual methods --- */
 
 static gboolean
@@ -273,15 +310,7 @@ wr_activate(GowlModule *mod)
 static void
 wr_deactivate(GowlModule *mod)
 {
-	GowlModuleWindowrules *self;
-
-	self = GOWL_MODULE_WINDOWRULES(mod);
-	if (self->compositor != NULL && self->pre_map_handler_id != 0) {
-		g_signal_handler_disconnect(self->compositor,
-		                             self->pre_map_handler_id);
-		self->pre_map_handler_id = 0;
-	}
-	self->compositor = NULL;
+	wr_detach(GOWL_MODULE_WINDOWRULES(mod));
 }
 
 static const gchar *
@@ -513,7 +542,18 @@ wr_on_startup(GowlStartupHandler *handler, gpointer compositor)
 	GowlModuleWindowrules *self;
 
 	self = GOWL_MODULE_WINDOWRULES(handler);
+
+	/* Already started with this compositor: a second dispatch would
+	 * connect the pre-map handler twice. */
+	if (self->compositor == (GowlCompositor *)compositor)
+		return;
+	wr_detach(self);
+
+	/* Weak, so that a deactivate after the compositor is gone finds
+	 * NULL here instead of freed memory: see wr_detach(). */
 	self->compositor = GOWL_COMPOSITOR(compositor);
+	g_object_add_weak_pointer(G_OBJECT(compositor),
+	                          (gpointer *)&self->compositor);
 
 	wr_apply_defaults(self);
 
@@ -661,11 +701,26 @@ wr_keybind_init(GowlKeybindHandlerInterface *iface)
 /* --- GObject lifecycle --- */
 
 static void
+gowl_module_windowrules_finalize(GObject *object)
+{
+	/* A module finalized while its compositor lives must take its weak
+	 * pointer back, or GObject writes NULL into freed memory when the
+	 * compositor goes. */
+	wr_detach(GOWL_MODULE_WINDOWRULES(object));
+
+	G_OBJECT_CLASS(gowl_module_windowrules_parent_class)->finalize(object);
+}
+
+static void
 gowl_module_windowrules_class_init(GowlModuleWindowrulesClass *klass)
 {
+	GObjectClass    *object_class;
 	GowlModuleClass *mod_class;
 
+	object_class = G_OBJECT_CLASS(klass);
 	mod_class = GOWL_MODULE_CLASS(klass);
+
+	object_class->finalize = gowl_module_windowrules_finalize;
 
 	mod_class->activate        = wr_activate;
 	mod_class->deactivate      = wr_deactivate;

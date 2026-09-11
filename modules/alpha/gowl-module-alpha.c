@@ -49,7 +49,7 @@ G_DECLARE_FINAL_TYPE(GowlModuleAlpha, gowl_module_alpha,
 
 struct _GowlModuleAlpha {
 	GowlModule parent_instance;
-	gpointer   compositor;        /* borrowed GowlCompositor* */
+	gpointer   compositor;        /* GowlCompositor*, a weak pointer */
 	gfloat     focused_alpha;     /* default 0.9 */
 	gfloat     unfocused_alpha;   /* default 0.9 */
 	/* Both default to the same value on purpose: the point of the
@@ -150,6 +150,41 @@ alpha_reset_all(GowlModuleAlpha *self)
 		gowl_client_set_alpha(GOWL_CLIENT(l->data), 1.0f);
 }
 
+/* --- Attaching to the compositor --- */
+
+/**
+ * alpha_detach:
+ * @self: the module
+ *
+ * Takes the module off its compositor: the focus handler, then the weak
+ * pointer.  Safe at any point and any number of times.
+ *
+ * The shutdown handler calls this while the compositor is alive, but
+ * nothing makes an embedder dispatch shutdown -- cmacs's `gowl-stop'
+ * does not -- and the module manager, which the compositor only
+ * borrows, is released after the compositor and deactivates every
+ * module that is still active.  So this can run with the compositor
+ * already finalized.  By then GObject has cleared @self->compositor
+ * through the weak pointer and destroyed the handler with the
+ * compositor, and there is nothing left to disconnect.  With a
+ * borrowed pointer here, that deactivate disconnected a handler from
+ * freed memory.
+ */
+static void
+alpha_detach(GowlModuleAlpha *self)
+{
+	if (self->compositor != NULL) {
+		if (self->focus_handler_id != 0)
+			g_signal_handler_disconnect(self->compositor,
+			                            self->focus_handler_id);
+		g_object_remove_weak_pointer(G_OBJECT(self->compositor),
+		                             &self->compositor);
+		self->compositor = NULL;
+	}
+	self->focus_handler_id = 0;
+	self->prev_focused = NULL;
+}
+
 /* --- GowlModule virtual methods --- */
 
 static gboolean
@@ -164,18 +199,13 @@ alpha_deactivate(GowlModule *mod)
 {
 	GowlModuleAlpha *self = GOWL_MODULE_ALPHA(mod);
 
-	/* Disconnect the focus signal */
-	if (self->focus_handler_id != 0 && self->compositor != NULL) {
-		g_signal_handler_disconnect(self->compositor,
-		                            self->focus_handler_id);
-		self->focus_handler_id = 0;
-	}
-
-	/* Restore all clients to fully opaque */
+	/* Restore all clients to fully opaque -- first, while the pointer
+	 * to their compositor is still held.  With the compositor gone the
+	 * pointer is NULL and this does nothing. */
 	alpha_reset_all(self);
 
-	self->prev_focused = NULL;
-	self->compositor = NULL;
+	/* Disconnect the focus signal and let go of the compositor */
+	alpha_detach(self);
 }
 
 static const gchar *
@@ -242,7 +272,16 @@ alpha_on_startup(GowlStartupHandler *handler, gpointer compositor)
 {
 	GowlModuleAlpha *self = GOWL_MODULE_ALPHA(handler);
 
+	/* Already started with this compositor: a second dispatch would
+	 * connect the focus handler twice. */
+	if (self->compositor == compositor)
+		return;
+	alpha_detach(self);
+
+	/* Weak, so that a deactivate after the compositor is gone finds
+	 * NULL here instead of freed memory: see alpha_detach(). */
 	self->compositor = compositor;
+	g_object_add_weak_pointer(G_OBJECT(compositor), &self->compositor);
 
 	/* Connect to focus-changed signal.  The signal passes a
 	 * GObject* (GowlClient or NULL) as the first argument. */
@@ -268,18 +307,12 @@ alpha_startup_init(GowlStartupHandlerInterface *iface)
 static void
 alpha_on_shutdown(GowlShutdownHandler *handler, gpointer compositor)
 {
-	GowlModuleAlpha *self = GOWL_MODULE_ALPHA(handler);
-
 	(void)compositor;
 
-	/* Disconnect and reset */
-	if (self->focus_handler_id != 0 && self->compositor != NULL) {
-		g_signal_handler_disconnect(self->compositor,
-		                            self->focus_handler_id);
-		self->focus_handler_id = 0;
-	}
-	self->prev_focused = NULL;
-	self->compositor = NULL;
+	/* Disconnect while the compositor is still alive, and let go of it:
+	 * the deactivate that follows once it is finalized then has nothing
+	 * left to do. */
+	alpha_detach(GOWL_MODULE_ALPHA(handler));
 }
 
 static void
@@ -291,11 +324,26 @@ alpha_shutdown_init(GowlShutdownHandlerInterface *iface)
 /* --- GObject lifecycle --- */
 
 static void
+gowl_module_alpha_finalize(GObject *object)
+{
+	/* A module finalized while its compositor lives must take its weak
+	 * pointer back, or GObject writes NULL into freed memory when the
+	 * compositor goes. */
+	alpha_detach(GOWL_MODULE_ALPHA(object));
+
+	G_OBJECT_CLASS(gowl_module_alpha_parent_class)->finalize(object);
+}
+
+static void
 gowl_module_alpha_class_init(GowlModuleAlphaClass *klass)
 {
+	GObjectClass    *object_class;
 	GowlModuleClass *mod_class;
 
+	object_class = G_OBJECT_CLASS(klass);
 	mod_class = GOWL_MODULE_CLASS(klass);
+
+	object_class->finalize = gowl_module_alpha_finalize;
 
 	mod_class->activate        = alpha_activate;
 	mod_class->deactivate      = alpha_deactivate;

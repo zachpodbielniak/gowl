@@ -223,6 +223,8 @@ struct _GowlShutdownHandlerInterface {
 };
 #+end_src
 
+=on_shutdown= runs while the compositor is still alive, so it is the last point at which a module can let go of it cleanly. Do not count on it being called, though: nothing obliges an embedder to dispatch shutdown, and cmacs's =gowl-stop= does not. =deactivate= runs later, after the compositor is finalized, and has to cope either way --- see [[#outliving-the-compositor][A module outlives the compositor]].
+
 *** GowlIpcHandler
 :PROPERTIES:
 :CUSTOM_ID: gowlipchandler
@@ -1073,7 +1075,7 @@ modules:
 
 - Uses =gowl_client_set_alpha()= which walks the client's scene tree via =wlr_scene_node_for_each_buffer()= and calls =wlr_scene_buffer_set_opacity()= on each buffer.
 - Connects to the compositor's =focus-changed= signal to automatically apply alpha on focus changes.
-- On deactivation, resets all clients to fully opaque (alpha 1.0).
+- On deactivation, resets all clients to fully opaque (alpha 1.0) --- while the compositor is alive. The compositor pointer is a weak pointer, so a deactivate that runs after the compositor is finalized (the module manager is released last) finds =NULL= and does nothing; see [[#outliving-the-compositor][A module outlives the compositor]].
 - Applying configuration while running immediately re-applies alpha to all existing clients.
 
 ** Tips
@@ -1085,6 +1087,28 @@ modules:
 - Use =g_autoptr()= and =g_steal_pointer()= for memory management.
 - Return =TRUE= from =handle_key= / =handle_button= only if you actually consumed the event; returning =TRUE= prevents other handlers from seeing it.
 - The module =.so= stays loaded for the lifetime of the compositor. Do not call =g_module_close()= on yourself.
+
+** A module outlives the compositor
+:PROPERTIES:
+:CUSTOM_ID: outliving-the-compositor
+:END:
+The compositor only borrows its module manager --- =gowl_compositor_set_module_manager()= takes no reference --- so whoever owns both releases the manager after the compositor. =main()= tears down in this order: =gowl_module_manager_dispatch_shutdown()= while the compositor is alive, then the compositor, then the manager, whose dispose calls =deactivate= on every module that is still active. So =deactivate= and =finalize= run with the compositor already finalized, and a module that touches it there is touching freed memory.
+
+A module that keeps the compositor pointer it was given in =on_startup= therefore has to be able to tell that it is gone:
+
+- Hold it with =g_object_add_weak_pointer()=. GObject sets the pointer to =NULL= when the compositor goes and destroys every handler connected to the compositor along with it, so a =deactivate= that finds =NULL= has nothing left to disconnect. Take the weak pointer back yourself when you detach, and when the module is finalized first, or GObject writes into freed memory later. One =detach= function that does both, called from =deactivate=, =finalize= and a repeated =on_startup=, is the shape =windowrules=, =alpha=, =osd=, =clipboard= and =layout-indicator= share; =dropdown= and =scratchpad= do the same inline.
+- Or connect with =g_signal_connect_object()= and never disconnect by hand: GObject drops the handler with whichever of the two dies first. =roundcorners=, =wallpaper= and =screenlock= connect =renderer-replaced= this way.
+
+A =GowlShutdownHandler= is the right place to let go while the compositor is alive, but it is not enough on its own: nothing obliges an embedder to dispatch shutdown, and cmacs's =gowl-stop= finalizes the compositor without it. =alpha= disconnected in its shutdown handler and still disconnected from freed memory in =deactivate= whenever shutdown had not run first.
+
+=windowrules= kept a borrowed pointer and disconnected its =client-pre-map= handler in =deactivate=, which ended every teardown with two GLib criticals:
+
+#+begin_example
+GLib-GObject-CRITICAL **: instance with invalid (NULL) class pointer
+GLib-GObject-CRITICAL **: g_signal_handler_disconnect: assertion 'G_TYPE_CHECK_INSTANCE (instance)' failed
+#+end_example
+
+The first line describes whatever the freed memory holds by then, so it also appears as =instance of invalid non-instantiatable type 'guchar'=. =tests/test-compositor-teardown.c= loads everything cmacs =--gowl= loads but the bar, starts a headless compositor under it, and tears it down with and without a shutdown dispatch; a critical anywhere fails it. No client is mapped there, so what a module keeps per client is outside its reach.
 
 ** Scene-effect dispatch order
 

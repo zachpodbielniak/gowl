@@ -245,7 +245,8 @@ static const GowlBarPluginVTable probe_vtable = {
 	NULL, NULL,
 	probe_click, NULL,
 	probe_panel, probe_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
 };
 
 /* A vtable that claims to be shorter than it is, standing in for a
@@ -258,7 +259,8 @@ static const GowlBarPluginVTable short_vtable = {
 	NULL, NULL,
 	probe_click, NULL,
 	probe_panel, probe_action,
-	NULL, NULL
+	NULL, NULL,
+	NULL
 };
 
 static void

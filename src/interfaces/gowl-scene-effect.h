@@ -29,10 +29,17 @@ typedef enum {
 #define GOWL_TYPE_SCENE_EFFECT (gowl_scene_effect_get_type ())
 G_DECLARE_INTERFACE (GowlSceneEffect, gowl_scene_effect, GOWL, SCENE_EFFECT, GObject)
 
-/* Native scene hooks, called on the compositor thread. The first active
- * provider by module priority owns presentation; the core uses immediate
- * geometry and ordinary input when none is active. Providers own their
- * state, and must restore live surfaces on deactivate/finish.
+/* Native scene hooks, called on the compositor thread.  Which provider gets
+ * a hook is a property of the hook (src/core/gowl-effects.c):
+ *
+ *   CONSUMABLE -- client_event, get_geometry, surface_at: offered to the
+ *   active providers in priority order, stopping at the first to claim it.
+ *   The core uses immediate geometry and ordinary input when none does.
+ *   BROADCAST -- alpha_changed, frame, frame_done, monitor_removed, finish,
+ *   client_placed: every active provider gets each one.
+ *
+ * Providers own their state, and must restore live surfaces on
+ * deactivate/finish.
  *
  * GEOMETRY runs after bounds are applied, before the final configure.
  * Returning TRUE means the provider placed the scene and its decoration.
@@ -51,7 +58,18 @@ G_DECLARE_INTERFACE (GowlSceneEffect, gowl_scene_effect, GOWL, SCENE_EFFECT, GOb
  * frame runs before output commit; TRUE requests another frame on that output.
  * frame_done runs after the ordinary visible-surface callbacks.
  * KEYBOARD_FOCUS reports a successful focus-stack change, after the
- * ordinary focus and border updates, excluding pointer focus changes. */
+ * ordinary focus and border updates, excluding pointer focus changes.
+ *
+ * client_placed runs each time the compositor draws a window's frame
+ * (GowlClient.frame): after whoever placed it for GEOMETRY, claimant or
+ * core; on every step an effect draws it at; and on the step that lands
+ * it.  GEOMETRY stops at its claimant -- the animation module claims it
+ * for every tile -- so this is how a provider that only decorates a window
+ * follows it, whichever provider moved it.  settled is TRUE when the window
+ * is drawn at its own geometry with nothing moving it (no provider claims
+ * get_geometry) and FALSE on the steps in between: keep expensive work for
+ * TRUE.  It runs inside gowl_compositor_apply_frame_geometry(), so a
+ * provider must not draw the frame again from it. */
 struct _GowlSceneEffectInterface {
 	GTypeInterface parent_iface;
 #ifndef __GI_SCANNER__
@@ -68,6 +86,10 @@ struct _GowlSceneEffectInterface {
 	                    const struct timespec *);
 	void (*monitor_removed) (GowlSceneEffect *, GowlCompositor *, GowlMonitor *);
 	void (*finish) (GowlSceneEffect *, GowlCompositor *);
+	/* Last, so a module built against the members above keeps their
+	 * offsets and simply leaves this one NULL. */
+	void (*client_placed) (GowlSceneEffect *, GowlCompositor *, GowlClient *,
+	                       gboolean);
 #endif
 };
 

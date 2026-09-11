@@ -25,7 +25,10 @@
  * client owns -- and otherwise leave the compositor alone.  That is why
  * this module has no sheet and no frame-by-frame drawing: once the nodes
  * are in place wlroots composites them, and the module only wakes up when
- * a window moves, resizes, or changes opacity.
+ * a window is placed or changes opacity.  A window an animation moves is
+ * placed a step at a time; then the module only re-points its nodes -- the
+ * backdrop cropped anew, the shadow stretched -- and draws the shadow
+ * again once the window has landed.
  *
  * WHAT THE BLUR ACTUALLY BLURS, AND WHY IT MATTERS.
  *
@@ -56,6 +59,7 @@
 #include "core/gowl-compositor.h"
 #include "core/gowl-monitor.h"
 #include "core/gowl-client.h"
+#include "core/gowl-effects.h"
 #include "core/gowl-frame-sink.h"
 #include "config/gowl-config.h"
 #include "boxed/gowl-color.h"
@@ -99,6 +103,7 @@ typedef struct {
 	struct wlr_buffer *buffer;       /* locked */
 	guint32            tags;         /* what was showing when it was made */
 	gint               width, height;
+	guint64            serial;       /* which blur this is: each build's own */
 	/*
 	 * Our OWN swapchain, not the output's.
 	 *
@@ -128,6 +133,7 @@ struct _GowlModuleBlur {
 	gboolean    gl_tried;
 	GList      *backdrops;   /* GowlBlurBackdrop* */
 	gboolean    capturing;
+	guint64     serial;      /* the last backdrop built */
 };
 
 /* Per-client decoration, hung off the client so it lives and dies with
@@ -147,6 +153,9 @@ typedef struct {
 	 * something it depends on has actually changed. */
 	gint    shadow_w, shadow_h, shadow_radius;
 	gdouble shadow_opacity;
+	/* Which blur of the wallpaper the backdrop shows (GowlBlurBackdrop's
+	 * serial), so its buffer is only set again when there is a new one. */
+	guint64 backdrop_serial;
 } GowlBlurNodes;
 
 static void blur_effect_init(GowlSceneEffectInterface *iface);
@@ -452,6 +461,9 @@ blur_build_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m,
 	bd->tags   = m->tagset[m->seltags];
 	bd->width  = out->width;
 	bd->height = out->height;
+	/* A new blur, so every backdrop showing the last one is re-pointed --
+	 * and only then, which is what the serial is for. */
+	bd->serial = ++mod->serial;
 	return TRUE;
 }
 
@@ -490,17 +502,61 @@ blur_client_eligible(GowlClient *c)
 	       && !gowl_fx_client_is_pinned(c);
 }
 
+/*
+ * Work from the frame as DRAWN, not from c->geom.
+ *
+ * A layout that allows overflow (scrolling) leaves c->geom unclipped on
+ * purpose -- it is the window's place in a strip wider than the screen --
+ * and a floating window dragged half off the monitor is never clipped at
+ * all.  Either way c->geom can describe a rectangle that is largely not on
+ * this output, while c->frame is where the compositor actually put the
+ * scene node.  Handing the former to wlroots as a source box is what
+ * aborted the session.  And while an animation moves the window, c->geom
+ * is where it is going and c->frame where it is now, which is what the
+ * decorations have to match.  Before the window is first drawn there is
+ * no frame, and its geometry is all there is.
+ */
+static struct wlr_box
+blur_drawn_frame(GowlClient *c)
+{
+	if (c->frame.width > 0 && c->frame.height > 0)
+		return c->frame;
+	return c->geom;
+}
+
+/* Whether the window has come to rest: no effect presents it at a
+ * geometry of its own.  client_placed is told; the other hooks ask. */
+static gboolean
+blur_settled(GowlClient *c)
+{
+	return !gowl_effects_has_geometry(c);
+}
+
+/*
+ * The shadow, around the frame as drawn and offset so the light appears
+ * to come from above.
+ *
+ * Drawing it is the one expensive thing in an otherwise free effect -- a
+ * CPU pass over every pixel of it -- so it is drawn only when something
+ * the picture depends on has changed, and only for a window at rest
+ * (@settled).  A window being dragged changes position every frame and
+ * size never.  One an animation is moving changes size on every step: the
+ * picture it already has is stretched over each frame instead, and drawn
+ * again for the size it lands at.  A window with no shadow yet gets one
+ * drawn for where it is going.
+ */
 static void
 blur_apply_shadow(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
-                   GowlBlurNodes *nodes)
+                   GowlBlurNodes *nodes, const struct wlr_box *frame,
+                   gboolean settled)
 {
 	gint    radius = gowl_config_get_shadow_radius(self->config);
 	gdouble opacity = gowl_config_get_shadow_opacity(self->config);
-	gint    pad, width, height;
+	gint    pad, width, height, draw_w, draw_h;
 	gdouble rgb[3] = { 0.0, 0.0, 0.0 };
 
 	if (!gowl_config_get_shadow(self->config) || radius <= 0
-	    || opacity <= 0.0 || c->geom.width <= 0 || c->geom.height <= 0) {
+	    || opacity <= 0.0 || frame->width <= 0 || frame->height <= 0) {
 		if (nodes->shadow != NULL) {
 			wlr_scene_node_destroy(&nodes->shadow->node);
 			nodes->shadow = NULL;
@@ -508,9 +564,23 @@ blur_apply_shadow(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 		return;
 	}
 
-	{
+	/* The size a new picture would be drawn for. */
+	draw_w = frame->width;
+	draw_h = frame->height;
+	if (!settled && c->geom.width > 0 && c->geom.height > 0) {
+		draw_w = c->geom.width;
+		draw_h = c->geom.height;
+	}
+
+	if (nodes->shadow == NULL
+	    || nodes->shadow_radius != radius
+	    || nodes->shadow_opacity != opacity
+	    || (settled && (nodes->shadow_w != draw_w
+	                    || nodes->shadow_h != draw_h))) {
 		const gchar *spec = gowl_config_get_shadow_color(self->config);
 		GowlColor *color = spec != NULL ? gowl_color_new_from_hex(spec) : NULL;
+		guint8 *pixels;
+		struct wlr_buffer *buffer;
 
 		if (color != NULL) {
 			rgb[0] = color->r;
@@ -518,37 +588,20 @@ blur_apply_shadow(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 			rgb[2] = color->b;
 			gowl_color_free(color);
 		}
-	}
 
-	pad    = radius * 2;
-	width  = c->geom.width + pad * 2;
-	height = c->geom.height + pad * 2;
+		if (nodes->shadow != NULL) {
+			wlr_scene_node_destroy(&nodes->shadow->node);
+			nodes->shadow = NULL;
+		}
 
-	/* Only redraw when something the image depends on has changed.  A
-	 * window being dragged changes position every frame and size never,
-	 * and re-rendering the shadow for each of those would be the one
-	 * expensive thing in an otherwise free effect. */
-	if (nodes->shadow != NULL
-	    && nodes->shadow_w == c->geom.width
-	    && nodes->shadow_h == c->geom.height
-	    && nodes->shadow_radius == radius
-	    && nodes->shadow_opacity == opacity) {
-		return;
-	}
-
-	if (nodes->shadow != NULL) {
-		wlr_scene_node_destroy(&nodes->shadow->node);
-		nodes->shadow = NULL;
-	}
-
-	{
-		guint8 *pixels = gowl_blur_shadow_render(
+		pad    = radius * 2;
+		width  = draw_w + pad * 2;
+		height = draw_h + pad * 2;
+		pixels = gowl_blur_shadow_render(
 			width, height, (gdouble)pad, (gdouble)pad,
-			(gdouble)c->geom.width, (gdouble)c->geom.height,
+			(gdouble)draw_w, (gdouble)draw_h,
 			(gdouble)radius, (gdouble)MAX(0, (gint)c->bw) + 6.0,
 			opacity, rgb);
-		struct wlr_buffer *buffer;
-
 		if (pixels == NULL)
 			return;
 		buffer = gowl_raw_buffer_create(pixels, width, height, width * 4);
@@ -560,27 +613,29 @@ blur_apply_shadow(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 		wlr_buffer_drop(buffer);
 		if (nodes->shadow == NULL)
 			return;
+		nodes->shadow_w = draw_w;
+		nodes->shadow_h = draw_h;
+		nodes->shadow_radius = radius;
+		nodes->shadow_opacity = opacity;
 	}
 
-	/* Under everything the client owns, offset so the light appears to
-	 * come from above. */
-	wlr_scene_node_lower_to_bottom(&nodes->shadow->node);
+	/* Over the frame as drawn: the picture's own size once the window is
+	 * at rest, stretched to each step while it moves. */
+	pad = nodes->shadow_radius * 2;
+	wlr_scene_buffer_set_dest_size(nodes->shadow, frame->width + pad * 2,
+	                               frame->height + pad * 2);
 	wlr_scene_node_set_position(&nodes->shadow->node,
 	                            -pad + gowl_config_get_shadow_offset_x(self->config),
 	                            -pad + gowl_config_get_shadow_offset_y(self->config));
-	nodes->shadow_w = c->geom.width;
-	nodes->shadow_h = c->geom.height;
-	nodes->shadow_radius = radius;
-	nodes->shadow_opacity = opacity;
 }
 
 static void
 blur_apply_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
-                     GowlBlurNodes *nodes)
+                     GowlBlurNodes *nodes, const struct wlr_box *frame)
 {
 	GowlBlurBackdrop *bd;
 	struct wlr_fbox   src;
-	struct wlr_box    frame, vis;
+	struct wlr_box    vis;
 
 	if (!gowl_config_get_blur(self->config)
 	    || c->alpha >= GOWL_BLUR_MIN_TRANSPARENCY
@@ -596,29 +651,24 @@ blur_apply_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 	if (bd == NULL)
 		return;
 
+	/*
+	 * A new node shows the current blur; one already there is re-pointed
+	 * only when the wallpaper has been blurred again.  Setting a buffer
+	 * drops the texture the scene made from the last one, and this runs
+	 * on every step of an animation.
+	 */
 	if (nodes->backdrop == NULL) {
 		blur_set_backdrop(nodes,
 		                  wlr_scene_buffer_create(c->scene, bd->buffer));
 		if (nodes->backdrop == NULL)
 			return;
-	} else {
+		nodes->backdrop_serial = bd->serial;
+	} else if (nodes->backdrop_serial != bd->serial) {
 		wlr_scene_buffer_set_buffer(nodes->backdrop, bd->buffer);
+		nodes->backdrop_serial = bd->serial;
 	}
 
-	/*
-	 * Work from the frame as DRAWN, not from c->geom.
-	 *
-	 * A layout that allows overflow (scrolling) leaves c->geom
-	 * unclipped on purpose -- it is the window's place in a strip wider
-	 * than the screen -- and a floating window dragged half off the
-	 * monitor is never clipped at all.  Either way c->geom can describe
-	 * a rectangle that is largely not on this output, while c->frame is
-	 * where the compositor actually put the scene node.  Handing the
-	 * former to wlroots as a source box is what aborted the session.
-	 */
-	frame = (c->frame.width > 0 && c->frame.height > 0) ? c->frame : c->geom;
-
-	if (!gowl_blur_backdrop_box(&frame, &c->mon->m, bd->width, bd->height,
+	if (!gowl_blur_backdrop_box(frame, &c->mon->m, bd->width, bd->height,
 	                            &src, &vis)) {
 		wlr_scene_node_set_enabled(&nodes->backdrop->node, FALSE);
 		return;
@@ -627,19 +677,38 @@ blur_apply_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 
 	wlr_scene_buffer_set_source_box(nodes->backdrop, &src);
 	wlr_scene_buffer_set_dest_size(nodes->backdrop, vis.width, vis.height);
-	wlr_scene_node_lower_to_bottom(&nodes->backdrop->node);
-	/* Above the shadow, which is outside the window's rectangle anyway. */
-	if (nodes->shadow != NULL)
-		wlr_scene_node_lower_to_bottom(&nodes->shadow->node);
 	/* The node is a child of c->scene, which sits at the frame origin. */
 	wlr_scene_node_set_position(&nodes->backdrop->node,
-	                            vis.x - frame.x, vis.y - frame.y);
+	                            vis.x - frame->x, vis.y - frame->y);
+}
+
+/*
+ * The shadow at the very bottom of the window's tree and the backdrop
+ * straight above it: both under everything the client draws, the backdrop
+ * over the shadow, which is outside the window's rectangle anyway.  Only
+ * what is out of place is moved -- a move damages the node, and this runs
+ * on every step of an animation.
+ */
+static void
+blur_restack(GowlBlurNodes *nodes)
+{
+	if (nodes->shadow != NULL)
+		wlr_scene_node_lower_to_bottom(&nodes->shadow->node);
+	if (nodes->backdrop == NULL)
+		return;
+	if (nodes->shadow != NULL)
+		wlr_scene_node_place_above(&nodes->backdrop->node,
+		                           &nodes->shadow->node);
+	else
+		wlr_scene_node_lower_to_bottom(&nodes->backdrop->node);
 }
 
 static void
-blur_update_client(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c)
+blur_update_client(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
+                    gboolean settled)
 {
-	GowlBlurNodes *nodes;
+	GowlBlurNodes  *nodes;
+	struct wlr_box  frame;
 
 	blur_ensure_gl(mod, self);
 	if (mod->gl == NULL || self->config == NULL || self->locked)
@@ -650,17 +719,23 @@ blur_update_client(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c)
 		return;
 	}
 
+	frame = blur_drawn_frame(c);
 	nodes = blur_nodes(c, TRUE);
-	blur_apply_shadow(mod, self, c, nodes);
-	blur_apply_backdrop(mod, self, c, nodes);
+	blur_apply_shadow(mod, self, c, nodes, &frame, settled);
+	blur_apply_backdrop(mod, self, c, nodes, &frame);
+	blur_restack(nodes);
 }
 
 /* ── Hooks ───────────────────────────────────────────────────────── */
 
 /*
- * Never claims an event.  The decorations follow the window rather than
- * placing it, so every hook here returns FALSE and the animation module
- * goes on owning geometry exactly as it did before.
+ * Never claims an event, and has no use for GEOMETRY: that stops at the
+ * first provider to claim it, which for every tile is the animation module
+ * sorted ahead of this one, so the decorations never heard of a resize
+ * from it.  Where a window is drawn arrives through client_placed below,
+ * which every provider gets.  What is left here is a window a tag switch
+ * reveals (the wallpaper behind it may be another tag's now), the end of
+ * a drag, and letting go.
  */
 static gboolean
 blur_client_event(GowlSceneEffect *effect, GowlCompositor *self, GowlClient *c,
@@ -694,20 +769,39 @@ blur_client_event(GowlSceneEffect *effect, GowlCompositor *self, GowlClient *c,
 		 * the old shadow and a backdrop at the tile's size hanging off
 		 * the window -- another pair on every trip into the scratchpad
 		 * and back, spilling into the next column.  Destroy whichever are
-		 * still alive; the next GEOMETRY builds them for where the window
-		 * is now.
+		 * still alive; the next placement builds them for where the
+		 * window is now.
 		 */
 		blur_clear_nodes(c);
 		break;
-	case GOWL_SCENE_EFFECT_GEOMETRY:
 	case GOWL_SCENE_EFFECT_REVEAL:
 	case GOWL_SCENE_EFFECT_RELEASE:
-		blur_update_client(mod, self, c);
+		blur_update_client(mod, self, c, blur_settled(c));
 		break;
 	default:
 		break;
 	}
 	return FALSE;
+}
+
+/*
+ * The window is drawn at a new frame: placed by whichever provider claimed
+ * its GEOMETRY or by the compositor, a step of an animation, or the step
+ * that lands it.  While it is still moving (@settled is FALSE) the
+ * decorations only follow it; once it is at rest the shadow is drawn for
+ * the size it came to.
+ */
+static void
+blur_client_placed(GowlSceneEffect *effect, GowlCompositor *self,
+                    GowlClient *c, gboolean settled)
+{
+	GowlModuleBlur *mod = GOWL_MODULE_BLUR(effect);
+
+	g_weak_ref_set(&mod->compositor, self);
+
+	if (c == NULL || mod->capturing)
+		return;
+	blur_update_client(mod, self, c, settled);
 }
 
 static void
@@ -719,7 +813,7 @@ blur_alpha_changed(GowlSceneEffect *effect, GowlClient *c, gfloat alpha)
 	/* A window becoming translucent is exactly when it needs a blurred
 	 * backdrop, and becoming opaque is when it should lose one. */
 	if (self != NULL)
-		blur_update_client(mod, self, c);
+		blur_update_client(mod, self, c, blur_settled(c));
 }
 
 static void
@@ -760,6 +854,7 @@ blur_effect_init(GowlSceneEffectInterface *iface)
 	iface->alpha_changed   = blur_alpha_changed;
 	iface->monitor_removed = blur_monitor_removed;
 	iface->finish          = blur_finish;
+	iface->client_placed   = blur_client_placed;
 }
 
 static void
@@ -777,12 +872,16 @@ blur_shutdown_init(GowlShutdownHandlerInterface *iface)
 /* ── Module ──────────────────────────────────────────────────────── */
 
 /*
- * After the animation module.
+ * After the animation module, for the hooks both of them hear -- REVEAL,
+ * RELEASE, an opacity change: by the time this module reads the frame,
+ * the window is where the animation put it.
  *
- * The decorations follow the window's FINAL geometry, and the animation
- * module is what decides that.  Running first would decorate a rectangle
- * the window is about to leave.  It claims nothing either way, so the
- * order costs nobody anything.
+ * Priority is NOT how the decorations follow a window, and cannot be.  A
+ * CONSUMABLE hook stops at the first provider to claim it, and the
+ * animation module claims GEOMETRY for every tile, so from here no resize
+ * was ever seen: a window that shrank drew its old shadow and backdrop
+ * across its neighbour.  They follow client_placed, which is BROADCAST
+ * and reaches every provider whatever its priority.
  */
 #define GOWL_BLUR_PRIORITY (10)
 

@@ -3917,12 +3917,10 @@ gowl_compositor_apply_frame_geometry(
 	float color[4];
 
 	/*
-	 * Record the frame as drawn before anything can return early.  This
-	 * is the only place that knows both the position the scene node was
-	 * given and the size the decoration was built at, and effect modules
-	 * need it: c->geom is the layout's idea of the window and can hang
-	 * off the output entirely.  The decorator branch below returns, so
-	 * this cannot live further down.
+	 * Record the frame as drawn.  This is the only place that knows both
+	 * the position the scene node was given and the size the decoration
+	 * was built at, and effect modules need it: c->geom is the layout's
+	 * idea of the window and can hang off the output entirely.
 	 */
 	c->frame.width  = width;
 	c->frame.height = height;
@@ -3945,27 +3943,43 @@ gowl_compositor_apply_frame_geometry(
 		gowl_client_decorator_render_decoration(
 			dec, c, width, height, c->bw,
 			color);
-		return;
+	} else {
+		/* Re-enable rect borders if a decorator was deactivated */
+		for (bi = 0; bi < 4; bi++) {
+			if (c->border[bi] != NULL)
+				wlr_scene_node_set_enabled(
+					&c->border[bi]->node, TRUE);
+		}
+
+		/* top, bottom, left, right */
+		wlr_scene_rect_set_size(c->border[0], width, c->bw);
+		wlr_scene_rect_set_size(c->border[1], width, c->bw);
+		wlr_scene_rect_set_size(c->border[2], c->bw,
+		                        MAX(0, height - 2 * (gint)c->bw));
+		wlr_scene_rect_set_size(c->border[3], c->bw,
+		                        MAX(0, height - 2 * (gint)c->bw));
+		wlr_scene_node_set_position(&c->border[1]->node, 0,
+		                            height - (gint)c->bw);
+		wlr_scene_node_set_position(&c->border[2]->node, 0, c->bw);
+		wlr_scene_node_set_position(&c->border[3]->node,
+		                            width - (gint)c->bw, c->bw);
 	}
 
-	/* Re-enable rect borders if a decorator was deactivated */
-	for (bi = 0; bi < 4; bi++) {
-		if (c->border[bi] != NULL)
-			wlr_scene_node_set_enabled(&c->border[bi]->node, TRUE);
-	}
-
-	/* top, bottom, left, right */
-	wlr_scene_rect_set_size(c->border[0], width, c->bw);
-	wlr_scene_rect_set_size(c->border[1], width, c->bw);
-	wlr_scene_rect_set_size(c->border[2], c->bw,
-	                        MAX(0, height - 2 * (gint)c->bw));
-	wlr_scene_rect_set_size(c->border[3], c->bw,
-	                        MAX(0, height - 2 * (gint)c->bw));
-	wlr_scene_node_set_position(&c->border[1]->node, 0,
-	                            height - (gint)c->bw);
-	wlr_scene_node_set_position(&c->border[2]->node, 0, c->bw);
-	wlr_scene_node_set_position(&c->border[3]->node,
-	                            width - (gint)c->bw, c->bw);
+	/*
+	 * Then tell every effect provider where the window is drawn now.
+	 *
+	 * Every drawn frame comes through here: the compositor's own
+	 * placement, the placement of an effect that claimed GEOMETRY
+	 * instead, each step of an animation and the step that lands it.
+	 * GEOMETRY stops at its claimant -- the animation module, for every
+	 * tile -- so a provider that only decorates a window, like the blur
+	 * module's shadow and backdrop, never heard that one had been resized
+	 * and went on drawing the old size across the neighbour.  After the
+	 * borders, so the frame a provider sees is finished, and from both
+	 * branches: cmacs draws every frame through its decorator (rounded
+	 * borders), where an early return used to end this function.
+	 */
+	gowl_effects_client_placed(self, c);
 }
 
 gboolean

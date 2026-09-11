@@ -75,9 +75,11 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   itself when there is no DRM render node
 - `test-effects` -- How scene-effect hooks are shared out: priority
   order, consumable hooks stopping at the first claimant, broadcast hooks
-  reaching every provider, and neither kind affecting the other. Both
-  failure modes are silent, so this is the file to read before changing
-  `src/core/gowl-effects.c`
+  reaching every provider, and neither kind affecting the other; and
+  `client_placed` sent from both branches of
+  `gowl_compositor_apply_frame_geometry()`, rect borders or decorator.
+  Both failure modes are silent, so this is the file to read before
+  changing `src/core/gowl-effects.c`
 - `test-fx-render` -- The shared effect layer (`src/fx`) against a real
   GLES2 renderer: quad and ortho orientation agreeing with each other,
   the blur actually blurring, corner rounding actually rounding. Skips
@@ -94,7 +96,12 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   DESTROY whose tree stays -- adopting a window into the scratchpad,
   showing it, giving it back -- takes them off, and no number of trips
   leaves an extra pair. Merely forgetting them hung a tile-sized shadow
-  and backdrop off the window, drawn across the next column of the panel
+  and backdrop off the window, drawn across the next column of the panel.
+  And with `animation.so` loaded, which claims every tile's GEOMETRY,
+  both follow the frame as drawn -- after a placement it makes at once,
+  on every step of one it animates (the shadow stretched, not redrawn)
+  and where it lands; again with `roundcorners.so`, whose frames are
+  drawn through the decorator
 - `test-fx-sheet-guard.sh` -- a capture that hides the client layers also
   hides the effect sheets (a sheet is a sibling of the layer trees and
   holds a picture of the desktop *with* its windows)

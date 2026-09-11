@@ -750,10 +750,12 @@ clocks, impulses, surface snapshots, closing ghosts, and per-client
 animation state. Existing =GowlConfig= properties remain the settings
 API; they do not activate an engine without a loaded module.
 
-The first active scene-effect provider receives geometry, reveal,
-release, unmap, destroy, pre-frame, frame-done, and monitor-removal
-hooks. Opacity and displayed geometry queries keep decorators and
-input consistent with the provider. Without a provider, geometry is
+The scene-effect providers receive geometry, reveal, release, unmap,
+destroy, pre-frame, frame-done, and monitor-removal hooks, and hear of
+every frame a window is drawn at --- each hook dispatched as described
+under *Six providers, dispatched per event* below. Opacity and displayed
+geometry queries keep decorators and input consistent with the
+provider. Without a provider, geometry is
 immediate. Disabling the animation module finishes motion, restores
 live content and opacity, and releases all closing buffers. Shutdown
 finishes effects before renderer teardown, and after that nothing is
@@ -793,11 +795,35 @@ blank.
 *Six providers, dispatched per event.* Every hook is either CONSUMABLE
 (=client_event=, =get_geometry=, =surface_at= --- first claimant wins,
 because two modules cannot both decide where a window is) or BROADCAST
-(=alpha_changed=, =frame=, =frame_done=, =monitor_removed=, =finish= ---
-every provider gets one, because a module that misses its own teardown
-leaks buffers into a departing renderer). =src/core/gowl-effects.c= owns
-that distinction and =tests/test-effects.c= pins it; both failure modes
-are silent absences rather than crashes.
+(=alpha_changed=, =frame=, =frame_done=, =monitor_removed=, =finish=,
+=client_placed= --- every provider gets one, because a module that misses
+its own teardown leaks buffers into a departing renderer, and one that
+decorates a window has to follow it whoever moved it).
+=src/core/gowl-effects.c= owns that distinction and =tests/test-effects.c=
+pins it; both failure modes are silent absences rather than crashes.
+
+*Where a window is drawn is news to every provider.* Placement arrives
+as =GEOMETRY=, which is consumable, and the animation module claims it
+for every tile --- so a provider sorted after it that only decorates the
+window never heard of a resize. The blur module's shadow kept the old
+size and its backdrop the old crop after every animated re-tile (Super+h,
+a neighbour closing, any layout change) until something else happened to
+wake it, and a window that shrank drew them across its neighbour.
+=gowl_compositor_apply_frame_geometry()= is the one function every drawn
+frame passes through --- the compositor's own placement, the claimant's,
+each step of an animation and the step that lands it, whether it draws
+rect borders or calls the decorator --- so it ends by broadcasting
+=client_placed=, with =settled= TRUE once the window is drawn at its own
+geometry and no provider presents it at another (=get_geometry= claims
+nothing), FALSE on the steps in between. Expensive work waits for
+=settled=: the blur module crops its backdrop to the drawn frame at every
+step and stretches the shadow it has over it, draws the shadow again only
+once the window has landed, and gives the scene a new backdrop buffer
+only when the wallpaper was blurred again, because setting one drops the
+texture made from the last. The rounded borders never had the gap: a
+decorator is called from that same function. =tests/test-blur-nodes.c=
+resizes a window with the animation module loaded, with and without the
+rounded borders, and holds both nodes to the drawn frame at every step.
 
 *DESTROY means two things.* It follows UNMAP when a window closes, by
 which time the window's scene tree is gone; and the compositor also sends

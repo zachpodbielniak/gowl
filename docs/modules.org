@@ -1215,10 +1215,15 @@ rather than of the module:
   IS and what the pointer hits. Two modules cannot both answer, so the
   first provider in priority order that claims one owns it. This is the
   rule that stops two modules fighting over one scene node.
-- =alpha_changed=, =frame=, =frame_done=, =monitor_removed= and =finish=
-  are "here is a tick" and "put your things away". Every provider gets
-  them, because a module that misses its own teardown leaks buffers into
-  a renderer that is going away.
+- =alpha_changed=, =frame=, =frame_done=, =monitor_removed=, =finish=
+  and =client_placed= are "here is a tick", "put your things away" and
+  "the window is drawn here now". Every provider gets them, because a
+  module that misses its own teardown leaks buffers into a renderer that
+  is going away, and one that decorates a window has to follow it
+  whichever module moved it. A decoration therefore follows
+  =client_placed=, never =GEOMETRY=: the animation module claims every
+  tile's placement, which is how the blur module's shadow and backdrop
+  used to keep a resized window's old size.
 
 Dispatch lives in =src/core/gowl-effects.c= and is pinned by
 =tests/test-effects.c=. Both failure modes are silent: a consumable hook

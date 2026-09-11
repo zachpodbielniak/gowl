@@ -1454,9 +1454,12 @@ void gowl_compositor_notify_output_resized (GowlCompositor    *self,
  * @width: the frame width to draw
  * @height: the frame height
  *
- * Lays out @client's borders at the given size.  Called by the layout
- * with the final geometry and by the animation with an interpolated
- * one; they must agree, which is why there is only one of it.
+ * Lays out @client's borders at the given size, records it as the frame
+ * drawn, and tells every scene-effect provider where @client is drawn now
+ * (the client_placed hook).  Called by the layout with the final geometry
+ * and by the animation with an interpolated one; they must agree, which
+ * is why there is only one of it -- and why it is where a provider that
+ * decorates a window learns that the window moved.
  */
 void gowl_compositor_apply_frame_geometry (GowlCompositor *self,
                                             GowlClient     *client,

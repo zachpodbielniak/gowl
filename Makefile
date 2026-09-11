@@ -598,8 +598,11 @@ $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(absp
 
 # The blur module's shadow and backdrop against the real .so, in a
 # headless compositor drawing with GLES2: a window whose effects are reset
-# while its tree stays -- into the scratchpad and out -- must not keep them.
-$(OUTDIR)/test-blur-nodes: $(OUTDIR)/modules/blur.so
+# while its tree stays -- into the scratchpad and out -- must not keep them,
+# and a window the animation module resizes, claiming the placement, must
+# still have them follow it; again with the rounded borders, which draw the
+# frame through the decorator instead.
+$(OUTDIR)/test-blur-nodes: $(addprefix $(OUTDIR)/modules/,blur.so animation.so roundcorners.so)
 $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

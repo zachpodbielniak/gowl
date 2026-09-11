@@ -14,10 +14,12 @@
  *     that keeps two modules from fighting over one scene node.
  *
  *   BROADCAST -- alpha_changed, frame, frame_done, monitor_removed,
- *     finish.  These are "here is a tick" and "put your things away".
- *     Every provider gets them, because a module that does not receive
- *     its own teardown leaks buffers into a renderer that is going away,
- *     and a module that does not receive a frame simply stops animating.
+ *     finish, client_placed.  These are "here is a tick", "put your
+ *     things away" and "the window is drawn here now".  Every provider
+ *     gets them, because a module that does not receive its own teardown
+ *     leaks buffers into a renderer that is going away, a module that
+ *     does not receive a frame simply stops animating, and a module that
+ *     decorates a window has to follow it whichever module moved it.
  *
  * gowl handed the whole interface to a single provider until there were
  * enough effect modules for that to hurt: the loser had to be forwarded
@@ -125,6 +127,40 @@ gowl_effects_alpha_changed (GowlClient *c, gfloat alpha)
 			GOWL_SCENE_EFFECT_GET_IFACE (p)->alpha_changed (p, c, alpha);
 	}
 	g_clear_pointer (&_p, g_ptr_array_unref);
+}
+
+/*
+ * The window is drawn at a new frame -- placed, a step of an animation, or
+ * landed -- and every provider hears of it, whichever of them moved it.
+ *
+ * Broadcast for the same reason a tick is.  Placement itself arrives as
+ * GEOMETRY, which is consumable: the animation module claims it for every
+ * tile, and a provider sorted after it that only decorates the window --
+ * the blur module's shadow and backdrop -- never heard that the window had
+ * been resized.  They stayed at the old size, drawn across the neighbour.
+ *
+ * Whether the window has settled is asked once, before anyone hears, so
+ * every provider is told the same thing about the same frame: settled
+ * means no provider presents the window at a geometry of its own.
+ */
+void
+gowl_effects_client_placed (GowlCompositor *self, GowlClient *c)
+{
+	GowlSceneEffect *p;
+	gboolean settled;
+
+	if (c == NULL)
+		return;
+	settled = !gowl_effects_has_geometry (c);
+
+	{
+		GOWL_EFFECTS_FOR_EACH (self, p) {
+			if (GOWL_SCENE_EFFECT_GET_IFACE (p)->client_placed != NULL)
+				GOWL_SCENE_EFFECT_GET_IFACE (p)->client_placed (
+					p, self, c, settled);
+		}
+		g_clear_pointer (&_p, g_ptr_array_unref);
+	}
 }
 
 struct wlr_surface *

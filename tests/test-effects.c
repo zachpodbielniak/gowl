@@ -17,12 +17,21 @@
  *
  * So the semantics are pinned here with counting providers, and the two
  * real plugins are loaded at the end to check they agree with them.
+ *
+ * One broadcast hook describes a window rather than a tick: client_placed,
+ * sent for every frame gowl_compositor_apply_frame_geometry() draws.  A
+ * window's placement is claimed by one provider -- the animation module,
+ * for every tile -- and this is how the rest hear of it, so it is pinned
+ * from both of that function's branches as well as from the dispatcher.
  */
 
 #include <glib.h>
+#include <wlr/types/wlr_scene.h>
 
 #include "core/gowl-core-private.h"
+#include "core/gowl-compositor.h"
 #include "core/gowl-effects.h"
+#include "interfaces/gowl-client-decorator.h"
 #include "interfaces/gowl-scene-effect.h"
 #include "module/gowl-module-manager.h"
 
@@ -37,14 +46,16 @@ typedef struct {
 	gint frame_done;
 	gint monitor_removed;
 	gint finish;
+	gint client_placed;
 } Calls;
 
 G_DECLARE_FINAL_TYPE(TestEffect, test_effect, TEST, EFFECT, GowlModule)
 struct _TestEffect {
 	GowlModule parent_instance;
 	Calls      calls;
-	gboolean   claims;       /* answer consumable hooks affirmatively */
-	gboolean   frame_live;   /* answer "still animating" */
+	gboolean   claims;          /* answer consumable hooks affirmatively */
+	gboolean   frame_live;      /* answer "still animating" */
+	gboolean   placed_settled;  /* what the last client_placed said */
 	gchar     *name;
 };
 
@@ -116,6 +127,16 @@ te_finish(GowlSceneEffect *e, GowlCompositor *c)
 }
 
 static void
+te_client_placed(GowlSceneEffect *e, GowlCompositor *c, GowlClient *cl,
+                 gboolean settled)
+{
+	TestEffect *self = TEST_EFFECT(e);
+
+	self->calls.client_placed++;
+	self->placed_settled = settled;
+}
+
+static void
 te_effect_init(GowlSceneEffectInterface *iface)
 {
 	iface->client_event    = te_client_event;
@@ -126,6 +147,7 @@ te_effect_init(GowlSceneEffectInterface *iface)
 	iface->frame_done      = te_frame_done;
 	iface->monitor_removed = te_monitor_removed;
 	iface->finish          = te_finish;
+	iface->client_placed   = te_client_placed;
 }
 
 G_DEFINE_TYPE_WITH_CODE(TestEffect, test_effect, GOWL_TYPE_MODULE,
@@ -160,6 +182,49 @@ test_effect_class_init(TestEffectClass *klass)
 	GOWL_MODULE_CLASS(klass)->get_name = te_name;
 	GOWL_MODULE_CLASS(klass)->activate = te_activate;
 	G_OBJECT_CLASS(klass)->finalize = te_finalize;
+}
+
+/* ── A decorator that counts ─────────────────────────────────────── */
+
+/*
+ * gowl_compositor_apply_frame_geometry() draws a frame one of two ways:
+ * rect borders, or through the active decorator.  cmacs always has one
+ * (the rounded borders), so the providers must hear of a frame drawn that
+ * way too.
+ */
+G_DECLARE_FINAL_TYPE(TestDecorator, test_decorator, TEST, DECORATOR, GowlModule)
+struct _TestDecorator {
+	GowlModule parent_instance;
+	gint       rendered;
+};
+
+static void
+td_render_decoration(GowlClientDecorator *d, gpointer client, gint width,
+                     gint height, guint bw, const float *color)
+{
+	TEST_DECORATOR(d)->rendered++;
+}
+
+static void
+td_decorator_init(GowlClientDecoratorInterface *iface)
+{
+	iface->render_decoration = td_render_decoration;
+}
+
+G_DEFINE_TYPE_WITH_CODE(TestDecorator, test_decorator, GOWL_TYPE_MODULE,
+	G_IMPLEMENT_INTERFACE(GOWL_TYPE_CLIENT_DECORATOR, td_decorator_init))
+
+static const gchar *td_name(GowlModule *m) { return "test-decorator"; }
+static gboolean td_activate(GowlModule *m) { return TRUE; }
+static void
+test_decorator_init(TestDecorator *self)
+{
+}
+static void
+test_decorator_class_init(TestDecoratorClass *klass)
+{
+	GOWL_MODULE_CLASS(klass)->get_name = td_name;
+	GOWL_MODULE_CLASS(klass)->activate = td_activate;
 }
 
 /* ── Fixture ─────────────────────────────────────────────────────── */
@@ -426,6 +491,85 @@ test_claiming_does_not_affect_broadcast(Fixture *f, gconstpointer data)
 	g_assert_cmpint(f->second->calls.finish, ==, 1);
 }
 
+/*
+ * client_placed is broadcast: the provider that claims a window's
+ * placement does not keep the news of it from the others, which is the
+ * whole point of the hook -- the animation module claims every tile's
+ * GEOMETRY, and the blur module sorted after it never saw a resize.  And
+ * every provider is told the same thing about whether the window has
+ * settled: not while one of them presents it at a geometry of its own.
+ */
+static void
+test_client_placed_reaches_every_provider(Fixture *f, gconstpointer data)
+{
+	f->first->claims = TRUE;
+	gowl_effects_client_placed(f->compositor, f->client);
+	g_assert_cmpint(f->first->calls.client_placed, ==, 1);
+	g_assert_cmpint(f->second->calls.client_placed, ==, 1);
+	g_assert_false(f->first->placed_settled);
+	g_assert_false(f->second->placed_settled);
+
+	f->first->claims = FALSE;
+	gowl_effects_client_placed(f->compositor, f->client);
+	g_assert_cmpint(f->first->calls.client_placed, ==, 2);
+	g_assert_cmpint(f->second->calls.client_placed, ==, 2);
+	g_assert_true(f->first->placed_settled);
+	g_assert_true(f->second->placed_settled);
+}
+
+/*
+ * Every frame gowl_compositor_apply_frame_geometry() draws is announced,
+ * whichever way it draws it: with rect borders, and through a decorator,
+ * which is how cmacs draws every frame.  A scene of its own, with the four
+ * border rects a mapped window has; no renderer is needed to draw into it.
+ */
+static void
+test_drawing_a_frame_announces_it(Fixture *f, gconstpointer data)
+{
+	static const float grey[4] = { 0.5f, 0.5f, 0.5f, 1.0f };
+	struct wlr_scene  *scene;
+	TestDecorator     *dec;
+	gint               i;
+
+	scene = wlr_scene_create();
+	f->client->scene = wlr_scene_tree_create(&scene->tree);
+	wlr_scene_node_set_position(&f->client->scene->node, 30, 40);
+	for (i = 0; i < 4; i++)
+		f->client->border[i] = wlr_scene_rect_create(f->client->scene,
+		                                             0, 0, grey);
+	f->client->bw = 2;
+
+	/* Drawn with rect borders. */
+	gowl_compositor_apply_frame_geometry(f->compositor, f->client, 120, 80);
+	g_assert_cmpint(f->client->frame.x, ==, 30);
+	g_assert_cmpint(f->client->frame.y, ==, 40);
+	g_assert_cmpint(f->client->frame.width, ==, 120);
+	g_assert_cmpint(f->client->frame.height, ==, 80);
+	g_assert_cmpint(f->first->calls.client_placed, ==, 1);
+	g_assert_cmpint(f->second->calls.client_placed, ==, 1);
+	g_assert_true(f->second->placed_settled);
+
+	/* And through a decorator, which takes over from the borders. */
+	g_assert_true(gowl_module_manager_register(f->compositor->module_mgr,
+	                                            test_decorator_get_type(),
+	                                            NULL));
+	dec = TEST_DECORATOR(gowl_module_manager_find_module(
+		f->compositor->module_mgr, "test-decorator"));
+	g_assert_nonnull(dec);
+	g_assert_true(gowl_module_activate(GOWL_MODULE(dec)));
+	gowl_compositor_apply_frame_geometry(f->compositor, f->client, 90, 60);
+	g_assert_cmpint(dec->rendered, ==, 1);
+	g_assert_cmpint(f->client->frame.width, ==, 90);
+	g_assert_cmpint(f->first->calls.client_placed, ==, 2);
+	g_assert_cmpint(f->second->calls.client_placed, ==, 2);
+
+	/* The borders go with the scene. */
+	wlr_scene_node_destroy(&scene->tree.node);
+	f->client->scene = NULL;
+	for (i = 0; i < 4; i++)
+		f->client->border[i] = NULL;
+}
+
 /* ── No providers at all ──────────────────────────────────────────── */
 
 /* Every hook count of @e is zero, except finish: once. */
@@ -439,6 +583,7 @@ assert_heard_only_finish(TestEffect *e)
 	g_assert_cmpint(e->calls.frame, ==, 0);
 	g_assert_cmpint(e->calls.frame_done, ==, 0);
 	g_assert_cmpint(e->calls.monitor_removed, ==, 0);
+	g_assert_cmpint(e->calls.client_placed, ==, 0);
 	g_assert_cmpint(e->calls.finish, ==, 1);
 }
 
@@ -467,6 +612,7 @@ test_nothing_reaches_a_provider_after_finish(Fixture *f, gconstpointer data)
 	g_assert_cmpint(box.x, ==, 7);  /* the client's own, from setup */
 	g_assert_false(gowl_effects_has_geometry(f->client));
 	gowl_effects_alpha_changed(f->client, 0.5f);
+	gowl_effects_client_placed(f->compositor, f->client);
 	g_assert_null(gowl_effects_surface_at(f->client, 1, 1, NULL, NULL));
 	g_assert_false(gowl_effects_frame(f->compositor, NULL, 0));
 	gowl_effects_frame_done(f->compositor, NULL, NULL);
@@ -525,6 +671,7 @@ test_no_providers_is_quiet(void)
 	g_assert_null(gowl_effects_surface_at(cl, 0, 0, &sx, &sy));
 	g_assert_false(gowl_effects_frame(c, NULL, 0));
 	gowl_effects_alpha_changed(cl, 1.0f);
+	gowl_effects_client_placed(c, cl);
 	gowl_effects_frame_done(c, NULL, &now);
 	gowl_effects_monitor_removed(c, NULL);
 	gowl_effects_finish(c);
@@ -560,6 +707,10 @@ main(int argc, char **argv)
 	           setup, test_teardown_hooks_reach_every_provider, teardown);
 	g_test_add("/effects/claim-does-not-block-broadcast", Fixture, NULL,
 	           setup, test_claiming_does_not_affect_broadcast, teardown);
+	g_test_add("/effects/client-placed/broadcast", Fixture, NULL,
+	           setup, test_client_placed_reaches_every_provider, teardown);
+	g_test_add("/effects/client-placed/every-frame-drawn", Fixture, NULL,
+	           setup, test_drawing_a_frame_announces_it, teardown);
 	g_test_add("/effects/equal-priority-registration-order", Fixture, NULL,
 	           setup, test_equal_priorities_keep_registration_order, teardown);
 	g_test_add("/effects/teardown/nothing-after-finish", Fixture, NULL,

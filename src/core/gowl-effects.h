@@ -11,6 +11,7 @@ gboolean gowl_effects_client_event (GowlCompositor *, GowlClient *,
 struct wlr_box gowl_effects_geometry (GowlClient *);
 gboolean gowl_effects_has_geometry (GowlClient *);
 void gowl_effects_alpha_changed (GowlClient *, gfloat);
+void gowl_effects_client_placed (GowlCompositor *, GowlClient *);
 struct wlr_surface *gowl_effects_surface_at (GowlClient *, gdouble, gdouble, gdouble *,
                                              gdouble *);
 gboolean gowl_effects_frame (GowlCompositor *, GowlMonitor *, gint64);

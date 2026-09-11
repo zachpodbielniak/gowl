@@ -555,6 +555,11 @@ gowl_compositor_finalize(GObject *object)
 	if (self->pretag_pids != NULL)
 		g_array_unref(self->pretag_pids);
 
+	/* The last config a reload made, which the teardown above could
+	 * still read.  A config the compositor was given is its owner's to
+	 * release, after this. */
+	g_clear_object(&self->owned_config);
+
 	G_OBJECT_CLASS(gowl_compositor_parent_class)->finalize(object);
 }
 
@@ -7491,12 +7496,25 @@ gowl_compositor_dispatch_keybind(
 			}
 			case GOWL_ACTION_RELOAD_CONFIG: {
 				/*
-				 * Reload the YAML configuration from disk.  Keybinds
-				 * and appearance settings take effect immediately.
-				 * The new config object is intentionally kept alive
-				 * (the compositor borrows the reference).
+				 * Reload the YAML configuration from disk into a
+				 * fresh config, so that a setting the file no longer
+				 * names goes back to its default.  Keybinds and
+				 * appearance settings take effect immediately; a file
+				 * that does not parse leaves the running config alone.
+				 *
+				 * The compositor owns only the configs it makes here.
+				 * The one it was given belongs to whoever gave it --
+				 * main(), or an embedder such as cmacs -- which
+				 * releases it after the compositor.  Releasing that
+				 * one here freed it under its owner: set_config()
+				 * then disconnected a handler from the freed memory,
+				 * and the owner released it again later.  So the
+				 * config being replaced goes only if the compositor
+				 * made it, and only once set_config() has moved off
+				 * it; finalize releases the last one.
 				 */
 				GowlConfig *new_config;
+				GowlConfig *replaced;
 				GError *err = NULL;
 
 				new_config = gowl_config_new();
@@ -7508,11 +7526,11 @@ gowl_compositor_dispatch_keybind(
 					return TRUE;
 				}
 
-				/* Drop ref on old config if compositor owns one */
-				if (self->config != NULL)
-					g_object_unref(self->config);
-
+				replaced = (GowlConfig *)g_steal_pointer(
+					&self->owned_config);
 				gowl_compositor_set_config(self, new_config);
+				self->owned_config = new_config;
+				g_clear_object(&replaced);
 				g_info("Configuration reloaded");
 
 				/* Re-apply per-output YAML overrides first, then

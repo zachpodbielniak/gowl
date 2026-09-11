@@ -212,6 +212,7 @@ struct _GowlCompositor {
 
 	/* gowl sub-objects (compositor-owned) */
 	GowlConfig                   *config;       /* borrowed ref */
+	GowlConfig                   *owned_config; /* the last one a reload made */
 	GowlModuleManager            *module_mgr;   /* borrowed ref */
 	GowlIpc                      *ipc;          /* borrowed ref (may be NULL) */
 

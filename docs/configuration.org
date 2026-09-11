@@ -871,6 +871,8 @@ Changes take effect live on =M-x cmacs-gowl-reload-config=, the
 equivalent =cmacsgi compositor reload=, and the =Mod+R= keybind --- no
 compositor restart required.
 
+The =reload_config= keybind (Super+Shift+r in the shipped config) reads the file into a fresh config, so a setting the file no longer names goes back to its default, and a file that does not parse leaves the running config alone.  The compositor owns only the configs it makes that way: it releases the one a later reload replaces, and its last one when it is finalized, but never a config it was given --- that one is =main()='s, or the embedder's, to release after the compositor.  Releasing it used to free it under its owner: =gowl_compositor_set_config()= disconnected a handler from the freed memory straight away, and the owner released it again later.  =tests/test-keybind-dispatch.c= holds it.
+
 *** Module Configuration
 :PROPERTIES:
 :CUSTOM_ID: module-configuration

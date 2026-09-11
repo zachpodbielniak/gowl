@@ -13,10 +13,13 @@
  * no backend, no display and no scene, which is exactly enough for the
  * lookup, the modifier matching, and the custom-action handoff.
  * Actions that touch the compositor's own state (tag-view, quit) are
- * deliberately not exercised.
+ * deliberately not exercised.  The reload action is: with no monitors it
+ * touches nothing but the config, and who releases which config is the
+ * whole of what it can get wrong.
  */
 
 #include <glib-object.h>
+#include <glib/gstdio.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 #include "core/gowl-core-private.h"
@@ -232,6 +235,97 @@ test_custom_action_null_arg(void)
 	g_object_unref(cfg);
 }
 
+/*
+ * The reload bind makes a fresh config from the file and hands it to the
+ * compositor -- and it used to release the config the compositor had
+ * been given first.  That one belongs to whoever gave it (main(), or an
+ * embedder such as cmacs), which releases it after the compositor: the
+ * reload freed it under its owner, set_config() disconnected a handler
+ * from the freed memory at once, and the owner released it again later.
+ * The compositor now releases only the configs it made itself -- the one
+ * a later reload replaces, and its last one when it is finalized.
+ *
+ * Run in a subprocess with criticals fatal, from a directory of its own
+ * whose data/config.yaml is the first file the search path finds.  The
+ * file binds the key again, or the second reload would find no bind in
+ * the config the first one made.
+ */
+static void
+reload_keeps_the_given_config(void)
+{
+	static const gchar yaml_text[] =
+		"border-width: 7\n"
+		"keybinds:\n"
+		"  \"Super+Shift+r\": { action: reload_config, desc: \"Reload\" }\n";
+	g_autofree gchar *dir = NULL;
+	g_autofree gchar *data = NULL;
+	g_autofree gchar *yaml = NULL;
+	GowlCompositor   *c;
+	GowlConfig       *given;
+	gpointer          first;
+	gpointer          second;
+	guint             mods;
+
+	g_log_set_always_fatal(G_LOG_LEVEL_CRITICAL | G_LOG_FATAL_MASK);
+
+	dir = g_dir_make_tmp("gowl-reload-XXXXXX", NULL);
+	g_assert_nonnull(dir);
+	data = g_build_filename(dir, "data", NULL);
+	yaml = g_build_filename(data, "config.yaml", NULL);
+	g_assert_cmpint(g_mkdir(data, 0700), ==, 0);
+	g_assert_true(g_file_set_contents(yaml, yaml_text, -1, NULL));
+	g_assert_cmpint(g_chdir(dir), ==, 0);
+	/* Nothing of the user's may be found instead. */
+	g_setenv("XDG_CONFIG_HOME", dir, TRUE);
+
+	mods = GOWL_KEY_MOD_LOGO | GOWL_KEY_MOD_SHIFT;
+	c = compositor_with_bind(mods, XKB_KEY_r, GOWL_ACTION_RELOAD_CONFIG,
+	                         NULL, "Reload", &given);
+	g_object_set(given, "border-width", 3, NULL);
+
+	/* The first reload: a config made from the file, and the given one
+	 * untouched. */
+	g_assert_true(gowl_compositor_dispatch_keybind(c, mods, XKB_KEY_r));
+	first = gowl_compositor_get_config(c);
+	g_assert_true(first != (gpointer)given);
+	g_assert_cmpint(gowl_config_get_border_width((GowlConfig *)first),
+	                ==, 7);
+	g_assert_true(GOWL_IS_CONFIG(given));
+	g_assert_cmpint(gowl_config_get_border_width(given), ==, 3);
+	g_object_add_weak_pointer(G_OBJECT(first), &first);
+
+	/* The second releases the one the first made... */
+	g_assert_true(gowl_compositor_dispatch_keybind(c, mods, XKB_KEY_r));
+	second = gowl_compositor_get_config(c);
+	g_assert_null(first);
+	g_object_add_weak_pointer(G_OBJECT(second), &second);
+
+	/* ...finalizing the compositor releases the last one... */
+	g_object_unref(c);
+	g_assert_null(second);
+
+	/* ...and the given one is still its owner's to release. */
+	g_assert_true(GOWL_IS_CONFIG(given));
+	g_object_unref(given);
+
+	g_assert_cmpint(g_chdir("/"), ==, 0);
+	g_assert_cmpint(g_unlink(yaml), ==, 0);
+	g_assert_cmpint(g_rmdir(data), ==, 0);
+	g_assert_cmpint(g_rmdir(dir), ==, 0);
+}
+
+static void
+test_reload_keeps_the_given_config(void)
+{
+	if (g_test_subprocess()) {
+		reload_keeps_the_given_config();
+		return;
+	}
+	g_test_trap_subprocess(NULL, 60 * G_USEC_PER_SEC,
+	                       G_TEST_SUBPROCESS_INHERIT_STDERR);
+	g_test_trap_assert_passed();
+}
+
 /* Dispatch with no config at all is FALSE, not a crash. */
 static void
 test_dispatch_without_config(void)
@@ -315,6 +409,8 @@ main(int argc, char *argv[])
 	                test_custom_action_null_arg);
 	g_test_add_func("/keybind-dispatch/no-config",
 	                test_dispatch_without_config);
+	g_test_add_func("/keybind-dispatch/reload-keeps-the-given-config",
+	                test_reload_keeps_the_given_config);
 
 	g_test_add_func("/keybind-dispatch/move-stack", test_move_stack);
 	return g_test_run();

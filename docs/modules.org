@@ -570,16 +570,28 @@ all:
 :PROPERTIES:
 :CUSTOM_ID: installing-a-module
 :END:
-Modules are loaded from:
+At startup the compositor looks for each module as =<name>.so= in two directories, in this order, and takes the first match:
 
-1. =$(PREFIX)/lib/gowl/modules/= (system-wide, installed by =make install=)
-2. =~/.local/lib/gowl/modules/= (user-local)
+1. =<exe-dir>/modules/= -- the directory next to the running binary, which is =build/release/modules/= in a development tree
+2. =$(MODULEDIR)= -- =$(LIBDIR)/gowl/modules=, i.e. =$(PREFIX)/lib/gowl/modules/= or =lib64= depending on the platform; =/usr/local/lib/gowl/modules/= with the default prefix
 
-Copy your =.so= to either location:
+=gowl --help= prints the resolved directories for the binary you have. There is no home-directory module search: a =.so= under =~/.local= or =~/.config= is never loaded. Per-user compositor code goes in =~/.config/gowl/config.c= instead (see the configuration guide).
+
+=make install= installs every built module into =$(DESTDIR)$(MODULEDIR)=. To install one by hand, copy it into the directory =gowl --help= lists as =(installed)=:
 
 #+begin_src sh
-cp my-module.so ~/.local/lib/gowl/modules/
+sudo cp my-module.so /usr/lib64/gowl/modules/     # or lib/, per your platform and prefix
 #+end_src
+
+Installing is not enough on its own. Only modules with =enabled: true= under =modules:= in the YAML config are loaded; =tile=, =monocle= and =float= are on unless explicitly disabled, everything else is off until named:
+
+#+begin_src yaml
+modules:
+  my-module:
+    enabled: true
+#+end_src
+
+A module that is enabled but whose =.so= is not found in either directory logs =Module 'my-module' is enabled but .so not found= and is skipped. Loading happens once, before the compositor is created; there is no runtime load, unload or reload for compositor modules, so a new or rebuilt =.so= means restarting the session.
 
 ** Module Configuration
 :PROPERTIES:

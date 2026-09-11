@@ -160,11 +160,12 @@ Each module has a =priority= property (integer). Dispatch arrays are sorted in a
 :PROPERTIES:
 :CUSTOM_ID: module-search-paths
 :END:
-Modules are loaded from:
+Each module enabled in the YAML config is looked up as =<name>.so= in, in order:
 
-1. =$GOWL_MODULEDIR= (compile-time default: =/usr/local/lib/gowl/modules/=)
-2. =~/.local/lib/gowl/modules/=
-3. The build output directory =build/release/modules/= (for development)
+1. =<exe-dir>/modules/= -- next to the running binary; =build/release/modules/= in a development tree
+2. =GOWL_MODULEDIR= -- the compile-time =$(LIBDIR)/gowl/modules= (=/usr/local/lib/gowl/modules/= with the default prefix)
+
+The first directory that has the file wins. There is no home-directory search; =gowl --help= prints the resolved list.
 
 ** Interface-Based Hook System
 :PROPERTIES:

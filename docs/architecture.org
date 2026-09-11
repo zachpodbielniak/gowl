@@ -640,8 +640,28 @@ goes into the same =wlr_output_state= as the frame.  So
 =wlr_output_state_init=, =wlr_scene_output_build_state=, optionally
 =wlr_gamma_control_v1_apply=, =wlr_output_commit_state=,
 =wlr_output_state_finish= --- rather than calling the one-shot
-=wlr_scene_output_commit()=, which is exactly that sequence with no
+=wlr_scene_output_commit()=, which is that sequence with no
 opportunity to add anything.
+
+Not /quite/ that sequence, though: the one-shot call first asks
+=wlr_scene_output_needs_frame()= and returns if nothing on the output
+changed, and =wlr_scene_output_build_state()= does not ask --- it renders
+and attaches a buffer every time. On DRM every committed buffer is a page
+flip, and every page flip ends in another frame event, so a frame handler
+that commits unconditionally redraws an idle output at full refresh,
+forever; the first version of this path did exactly that. So
+=on_monitor_frame()= makes the check itself: it draws only when
+=wlr_scene_output_needs_frame()= says so or a ramp is waiting
+(=gamma_dirty=). Everything that wants a frame --- damage, a surface's
+frame callback, a screencopy, an export-dmabuf or image-capture client,
+a software cursor --- sets =needs_frame=, and the scene answers that by
+scheduling one. A frame event with nothing to draw still runs the
+effects' =frame= and =frame_done= hooks and sends frame callbacks, but
+commits nothing and does not emit =GowlCompositor::frame-rendered=, and
+an output nothing asks to redraw sends no more frame events at all.
+Whatever needs a steady stream from an unchanging screen asks for each
+next frame itself, from =frame-rendered=; the recording module does,
+while it records. =tests/test-idle-output.c= holds all of this.
 
 The handler therefore cannot apply the ramp itself.  It sets
 =gamma_dirty= on the monitor and calls =wlr_output_schedule_frame()=.
@@ -740,6 +760,35 @@ finishes effects before renderer teardown, and after that nothing is
 dispatched to a provider at all: teardown still unmaps and destroys
 every client, and a provider woken for those would be working on a
 compositor already being finalized.
+
+*GPU reset.* When wlroots reports the renderer lost (=events.lost=: a GPU
+reset, or the device going away) the compositor swaps in a new renderer
+and allocator on the next loop iteration --- never inside the signal,
+which can arrive in the middle of a render pass, where destroying the
+renderer fails wlroots' no-listeners-left assert. It makes the new pair
+first, so a failure leaves a compositor that cannot draw but is still
+alive; asks every effect provider to let go of its GL objects and
+buffers (the =finish= hook, with dispatch left open, so providers
+rebuild lazily on the new renderer); moves the =lost= listener across;
+points surface uploads and every output the scene renders to at the new
+pair --- the monitors, and the private output each window screencast
+renders through, which would otherwise draw its next frame with a freed
+renderer; and only then destroys the old one.
+
+That destroys every texture made with the old renderer, and a texture is
+often the only copy of its pixels: a scene buffer releases its
+=wlr_buffer= once uploaded. So the swap puts pixels back. The solid lock
+backdrop covers the screen again while an animated one waits for a new
+frame on every monitor, so a reset while locked never shows the desktop.
+The cursor image is re-applied, and the pointer re-entered so a client
+sets its own cursor again. Then =GowlCompositor::renderer-replaced= tells
+the modules that draw into scene buffers of their own to redraw them;
+the wallpaper, bar, rounded borders and lock prompt do. A client window
+that has not drawn since the reset reappears on its next commit.
+=tests/test-gpu-reset.c= loses a real headless compositor's renderer ---
+twice, with a window capture running and the screen locked --- and then
+again with those modules loaded, checking that nothing they drew is left
+blank.
 
 *Six providers, dispatched per event.* Every hook is either CONSUMABLE
 (=client_event=, =get_geometry=, =surface_at= --- first claimant wins,
@@ -1075,7 +1124,9 @@ Closing during a morph transfers that snapshot at its current size and
 opacity. Embedded clients do not use snapshots.
 
 =on_monitor_frame= advances animations before rendering and schedules
-another frame only while an animation is live on that output. Repeated
+another frame only while an animation is live on that output; with
+nothing live and nothing changed, it draws nothing at all (see /Gamma
+control and the frame commit/). Repeated
 arrangements with the same destination retain the current clock; a new
 destination retargets from the displayed rectangle. Interactive moves
 and resizes remain immediate while the pointer is held. Releasing a

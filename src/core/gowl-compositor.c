@@ -77,6 +77,7 @@ enum {
 	SIGNAL_WORKSPACE_CREATED,
 	SIGNAL_WORKSPACE_SWITCHED,
 	SIGNAL_WORKSPACE_DESTROYED,
+	SIGNAL_RENDERER_REPLACED,
 	N_SIGNALS
 };
 
@@ -505,6 +506,11 @@ gowl_compositor_finalize(GObject *object)
 	 * is destroyed. */
 	if (self->wl_display != NULL) {
 		remove_compositor_listeners(self);
+		/* A renderer swap still waiting for the loop never runs. */
+		if (self->gpu_reset_idle != NULL) {
+			wl_event_source_remove(self->gpu_reset_idle);
+			self->gpu_reset_idle = NULL;
+		}
 		wl_display_destroy_clients(self->wl_display);
 
 #ifdef GOWL_HAVE_XWAYLAND
@@ -709,6 +715,29 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 		             0);
 
 	/**
+	 * GowlCompositor::renderer-replaced:
+	 * @compositor: the #GowlCompositor that emitted the signal
+	 *
+	 * Emitted after a GPU reset, once a new renderer has taken over from
+	 * the one wlroots reported lost.  Every texture made with the old
+	 * renderer is gone by then, and for a scene buffer whose wlr_buffer
+	 * was released once uploaded -- anything drawn once and handed to
+	 * the scene, a wallpaper or a bar -- that texture was the only copy
+	 * of its pixels.  A module that draws into scene buffers of its own
+	 * redraws them here; until it does they show nothing.  Client
+	 * windows come back by themselves, on their next commit.
+	 */
+	compositor_signals[SIGNAL_RENDERER_REPLACED] =
+		g_signal_new("renderer-replaced",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             0);
+
+	/**
 	 * GowlCompositor::client-pre-map:
 	 * @compositor: the #GowlCompositor that emitted the signal
 	 * @client: the #GowlClient that is about to be placed
@@ -811,6 +840,11 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	 * completes its frame render.  Signal handlers run on the
 	 * same thread that owns the wlroots renderer and EGL context,
 	 * so they can safely call screenshot APIs.
+	 *
+	 * Only for frames that are drawn: an output is drawn when something
+	 * on it changed, so an unchanging screen emits nothing.  A handler
+	 * that needs a steady stream asks for each next frame with
+	 * wlr_output_schedule_frame() on the monitor's output.
 	 *
 	 * Used by the recording module to capture frames.
 	 */
@@ -1932,20 +1966,25 @@ gowl_compositor_push_lock_frame(
 	if (m == NULL)
 		return;
 
-	if (self->lock_sink == NULL) {
+	if (self->lock_sink == NULL)
 		self->lock_sink = gowl_frame_sink_new(
 			self->layers[GOWL_SCENE_LAYER_BLOCK], TRUE);
-		/* The animated frame now provides the lock backdrop, so hide the
-		 * solid lock rect (it would otherwise sit above the frame and
-		 * occlude it).  Restored when the last lock frame is cleared. */
-		if (self->locked_bg != NULL)
-			wlr_scene_node_set_enabled(&self->locked_bg->node, FALSE);
-	}
 
 	gowl_monitor_get_geometry(m, &x, &y, &mw, &mh);
 	(void)mw; (void)mh;
-	gowl_frame_sink_push(self->lock_sink, monitor,
-	                     x, y, pixels, width, height, stride);
+	if (!gowl_frame_sink_push(self->lock_sink, monitor,
+	                          x, y, pixels, width, height, stride))
+		return;
+
+	/* The animated frame now provides the lock backdrop, so hide the
+	 * solid lock rect (it would otherwise sit above the frame and
+	 * occlude it).  Restored when the last lock frame is cleared, and by
+	 * a GPU reset, which blanks every frame: it goes again only once
+	 * each monitor has a new one, or a monitor still waiting for its
+	 * frame would show the desktop through the lock. */
+	if (self->locked_bg != NULL
+	    && !gowl_frame_sink_has_blank(self->lock_sink))
+		wlr_scene_node_set_enabled(&self->locked_bg->node, FALSE);
 }
 
 void
@@ -5860,6 +5899,7 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 {
 	GowlMonitor *m;
 	struct timespec now;
+	gboolean skipped;
 
 	m = wl_container_of(listener, m, frame);
 	(void)data;
@@ -5882,13 +5922,25 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 	m->effect_live = gowl_effects_frame(m->compositor, m,
 	                                   g_get_monotonic_time());
 
-	/* Commit the scene graph to this output.
+	/* Commit the scene graph to this output -- when there is anything
+	 * to commit.
 	 *
 	 * Built into an explicit wlr_output_state rather than the one-shot
 	 * wlr_scene_output_commit(), because a gamma ramp cannot be applied
-	 * on its own: it has to ride the same commit as the frame.  When no
-	 * client has set one this is exactly what the one-shot call did. */
-	{
+	 * on its own: it has to ride the same commit as the frame.  But the
+	 * one-shot call also returned when nothing on the output had
+	 * changed, and wlr_scene_output_build_state() does not: it renders
+	 * and attaches a buffer every time.  On DRM every committed buffer
+	 * is a page flip that ends in another frame event, so committing
+	 * here unconditionally redrew an idle output at full refresh,
+	 * forever.  Asked after the effects above, which may just have moved
+	 * something; a waiting gamma ramp needs a frame of its own.
+	 * Everything else that wants a frame -- damage, a frame callback, a
+	 * screencopy, a software cursor -- sets needs_frame, and the scene
+	 * turns that into a scheduled frame. */
+	skipped = !wlr_scene_output_needs_frame(m->scene_output)
+	          && !m->gamma_dirty;
+	if (!skipped) {
 		struct wlr_output_state state;
 
 		wlr_output_state_init(&state);
@@ -5930,15 +5982,18 @@ frame_done:
 	if (m->effect_live)
 		wlr_output_schedule_frame(m->wlr_output);
 
-	/* Notify clients that a frame has been rendered */
+	/* Notify clients that a frame has been rendered -- or would have
+	 * been: a client waiting on a frame callback gets it either way. */
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(m->scene_output, &now);
 	gowl_effects_frame_done(m->compositor, m, &now);
 
 	/* Emit frame-rendered on the compositor so modules (e.g. recording)
 	 * can safely capture from the dispatch thread.  EGL is idle at
-	 * this point. */
-	if (m->compositor != NULL) {
+	 * this point.  Not for a frame with nothing to draw: nothing was
+	 * rendered, and a module that wants frames from an unchanging
+	 * screen asks for each next one itself. */
+	if (!skipped && m->compositor != NULL) {
 		g_signal_emit(m->compositor,
 		              compositor_signals[SIGNAL_FRAME_RENDERED],
 		              0, m);
@@ -6409,6 +6464,147 @@ on_layout_change(struct wl_listener *listener, void *data)
 	gowl_compositor_publish_output_config(self);
 }
 
+/*
+ * gpu_reset_swap:
+ * @data: the compositor
+ *
+ * Replaces a lost renderer, from an idle callback -- see on_gpu_reset()
+ * for why not sooner.  In order:
+ *
+ *   1. make the new renderer and allocator first, so that failing leaves
+ *      things as they were: a compositor that cannot draw but is alive,
+ *      rather than dwl's exit, which here would take Emacs with it;
+ *   2. let effect providers drop the GL objects and buffers they hold on
+ *      the old pair while its EGL context still exists -- they build
+ *      again, lazily, on the new one;
+ *   3. move the lost listener onto the new renderer, since wlroots
+ *      asserts that a destroyed renderer has no listeners left;
+ *   4. point surface uploads at the new pair, and every output the scene
+ *      renders to: the monitors, and the private output a window capture
+ *      renders through, which was handed the old pair when the capture
+ *      began and, like any wlr_output, never notices its renderer go --
+ *      left alone, its next frame would render with a freed one;
+ *   5. only then destroy the old pair.  wlroots drops every texture made
+ *      with it -- scene buffers, client buffers and cursors listen for
+ *      that -- and what remains is putting pixels back:
+ *   6. the lock screen: an animated backdrop's frames were textures too,
+ *      so the solid backdrop covers the screen again until every monitor
+ *      has a new frame, and a reset while locked never shows what the
+ *      lock is hiding;
+ *   7. the cursor, whose image wlr_cursor only re-applies when it
+ *      changes: cleared and set to the default, then the pointer is sent
+ *      back into whatever is under it, so a client with a cursor of its
+ *      own sets it again;
+ *   8. ::renderer-replaced, for the modules that draw into scene buffers
+ *      of their own -- wallpaper, bar, borders, the lock prompt.
+ *
+ * A client window that has not drawn since the reset reappears on its
+ * next commit.
+ *
+ * Modelled on sway's handle_renderer_lost(); the effect release, waiting
+ * for the loop, the capture outputs and steps 6 to 8 are what gowl adds.
+ */
+static void
+gpu_reset_swap(void *data)
+{
+	GowlCompositor          *self;
+	struct wlr_renderer     *renderer;
+	struct wlr_renderer     *old_renderer;
+	struct wlr_allocator    *allocator;
+	struct wlr_allocator    *old_allocator;
+	struct wlr_scene_output *scene_output;
+	GList                   *l;
+
+	self = (GowlCompositor *)data;
+	self->gpu_reset_idle = NULL;
+
+	/* 1. The new pair, before anything is let go of. */
+	renderer = wlr_renderer_autocreate(self->backend);
+	if (renderer == NULL) {
+		g_critical("gowl: GPU reset: no new renderer could be made; "
+		           "nothing will draw until the compositor restarts");
+		return;
+	}
+	allocator = wlr_allocator_autocreate(self->backend, renderer);
+	if (allocator == NULL) {
+		g_critical("gowl: GPU reset: no allocator for the new renderer; "
+		           "nothing will draw until the compositor restarts");
+		wlr_renderer_destroy(renderer);
+		return;
+	}
+
+	/* 2. Effects let go of what they hold on the old pair. */
+	gowl_effects_release(self);
+
+	/* 3. The swap, and the lost signal follows the renderer. */
+	old_renderer = self->renderer;
+	old_allocator = self->allocator;
+	self->renderer = renderer;
+	self->allocator = allocator;
+	wl_list_remove(&self->gpu_reset.link);
+	wl_signal_add(&self->renderer->events.lost, &self->gpu_reset);
+
+	/* 4. Surface uploads, the monitors, then every other output the
+	 * scene renders to -- the ones window captures run on. */
+	wlr_compositor_set_renderer(self->wlr_compositor, self->renderer);
+	for (l = self->monitors; l != NULL; l = l->next) {
+		GowlMonitor *m = (GowlMonitor *)l->data;
+
+		if (m->wlr_output == NULL)
+			continue;
+		if (wlr_output_init_render(m->wlr_output, self->allocator,
+		                           self->renderer))
+			wlr_output_schedule_frame(m->wlr_output);
+		else
+			g_critical("gowl: GPU reset: output %s would not take "
+			           "the new renderer", m->wlr_output->name);
+	}
+	wl_list_for_each(scene_output, &self->scene->outputs, link) {
+		if (scene_output->output->renderer != old_renderer)
+			continue;
+		if (!wlr_output_init_render(scene_output->output,
+		                            self->allocator, self->renderer))
+			g_critical("gowl: GPU reset: output %s would not take "
+			           "the new renderer", scene_output->output->name);
+	}
+
+	/* 5. Only now the old pair. */
+	wlr_allocator_destroy(old_allocator);
+	wlr_renderer_destroy(old_renderer);
+
+	/* 6. The lock screen covers what it covered. */
+	if (self->lock_sink != NULL) {
+		gowl_frame_sink_mark_blank(self->lock_sink);
+		if (self->locked && self->locked_bg != NULL)
+			wlr_scene_node_set_enabled(&self->locked_bg->node, TRUE);
+	}
+
+	/* 7. The cursor. */
+	wlr_cursor_unset_image(self->wlr_cursor);
+	wlr_cursor_set_xcursor(self->wlr_cursor, self->xcursor_mgr, "default");
+	wlr_seat_pointer_notify_clear_focus(self->wlr_seat);
+	gowl_compositor_motionnotify(self, 0);
+
+	/* 8. Modules redraw what they drew. */
+	g_signal_emit(self, compositor_signals[SIGNAL_RENDERER_REPLACED], 0);
+	g_message("gowl: GPU reset: drawing with a new renderer");
+}
+
+/*
+ * on_gpu_reset:
+ *
+ * The renderer was lost -- a GPU reset, or its device going away -- and
+ * wlroots' contract (wlr_renderer.events.lost) is to destroy it and make
+ * another.  This used to make one and drop it on the floor, leaving every
+ * output on the dead renderer: a desktop that no longer drew, which under
+ * cmacs --gowl is the whole session.
+ *
+ * The swap waits for the event loop.  wlroots can emit lost from inside a
+ * render pass, and wl_signal_emit_mutable() keeps two marker listeners on
+ * the signal while it runs: destroying the renderer here would fail
+ * wlroots' no-listeners-left assert and write into freed memory on the
+ * way out.  A second lost before the swap runs changes nothing.
+ */
 static void
 on_gpu_reset(struct wl_listener *listener, void *data)
 {
@@ -6417,8 +6613,12 @@ on_gpu_reset(struct wl_listener *listener, void *data)
 	self = wl_container_of(listener, self, gpu_reset);
 	(void)data;
 
-	g_warning("GPU reset detected");
-	wlr_renderer_autocreate(self->backend);
+	if (self->gpu_reset_idle != NULL)
+		return;
+	g_warning("gowl: GPU reset: the renderer was lost; swapping in a "
+	          "new one");
+	self->gpu_reset_idle = wl_event_loop_add_idle(self->event_loop,
+	                                              gpu_reset_swap, self);
 }
 
 /* -----------------------------------------------------------

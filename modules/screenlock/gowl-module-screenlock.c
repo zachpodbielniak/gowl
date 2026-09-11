@@ -202,6 +202,7 @@ struct _GowlModuleScreenlock {
 	struct wl_event_source *idle_timer;
 	gint        auth_pipe[2];
 	struct wl_event_source *auth_fd_source;
+	gulong      renderer_replaced_id;
 };
 
 /* Forward declarations */
@@ -1094,6 +1095,24 @@ screenlock_lock_init(GowlLockHandlerInterface *iface)
 	iface->on_activity       = screenlock_on_activity;
 }
 
+/*
+ * After a GPU reset.  The prompt's pixels lived only in the texture the
+ * scene made from them, which went with the old renderer.  The
+ * compositor's solid backdrop still covers the screen, so nothing shows
+ * that should not -- but without the prompt a locked session looks like
+ * a blank screen that ignores its owner.
+ */
+static void
+screenlock_on_renderer_replaced(GowlCompositor *compositor, gpointer user_data)
+{
+	GowlModuleScreenlock *self;
+
+	(void)compositor;
+	self = GOWL_MODULE_SCREENLOCK(user_data);
+	if (self->is_locked)
+		screenlock_redraw_all(self);
+}
+
 /* ----------------------------------------------------------------
  * GowlStartupHandler implementation
  * ---------------------------------------------------------------- */
@@ -1111,6 +1130,10 @@ screenlock_on_startup(
 	comp = (GowlCompositor *)compositor;
 
 	self->compositor = compositor;
+	if (self->renderer_replaced_id == 0)
+		self->renderer_replaced_id = g_signal_connect_object(
+			compositor, "renderer-replaced",
+			G_CALLBACK(screenlock_on_renderer_replaced), self, 0);
 
 	/* Set up PAM result pipe */
 	if (pipe(self->auth_pipe) == 0) {

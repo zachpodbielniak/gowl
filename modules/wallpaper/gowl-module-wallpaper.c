@@ -184,6 +184,9 @@ struct _GowlModuleWallpaper {
 	 * switch, re-reading a file from disk to show a picture it decoded a
 	 * moment ago. */
 	GHashTable *decoded;     /* path -> GdkPixbuf* */
+
+	/* ::renderer-replaced, connected at startup. */
+	gulong      renderer_replaced_id;
 };
 
 /* Forward declarations for interface init functions */
@@ -858,6 +861,37 @@ wallpaper_provider_init(GowlWallpaperProviderInterface *iface)
  * GowlStartupHandler implementation
  * ---------------------------------------------------------------- */
 
+/*
+ * After a GPU reset.  A wallpaper's pixels lived only in the texture the
+ * scene made from them -- the buffer was dropped once handed over -- and
+ * that texture went with the old renderer.  Each monitor's is set again
+ * from scratch; the decode cache makes that a rescale on the CPU, not a
+ * read from disk.  A fade caught in flight was settled by finish.
+ */
+static void
+wallpaper_on_renderer_replaced(GowlCompositor *compositor, gpointer user_data)
+{
+	GowlModuleWallpaper *self;
+	GList *l;
+
+	self = GOWL_MODULE_WALLPAPER(user_data);
+	for (l = gowl_compositor_get_monitors(compositor); l != NULL;
+	     l = l->next) {
+		GowlMonitor *monitor = GOWL_MONITOR(l->data);
+		const gchar *name = gowl_monitor_get_name(monitor);
+
+		/* Only what was showing: a monitor without a wallpaper stays
+		 * without one. */
+		if (name == NULL
+		    || g_hash_table_lookup(self->per_monitor, name) == NULL)
+			continue;
+		wallpaper_on_output_destroy(GOWL_WALLPAPER_PROVIDER(self),
+		                            monitor);
+		wallpaper_on_output(GOWL_WALLPAPER_PROVIDER(self), compositor,
+		                    monitor);
+	}
+}
+
 static void
 wallpaper_on_startup(
 	GowlStartupHandler *handler,
@@ -867,6 +901,10 @@ wallpaper_on_startup(
 
 	self = GOWL_MODULE_WALLPAPER(handler);
 	self->compositor = compositor;
+	if (self->renderer_replaced_id == 0)
+		self->renderer_replaced_id = g_signal_connect_object(
+			compositor, "renderer-replaced",
+			G_CALLBACK(wallpaper_on_renderer_replaced), self, 0);
 
 	g_debug("wallpaper: startup (path=%s, mode=%s)",
 	        self->path != NULL ? self->path : "(none)",

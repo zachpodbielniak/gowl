@@ -342,6 +342,8 @@ struct _GowlCompositor {
 	struct wl_listener new_xdg_decoration;
 	struct wl_listener layout_change;
 	struct wl_listener gpu_reset;
+	/* The renderer swap a lost renderer schedules; see on_gpu_reset(). */
+	struct wl_event_source *gpu_reset_idle;
 	struct wl_listener new_idle_inhibitor;
 	struct wl_listener new_session_lock;
 	struct wl_listener request_activate;

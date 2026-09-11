@@ -206,6 +206,58 @@ test_sink_keep_at_bottom(void)
 	wlr_scene_node_destroy(&scene->tree.node);
 }
 
+static void
+test_sink_blank_after_reset(void)
+{
+	struct wlr_scene *scene;
+	GowlFrameSink *sink;
+	guint8 px[4 * 2 * 2];
+
+	/* A GPU reset leaves every frame blank until its monitor's next
+	 * push, and the lock screen keeps its solid backdrop up until no
+	 * monitor is still waiting. */
+	scene = wlr_scene_create();
+	g_assert_nonnull(scene);
+	memset(px, 0, sizeof px);
+
+	sink = gowl_frame_sink_new(&scene->tree, TRUE);
+	g_assert_false(gowl_frame_sink_has_blank(sink));
+	g_assert_true(gowl_frame_sink_push(sink, "DP-1", 0, 0, px, 2, 2, 8));
+	g_assert_true(gowl_frame_sink_push(sink, "HDMI-A-1", 0, 0, px, 2, 2, 8));
+	g_assert_false(gowl_frame_sink_has_blank(sink));
+
+	gowl_frame_sink_mark_blank(sink);
+	g_assert_true(gowl_frame_sink_has_blank(sink));
+	/* One monitor's frame is not enough... */
+	g_assert_true(gowl_frame_sink_push(sink, "DP-1", 0, 0, px, 2, 2, 8));
+	g_assert_true(gowl_frame_sink_has_blank(sink));
+	/* ...a push that failed counts for nothing... */
+	g_assert_false(gowl_frame_sink_push(sink, "HDMI-A-1", 0, 0, NULL, 2, 2, 8));
+	g_assert_true(gowl_frame_sink_has_blank(sink));
+	/* ...every monitor's is. */
+	g_assert_true(gowl_frame_sink_push(sink, "HDMI-A-1", 0, 0, px, 2, 2, 8));
+	g_assert_false(gowl_frame_sink_has_blank(sink));
+
+	/* A monitor that goes away is no longer waited for; the other one
+	 * still is, until it goes too. */
+	gowl_frame_sink_mark_blank(sink);
+	gowl_frame_sink_clear(sink, "DP-1");
+	g_assert_true(gowl_frame_sink_has_blank(sink));
+	gowl_frame_sink_clear_all(sink);
+	g_assert_false(gowl_frame_sink_has_blank(sink));
+
+	/* A monitor first seen after the reset was never blank. */
+	g_assert_true(gowl_frame_sink_push(sink, "DP-2", 0, 0, px, 2, 2, 8));
+	g_assert_false(gowl_frame_sink_has_blank(sink));
+
+	/* NULL-safety. */
+	gowl_frame_sink_mark_blank(NULL);
+	g_assert_false(gowl_frame_sink_has_blank(NULL));
+
+	gowl_frame_sink_free(sink);
+	wlr_scene_node_destroy(&scene->tree.node);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -220,5 +272,7 @@ main(int argc, char *argv[])
 	g_test_add_func("/frame-sink/sink-lifecycle", test_sink_lifecycle);
 	g_test_add_func("/frame-sink/sink-keep-at-bottom",
 	                test_sink_keep_at_bottom);
+	g_test_add_func("/frame-sink/sink-blank-after-reset",
+	                test_sink_blank_after_reset);
 	return g_test_run();
 }

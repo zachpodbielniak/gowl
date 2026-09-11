@@ -106,6 +106,14 @@ void     gowl_frame_sink_clear_all (GowlFrameSink *self);
 /* TRUE if the sink currently holds no buffers. */
 gboolean gowl_frame_sink_is_empty (GowlFrameSink *self);
 
+/* Mark every monitor's frame as gone.  A GPU reset destroys the textures
+ * the scene drew the frames from, and nothing else kept their pixels, so
+ * each monitor shows nothing until its next push. */
+void     gowl_frame_sink_mark_blank (GowlFrameSink *self);
+
+/* TRUE while a monitor marked blank has not had a frame pushed since. */
+gboolean gowl_frame_sink_has_blank (GowlFrameSink *self);
+
 /* Destroy the sink and all its scene buffers. */
 void     gowl_frame_sink_free (GowlFrameSink *self);
 

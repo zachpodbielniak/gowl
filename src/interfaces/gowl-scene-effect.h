@@ -37,6 +37,10 @@ G_DECLARE_INTERFACE (GowlSceneEffect, gowl_scene_effect, GOWL, SCENE_EFFECT, GOb
  * GEOMETRY runs after bounds are applied, before the final configure.
  * Returning TRUE means the provider placed the scene and its decoration.
  * UNMAP/DESTROY and finish run before scene nodes or the renderer disappear.
+ * finish runs at teardown, after which nothing is dispatched, and also when
+ * a GPU reset replaces the renderer -- after which hooks carry on, so a
+ * provider must rebuild what it let go of, on demand, from the
+ * compositor's current renderer rather than keep a pointer to the old one.
  * frame runs before output commit; TRUE requests another frame on that output.
  * frame_done runs after the ordinary visible-surface callbacks.
  * KEYBOARD_FOCUS reports a successful focus-stack change, after the

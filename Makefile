@@ -583,6 +583,18 @@ $(OBJDIR)/tests/test-bar-module.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abs
 $(OUTDIR)/test-scratchpad-module: $(OUTDIR)/modules/scratchpad.so
 $(OBJDIR)/tests/test-scratchpad-module.o: TEST_CFLAGS += -DGOWL_TEST_SCRATCHPAD_MODULE='"$(abspath $(OUTDIR)/modules/scratchpad.so)"'
 
+# A GPU reset in a headless compositor, then again with the real modules
+# that draw scene buffers of their own loaded, to see each one redraw.
+# Each is built by its own Makefile, as `modules' builds it: the generic
+# rule knows nothing of the wallpaper's gdk-pixbuf or the lock's PAM.
+$(OUTDIR)/modules/wallpaper.so: $(wildcard modules/wallpaper/*.c)
+$(OUTDIR)/modules/screenlock.so: $(wildcard modules/screenlock/*.c)
+$(OUTDIR)/modules/roundcorners.so: $(wildcard modules/roundcorners/*.c)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
+$(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
+$(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 $(OUTDIR)/test-layout-orientation: $(addprefix $(OUTDIR)/modules/,tile.so monocle.so scrolling.so centeredmaster.so fibonacci.so)

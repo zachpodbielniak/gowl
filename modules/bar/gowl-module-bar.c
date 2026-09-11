@@ -283,6 +283,7 @@ struct _GowlModuleBar {
 	gulong            focus_handler_id;
 	gulong            client_added_id;
 	gulong            client_removed_id;
+	gulong            renderer_replaced_id;
 	struct wl_event_source *tick_timer;
 
 	BarPanelState     panel;
@@ -4034,6 +4035,11 @@ bar_disconnect_signals(GowlModuleBar *self)
 		                            self->client_removed_id);
 		self->client_removed_id = 0;
 	}
+	if (self->renderer_replaced_id != 0) {
+		g_signal_handler_disconnect(self->compositor,
+		                            self->renderer_replaced_id);
+		self->renderer_replaced_id = 0;
+	}
 }
 
 static void
@@ -4103,6 +4109,39 @@ bar_on_client_changed(GowlCompositor *comp, GObject *client,
 	bar_redraw_all(self);
 }
 
+/* After a GPU reset.  Every bar, panel, tip and toast was a texture on
+   the renderer that just went away, and the scene kept none of their
+   pixels.  Forget what was drawn, so each is painted again rather than
+   skipped as unchanged. */
+static void
+bar_on_renderer_replaced(GowlCompositor *comp, gpointer user_data)
+{
+	GowlModuleBar *self = GOWL_MODULE_BAR(user_data);
+	gint bi;
+
+	(void)comp;
+	for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++) {
+		GHashTableIter iter;
+		gpointer value;
+
+		if (self->bars[bi].surfaces == NULL)
+			continue;
+		g_hash_table_iter_init(&iter, self->bars[bi].surfaces);
+		while (g_hash_table_iter_next(&iter, NULL, &value))
+			g_clear_pointer(&((BarSurface *)value)->last_signature,
+			                g_free);
+	}
+	g_clear_pointer(&self->toast_layer.last_signature, g_free);
+
+	bar_redraw_all(self);
+	if (self->panel.scene_buf != NULL)
+		bar_panel_render(self);
+	if (self->toast_layer.scene_buf != NULL)
+		bar_toast_render(self);
+	if (self->tip.scene_buf != NULL)
+		bar_tip_render(self);
+}
+
 /* Rebuild both slots' themes from the session palette, keeping any
    role the config pinned. */
 static void
@@ -4152,6 +4191,8 @@ bar_on_startup(GowlStartupHandler *handler, gpointer compositor)
 		G_CALLBACK(bar_on_client_changed), self);
 	self->client_removed_id = g_signal_connect(compositor, "client-removed",
 		G_CALLBACK(bar_on_client_changed), self);
+	self->renderer_replaced_id = g_signal_connect(compositor,
+		"renderer-replaced", G_CALLBACK(bar_on_renderer_replaced), self);
 
 	monitors = gowl_compositor_get_monitors(comp);
 	for (l = monitors; l != NULL; l = l->next) {

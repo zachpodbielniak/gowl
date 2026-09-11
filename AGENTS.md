@@ -53,6 +53,17 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   backend, pixman renderer, a private runtime dir, systemd off) and
   finalizes it in a subprocess: wlroots aborts if any listener is still
   on a signal when its object is destroyed
+- `test-gpu-reset` -- Loses a real headless compositor's renderer: the swap
+  waits for the event loop, destroys the old renderer and allocator, moves
+  every output (a window capture's too) to the new pair, restores the
+  cursor and the lock cover, emits `renderer-replaced`, and hears the next
+  loss; then, with wallpaper, screenlock and roundcorners loaded, checks
+  that nothing they drew is left blank
+- `test-idle-output` -- An idle headless output stops committing; a frame
+  event with nothing to draw still runs effect hooks and frame callbacks
+  but commits nothing and emits no `frame-rendered`; a scheduled frame, a
+  bare `needs_frame`, damage and a gamma ramp still draw; a live effect,
+  or a `frame-rendered` handler that asks again, keeps it drawing
 - `test-cube` -- Desktop cube planner: step count and itinerary, no
   wrap-around, duration growth and cap, slot window, and the envelope's
   flatness at both ends (the property that makes a rotation cut-free)
@@ -252,6 +263,33 @@ tests. These assert invariants no unit test can reach:
 > gowl and cmacs `--gowl` exit with the compositor alive, so only the
 > tests and cmacs's `gowl-stop` finalize one --
 > `tests/test-compositor-teardown.c` does it for real.
+
+> **A lost renderer is swapped on the next loop iteration, never inside the
+> signal.** wlroots can emit `events.lost` from inside a render pass, and
+> destroying the renderer there fails its no-listeners-left assert (the
+> emit keeps marker listeners on the signal) and writes into freed memory.
+> `on_gpu_reset()` only schedules; `gpu_reset_swap()` makes the new renderer
+> and allocator first, releases effects with `gowl_effects_release()` --
+> `finish` without closing dispatch, so a provider's `finish` must leave it
+> able to rebuild from `compositor->renderer` -- re-points every output in
+> `scene->outputs` (a window capture renders through a private one that
+> would otherwise draw its next frame with the freed renderer), and
+> destroys the old pair last. Every texture goes with it, and a scene
+> buffer's texture is usually the only copy of its pixels, so a module
+> that draws into scene buffers of its own must redraw them on
+> `GowlCompositor::renderer-replaced` (wallpaper, bar, roundcorners and
+> screenlock do). `tests/test-gpu-reset.c` checks all of it.
+
+> **An output with nothing to draw is not drawn.** `on_monitor_frame()`
+> commits only when `wlr_scene_output_needs_frame()` or `gamma_dirty` says
+> so. `wlr_scene_output_build_state()` renders and attaches a buffer
+> unconditionally, and on DRM every committed buffer is a page flip that
+> ends in another frame event, so an unconditional commit redraws an idle
+> output at full refresh forever -- 768c2b0 did exactly that. Anything
+> that wants a frame sets `needs_frame` and the scene schedules it; a
+> module that needs a steady stream from an unchanging screen schedules
+> each next frame from `frame-rendered`, as the recording module does.
+> `tests/test-idle-output.c` checks it.
 
 ## Code Style
 

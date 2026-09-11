@@ -63,6 +63,7 @@
 #include <wordexp.h>
 
 #include <wayland-server-core.h>
+#include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_scene.h>
 
 #include "gowl-enums.h"
@@ -199,12 +200,22 @@ on_frame_rendered(GowlCompositor *compositor, GObject *monitor,
 	ssize_t written;
 	gint w, h;
 	gint64 now_us;
+	struct wlr_output *output;
 
 	(void)compositor;
-	(void)monitor;
 
 	if (!self->recording || self->ffmpeg_stdin_fd < 0)
 		return;
+
+	/* The compositor draws an output only when something on it changed,
+	 * so an unchanging screen sends no frames -- and ffmpeg reads a
+	 * fixed frame rate, so a stretch of it standing still would drop out
+	 * of the video's timeline.  Ask for this output's next frame, before
+	 * the throttle below: returning first would end the stream on the
+	 * first frame it skips. */
+	output = gowl_monitor_get_wlr_output(GOWL_MONITOR(monitor));
+	if (output != NULL)
+		wlr_output_schedule_frame(output);
 
 	/* FPS throttle: skip if last capture was too recent */
 	now_us = g_get_monotonic_time();
@@ -520,6 +531,24 @@ do_start(GowlModuleRecording *self,
 	self->frame_rendered_id = g_signal_connect(
 	    self->compositor, "frame-rendered",
 	    G_CALLBACK(on_frame_rendered), self);
+
+	/* And start the stream: an unchanging screen sends no frames until
+	 * something asks for one, and on_frame_rendered() only asks once it
+	 * has had one. */
+	{
+		GList *l;
+
+		for (l = gowl_compositor_get_monitors(
+		         GOWL_COMPOSITOR(self->compositor));
+		     l != NULL; l = l->next) {
+			struct wlr_output *output;
+
+			output = gowl_monitor_get_wlr_output(
+				GOWL_MONITOR(l->data));
+			if (output != NULL)
+				wlr_output_schedule_frame(output);
+		}
+	}
 
 	g_signal_emit(self, recording_signals[SIGNAL_RECORDING_STARTED],
 	              0, self->output_path);

@@ -1117,15 +1117,79 @@ otherwise the core applies the final rectangle immediately.
 =get_geometry= and =alpha_changed= keep independent decorators and
 client opacity synchronized. =surface_at= translates input through
 replacement visuals. =frame= runs before the output commit and reports
-whether that output needs another frame. =frame_done= lets providers
+whether that output needs another frame --- which matters, because an
+output nothing asks to redraw is not drawn at all; it runs on every frame
+event, drawn or not. =frame_done= lets providers
 maintain callbacks for temporarily hidden live content. =monitor_removed=
 releases resources tied to an output, and =finish= runs before compositor
-scene/renderer teardown. After =finish= no hook reaches a provider again,
-so a provider must let go of everything there rather than wait to hear
-about the clients teardown destroys. Deactivation must also restore
-ordinary live
+scene/renderer teardown. After that =finish= no hook reaches a provider
+again, so a provider must let go of everything there rather than wait to
+hear about the clients teardown destroys. =finish= also runs when a GPU
+reset replaces the renderer, and then hooks carry on: a provider must
+rebuild what it let go of on demand, from the compositor's current
+renderer, never from a pointer kept from before. Deactivation must also
+restore ordinary live
 presentation and release all held buffers. Providers own their state;
 there are no animation clocks or snapshots in the core client structure.
+
+** After a GPU reset
+
+When wlroots reports the renderer lost, the compositor swaps in a new one
+(see [[file:architecture.org][architecture]]), and every texture the old
+renderer made goes with it. For a scene buffer that texture is usually
+the only copy of its pixels: the scene uploads a =wlr_buffer= and then
+releases it, so a module that hands the scene a buffer and drops its own
+reference --- the normal pattern --- has nothing left to draw from. Such
+a node shows nothing until it is given a buffer again.
+
+So once the new renderer is in place the compositor emits
+=GowlCompositor::renderer-replaced=, and a module that draws into scene
+buffers of its own connects to it at startup and redraws them:
+
+#+begin_src c
+static void
+my_on_renderer_replaced(GowlCompositor *compositor, gpointer user_data)
+{
+	MyModule *self = MY_MODULE(user_data);
+
+	/* Every buffer handed to the scene before now is gone: draw each
+	 * again, even where nothing about it has changed. */
+	my_redraw_all(self);
+}
+
+/* In the startup handler: */
+g_signal_connect_object(compositor, "renderer-replaced",
+                        G_CALLBACK(my_on_renderer_replaced), self, 0);
+#+end_src
+
+A cache that skips redrawing unchanged content has to be bypassed there,
+or the redraw is skipped as a no-op; the bar forgets its render
+signatures first for exactly that reason. The wallpaper, bar,
+roundcorners and screenlock modules do this. Surfaces that hide by
+themselves (the OSD, the layout indicator) do not: at worst one vanishes
+a moment early. Scene effects also get =finish= before the swap, as
+above, for their GL objects. Client windows need nothing: each comes
+back on its next commit. =tests/test-gpu-reset.c= loads the modules and
+checks that nothing they drew is left blank.
+
+** Frames on an idle output
+
+The compositor draws an output only when something on it changed:
+damage, a frame callback, a screencopy, an effect whose =frame= hook
+reported it is still moving, a gamma ramp. A frame event with none of
+those commits nothing and does not emit =GowlCompositor::frame-rendered=,
+and an output nobody asks to redraw sends no frame events at all. So a
+module that needs a steady stream of frames from an unchanging screen
+asks for each next one itself, from its =frame-rendered= handler:
+
+#+begin_src c
+wlr_output_schedule_frame(gowl_monitor_get_wlr_output(GOWL_MONITOR(monitor)));
+#+end_src
+
+The recording module does exactly this while it records, and schedules a
+first frame on every output when it starts: ffmpeg reads a fixed frame
+rate, so without it a stretch of screen standing still would drop out of
+the video's timeline. =tests/test-idle-output.c= checks the contract.
 
 ** Six effect modules, one interface
 

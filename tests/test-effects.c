@@ -477,6 +477,32 @@ test_nothing_reaches_a_provider_after_finish(Fixture *f, gconstpointer data)
 	assert_heard_only_finish(f->second);
 }
 
+/*
+ * A GPU reset releases the providers without closing dispatch.  The
+ * renderer they drew with is about to be destroyed, but the compositor
+ * carries on, and so must they -- rebuilding on the new renderer the next
+ * time a hook reaches them.  finish, at teardown, is release and close.
+ */
+static void
+test_release_keeps_dispatch_open(Fixture *f, gconstpointer data)
+{
+	gowl_effects_release(f->compositor);
+	g_assert_cmpint(f->first->calls.finish, ==, 1);
+	g_assert_cmpint(f->second->calls.finish, ==, 1);
+
+	gowl_effects_client_event(f->compositor, f->client,
+	                          GOWL_SCENE_EFFECT_GEOMETRY, NULL, FALSE);
+	gowl_effects_frame(f->compositor, NULL, 0);
+	g_assert_cmpint(f->first->calls.client_event, ==, 1);
+	g_assert_cmpint(f->first->calls.frame, ==, 1);
+	g_assert_cmpint(f->second->calls.frame, ==, 1);
+
+	gowl_effects_finish(f->compositor);
+	g_assert_cmpint(f->first->calls.finish, ==, 2);
+	gowl_effects_frame(f->compositor, NULL, 0);
+	g_assert_cmpint(f->first->calls.frame, ==, 1);
+}
+
 static void
 test_no_providers_is_quiet(void)
 {
@@ -538,6 +564,8 @@ main(int argc, char **argv)
 	           setup, test_equal_priorities_keep_registration_order, teardown);
 	g_test_add("/effects/teardown/nothing-after-finish", Fixture, NULL,
 	           setup, test_nothing_reaches_a_provider_after_finish, teardown);
+	g_test_add("/effects/gpu-reset/release-keeps-dispatch-open", Fixture,
+	           NULL, setup, test_release_keeps_dispatch_open, teardown);
 	g_test_add_func("/effects/no-providers", test_no_providers_is_quiet);
 
 	return g_test_run();

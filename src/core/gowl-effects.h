@@ -16,5 +16,6 @@ struct wlr_surface *gowl_effects_surface_at (GowlClient *, gdouble, gdouble, gdo
 gboolean gowl_effects_frame (GowlCompositor *, GowlMonitor *, gint64);
 void gowl_effects_frame_done (GowlCompositor *, GowlMonitor *, const struct timespec *);
 void gowl_effects_monitor_removed (GowlCompositor *, GowlMonitor *);
+void gowl_effects_release (GowlCompositor *);
 void gowl_effects_finish (GowlCompositor *);
 #endif

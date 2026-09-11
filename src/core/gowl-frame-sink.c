@@ -136,6 +136,7 @@ gowl_raw_buffer_create(
 struct _GowlFrameSink {
 	struct wlr_scene_tree *layer;          /* borrowed */
 	GHashTable            *buffers;         /* name -> struct wlr_scene_buffer* */
+	GHashTable            *blank;           /* set: names whose frame is gone */
 	gboolean               keep_at_bottom;
 };
 
@@ -161,6 +162,8 @@ gowl_frame_sink_new(struct wlr_scene_tree *layer, gboolean keep_at_bottom)
 	self->keep_at_bottom = keep_at_bottom;
 	self->buffers = g_hash_table_new_full(g_str_hash, g_str_equal,
 	                                       g_free, sink_value_destroy);
+	self->blank = g_hash_table_new_full(g_str_hash, g_str_equal,
+	                                     g_free, NULL);
 	return self;
 }
 
@@ -202,6 +205,7 @@ gowl_frame_sink_push(
 	wlr_scene_node_set_position(&sb->node, x, y);
 	if (self->keep_at_bottom)
 		wlr_scene_node_lower_to_bottom(&sb->node);
+	g_hash_table_remove(self->blank, mon_name);
 	return TRUE;
 }
 
@@ -212,6 +216,7 @@ gowl_frame_sink_clear(GowlFrameSink *self, const gchar *mon_name)
 		return;
 	/* The value-destroy func tears down the scene node. */
 	g_hash_table_remove(self->buffers, mon_name);
+	g_hash_table_remove(self->blank, mon_name);
 }
 
 void
@@ -220,6 +225,7 @@ gowl_frame_sink_clear_all(GowlFrameSink *self)
 	if (self == NULL)
 		return;
 	g_hash_table_remove_all(self->buffers);
+	g_hash_table_remove_all(self->blank);
 }
 
 gboolean
@@ -231,10 +237,36 @@ gowl_frame_sink_is_empty(GowlFrameSink *self)
 }
 
 void
+gowl_frame_sink_mark_blank(GowlFrameSink *self)
+{
+	GHashTableIter iter;
+	gpointer       key;
+
+	/* The scene drew each frame from a texture, and let go of the
+	 * buffer the pixels came in once it had one; a GPU reset destroys
+	 * the texture, so until its next push a monitor's node shows
+	 * nothing at all. */
+	if (self == NULL)
+		return;
+	g_hash_table_iter_init(&iter, self->buffers);
+	while (g_hash_table_iter_next(&iter, &key, NULL))
+		g_hash_table_add(self->blank, g_strdup((const gchar *)key));
+}
+
+gboolean
+gowl_frame_sink_has_blank(GowlFrameSink *self)
+{
+	if (self == NULL)
+		return FALSE;
+	return g_hash_table_size(self->blank) > 0;
+}
+
+void
 gowl_frame_sink_free(GowlFrameSink *self)
 {
 	if (self == NULL)
 		return;
 	g_hash_table_destroy(self->buffers);
+	g_hash_table_destroy(self->blank);
 	g_free(self);
 }

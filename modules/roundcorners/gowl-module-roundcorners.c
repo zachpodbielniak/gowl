@@ -137,6 +137,7 @@ struct _GowlModuleRoundCorners {
 	GowlCompositor *compositor;
 	gint            corner_radius;
 	GHashTable     *decorations;  /* GowlClient* → RoundDecor* */
+	gulong          renderer_replaced_id;  /* connected at startup */
 };
 
 static void rc_decorator_init  (GowlClientDecoratorInterface *iface);
@@ -369,6 +370,38 @@ rc_decorator_init(GowlClientDecoratorInterface *iface)
 	iface->should_draw_border = rc_should_draw_border;
 }
 
+/*
+ * After a GPU reset.  Each frame's pixels lived only in the texture the
+ * scene made from them, which went with the old renderer; every one is
+ * drawn again from what it was last drawn with.
+ */
+static void
+rc_on_renderer_replaced(GowlCompositor *compositor, gpointer user_data)
+{
+	GowlModuleRoundCorners *self;
+	GHashTableIter iter;
+	gpointer value;
+
+	(void)compositor;
+	self = GOWL_MODULE_ROUND_CORNERS(user_data);
+
+	g_hash_table_iter_init(&iter, self->decorations);
+	while (g_hash_table_iter_next(&iter, NULL, &value)) {
+		RoundDecor *decor = (RoundDecor *)value;
+		RoundBuffer *buf;
+
+		if (decor->frame_buf == NULL)
+			continue;
+		buf = render_rounded_frame(decor->width, decor->height,
+		                           decor->bw, self->corner_radius,
+		                           decor->color);
+		if (buf == NULL)
+			continue;
+		wlr_scene_buffer_set_buffer(decor->frame_buf, &buf->base);
+		wlr_buffer_drop(&buf->base);
+	}
+}
+
 /* ----------------------------------------------------------------
  * GowlStartupHandler
  * ---------------------------------------------------------------- */
@@ -378,6 +411,10 @@ rc_on_startup(GowlStartupHandler *handler, gpointer compositor)
 {
 	GowlModuleRoundCorners *self = GOWL_MODULE_ROUND_CORNERS(handler);
 	self->compositor = GOWL_COMPOSITOR(compositor);
+	if (self->renderer_replaced_id == 0)
+		self->renderer_replaced_id = g_signal_connect_object(
+			compositor, "renderer-replaced",
+			G_CALLBACK(rc_on_renderer_replaced), self, 0);
 }
 
 static void

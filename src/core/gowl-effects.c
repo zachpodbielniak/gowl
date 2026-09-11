@@ -29,7 +29,10 @@
  * FINISH CLOSES IT.  After gowl_effects_finish() no hook of either kind
  * reaches a provider.  Teardown goes on unmapping and destroying every
  * client after finishing the effects, and a provider that heard about
- * those would be working on a compositor that is being finalized.
+ * those would be working on a compositor that is being finalized.  A
+ * GPU reset uses gowl_effects_release() instead: the same finish hook,
+ * with dispatch left open, because the compositor carries on with a new
+ * renderer and so do the providers.
  */
 
 #include "gowl-effects.h"
@@ -190,20 +193,30 @@ gowl_effects_monitor_removed (GowlCompositor *self, GowlMonitor *m)
 }
 
 void
-gowl_effects_finish (GowlCompositor *self)
+gowl_effects_release (GowlCompositor *self)
 {
 	GowlSceneEffect *p;
 
 	/* Nothing may be skipped here.  A provider that does not run its
 	 * finish is holding client buffers and GL objects into a renderer
-	 * teardown, which is a crash rather than a missing effect. */
+	 * teardown, which is a crash rather than a missing effect.  A GPU
+	 * reset calls this on its own: the renderer those objects belong to
+	 * is about to be destroyed, but the compositor carries on, so
+	 * dispatch stays open and providers build again, lazily, on the
+	 * renderer they find next. */
 	GOWL_EFFECTS_FOR_EACH (self, p) {
 		if (GOWL_SCENE_EFFECT_GET_IFACE (p)->finish != NULL)
 			GOWL_SCENE_EFFECT_GET_IFACE (p)->finish (p, self);
 	}
 	g_clear_pointer (&_p, g_ptr_array_unref);
+}
 
-	/* And nothing is dispatched after it.  Teardown carries on
+void
+gowl_effects_finish (GowlCompositor *self)
+{
+	gowl_effects_release (self);
+
+	/* And at teardown nothing is dispatched after it.  Teardown carries on
 	 * unmapping and destroying every client, and a provider woken for
 	 * those would take buffers from the renderer it just let go of --
 	 * or, as the animation module did, re-bind a compositor already

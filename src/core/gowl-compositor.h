@@ -1523,17 +1523,39 @@ gboolean gowl_compositor_release_overlay (GowlCompositor *self,
  * gowl_compositor_stack_neighbour:
  * @self: a #GowlCompositor
  * @from: the client a focus-stack step starts from
- * @direction: > 0 steps forward through the client list, otherwise back
+ * @direction: > 0 steps forward, otherwise back
  *
  * The client a focus-stack step (Super+j / Super+k) from @from lands on,
  * without focusing it: the next client visible on the selected output in
  * the same overlay group as @from, wrapping at the ends.  @from itself
- * when nothing else qualifies.
+ * when nothing else qualifies.  Tiles step through the client list; a
+ * window in a panel (a non-zero overlay group, such as a shown
+ * scratchpad) steps to the next column along, left to right by where the
+ * columns are drawn.
  *
  * Returns: (transfer none) (nullable): the target, or %NULL if @from is
  *   not in the client list
  */
 GowlClient *gowl_compositor_stack_neighbour (GowlCompositor *self,
+                                             GowlClient     *from,
+                                             gint            direction);
+
+/**
+ * gowl_compositor_panel_neighbour:
+ * @self: a #GowlCompositor
+ * @from: a client in a panel
+ * @direction: > 0 to the right, otherwise to the left
+ *
+ * The column beside @from in its panel (Super+l / Super+h while a
+ * scratchpad is up), without focusing it: the members of @from's overlay
+ * group shown on the selected output, left to right by where they are
+ * drawn.  Unlike a focus-stack step it stops at either end, giving back
+ * @from.
+ *
+ * Returns: (transfer none) (nullable): the target, or %NULL when @from
+ *   is not in a panel
+ */
+GowlClient *gowl_compositor_panel_neighbour (GowlCompositor *self,
                                              GowlClient     *from,
                                              gint            direction);
 

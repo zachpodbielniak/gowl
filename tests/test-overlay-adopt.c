@@ -12,7 +12,9 @@
  *
  * Also here, because each is the same contract seen from somewhere else:
  * the focus-stack rule that keeps a shown scratchpad's windows cycling
- * among themselves, the jump-to-window path that must not read a hidden
+ * among themselves in the order their columns are drawn (and Super+h /
+ * Super+l stepping across them, not resizing tiles hidden behind them),
+ * the jump-to-window path that must not read a hidden
  * overlay's empty tag set as a view to switch to, and the session file,
  * which must not save overlays at all.
  */
@@ -22,6 +24,7 @@
 #include <gio/gio.h>
 #include <string.h>
 #include <unistd.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 #include "core/gowl-core-private.h"
 #include "core/gowl-session-default.h"
@@ -32,6 +35,7 @@ typedef struct {
 	GowlMonitor    *mon;
 	GowlMonitor    *mon2;
 	GowlClient     *c[4];
+	GowlConfig     *cfg;   /* borrowed by comp, so dropped after it */
 } Fixture;
 
 static void
@@ -93,6 +97,7 @@ fixture_teardown(Fixture *f, gconstpointer data)
 		g_object_unref(f->c[i]);
 	}
 	g_object_unref(f->comp);
+	g_clear_object(&f->cfg);
 	g_object_unref(f->mon);
 	g_object_unref(f->mon2);
 }
@@ -320,6 +325,103 @@ test_session_leaves_overlays_out(Fixture *f, gconstpointer data)
 	g_unlink(path);
 }
 
+/* Make c[1..3] a shown panel's windows: one row of columns under the bar,
+ * in group 1. */
+static void
+make_panel(Fixture *f)
+{
+	guint i;
+
+	for (i = 1; i < G_N_ELEMENTS(f->c); i++) {
+		f->c[i]->isoverlay = TRUE;
+		f->c[i]->overlay_visible = TRUE;
+		f->c[i]->overlay_group = 1;
+		f->c[i]->geom.y = 404;
+		f->c[i]->geom.width = 640;
+		f->c[i]->geom.height = 676;
+	}
+}
+
+/* A panel is read left to right, so that is the order a focus step takes
+ * through it, whatever order its windows were mapped in, and the tile
+ * under it never comes into it.  Super+j / Super+k wrap at the ends;
+ * Super+h / Super+l stop there. */
+static void
+test_panel_steps_follow_the_columns(Fixture *f, gconstpointer data)
+{
+	GowlClient *tile = f->c[0];
+	GowlClient *right = f->c[1];
+	GowlClient *left = f->c[2];
+	GowlClient *middle = f->c[3];
+
+	(void)data;
+	/* Mapped right, left, middle: list order is not column order. */
+	make_panel(f);
+	right->geom.x = 1280;
+	left->geom.x = 0;
+	middle->geom.x = 640;
+
+	g_assert_true(gowl_compositor_stack_neighbour(f->comp, left, 1) == middle);
+	g_assert_true(gowl_compositor_stack_neighbour(f->comp, middle, 1) == right);
+	g_assert_true(gowl_compositor_stack_neighbour(f->comp, right, 1) == left);
+	g_assert_true(gowl_compositor_stack_neighbour(f->comp, left, -1) == right);
+	g_assert_true(gowl_compositor_stack_neighbour(f->comp, right, -1) == middle);
+
+	g_assert_true(gowl_compositor_panel_neighbour(f->comp, left, 1) == middle);
+	g_assert_true(gowl_compositor_panel_neighbour(f->comp, middle, 1) == right);
+	g_assert_true(gowl_compositor_panel_neighbour(f->comp, right, 1) == right);
+	g_assert_true(gowl_compositor_panel_neighbour(f->comp, right, -1) == middle);
+	g_assert_true(gowl_compositor_panel_neighbour(f->comp, left, -1) == left);
+
+	/* The tile is in no panel, and alone among the tiles in view. */
+	g_assert_null(gowl_compositor_panel_neighbour(f->comp, tile, 1));
+	g_assert_true(gowl_compositor_stack_neighbour(f->comp, tile, 1) == tile);
+
+	/* A member that is not shown is stepped over. */
+	middle->overlay_visible = FALSE;
+	g_assert_true(gowl_compositor_panel_neighbour(f->comp, left, 1) == right);
+	g_assert_true(gowl_compositor_stack_neighbour(f->comp, right, 1) == left);
+	middle->overlay_visible = TRUE;
+
+	/* Two in one column: the top one comes first. */
+	middle->geom.x = right->geom.x;
+	middle->geom.y = 30;
+	g_assert_true(gowl_compositor_panel_neighbour(f->comp, left, 1) == middle);
+	g_assert_true(gowl_compositor_panel_neighbour(f->comp, middle, 1) == right);
+}
+
+/* With a panel up, the master area Super+h / Super+l resize is hidden
+ * behind it, so those keys step across the panel instead and leave the
+ * tiles alone.  (Where the step lands needs a seat; the end-to-end run
+ * checks that.) */
+static void
+test_panel_keeps_h_and_l(Fixture *f, gconstpointer data)
+{
+	GowlClient *left = f->c[1];
+
+	(void)data;
+	f->cfg = gowl_config_new();
+	gowl_config_add_keybind_full(f->cfg, GOWL_KEY_MOD_LOGO, XKB_KEY_h,
+		GOWL_ACTION_SET_MFACT, "-0.05", NULL);
+	gowl_config_add_keybind_full(f->cfg, GOWL_KEY_MOD_LOGO, XKB_KEY_l,
+		GOWL_ACTION_SET_MFACT, "+0.05", NULL);
+	gowl_compositor_set_config(f->comp, f->cfg);
+	f->mon->mfact = 0.5;
+
+	make_panel(f);
+	left->geom.x = 0;
+	f->c[2]->geom.x = 640;
+	f->c[3]->geom.x = 1280;
+	f->comp->fstack = g_list_remove(f->comp->fstack, left);
+	f->comp->fstack = g_list_prepend(f->comp->fstack, left);
+
+	g_assert_true(gowl_compositor_dispatch_keybind(f->comp,
+		GOWL_KEY_MOD_LOGO, XKB_KEY_l));
+	g_assert_true(gowl_compositor_dispatch_keybind(f->comp,
+		GOWL_KEY_MOD_LOGO, XKB_KEY_h));
+	g_assert_cmpfloat(f->mon->mfact, ==, 0.5);
+}
+
 #define ADD(path, fn) \
 	g_test_add("/overlay-adopt/" path, Fixture, NULL, \
 	           fixture_setup, fn, fixture_teardown)
@@ -337,6 +439,9 @@ main(int argc, char **argv)
 	ADD("release/unmapped", test_release_unmapped);
 	ADD("stack-neighbour/stays-in-its-group",
 	    test_stack_neighbour_stays_in_its_group);
+	ADD("stack-neighbour/panel-follows-the-columns",
+	    test_panel_steps_follow_the_columns);
+	ADD("set-mfact/panel-keeps-h-and-l", test_panel_keeps_h_and_l);
 	ADD("show-client/keeps-the-view", test_show_client_keeps_the_view);
 	ADD("session/leaves-overlays-out", test_session_leaves_overlays_out);
 

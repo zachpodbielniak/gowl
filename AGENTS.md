@@ -43,7 +43,9 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-overlay-adopt` -- `gowl_compositor_adopt_overlay()` /
   `release_overlay()`: what can be adopted, a hidden overlay being on no
   tag, a floating window coming back where it floated, focus-stack steps
-  staying in their overlay group, `show_client` never viewing "no tags",
+  staying in their overlay group and taking a panel's columns left to
+  right, Super+h/l stepping across a shown panel rather than resizing
+  the tiles hidden behind it, `show_client` never viewing "no tags",
   and the session file leaving overlays out
 - `test-scratchpad-module` -- The scratchpad module against the real .so:
   every command's reply, focus elsewhere rolling it away, members that
@@ -87,6 +89,12 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-blur-shadow` -- The analytic drop shadow: falloff, rounded
   corners, and premultiplied output (straight colour gives every shadow a
   bright halo)
+- `test-blur-nodes` -- The blur module's shadow and backdrop, against the
+  real .so in a headless GLES2 compositor (skipped without one): a
+  DESTROY whose tree stays -- adopting a window into the scratchpad,
+  showing it, giving it back -- takes them off, and no number of trips
+  leaves an extra pair. Merely forgetting them hung a tile-sized shadow
+  and backdrop off the window, drawn across the next column of the panel
 - `test-fx-sheet-guard.sh` -- a capture that hides the client layers also
   hides the effect sheets (a sheet is a sibling of the layer trees and
   holds a picture of the desktop *with* its windows)
@@ -143,6 +151,9 @@ tests. These assert invariants no unit test can reach:
   invisible, on no tag, with nothing to show it), and the focus_stack
   action still steps through `gowl_compositor_stack_neighbour()` (else
   Super+j on a shown scratchpad lands on a tile and rolls it away)
+- `test-scratchpad-binds.sh` -- both shipped configs bind Super+Ctrl+s to
+  `scratchpad-remove`: unbound, it reaches a terminal in the panel as
+  Ctrl+S (XOFF), and the window looks frozen
 - `test-teardown-guard.sh` -- every listener `gowl_compositor_start()`
   adds is taken back off by `remove_compositor_listeners()`, which
   finalize calls before it destroys anything, and the capture provider's

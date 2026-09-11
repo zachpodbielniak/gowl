@@ -221,6 +221,11 @@ keybinds:
     { action: ipc_command, arg: "scratchpad-toggle", desc: "Scratchpad: show / hide" }
   "Super+Alt+s":
     { action: ipc_command, arg: "scratchpad-add", desc: "Scratchpad: send the focused window" }
+  "Super+Ctrl+s":
+    { action: ipc_command, arg: "scratchpad-remove", desc: "Scratchpad: bring the focused window back" }
+  # The same with Shift.  Super+Ctrl+s has to be bound either way: left to
+  # fall through, a terminal gets it as Ctrl+S -- XOFF -- and stops
+  # echoing, which looks like the window died.
   "Super+Ctrl+Shift+s":
     { action: ipc_command, arg: "scratchpad-remove", desc: "Scratchpad: bring the focused window back" }
 

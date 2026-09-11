@@ -36,7 +36,14 @@ G_DECLARE_INTERFACE (GowlSceneEffect, gowl_scene_effect, GOWL, SCENE_EFFECT, GOb
  *
  * GEOMETRY runs after bounds are applied, before the final configure.
  * Returning TRUE means the provider placed the scene and its decoration.
- * UNMAP/DESTROY and finish run before scene nodes or the renderer disappear.
+ * UNMAP runs before the client's scene tree is destroyed.  DESTROY means
+ * "let go of this client", and is sent for two things: a closing window,
+ * after UNMAP, by which time its tree is gone; and a window the compositor
+ * takes over as an overlay, shows in a panel or gives back, whose tree
+ * stays.  A provider that hangs nodes off the client's tree must tell the
+ * two apart by the nodes' own destroy signals: forgetting them while the
+ * tree stays leaves them drawn on it.  finish runs before scene nodes or
+ * the renderer disappear.
  * finish runs at teardown, after which nothing is dispatched, and also when
  * a GPU reset replaces the renderer -- after which hooks carry on, so a
  * provider must rebuild what it let go of, on demand, from the

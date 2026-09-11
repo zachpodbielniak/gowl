@@ -4883,6 +4883,112 @@ gowl_compositor_release_overlay(
 	return TRUE;
 }
 
+/*
+ * panel_order:
+ *
+ * Left to right by where a window is drawn, then top to bottom -- the
+ * order a panel's columns are read in.  For g_ptr_array_sort(), which is
+ * stable, so windows drawn in the same place keep the client-list order.
+ */
+static gint
+panel_order(
+	gconstpointer a,
+	gconstpointer b
+){
+	const GowlClient *ca = *(GowlClient *const *)a;
+	const GowlClient *cb = *(GowlClient *const *)b;
+
+	if (ca->geom.x != cb->geom.x)
+		return ca->geom.x < cb->geom.x ? -1 : 1;
+	if (ca->geom.y != cb->geom.y)
+		return ca->geom.y < cb->geom.y ? -1 : 1;
+	return 0;
+}
+
+/*
+ * panel_step:
+ * @self: the compositor
+ * @from: a window in a panel -- an overlay group other than 0
+ * @direction: > 0 to the right, otherwise to the left
+ * @wrap: whether a step off either end comes round to the other
+ *
+ * The window beside @from in its panel: the members of @from's group
+ * shown on the selected output, in panel_order().  @from itself when
+ * there is nothing that way.
+ */
+static GowlClient *
+panel_step(
+	GowlCompositor *self,
+	GowlClient     *from,
+	gint            direction,
+	gboolean        wrap
+){
+	GPtrArray  *row;
+	GowlClient *to;
+	GList      *l;
+	guint       at;
+	guint       i;
+
+	row = g_ptr_array_new();
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if (c == from
+		    || (VISIBLEON(c, self->selmon)
+		        && gowl_focus_stack_accepts(from->overlay_group,
+		                                    c->overlay_group)))
+			g_ptr_array_add(row, c);
+	}
+	g_ptr_array_sort(row, panel_order);
+
+	at = 0;
+	for (i = 0; i < row->len; i++) {
+		if (g_ptr_array_index(row, i) == from) {
+			at = i;
+			break;
+		}
+	}
+	to = from;
+	if (direction > 0) {
+		if (at + 1 < row->len)
+			to = (GowlClient *)g_ptr_array_index(row, at + 1);
+		else if (wrap)
+			to = (GowlClient *)g_ptr_array_index(row, 0);
+	} else {
+		if (at > 0)
+			to = (GowlClient *)g_ptr_array_index(row, at - 1);
+		else if (wrap)
+			to = (GowlClient *)g_ptr_array_index(row, row->len - 1);
+	}
+	g_ptr_array_unref(row);
+	return to;
+}
+
+/**
+ * gowl_compositor_panel_neighbour:
+ * @self: the compositor
+ * @from: the client a step starts from
+ * @direction: > 0 to the right, otherwise to the left
+ *
+ * See the header.
+ *
+ * Returns: (transfer none) (nullable): the target, or %NULL if @from is
+ *   not in a panel
+ */
+GowlClient *
+gowl_compositor_panel_neighbour(
+	GowlCompositor *self,
+	GowlClient     *from,
+	gint            direction
+){
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	g_return_val_if_fail(GOWL_IS_CLIENT(from), NULL);
+
+	if (!from->isoverlay || from->overlay_group == 0)
+		return NULL;
+	return panel_step(self, from, direction, FALSE);
+}
+
 /**
  * gowl_compositor_stack_neighbour:
  * @self: the compositor
@@ -4909,6 +5015,12 @@ gowl_compositor_stack_neighbour(
 	start = g_list_find(self->clients, from);
 	if (start == NULL)
 		return NULL;
+
+	/* A panel's windows sit side by side in columns, so a step there goes
+	 * to the next column along, the order they are read in -- not the next
+	 * in map order, which jumps about once a window was sent out of turn. */
+	if (from->isoverlay && from->overlay_group != 0)
+		return panel_step(self, from, direction, TRUE);
 
 	/* Walk the client list from @from, wrapping at either end, to the
 	 * first client visible on the selected output and in @from's overlay
@@ -7031,9 +7143,32 @@ gowl_compositor_dispatch_keybind(
 				return TRUE;
 			}
 			case GOWL_ACTION_SET_MFACT: {
+				GowlClient *sel;
 				gdouble f;
 				if (self->selmon == NULL || kb->arg == NULL)
 					return TRUE;
+
+				/* A shown panel has no master area -- the tiles it
+				 * would resize are hidden behind it -- so Super+h /
+				 * Super+l step left and right across its columns. */
+				sel = focustop(self, self->selmon);
+				if (sel != NULL && sel->isoverlay
+				    && sel->overlay_group != 0) {
+					GowlClient *to;
+
+					f = g_ascii_strtod(kb->arg, NULL);
+					to = panel_step(self, sel, f < 0 ? -1 : 1, FALSE);
+					if (to != sel) {
+						gowl_compositor_focus_client(self, to, TRUE);
+						if (client_surface(to) != NULL
+						    && self->wlr_seat->keyboard_state.focused_surface
+						       == client_surface(to))
+							gowl_effects_client_event(self, to,
+								GOWL_SCENE_EFFECT_KEYBOARD_FOCUS,
+								NULL, FALSE);
+					}
+					return TRUE;
+				}
 				f = g_ascii_strtod(kb->arg, NULL) + self->selmon->mfact;
 				if (f < 0.1 || f > 0.9)
 					return TRUE;

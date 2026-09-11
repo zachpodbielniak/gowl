@@ -799,6 +799,18 @@ leaks buffers into a departing renderer). =src/core/gowl-effects.c= owns
 that distinction and =tests/test-effects.c= pins it; both failure modes
 are silent absences rather than crashes.
 
+*DESTROY means two things.* It follows UNMAP when a window closes, by
+which time the window's scene tree is gone; and the compositor also sends
+it, tree staying, to reset a window's effects when it takes the window
+over as an overlay, shows it in a panel or gives it back. A provider that
+hangs nodes off the client's tree therefore follows each node's own
+destroy signal and destroys whatever is still alive, instead of assuming
+either case. The blur module used to merely forget its shadow and
+backdrop, which left a tile-sized pair hanging off every window that went
+through the scratchpad, drawn across the next column of the panel ---
+another pair per trip. =tests/test-blur-nodes.c= makes those trips
+against the real module.
+
 gowl handed the whole interface to the single highest-priority provider
 until there were enough effect modules for that to hurt, at which point
 every module after the first would have had to be forwarded to by hand,

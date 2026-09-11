@@ -837,21 +837,29 @@ in columns. It is the dropdown's size --- both panels come from
 --- and the same fixed floating overlay: showing it never rearranges the
 tiles beneath it, it comes up over whichever tag is in view, and
 focusing a window outside it rolls it away. While it is up its windows
-have the keyboard and every keybind, and Super+j / Super+k cycle among
-them instead of stepping down onto the tiles, which would roll it away.
+have the keyboard and every keybind. Super+j / Super+k step across its
+columns in the order they are drawn, wrapping at the ends, and Super+h /
+Super+l move left and right (there is no master area to resize behind
+the panel) --- instead of stepping down onto the tiles, which would roll
+it away. Like every overlay, its windows get no shadow or frosted
+backdrop from the blur module, so the columns meet edge to edge with
+nothing drawn across the seam.
 
 | Key                  | Command             | Effect                                    |
 |----------------------+---------------------+-------------------------------------------|
 | =Super+s=            | =scratchpad-toggle= | Slide the panel up, or roll it away       |
 | =Super+Alt+s=        | =scratchpad-add=    | Send the focused window to it             |
-| =Super+Ctrl+Shift+s= | =scratchpad-remove= | Bring the focused window back to the tags |
+| =Super+Ctrl+s=       | =scratchpad-remove= | Bring the focused window back to the tags |
+| =Super+Ctrl+Shift+s= | =scratchpad-remove= | The same, with Shift                      |
 
 The module has no keys of its own. Every operation is a command, so a
 bind is ={ action: ipc_command, arg: "scratchpad-toggle" }= and the same
 word works over the IPC socket and from an embedder through
 =gowl_compositor_run_command()=, which is how cmacs reaches it. The
-shipped =default-config.yaml= binds the three keys above and enables the
-module.
+shipped =default-config.yaml= binds the keys above and enables the
+module. Super+Ctrl+s has to be bound: left to fall through, a terminal in
+the panel gets it as Ctrl+S --- XOFF --- and stops echoing, which looks
+exactly like the window died.
 
 | Command                  | Reply                  | Does                                                  |
 |--------------------------+------------------------+-------------------------------------------------------|

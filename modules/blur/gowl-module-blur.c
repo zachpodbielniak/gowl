@@ -137,6 +137,12 @@ struct _GowlModuleBlur {
 typedef struct {
 	struct wlr_scene_buffer *shadow;
 	struct wlr_scene_buffer *backdrop;
+	/* On each node's destroy signal for as long as it lives, so a node
+	 * that goes with the client's tree clears its pointer here: a pointer
+	 * that is set always names a live node.  blur_client_event() says why
+	 * the module cannot simply know. */
+	struct wl_listener       shadow_destroy;
+	struct wl_listener       backdrop_destroy;
 	/* What the current shadow was drawn for, so it is only redrawn when
 	 * something it depends on has actually changed. */
 	gint    shadow_w, shadow_h, shadow_radius;
@@ -153,15 +159,75 @@ G_DEFINE_TYPE_WITH_CODE(GowlModuleBlur, gowl_module_blur, GOWL_TYPE_MODULE,
 /* ── Plumbing ────────────────────────────────────────────────────── */
 
 static void
+blur_on_shadow_destroy(struct wl_listener *listener, void *data)
+{
+	GowlBlurNodes *nodes;
+
+	(void)data;
+	nodes = wl_container_of(listener, nodes, shadow_destroy);
+	wl_list_remove(&listener->link);
+	nodes->shadow = NULL;
+}
+
+static void
+blur_on_backdrop_destroy(struct wl_listener *listener, void *data)
+{
+	GowlBlurNodes *nodes;
+
+	(void)data;
+	nodes = wl_container_of(listener, nodes, backdrop_destroy);
+	wl_list_remove(&listener->link);
+	nodes->backdrop = NULL;
+}
+
+/* Take @buf (which may be NULL) as the shadow, and follow its lifetime. */
+static void
+blur_set_shadow(GowlBlurNodes *nodes, struct wlr_scene_buffer *buf)
+{
+	nodes->shadow = buf;
+	if (buf == NULL)
+		return;
+	nodes->shadow_destroy.notify = blur_on_shadow_destroy;
+	wl_signal_add(&buf->node.events.destroy, &nodes->shadow_destroy);
+}
+
+/* Take @buf (which may be NULL) as the backdrop, and follow its lifetime. */
+static void
+blur_set_backdrop(GowlBlurNodes *nodes, struct wlr_scene_buffer *buf)
+{
+	nodes->backdrop = buf;
+	if (buf == NULL)
+		return;
+	nodes->backdrop_destroy.notify = blur_on_backdrop_destroy;
+	wl_signal_add(&buf->node.events.destroy, &nodes->backdrop_destroy);
+}
+
+/* Stop following the nodes and leave them where they are, in a tree that
+ * is about to be destroyed with them in it. */
+static void
+blur_forget_nodes(GowlBlurNodes *nodes)
+{
+	if (nodes->shadow != NULL) {
+		wl_list_remove(&nodes->shadow_destroy.link);
+		nodes->shadow = NULL;
+	}
+	if (nodes->backdrop != NULL) {
+		wl_list_remove(&nodes->backdrop_destroy.link);
+		nodes->backdrop = NULL;
+	}
+}
+
+static void
 blur_nodes_free(gpointer data)
 {
 	GowlBlurNodes *nodes = data;
 
 	/*
-	 * The nodes are children of the client's own scene tree, so by the
-	 * time the client is destroyed wlroots has already taken them with
-	 * it.  This only runs while the client is alive -- when the module is
-	 * disabled -- so the nodes still exist and must go by hand.
+	 * A node that went with the client's tree has already cleared its
+	 * pointer through its destroy listener, so whatever is still set here
+	 * is alive -- the module being disabled, or a window whose effects
+	 * are reset while its tree stays -- and must go by hand.  Each
+	 * listener takes itself off as its node goes.
 	 */
 	if (nodes->shadow != NULL)
 		wlr_scene_node_destroy(&nodes->shadow->node);
@@ -490,7 +556,7 @@ blur_apply_shadow(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 		if (buffer == NULL)
 			return;
 
-		nodes->shadow = wlr_scene_buffer_create(c->scene, buffer);
+		blur_set_shadow(nodes, wlr_scene_buffer_create(c->scene, buffer));
 		wlr_buffer_drop(buffer);
 		if (nodes->shadow == NULL)
 			return;
@@ -531,7 +597,8 @@ blur_apply_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 		return;
 
 	if (nodes->backdrop == NULL) {
-		nodes->backdrop = wlr_scene_buffer_create(c->scene, bd->buffer);
+		blur_set_backdrop(nodes,
+		                  wlr_scene_buffer_create(c->scene, bd->buffer));
 		if (nodes->backdrop == NULL)
 			return;
 	} else {
@@ -609,17 +676,28 @@ blur_client_event(GowlSceneEffect *effect, GowlCompositor *self, GowlClient *c,
 
 	switch (event) {
 	case GOWL_SCENE_EFFECT_UNMAP:
-	case GOWL_SCENE_EFFECT_DESTROY:
-		/* The nodes are children of a scene tree that is about to go, so
-		 * forget them rather than free them: touching them afterwards
-		 * would be a use-after-free. */
+		/* The tree the nodes hang off is destroyed straight after this
+		 * and takes them with it: stop following them and leave them to
+		 * it. */
 		if (g_object_get_data(G_OBJECT(c), GOWL_BLUR_DATA_KEY) != NULL) {
-			GowlBlurNodes *nodes = blur_nodes(c, FALSE);
-
-			nodes->shadow = NULL;
-			nodes->backdrop = NULL;
+			blur_forget_nodes(blur_nodes(c, FALSE));
 			blur_clear_nodes(c);
 		}
+		break;
+	case GOWL_SCENE_EFFECT_DESTROY:
+		/*
+		 * Two different things arrive as DESTROY.  A window that is gone:
+		 * its tree went at unmap with the nodes in it, and their destroy
+		 * listeners have cleared the pointers.  And a window the
+		 * compositor is taking over as an overlay, showing in a panel or
+		 * giving back, whose tree stays: forgetting the nodes then left
+		 * the old shadow and a backdrop at the tile's size hanging off
+		 * the window -- another pair on every trip into the scratchpad
+		 * and back, spilling into the next column.  Destroy whichever are
+		 * still alive; the next GEOMETRY builds them for where the window
+		 * is now.
+		 */
+		blur_clear_nodes(c);
 		break;
 	case GOWL_SCENE_EFFECT_GEOMETRY:
 	case GOWL_SCENE_EFFECT_REVEAL:

@@ -279,6 +279,7 @@ static const gchar *default_yaml_config =
 	"  # Scratchpad: a panel of windows that slides up from the bottom\n"
 	"  \"Super+s\": { action: ipc_command, arg: \"scratchpad-toggle\" }\n"
 	"  \"Super+Alt+s\": { action: ipc_command, arg: \"scratchpad-add\" }\n"
+	"  \"Super+Ctrl+s\": { action: ipc_command, arg: \"scratchpad-remove\" }\n"
 	"  \"Super+Ctrl+Shift+s\": { action: ipc_command, arg: \"scratchpad-remove\" }\n"
 	"\n"
 	"  # Multi-monitor\n"

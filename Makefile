@@ -590,10 +590,17 @@ $(OBJDIR)/tests/test-scratchpad-module.o: TEST_CFLAGS += -DGOWL_TEST_SCRATCHPAD_
 $(OUTDIR)/modules/wallpaper.so: $(wildcard modules/wallpaper/*.c)
 $(OUTDIR)/modules/screenlock.so: $(wildcard modules/screenlock/*.c)
 $(OUTDIR)/modules/roundcorners.so: $(wildcard modules/roundcorners/*.c)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+$(OUTDIR)/modules/blur.so: $(wildcard modules/blur/*.c modules/blur/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
+# The blur module's shadow and backdrop against the real .so, in a
+# headless compositor drawing with GLES2: a window whose effects are reset
+# while its tree stays -- into the scratchpad and out -- must not keep them.
+$(OUTDIR)/test-blur-nodes: $(OUTDIR)/modules/blur.so
+$(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 

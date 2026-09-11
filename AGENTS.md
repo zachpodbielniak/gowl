@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code when working with the gowl codebase.
+This file provides guidance to coding agents working with the gowl codebase.
 
 Gowl is a GObject-based Wayland compositor inspired by dwl and dwm. It is not a direct port -- it reimagines their tiling window management approach with a full GObject type system, modular plugin architecture, and introspection support.
 

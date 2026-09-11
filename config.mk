@@ -275,7 +275,7 @@ CFLAGS_INC := -I. -Isrc -I$(YAMLGLIB_DIR)/src -I$(CRISPY_DIR)/src
 # gowl-core-private.h) now correctly recompiles every dependent TU --
 # without this, gowl-client.o could keep a stale sizeof(GowlClient) while
 # gowl-compositor.o saw the new one, corrupting the heap (see the
-# CLAUDE.md "make may not relink" hazard).
+# cmacs AGENTS.md "make may not relink" hazard).
 DEPFLAGS := -MMD -MP
 
 CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(CFLAGS_INC) $(CFLAGS_DEPS) $(DEPFLAGS)

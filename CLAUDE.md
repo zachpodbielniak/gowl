@@ -49,6 +49,10 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   every command's reply, focus elsewhere rolling it away, members that
   unmap or are destroyed, strict settings, and switching it off giving
   every window back
+- `test-compositor-teardown` -- Starts a real compositor (headless
+  backend, pixman renderer, a private runtime dir, systemd off) and
+  finalizes it in a subprocess: wlroots aborts if any listener is still
+  on a signal when its object is destroyed
 - `test-cube` -- Desktop cube planner: step count and itinerary, no
   wrap-around, duration growth and cap, slot window, and the envelope's
   flatness at both ends (the property that makes a rotation cut-free)
@@ -128,6 +132,10 @@ tests. These assert invariants no unit test can reach:
   invisible, on no tag, with nothing to show it), and the focus_stack
   action still steps through `gowl_compositor_stack_neighbour()` (else
   Super+j on a shown scratchpad lands on a tile and rolls it away)
+- `test-teardown-guard.sh` -- every listener `gowl_compositor_start()`
+  adds is taken back off by `remove_compositor_listeners()`, which
+  finalize calls before it destroys anything, and the capture provider's
+  listener on the toplevel image-capture source comes off in its finalize
 - `test-record-guard.sh` -- the input recorder's taps are still wired to
   all six input hooks, the injection helpers and `motionnotify` are still
   *un*wired (they are reached by both the real and the synthetic path, so
@@ -229,6 +237,21 @@ tests. These assert invariants no unit test can reach:
 > overlay would have set its monitor to viewing nothing, taking every window
 > off the screen. `tests/test-overlay-adopt.c` holds it. The same reason
 > keeps overlays out of the session file.
+
+> **Teardown takes the compositor's own listeners off first.** wlroots
+> asserts that a signal has no listeners left when its object is destroyed
+> -- XWayland, the keyboard group, the backend, every global
+> `wl_display_destroy()` takes with it -- and an assert is an abort.
+> `remove_compositor_listeners()` runs before finalize destroys anything
+> (dwl's `cleanuplisteners()`), so a listener added to the compositor in
+> `gowl_compositor_start()` has to be added there too, and a sub-object
+> that listens on a global takes its listener off in its own finalize, as
+> the capture provider does; `tests/test-teardown-guard.sh` checks both.
+> Effects are closed by then: after
+> `gowl_effects_finish()` nothing is dispatched to a provider. Standalone
+> gowl and cmacs `--gowl` exit with the compositor alive, so only the
+> tests and cmacs's `gowl-stop` finalize one --
+> `tests/test-compositor-teardown.c` does it for real.
 
 ## Code Style
 

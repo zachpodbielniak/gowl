@@ -377,11 +377,21 @@ gowl_capture_wlroots_finalize(GObject *object)
 	GowlCaptureWlroots *self = GOWL_CAPTURE_WLROOTS(object);
 
 	/* Handles are owned by wlroots and torn down with the display; we
-	 * just drop our tracking table.  The capture-request listener is
-	 * removed automatically when the manager's global is destroyed. */
+	 * just drop our tracking table. */
 	if (self->handles != NULL) {
 		g_hash_table_destroy(self->handles);
 		self->handles = NULL;
+	}
+
+	/* The capture-request listener is NOT taken off for us when the
+	 * manager's global goes: wlroots asserts that the signal has no
+	 * listeners left, and the abort takes the session with it.  The
+	 * compositor drops us in its dispose, while the display and this
+	 * manager still exist, so this is the moment.  The link is NULL if
+	 * impl_create_globals() never ran, as GObject zeroes the instance. */
+	if (self->toplevel_capture_request.link.next != NULL) {
+		wl_list_remove(&self->toplevel_capture_request.link);
+		wl_list_init(&self->toplevel_capture_request.link);
 	}
 #endif
 

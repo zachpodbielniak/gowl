@@ -736,7 +736,10 @@ hooks. Opacity and displayed geometry queries keep decorators and
 input consistent with the provider. Without a provider, geometry is
 immediate. Disabling the animation module finishes motion, restores
 live content and opacity, and releases all closing buffers. Shutdown
-finishes effects before renderer teardown.
+finishes effects before renderer teardown, and after that nothing is
+dispatched to a provider at all: teardown still unmaps and destroys
+every client, and a provider woken for those would be working on a
+compositor already being finalized.
 
 *Six providers, dispatched per event.* Every hook is either CONSUMABLE
 (=client_event=, =get_geometry=, =surface_at= --- first claimant wins,

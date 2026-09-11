@@ -305,6 +305,12 @@ struct _GowlCompositor {
 	/* state */
 	gboolean   running;
 	gboolean   locked;
+	/* Set by gowl_effects_finish() as teardown begins.  From then on no
+	 * scene-effect provider hears of anything: finalize still unmaps and
+	 * destroys every client after it, and a provider woken for those
+	 * would re-bind a compositor already being finalized, or take new
+	 * buffers from a renderer about to go.  See gowl-effects.c. */
+	gboolean   effects_finished;
 	const char *socket_name;
 
 	/* laptop-lid output management (see gowl-lid-policy.h) */

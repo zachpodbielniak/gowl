@@ -25,17 +25,23 @@
  * error --- just a feature that silently stopped working.  Deciding per
  * event instead puts the whole question in this file, where
  * tests/test-effects.c can hold it to it.
+ *
+ * FINISH CLOSES IT.  After gowl_effects_finish() no hook of either kind
+ * reaches a provider.  Teardown goes on unmapping and destroying every
+ * client after finishing the effects, and a provider that heard about
+ * those would be working on a compositor that is being finalized.
  */
 
 #include "gowl-effects.h"
 #include "gowl-core-private.h"
 
-/* Providers in priority order, or NULL when there are none.  Callers
- * must free the container. */
+/* Providers in priority order, or NULL when there are none -- which
+ * includes once gowl_effects_finish() has run.  Callers must free the
+ * container. */
 static GPtrArray *
 providers (GowlCompositor *self)
 {
-	if (self == NULL || self->module_mgr == NULL)
+	if (self == NULL || self->module_mgr == NULL || self->effects_finished)
 		return NULL;
 	return gowl_module_manager_get_scene_effects (self->module_mgr);
 }
@@ -196,4 +202,13 @@ gowl_effects_finish (GowlCompositor *self)
 			GOWL_SCENE_EFFECT_GET_IFACE (p)->finish (p, self);
 	}
 	g_clear_pointer (&_p, g_ptr_array_unref);
+
+	/* And nothing is dispatched after it.  Teardown carries on
+	 * unmapping and destroying every client, and a provider woken for
+	 * those would take buffers from the renderer it just let go of --
+	 * or, as the animation module did, re-bind a compositor already
+	 * being finalized, which GLib answers with "g_weak_ref_set() with
+	 * already destroyed object".  Finishing twice is a no-op. */
+	if (self != NULL)
+		self->effects_finished = TRUE;
 }

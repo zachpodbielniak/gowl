@@ -1120,7 +1120,10 @@ replacement visuals. =frame= runs before the output commit and reports
 whether that output needs another frame. =frame_done= lets providers
 maintain callbacks for temporarily hidden live content. =monitor_removed=
 releases resources tied to an output, and =finish= runs before compositor
-scene/renderer teardown. Deactivation must also restore ordinary live
+scene/renderer teardown. After =finish= no hook reaches a provider again,
+so a provider must let go of everything there rather than wait to hear
+about the clients teardown destroys. Deactivation must also restore
+ordinary live
 presentation and release all held buffers. Providers own their state;
 there are no animation clocks or snapshots in the core client structure.
 

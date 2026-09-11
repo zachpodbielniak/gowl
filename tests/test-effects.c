@@ -428,6 +428,55 @@ test_claiming_does_not_affect_broadcast(Fixture *f, gconstpointer data)
 
 /* ── No providers at all ──────────────────────────────────────────── */
 
+/* Every hook count of @e is zero, except finish: once. */
+static void
+assert_heard_only_finish(TestEffect *e)
+{
+	g_assert_cmpint(e->calls.client_event, ==, 0);
+	g_assert_cmpint(e->calls.get_geometry, ==, 0);
+	g_assert_cmpint(e->calls.alpha_changed, ==, 0);
+	g_assert_cmpint(e->calls.surface_at, ==, 0);
+	g_assert_cmpint(e->calls.frame, ==, 0);
+	g_assert_cmpint(e->calls.frame_done, ==, 0);
+	g_assert_cmpint(e->calls.monitor_removed, ==, 0);
+	g_assert_cmpint(e->calls.finish, ==, 1);
+}
+
+/*
+ * After finish, no hook reaches anyone.
+ *
+ * The compositor finishes its effects as teardown begins (dispose) and
+ * then goes on to unmap and destroy every client (finalize).  A provider
+ * woken for those was working on a compositor being finalized: the
+ * animation module re-bound it, and GLib answered each event with
+ * "g_weak_ref_set() with already destroyed object".  Finishing twice
+ * would also hand a provider its teardown twice.
+ */
+static void
+test_nothing_reaches_a_provider_after_finish(Fixture *f, gconstpointer data)
+{
+	struct wlr_box box;
+
+	f->first->claims = TRUE;
+	gowl_effects_finish(f->compositor);
+
+	g_assert_false(gowl_effects_client_event(f->compositor, f->client,
+	                                         GOWL_SCENE_EFFECT_DESTROY,
+	                                         NULL, FALSE));
+	box = gowl_effects_geometry(f->client);
+	g_assert_cmpint(box.x, ==, 7);  /* the client's own, from setup */
+	g_assert_false(gowl_effects_has_geometry(f->client));
+	gowl_effects_alpha_changed(f->client, 0.5f);
+	g_assert_null(gowl_effects_surface_at(f->client, 1, 1, NULL, NULL));
+	g_assert_false(gowl_effects_frame(f->compositor, NULL, 0));
+	gowl_effects_frame_done(f->compositor, NULL, NULL);
+	gowl_effects_monitor_removed(f->compositor, NULL);
+	gowl_effects_finish(f->compositor);
+
+	assert_heard_only_finish(f->first);
+	assert_heard_only_finish(f->second);
+}
+
 static void
 test_no_providers_is_quiet(void)
 {
@@ -487,6 +536,8 @@ main(int argc, char **argv)
 	           setup, test_claiming_does_not_affect_broadcast, teardown);
 	g_test_add("/effects/equal-priority-registration-order", Fixture, NULL,
 	           setup, test_equal_priorities_keep_registration_order, teardown);
+	g_test_add("/effects/teardown/nothing-after-finish", Fixture, NULL,
+	           setup, test_nothing_reaches_a_provider_after_finish, teardown);
 	g_test_add_func("/effects/no-providers", test_no_providers_is_quiet);
 
 	return g_test_run();

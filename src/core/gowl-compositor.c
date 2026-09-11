@@ -328,6 +328,97 @@ static GowlMonitor *xytomon       (GowlCompositor *self,
  * GObject lifecycle
  * ----------------------------------------------------------- */
 
+/*
+ * listener_remove:
+ * @listener: a listener that may or may not be on a signal
+ *
+ * Takes @listener off whatever signal it is on.  Safe on one that was
+ * never added -- GObject zeroes the instance, so its link is NULL -- and
+ * on one already removed, so teardown need not know which of the
+ * optional managers gowl_compositor_start() managed to create.
+ */
+static void
+listener_remove(struct wl_listener *listener)
+{
+	if (listener->link.next == NULL)
+		return;
+	wl_list_remove(&listener->link);
+	wl_list_init(&listener->link);
+}
+
+/*
+ * remove_compositor_listeners:
+ * @self: the compositor being finalized
+ *
+ * Takes every listener gowl_compositor_start() put on a wlroots object
+ * back off it, before anything is destroyed: the list dwl keeps in
+ * cleanuplisteners().  wlroots asserts that a signal has no listeners
+ * left when its object goes -- XWayland, the keyboard group, the backend,
+ * and every global wl_display_destroy() takes with it -- and an assert is
+ * an abort.  Nobody noticed because standalone gowl and cmacs --gowl exit
+ * with the compositor alive; the tests, cmacs's `gowl-stop' and a start
+ * that fails half way are what finalize one.
+ *
+ * A listener added in gowl_compositor_start() belongs here too;
+ * tests/test-teardown-guard.sh checks that it is.  Per-object listeners
+ * (clients, outputs, layer surfaces, locks, the lid switch) are not in
+ * this list: their own destroy handlers remove them as teardown destroys
+ * the objects.
+ */
+static void
+remove_compositor_listeners(GowlCompositor *self)
+{
+	/* The renderer, the output layout and the backend. */
+	listener_remove(&self->gpu_reset);
+	listener_remove(&self->layout_change);
+	listener_remove(&self->new_output);
+	listener_remove(&self->new_input);
+
+	/* Shells and protocol managers -- all globals, destroyed with the
+	 * display. */
+	listener_remove(&self->new_xdg_toplevel);
+	listener_remove(&self->new_xdg_popup);
+	listener_remove(&self->new_layer_surface);
+	listener_remove(&self->new_session_lock);
+	listener_remove(&self->new_xdg_decoration);
+	listener_remove(&self->request_set_shape);
+	listener_remove(&self->gamma_set);
+	listener_remove(&self->new_pointer_constraint);
+	listener_remove(&self->output_mgr_apply);
+	listener_remove(&self->output_mgr_test);
+	listener_remove(&self->xdg_activation_request);
+
+	/* The cursor. */
+	listener_remove(&self->cursor_motion);
+	listener_remove(&self->cursor_motion_absolute);
+	listener_remove(&self->cursor_button);
+	listener_remove(&self->cursor_axis);
+	listener_remove(&self->cursor_frame);
+	listener_remove(&self->cursor_swipe_begin);
+	listener_remove(&self->cursor_swipe_update);
+	listener_remove(&self->cursor_swipe_end);
+	listener_remove(&self->cursor_pinch_begin);
+	listener_remove(&self->cursor_pinch_update);
+	listener_remove(&self->cursor_pinch_end);
+	listener_remove(&self->cursor_hold_begin);
+	listener_remove(&self->cursor_hold_end);
+
+	/* The seat, and the keyboard group every keyboard joins. */
+	listener_remove(&self->request_cursor);
+	listener_remove(&self->request_set_sel);
+	listener_remove(&self->request_set_psel);
+	listener_remove(&self->request_start_drag);
+	listener_remove(&self->start_drag);
+	listener_remove(&self->kb_key);
+	listener_remove(&self->kb_modifiers);
+
+#ifdef GOWL_HAVE_XWAYLAND
+	/* The pair wlr_xwayland_destroy() caught first. */
+	listener_remove(&self->xwayland_ready);
+	listener_remove(&self->new_xwayland_surface);
+#endif
+}
+
 static void
 gowl_compositor_dispose(GObject *object)
 {
@@ -408,8 +499,12 @@ gowl_compositor_finalize(GObject *object)
 	g_clear_pointer(&self->wallpaper_sink, gowl_frame_sink_free);
 	g_clear_pointer(&self->lock_sink, gowl_frame_sink_free);
 
-	/* Teardown in reverse order of setup, following dwl's cleanup() */
+	/* Teardown in reverse order of setup, following dwl's cleanup():
+	 * our own listeners come off first, as in dwl's cleanuplisteners(),
+	 * because wlroots aborts if one is still on a signal when its object
+	 * is destroyed. */
 	if (self->wl_display != NULL) {
+		remove_compositor_listeners(self);
 		wl_display_destroy_clients(self->wl_display);
 
 #ifdef GOWL_HAVE_XWAYLAND

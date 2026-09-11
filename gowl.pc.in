@@ -6,6 +6,6 @@ moduledir=${libdir}/gowl/modules
 Name: gowl
 Description: GObject Wayland Compositor - A modular Wayland compositor library
 Version: @VERSION@
-Requires: glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 @WLROOTS_PC@ wayland-server xkbcommon
+Requires: glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0 @WLROOTS_PC@ wayland-server xkbcommon cairo pangocairo
 Libs: -L${libdir} -lgowl
 Cflags: -I${includedir}/gowl

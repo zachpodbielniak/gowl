@@ -37,6 +37,7 @@
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"
 #include "core/gowl-monitor.h"
+#include "core/gowl-overlay-layout.h"
 #include "gowl-enums.h"
 
 /**
@@ -150,40 +151,14 @@ dd_compute_geometry(
 	gint          *out_h
 ){
 	gint mx, my, mw, mh;
-	gint w, h;
 
+	/* The panel math lives in gowl_overlay_panel_box(), shared with the
+	 * scratchpad: one function is what keeps the two the same size. */
 	gowl_monitor_get_window_area(mon, &mx, &my, &mw, &mh);
-
-	w = s->width_abs > 0
-		? s->width_abs
-		: (gint)(mw * (s->width_pct > 0 ? s->width_pct : 1.0));
-	h = s->height_abs > 0
-		? s->height_abs
-		: (gint)(mh * (s->height_pct > 0 ? s->height_pct : (2.0 / 3.0)));
-
-	w = CLAMP(w, 1, MAX(1, mw));
-	h = CLAMP(h, 1, MAX(1, mh));
-
-	switch (s->anchor) {
-	case 1: /* bottom */
-		*out_x = mx + (mw - w) / 2;
-		*out_y = my + mh - h;
-		break;
-	case 2: /* left */
-		*out_x = mx;
-		*out_y = my + (mh - h) / 2;
-		break;
-	case 3: /* right */
-		*out_x = mx + mw - w;
-		*out_y = my + (mh - h) / 2;
-		break;
-	default: /* top */
-		*out_x = mx + (mw - w) / 2;
-		*out_y = my;
-		break;
-	}
-	*out_w = w;
-	*out_h = h;
+	gowl_overlay_panel_box(mx, my, mw, mh,
+	                       s->width_pct, s->height_pct,
+	                       s->width_abs, s->height_abs, s->anchor,
+	                       out_x, out_y, out_w, out_h);
 }
 
 /**

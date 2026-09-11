@@ -27,6 +27,20 @@ G_BEGIN_DECLS
 
 G_DECLARE_INTERFACE(GowlScratchpadHandler, gowl_scratchpad_handler, GOWL, SCRATCHPAD_HANDLER, GObject)
 
+/**
+ * GowlScratchpadHandlerInterface:
+ * @parent_iface: the parent interface
+ * @is_scratchpad: whether @client is one of the scratchpad's windows
+ * @toggle_scratchpad: show the scratchpad if it is hidden, hide it if it
+ *   is shown.  @name is kept for compatibility with named scratchpads;
+ *   there is one scratchpad, and the name is ignored.
+ *
+ * Implemented by the scratchpad module: a panel that slides up from the
+ * bottom of the focused output holding any windows sent to it.  Windows
+ * join and leave through its IPC commands (`scratchpad-add',
+ * `scratchpad-remove'); this interface is the typed entry point an
+ * embedder uses to ask and to toggle.
+ */
 struct _GowlScratchpadHandlerInterface {
 	GTypeInterface parent_iface;
 

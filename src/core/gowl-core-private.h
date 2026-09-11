@@ -667,6 +667,15 @@ struct _GowlClient {
 	gboolean isoverlay;
 	gboolean overlay_visible;
 	gint overlay_anchor; /* top, bottom, left, right */
+	/* Overlay group: focus-stack steps stay within a non-zero group, so a
+	 * shown scratchpad's windows cycle among themselves.  0 for ordinary
+	 * windows and ungrouped overlays such as the dropdown. */
+	guint overlay_group;
+	/* What gowl_compositor_adopt_overlay() took over, for
+	 * gowl_compositor_release_overlay() to give back: whether the window
+	 * floated, and where, relative to its output's window area. */
+	gboolean overlay_was_floating;
+	struct wlr_box overlay_float_box;
 
 };
 

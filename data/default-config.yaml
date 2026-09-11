@@ -209,13 +209,20 @@ keybinds:
   "Super+t": { action: set_layout, arg: "tile", desc: "Tile layout" }
   "Super+f": { action: set_layout, arg: "float", desc: "Float layout" }
   "Super+m": { action: set_layout, arg: "monocle", desc: "Monocle layout" }
-  "Super+s":
-    { action: set_layout, arg: "scrolling", desc: "Scrolling layout" }
   "Super+Tab": { action: cycle_layout, desc: "Next layout" }
   "Super+Shift+Tab":
     { action: cycle_layout, arg: "-1", desc: "Previous layout" }
   "Super+v": { action: set_split, arg: "vsplit", desc: "Vertical split" }
   "Super+Shift+v": { action: set_split, arg: "normal", desc: "Horizontal split" }
+
+  # Scratchpad: a panel of windows that slides up from the bottom of the
+  # focused output, the quake shell's size.  Needs the scratchpad module.
+  "Super+s":
+    { action: ipc_command, arg: "scratchpad-toggle", desc: "Scratchpad: show / hide" }
+  "Super+Alt+s":
+    { action: ipc_command, arg: "scratchpad-add", desc: "Scratchpad: send the focused window" }
+  "Super+Ctrl+Shift+s":
+    { action: ipc_command, arg: "scratchpad-remove", desc: "Scratchpad: bring the focused window back" }
 
   # Multi-monitor
   "Super+comma": { action: focus_monitor, arg: "-1", desc: "Focus left monitor" }
@@ -563,7 +570,15 @@ modules:
   autostart:
     enabled: true
   scratchpad:
-    enabled: false
+    enabled: true
+    # The panel's size, the dropdown's settings: fractions of the output's
+    # usable area, or pixels (width / height; 0 uses the fraction).
+    width-pct: 1.0
+    height-pct: 0.666667
+    width: 0
+    height: 0
+    # Pixels between the columns its windows are tiled in.
+    gap: 0
   swallow:
     enabled: false
   copyhighlight:

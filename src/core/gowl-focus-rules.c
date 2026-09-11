@@ -131,3 +131,12 @@ gowl_focus_decision_to_string(GowlFocusDecision decision)
 
 	return "denied: unknown";
 }
+
+/* Documented in the header: one group cycles within itself. */
+gboolean
+gowl_focus_stack_accepts(
+	guint focused_group,
+	guint candidate_group
+){
+	return focused_group == candidate_group;
+}

@@ -281,6 +281,21 @@ test_focus_decision_names(void)
 		"grab"));
 }
 
+static void
+test_focus_stack_accepts_groups(void)
+{
+	/* Ordinary windows, and ungrouped overlays such as the dropdown. */
+	g_assert_true(gowl_focus_stack_accepts(0, 0));
+	/* A shown scratchpad cycles among its own windows... */
+	g_assert_true(gowl_focus_stack_accepts(1, 1));
+	/* ...never down into the tiles beneath it... */
+	g_assert_false(gowl_focus_stack_accepts(1, 0));
+	/* ...and a tiled window never steps up into it. */
+	g_assert_false(gowl_focus_stack_accepts(0, 1));
+	/* Two groups stay apart. */
+	g_assert_false(gowl_focus_stack_accepts(1, 2));
+}
+
 int
 main(int argc, char **argv)
 {
@@ -308,6 +323,9 @@ main(int argc, char **argv)
 	                test_focus_decide_is_total);
 	g_test_add_func("/focus-rules/decide/names",
 	                test_focus_decision_names);
+
+	g_test_add_func("/focus-rules/stack-accepts/groups",
+	                test_focus_stack_accepts_groups);
 
 	return g_test_run();
 }

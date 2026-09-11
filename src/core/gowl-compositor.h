@@ -1469,6 +1469,74 @@ void gowl_compositor_present_overlay(GowlCompositor *self, GowlClient *client,
                                      GowlMonitor *monitor, gint x, gint y,
                                      gint width, gint height, gint anchor, gboolean visible);
 
+/**
+ * gowl_compositor_adopt_overlay:
+ * @self: a #GowlCompositor
+ * @client: a mapped, managed client
+ * @group: overlay group, non-zero.  Focus-stack steps stay within a group
+ *   (see gowl_focus_stack_accepts()); group 0 is for ordinary windows and
+ *   ungrouped overlays such as the dropdown.
+ *
+ * Takes @client out of tiling and floating management and keeps it as a
+ * hidden module-owned overlay -- the state gowl_compositor_present_overlay()
+ * shows and hides.  It leaves every tag, since a hidden overlay is on no
+ * tag and nothing should count it as occupying one; its monitor is
+ * re-arranged without it; and if it held keyboard focus, the focus moves
+ * to the next visible client.  Fullscreen is dropped first, and whether
+ * the window floated, and where, is recorded for
+ * gowl_compositor_release_overlay() to give back.
+ *
+ * An adopted overlay that unmaps is handed back by the compositor itself,
+ * so a toplevel that maps again returns as an ordinary window rather than
+ * as a hidden overlay nothing shows.  Its adopter hears of the unmap from
+ * #GowlCompositor::client-removed and should forget the window then.
+ *
+ * Refuses clients that are already overlays, embedded clients, unmanaged
+ * (override-redirect) surfaces, and clients that are not mapped.
+ *
+ * Returns: %TRUE if @client was adopted
+ */
+gboolean gowl_compositor_adopt_overlay (GowlCompositor *self,
+                                        GowlClient     *client,
+                                        guint           group);
+
+/**
+ * gowl_compositor_release_overlay:
+ * @self: a #GowlCompositor
+ * @client: an overlay client
+ * @monitor: (nullable): where it goes; %NULL for the selected output
+ *
+ * The inverse of gowl_compositor_adopt_overlay(): hands @client back to
+ * ordinary management on the tags @monitor is showing -- tiled, or
+ * floating where it floated before, relative to @monitor's window area --
+ * and arranges that monitor.  It does not move keyboard focus; a caller
+ * that wants the window focused focuses it.  A client that is no longer
+ * mapped only loses its overlay state.
+ *
+ * Returns: %TRUE if @client was an overlay and has been released
+ */
+gboolean gowl_compositor_release_overlay (GowlCompositor *self,
+                                          GowlClient     *client,
+                                          GowlMonitor    *monitor);
+
+/**
+ * gowl_compositor_stack_neighbour:
+ * @self: a #GowlCompositor
+ * @from: the client a focus-stack step starts from
+ * @direction: > 0 steps forward through the client list, otherwise back
+ *
+ * The client a focus-stack step (Super+j / Super+k) from @from lands on,
+ * without focusing it: the next client visible on the selected output in
+ * the same overlay group as @from, wrapping at the ends.  @from itself
+ * when nothing else qualifies.
+ *
+ * Returns: (transfer none) (nullable): the target, or %NULL if @from is
+ *   not in the client list
+ */
+GowlClient *gowl_compositor_stack_neighbour (GowlCompositor *self,
+                                             GowlClient     *from,
+                                             gint            direction);
+
 G_END_DECLS
 
 #endif /* GOWL_COMPOSITOR_H */

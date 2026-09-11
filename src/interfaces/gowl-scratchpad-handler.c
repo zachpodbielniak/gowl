@@ -56,7 +56,8 @@ gowl_scratchpad_handler_is_scratchpad(
  * @self: a #GowlScratchpadHandler
  * @name: the name of the scratchpad to toggle
  *
- * Toggles the visibility of the named scratchpad window.
+ * Shows the scratchpad if it is hidden and hides it if it is shown.
+ * @name is ignored: there is one scratchpad.
  */
 void
 gowl_scratchpad_handler_toggle_scratchpad(

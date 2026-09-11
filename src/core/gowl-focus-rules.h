@@ -160,6 +160,26 @@ GowlFocusDecision gowl_focus_decide(gboolean session_locked,
  */
 const char *gowl_focus_decision_to_string(GowlFocusDecision decision);
 
+/**
+ * gowl_focus_stack_accepts:
+ * @focused_group: overlay group of the client a focus-stack step starts
+ *   from, 0 for none
+ * @candidate_group: overlay group of a client the step reaches
+ *
+ * Whether a focus-stack step (Super+j / Super+k) may land on the
+ * candidate.  Windows cycle only among windows of their own overlay
+ * group.  While the scratchpad is up its windows cycle among themselves
+ * instead of reaching the tiles underneath -- which would roll it away,
+ * since focus leaving the scratchpad hides it -- and ordinary windows
+ * never step up into it.  Group 0 holds every ordinary window and the
+ * ungrouped overlays such as the dropdown, so their behaviour does not
+ * change.
+ *
+ * Returns: %TRUE if the step may focus the candidate
+ */
+gboolean gowl_focus_stack_accepts(guint focused_group,
+                                  guint candidate_group);
+
 G_END_DECLS
 
 #endif /* GOWL_FOCUS_RULES_H */

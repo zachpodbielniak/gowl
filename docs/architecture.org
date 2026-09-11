@@ -193,7 +193,7 @@ Gowl defines 18 GObject interfaces. A module implements one or more of these to 
 | =GowlTagManager=          | =view_tag(monitor, mask)=, =set_tag(client, mask)=                                                  | First manager returning TRUE claims the operation.    |
 | =GowlGapProvider=         | =get_gaps(monitor)=                                                                                 | First provider returning non-NULL gaps wins.          |
 | =GowlBarProvider=         | =render_bar(monitor, surface)=, =get_bar_height()=                                                  | First provider returning TRUE claims the bar.         |
-| =GowlScratchpadHandler=   | =toggle_scratchpad(name)=, =add_to_scratchpad(client, name)=                                        | First handler returning TRUE claims the operation.    |
+| =GowlScratchpadHandler=   | =is_scratchpad(client)=, =toggle_scratchpad(name)= (the name is ignored)                            | Implemented by the =scratchpad= module.               |
 | =GowlSwallowHandler=      | =should_swallow(parent, child)=, =swallow(parent, child)=, =unswallow(parent)=                      | First handler returning TRUE claims the swallow.      |
 | =GowlStickyHandler=       | =is_sticky(client)=, =set_sticky(client, sticky)=                                                   | First handler returning TRUE claims the operation.    |
 | =GowlCursorProvider=      | =get_cursor_image(mode)=, =set_cursor(image)=                                                       | First provider returning non-NULL claims the cursor.  |

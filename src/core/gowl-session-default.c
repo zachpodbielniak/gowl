@@ -119,6 +119,13 @@ gowl_session_default_save_impl(GowlSessionProvider *provider,
 		const gchar *title;
 		gint         gx, gy, gw, gh;
 
+		/* Overlays belong to the module that shows them -- the
+		 * dropdown's shell, the scratchpad's windows -- and it puts
+		 * them back itself.  Saved here they would return as rules
+		 * floating every window of that app at the overlay's size. */
+		if (c->isoverlay)
+			continue;
+
 		app_id = gowl_client_get_app_id(c);
 		title  = gowl_client_get_title(c);
 		gowl_client_get_geometry(c, &gx, &gy, &gw, &gh);

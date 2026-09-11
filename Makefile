@@ -111,6 +111,7 @@ LIB_SRCS := \
 	src/core/gowl-effects.c \
 	src/interfaces/gowl-scene-effect.c \
 	src/core/gowl-focus-rules.c \
+	src/core/gowl-overlay-layout.c \
 	src/core/gowl-monitor.c \
 	src/core/gowl-client.c \
 	src/core/gowl-seat.c \
@@ -575,6 +576,12 @@ $(OUTDIR)/test-layout: TEST_LDFLAGS += -L$(OUTDIR)/modules -l:tile.so -l:monocle
 # configuration actually produces is testable here.
 $(OUTDIR)/test-bar-module: $(OUTDIR)/modules/bar.so
 $(OBJDIR)/tests/test-bar-module.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"'
+
+# The scratchpad module against the real .so, the same way: membership,
+# commands and settings need no started compositor, so what each command
+# does is asserted here rather than by logging in and pressing keys.
+$(OUTDIR)/test-scratchpad-module: $(OUTDIR)/modules/scratchpad.so
+$(OBJDIR)/tests/test-scratchpad-module.o: TEST_CFLAGS += -DGOWL_TEST_SCRATCHPAD_MODULE='"$(abspath $(OUTDIR)/modules/scratchpad.so)"'
 
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 

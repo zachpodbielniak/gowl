@@ -36,6 +36,19 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-layout` -- Layout provider interface tests
 - `test-module` -- Module lifecycle and registration tests
 - `test-focus-rules` -- Keyboard-focus arbitration + client close routing
+- `test-overlay-layout` -- The panel the dropdown and the scratchpad share
+  (`gowl_overlay_panel_box()`) and the scratchpad's column split: columns
+  fill the panel exactly and share its top edge and height, which is what
+  lets several windows slide up as one panel
+- `test-overlay-adopt` -- `gowl_compositor_adopt_overlay()` /
+  `release_overlay()`: what can be adopted, a hidden overlay being on no
+  tag, a floating window coming back where it floated, focus-stack steps
+  staying in their overlay group, `show_client` never viewing "no tags",
+  and the session file leaving overlays out
+- `test-scratchpad-module` -- The scratchpad module against the real .so:
+  every command's reply, focus elsewhere rolling it away, members that
+  unmap or are destroyed, strict settings, and switching it off giving
+  every window back
 - `test-cube` -- Desktop cube planner: step count and itinerary, no
   wrap-around, duration growth and cap, slot window, and the envelope's
   flatness at both ends (the property that makes a rotation cut-free)
@@ -110,6 +123,11 @@ tests. These assert invariants no unit test can reach:
   `gowl_client_close()`), `gowl_compositor_focus_client()` still consults
   `gowl_focus_decide()`, and no new `wlr_seat_keyboard_notify_enter` call
   sites have appeared
+- `test-overlay-guard.sh` -- `on_client_unmap()` still hands an adopted
+  overlay back (a toplevel that maps again would otherwise come back
+  invisible, on no tag, with nothing to show it), and the focus_stack
+  action still steps through `gowl_compositor_stack_neighbour()` (else
+  Super+j on a shown scratchpad lands on a tile and rolls it away)
 - `test-record-guard.sh` -- the input recorder's taps are still wired to
   all six input hooks, the injection helpers and `motionnotify` are still
   *un*wired (they are reached by both the real and the synthetic path, so
@@ -201,6 +219,16 @@ tests. These assert invariants no unit test can reach:
 > must move seat focus themselves have to call
 > `gowl_compositor_has_exclusive_keyboard_layer()` first. See *Keyboard Focus
 > Arbitration* in `docs/architecture.org`.
+
+> **A hidden overlay is on no tag (`tags == 0`), and a view of no tags is an
+> empty screen.** Hidden overlays -- the dropdown's shell, the scratchpad's
+> windows -- keep `tags = 0` so nothing counts them as occupying a tag;
+> `gowl_compositor_present_overlay()`, `adopt_overlay()` and `setmon()` keep
+> it that way. So anything that switches a monitor to *a client's* tags must
+> skip 0: `gowl_compositor_show_client()` did not, and jumping to a hidden
+> overlay would have set its monitor to viewing nothing, taking every window
+> off the screen. `tests/test-overlay-adopt.c` holds it. The same reason
+> keeps overlays out of the session file.
 
 ## Code Style
 

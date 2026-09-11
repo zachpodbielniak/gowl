@@ -4073,8 +4073,11 @@ setmon(
 	if (m != NULL) {
 		/* Make sure window overlaps with the new monitor */
 		resize_client(self, c, c->geom, FALSE);
-		/* Assign tags of target monitor */
+		/* Assign tags of target monitor -- except to a hidden
+		 * overlay, which is on no tag wherever it is. */
 		c->tags = newtags ? newtags : m->tagset[m->seltags];
+		if (c->isoverlay && !c->overlay_visible)
+			c->tags = 0;
 		setfullscreen(self, c, c->isfullscreen);
 		setfloating(self, c, c->isfloating);
 	}
@@ -4468,6 +4471,7 @@ gowl_compositor_show_client(
 	GowlClient     *client
 ){
 	GowlMonitor *mon;
+	guint32      tags;
 
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
@@ -4475,8 +4479,11 @@ gowl_compositor_show_client(
 		return;
 
 	mon = (GowlMonitor *)gowl_client_get_monitor(client);
-	if (mon != NULL)
-		gowl_monitor_set_tags(mon, gowl_client_get_tags(client));
+	tags = gowl_client_get_tags(client);
+	/* A hidden overlay is on no tag, so there is no view to switch to --
+	 * and viewing "no tags" would empty the whole output. */
+	if (mon != NULL && tags != 0)
+		gowl_monitor_set_tags(mon, tags);
 	gowl_compositor_focus_client(self, client, TRUE);
 	if (mon != NULL) {
 		self->selmon = mon;
@@ -4535,9 +4542,31 @@ gowl_compositor_present_overlay(GowlCompositor *self, GowlClient *c,
 
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 	g_return_if_fail(GOWL_IS_CLIENT(c));
-	if (c->scene == NULL || (visible && monitor == NULL)
-	    || (!visible && !c->overlay_visible))
+	if (c->scene == NULL || (visible && monitor == NULL))
 		return;
+
+	/* A hidden overlay is on no tag.  Nothing may count it as occupying
+	 * the one it was last shown on -- the bar would light that tag up for
+	 * a window nobody can see.  Hiding one already hidden settles that. */
+	if (!visible && !c->overlay_visible) {
+		if (c->isoverlay)
+			c->tags = 0;
+		return;
+	}
+
+	/* Already showing on this output: move it in place.  Running the show
+	 * effect again would slide it in from its edge a second time, which
+	 * is what re-tiling a shown scratchpad would otherwise look like. */
+	if (visible && c->isoverlay && c->overlay_visible && c->mon == monitor) {
+		c->overlay_anchor = CLAMP(anchor, 0, 3);
+		c->tags = monitor->tagset[monitor->seltags];
+		if (!wlr_box_equal(&c->geom, &target))
+			resize_client(self, c, target, FALSE);
+		wlr_scene_node_raise_to_top(&c->scene->node);
+		gowl_compositor_focus_client(self, c, TRUE);
+		return;
+	}
+
 	if (visible) {
 		if (!c->isoverlay || c->mon != monitor || !wlr_box_equal(&c->geom, &target)) {
 			gowl_effects_client_event(self, c, GOWL_SCENE_EFFECT_DESTROY, NULL, FALSE);
@@ -4545,12 +4574,15 @@ gowl_compositor_present_overlay(GowlCompositor *self, GowlClient *c,
 			c->isfloating = TRUE;
 			c->isfullscreen = FALSE;
 			c->mon = monitor;
-			c->tags = monitor->tagset[monitor->seltags];
 			resize_client(self, c, target, FALSE);
 		}
+		/* Shown, it is on whatever the output is viewing. */
+		c->tags = monitor->tagset[monitor->seltags];
 		c->overlay_anchor = CLAMP(anchor, 0, 3);
 		wlr_scene_node_reparent(&c->scene->node, self->layers[GOWL_SCENE_LAYER_OVERLAY]);
 		wlr_scene_node_raise_to_top(&c->scene->node);
+	} else {
+		c->tags = 0;
 	}
 	c->overlay_visible = visible;
 	handled = gowl_effects_client_event(self, c, visible
@@ -4562,6 +4594,206 @@ gowl_compositor_present_overlay(GowlCompositor *self, GowlClient *c,
 	} else if (self->wlr_seat != NULL
 	           && self->wlr_seat->keyboard_state.focused_surface == client_surface(c)) {
 		gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
+	}
+}
+
+/**
+ * gowl_compositor_adopt_overlay:
+ * @self: the compositor
+ * @c: a mapped, managed client
+ * @group: overlay group, non-zero
+ *
+ * Takes @c out of tiling and floating management as a hidden overlay,
+ * which its adopter shows and hides with gowl_compositor_present_overlay().
+ * What it was -- floating or not, and where -- is recorded for
+ * gowl_compositor_release_overlay() to give back.  See the header.
+ *
+ * Returns: %TRUE if @c was adopted
+ */
+gboolean
+gowl_compositor_adopt_overlay(
+	GowlCompositor *self,
+	GowlClient     *c,
+	guint           group
+){
+	GowlMonitor *mon;
+	gboolean     had_focus;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	g_return_val_if_fail(GOWL_IS_CLIENT(c), FALSE);
+	g_return_val_if_fail(group != 0, FALSE);
+
+	/* Only an ordinary mapped window: an overlay already has an owner,
+	 * an embedded client belongs to its host, an override-redirect popup
+	 * to the window that opened it, and a client that is not in the list
+	 * is not mapped. */
+	if (c->isoverlay || c->isembedded || client_is_unmanaged(c)
+	    || g_list_find(self->clients, c) == NULL)
+		return FALSE;
+
+	had_focus = gowl_compositor_get_focused_client(self) == c;
+	mon = c->mon;
+
+	/* Fullscreen is a layer and a geometry of its own.  Leave it first,
+	 * so what is recorded below is the window's own state. */
+	if (c->isfullscreen)
+		setfullscreen(self, c, FALSE);
+
+	/* A window being dragged is let go of, as it is on unmap. */
+	if (c == self->grabbed_client) {
+		self->cursor_mode = GOWL_CURSOR_MODE_NORMAL;
+		self->grabbed_client = NULL;
+	}
+
+	/* What release gives back: floating or not, and where, relative to
+	 * the output's window area so it can come back on another output. */
+	c->overlay_was_floating = c->isfloating;
+	c->overlay_float_box = c->geom;
+	if (mon != NULL) {
+		c->overlay_float_box.x -= mon->w.x;
+		c->overlay_float_box.y -= mon->w.y;
+	}
+
+	/* End any tile animation: from here the overlay's owner presents it. */
+	gowl_effects_client_event(self, c, GOWL_SCENE_EFFECT_DESTROY, NULL, FALSE);
+
+	c->isoverlay = TRUE;
+	c->overlay_visible = FALSE;
+	c->overlay_group = group;
+	c->isfloating = TRUE;
+	c->tags = 0;
+	if (c->scene != NULL) {
+		wlr_scene_node_reparent(&c->scene->node,
+		                        self->layers[GOWL_SCENE_LAYER_OVERLAY]);
+		wlr_scene_node_set_enabled(&c->scene->node, FALSE);
+	}
+
+	/* Close the gap it leaves, and hand its focus on. */
+	gowl_compositor_arrange(self, mon);
+	if (had_focus)
+		gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
+	return TRUE;
+}
+
+/**
+ * gowl_compositor_release_overlay:
+ * @self: the compositor
+ * @c: an overlay client
+ * @monitor: (nullable): where it goes; %NULL for the selected output
+ *
+ * The inverse of gowl_compositor_adopt_overlay().  See the header.
+ *
+ * Returns: %TRUE if @c was an overlay and has been released
+ */
+gboolean
+gowl_compositor_release_overlay(
+	GowlCompositor *self,
+	GowlClient     *c,
+	GowlMonitor    *monitor
+){
+	struct wlr_box box;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	g_return_val_if_fail(GOWL_IS_CLIENT(c), FALSE);
+
+	if (!c->isoverlay)
+		return FALSE;
+
+	/* No longer mapped -- the unmap path lands here.  Nothing is on
+	 * screen to place, so only the overlay state goes, and a later map
+	 * treats the window like any other. */
+	if (g_list_find(self->clients, c) == NULL) {
+		c->isoverlay = FALSE;
+		c->overlay_visible = FALSE;
+		c->overlay_group = 0;
+		c->isfloating = c->overlay_was_floating;
+		return TRUE;
+	}
+
+	if (monitor == NULL)
+		monitor = self->selmon != NULL ? self->selmon : c->mon;
+
+	/* End the overlay slide: the window is placed from rest. */
+	gowl_effects_client_event(self, c, GOWL_SCENE_EFFECT_DESTROY, NULL, FALSE);
+
+	c->isoverlay = FALSE;
+	c->overlay_visible = FALSE;
+	c->overlay_group = 0;
+	c->isfullscreen = FALSE;
+	c->isfloating = c->overlay_was_floating;
+	c->mon = monitor;
+	c->tags = monitor != NULL ? monitor->tagset[monitor->seltags] : 0;
+
+	if (c->isfloating) {
+		/* Back where it floated, on whichever output it lands on. */
+		box = c->overlay_float_box;
+		if (monitor != NULL) {
+			box.x += monitor->w.x;
+			box.y += monitor->w.y;
+		}
+		if (c->scene != NULL) {
+			wlr_scene_node_reparent(&c->scene->node,
+			                        self->layers[GOWL_SCENE_LAYER_FLOAT]);
+			resize_client(self, c, box, FALSE);
+		} else {
+			c->geom = box;
+		}
+	} else if (c->scene != NULL) {
+		wlr_scene_node_reparent(&c->scene->node,
+		                        self->layers[GOWL_SCENE_LAYER_TILE]);
+	}
+
+	/* arrange() turns it on -- it is visible on the tags just given --
+	 * and the layout gives a tiled window its place. */
+	gowl_compositor_arrange(self, monitor);
+	return TRUE;
+}
+
+/**
+ * gowl_compositor_stack_neighbour:
+ * @self: the compositor
+ * @from: the client a focus-stack step starts from
+ * @direction: > 0 forward through the client list, otherwise back
+ *
+ * See the header.
+ *
+ * Returns: (transfer none) (nullable): the target, or %NULL if @from is
+ *   not in the client list
+ */
+GowlClient *
+gowl_compositor_stack_neighbour(
+	GowlCompositor *self,
+	GowlClient     *from,
+	gint            direction
+){
+	GList *start;
+	GList *l;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	g_return_val_if_fail(GOWL_IS_CLIENT(from), NULL);
+
+	start = g_list_find(self->clients, from);
+	if (start == NULL)
+		return NULL;
+
+	/* Walk the client list from @from, wrapping at either end, to the
+	 * first client visible on the selected output and in @from's overlay
+	 * group.  Arriving back at @from means nothing else qualified. */
+	for (l = start;;) {
+		GowlClient *found;
+
+		if (direction > 0)
+			l = l->next != NULL ? l->next : self->clients;
+		else
+			l = l->prev != NULL ? l->prev : g_list_last(self->clients);
+		if (l == start)
+			return from;
+
+		found = (GowlClient *)l->data;
+		if (VISIBLEON(found, self->selmon)
+		    && gowl_focus_stack_accepts(from->overlay_group,
+		                                found->overlay_group))
+			return found;
 	}
 }
 
@@ -4804,6 +5036,11 @@ gowl_compositor_focus_client(
 	struct wlr_surface *old;
 	struct wlr_keyboard *kb;
 	GowlFocusDecision decision;
+
+	/* A compositor that has not been started has no seat, so there is
+	 * nothing to focus through -- and this used to dereference it. */
+	if (self->wlr_seat == NULL)
+		return;
 
 	/*
 	 * One gate for every guard.  The decision itself is pure logic in
@@ -6476,42 +6713,19 @@ gowl_compositor_dispatch_keybind(
 				return TRUE;
 			case GOWL_ACTION_FOCUS_STACK: {
 				GowlClient *sel, *found;
-				GList *start, *l;
-				gint dir;
 
 				sel = focustop(self, self->selmon);
 				if (sel == NULL)
 					return TRUE;
 
-				dir = (kb->arg != NULL) ? atoi(kb->arg) : 1;
-				start = g_list_find(self->clients, sel);
-				if (start == NULL)
+				/* Which neighbour is gowl_compositor_stack_neighbour()'s
+				 * call: it keeps a shown scratchpad's windows cycling
+				 * among themselves instead of stepping down onto the
+				 * tiles beneath it, which would roll it away. */
+				found = gowl_compositor_stack_neighbour(self, sel,
+					(kb->arg != NULL) ? atoi(kb->arg) : 1);
+				if (found == NULL)
 					return TRUE;
-
-				if (dir > 0) {
-					/* Forward */
-					l = start->next;
-					if (l == NULL) l = self->clients;
-					while (l != start) {
-						found = (GowlClient *)l->data;
-						if (VISIBLEON(found, self->selmon))
-							break;
-						l = l->next;
-						if (l == NULL) l = self->clients;
-					}
-				} else {
-					/* Backward */
-					l = start->prev;
-					if (l == NULL) l = g_list_last(self->clients);
-					while (l != start) {
-						found = (GowlClient *)l->data;
-						if (VISIBLEON(found, self->selmon))
-							break;
-						l = l->prev;
-						if (l == NULL) l = g_list_last(self->clients);
-					}
-				}
-				found = (GowlClient *)l->data;
 				gowl_compositor_focus_client(self, found, TRUE);
 				/* Notify effects only after focus actually changes. Focus
 				 * guards and cycling a single window must stay quiet. */
@@ -6883,8 +7097,11 @@ gowl_compositor_dispatch_keybind(
 				 * the IPC socket either way, because a listener
 				 * there wants to see what happened.
 				 */
+				/* The reply is for a caller that asked.  A key has
+				 * nobody to hand it to, and dropping it on the floor
+				 * leaked it on every press. */
 				if (kb->arg != NULL)
-					gowl_compositor_run_command(self, kb->arg);
+					g_free(gowl_compositor_run_command(self, kb->arg));
 				return TRUE;
 			}
 			case GOWL_ACTION_LOCK:
@@ -9028,6 +9245,15 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	c->scene = NULL;
 	c->scene_surface = NULL;
 	memset(c->border, 0, sizeof(c->border));
+
+	/* An adopted overlay goes back to being an ordinary window when it
+	 * unmaps.  Its owner let go of it on client-removed, and a toplevel
+	 * can map again without being destroyed: it must come back as a
+	 * window, not as a hidden overlay that nothing will ever show.  With
+	 * the scene gone and the client out of the list, this only clears
+	 * the overlay state. */
+	if (c->isoverlay && c->overlay_group != 0)
+		gowl_compositor_release_overlay(self, c, NULL);
 
 	/* Restore focus */
 	gowl_compositor_motionnotify(self, 0);

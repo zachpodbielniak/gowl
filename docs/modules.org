@@ -285,15 +285,18 @@ struct _GowlBarProviderInterface {
 :PROPERTIES:
 :CUSTOM_ID: gowlscratchpadhandler
 :END:
-Manage scratchpad windows.
+Ask whether a window is in the scratchpad, and toggle it. The bundled
+=scratchpad= module implements it; windows join and leave through that
+module's IPC commands (see [[#scratchpad][Scratchpad]]). =name= is kept
+for compatibility with named scratchpads and is ignored: there is one.
 
 #+begin_src C
 struct _GowlScratchpadHandlerInterface {
     GTypeInterface parent_iface;
-    gboolean (*toggle_scratchpad)  (GowlScratchpadHandler *self,
-                                    const gchar *name);
-    gboolean (*add_to_scratchpad)  (GowlScratchpadHandler *self,
-                                    gpointer client, const gchar *name);
+    gboolean (*is_scratchpad)     (GowlScratchpadHandler *self,
+                                   gpointer client);
+    void     (*toggle_scratchpad) (GowlScratchpadHandler *self,
+                                   const gchar *name);
 };
 #+end_src
 
@@ -631,7 +634,7 @@ Gowl ships with several modules in the =modules/= directory:
 | =autostart=      | Runs autostart commands from config                   |
 | =vanitygaps=     | Adds configurable inner/outer gaps to layouts         |
 | =pertag=         | Per-tag layout and mfact settings                     |
-| =scratchpad=     | Named scratchpad windows                              |
+| =scratchpad=     | Slide-up panel of windows, the dropdown's twin        |
 | =swallow=        | Terminal window swallowing                            |
 | =movestack=      | Move clients within the stack                         |
 | =fibonacci=      | Fibonacci spiral layout                               |
@@ -770,9 +773,11 @@ offscreen windows, and the viewport clips content to its own monitor.
 The layout-provider interface supports focus, scrolling and overflow
 policy without putting layout algorithms in the compositor.
 
-CMacs binds Super+< / Super+> to previous/next layout on the current tag.
-Super+Tab / Super+Shift+Tab remain aliases; Super+s selects scrolling,
-Super+t selects tile, and Super+[ / Super+] scroll the strip.
+CMacs binds Super+< / Super+> to previous/next layout on the current tag,
+which is also how the scrolling layout is reached: Super+s is the
+scratchpad (see [[#scratchpad][Scratchpad]]). Super+Tab / Super+Shift+Tab
+remain aliases, Super+t selects tile, and Super+[ / Super+] scroll the
+strip.
 Monitor-moving shortcuts use Super+Ctrl+Shift+comma/period. Super+Shift+j/k
 swap the focused tiled client with the next/previous eligible client,
 wrapping at either end and keeping focus on the moved window. The
@@ -819,6 +824,97 @@ With =animation= enabled, the live shell slides from its configured edge
 and reverses from its current position on rapid toggles. A second toggle
 during startup keeps the shell hidden without a flash. Without animation,
 visibility changes immediately.
+
+*** Scratchpad
+:PROPERTIES:
+:CUSTOM_ID: scratchpad
+:END:
+
+The quake shell's twin from the other edge: a panel that slides up from
+the bottom of the focused output holding any windows sent to it, tiled
+in columns. It is the dropdown's size --- both panels come from
+=gowl_overlay_panel_box()=, so the same settings give the same rectangle
+--- and the same fixed floating overlay: showing it never rearranges the
+tiles beneath it, it comes up over whichever tag is in view, and
+focusing a window outside it rolls it away. While it is up its windows
+have the keyboard and every keybind, and Super+j / Super+k cycle among
+them instead of stepping down onto the tiles, which would roll it away.
+
+| Key                  | Command             | Effect                                    |
+|----------------------+---------------------+-------------------------------------------|
+| =Super+s=            | =scratchpad-toggle= | Slide the panel up, or roll it away       |
+| =Super+Alt+s=        | =scratchpad-add=    | Send the focused window to it             |
+| =Super+Ctrl+Shift+s= | =scratchpad-remove= | Bring the focused window back to the tags |
+
+The module has no keys of its own. Every operation is a command, so a
+bind is ={ action: ipc_command, arg: "scratchpad-toggle" }= and the same
+word works over the IPC socket and from an embedder through
+=gowl_compositor_run_command()=, which is how cmacs reaches it. The
+shipped =default-config.yaml= binds the three keys above and enables the
+module.
+
+| Command                  | Reply                  | Does                                                  |
+|--------------------------+------------------------+-------------------------------------------------------|
+| =scratchpad-toggle=      | =OK shown N=, =OK hidden= | Show if hidden, hide if shown                      |
+| =scratchpad-show=        | =OK shown N=           | Show; when already up, re-tile and refocus            |
+| =scratchpad-hide=        | =OK hidden=            | Hide                                                  |
+| =scratchpad-add [ID]=    | =OK added N=           | The focused window, or client ID, joins               |
+| =scratchpad-remove [ID]= | =OK removed N=         | It leaves onto the selected output's tags, focused    |
+| =scratchpad-status=      | =OK visible=0 count=2 ...= | Visibility, member ids and settings, as key=value |
+
+N is how many windows the scratchpad holds afterwards. The status line
+is =OK visible=V count=N members=ID,ID width-pct=W height-pct=H width=PX
+height=PX gap=PX=; fractions always print with a '.', whatever the
+locale. Anything that fails is an =ERROR ...= reply saying why: the
+scratchpad is empty, the window is already a member, it cannot join (an
+embedded client, somebody else's overlay such as the dropdown's shell, a
+popup), or an id names no window.
+
+*Joining.* The window leaves the layout as a hidden overlay on no tag
+--- so no tag counts it as occupied --- and its monitor re-tiles without
+it. It is the window focused the next time the panel comes up. Members
+are columns in the order they joined, split evenly with any leftover
+pixels going one each to the first columns, and every column shares the
+panel's top edge and height, which is why several windows slide up as
+one panel.
+
+*Leaving.* =scratchpad-remove= rolls the rest away, puts the window back
+on the tags in view --- tiled if it was tiled, floating where it floated,
+measured from the window area so it lands in the same place on another
+output --- and focuses it. A window that closes simply leaves, and the
+rest close the gap. One that unmaps without closing, such as an app
+hiding in its tray, leaves too, and comes back as an ordinary window if
+it maps again. Disabling the module gives every window back, so none is
+ever stranded as a hidden overlay with nothing left to show it.
+
+*Settings* (=modules: scratchpad:= in YAML, =gowl-configure-module= under
+cmacs) are the dropdown's own:
+
+| Key          | Default    | Meaning                                                  |
+|--------------+------------+----------------------------------------------------------|
+| =width-pct=  | =1.0=      | Fraction of the usable width, above 0 and at most 1      |
+| =height-pct= | =0.666667= | Fraction of the usable height                            |
+| =width=      | =0=        | Pixels, 0 to 65535; when not 0 it wins over =width-pct=  |
+| =height=     | =0=        | Pixels, 0 to 65535; when not 0 it wins over =height-pct= |
+| =gap=        | =0=        | Pixels between the columns, 0 to 512                     |
+
+A bad value is refused with a warning naming the key, and the old value
+kept. A shown panel takes a new size at once.
+
+*How it is built.* The module decides only which windows, where and
+when. The compositor does the window management, through three calls
+any module can use: =gowl_compositor_adopt_overlay()= takes a window out
+of tiling as a hidden overlay in a non-zero /overlay group/, recording
+whether it floated and where; =gowl_compositor_present_overlay()= --- the
+dropdown's call --- shows and hides it; =gowl_compositor_release_overlay()=
+gives it back. The group keeps Super+j / Super+k inside a shown panel
+(=gowl_focus_stack_accepts()=). The compositor itself hands an adopted
+overlay back when its window unmaps, which is why a remapped window
+cannot come back invisible; =tests/test-overlay-guard.sh= keeps that call
+and the focus-stack one in place. Hidden overlays are on no tag, so the
+session file leaves them out and jumping to one
+(=gowl_compositor_show_client()=) never switches an output to viewing no
+tags.
 
 *** Bar Module
 :PROPERTIES:

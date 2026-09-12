@@ -556,6 +556,7 @@ blur_apply_shadow(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 	gdouble rgb[3] = { 0.0, 0.0, 0.0 };
 
 	if (!gowl_config_get_shadow(self->config) || radius <= 0
+	    || (c->rule_flags & GOWL_CLIENT_RULE_NO_SHADOW)
 	    || opacity <= 0.0 || frame->width <= 0 || frame->height <= 0) {
 		if (nodes->shadow != NULL) {
 			wlr_scene_node_destroy(&nodes->shadow->node);
@@ -638,6 +639,7 @@ blur_apply_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 	struct wlr_box    vis;
 
 	if (!gowl_config_get_blur(self->config)
+	    || (c->rule_flags & GOWL_CLIENT_RULE_NO_BLUR)
 	    || c->alpha >= GOWL_BLUR_MIN_TRANSPARENCY
 	    || c->mon == NULL) {
 		if (nodes->backdrop != NULL) {

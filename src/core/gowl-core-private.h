@@ -689,6 +689,9 @@ struct _GowlClient {
 	/* Pinned: shown on every tag of its monitor, whatever is viewed.
 	 * Its own tags are kept, so unpinning puts it back where it was. */
 	gboolean issticky;
+	/* #GowlClientRuleFlags set by a window rule: what the effect
+	 * modules and the idle manager leave alone or take up. */
+	guint    rule_flags;
 	gboolean isembedded;     /* externally managed (skip arrange) */
 	gfloat   alpha;          /* opacity: 0.0 (transparent) to 1.0 (opaque) */
 

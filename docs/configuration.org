@@ -848,6 +848,18 @@ Rules match clients by =app_id= and/or =title= and apply settings.
 | =center=   | bool   | =true=  | Centre a floated match on its monitor       |
 | =regex=    | bool   | =false= | Match =app_id= and =title= as PCRE regexes rather than globs |
 | =sticky=   | bool   | =false= | Pin the match to every tag of its monitor   |
+| =initial-title= | string | =""= | Title pattern matched only when the window maps, never on a later rename (a browser's tab titles) |
+| =xwayland= | bool   | unset   | =true= matches only X11 clients, =false= only Wayland ones |
+| =pid=      | int    | =0=     | Match the client's process id               |
+| =no-focus= | bool   | =false= | Do not give the window the keyboard when it maps |
+| =fullscreen= | bool | =false= | Open the window fullscreen                  |
+| =opacity=  | float  | unset   | Opacity 0.05..1.0 (needs the =alpha= module's per-client alpha to show) |
+| =no-blur=  | bool   | =false= | No frosted backdrop behind it (=blur= module) |
+| =no-shadow= | bool  | =false= | No drop shadow (=blur= module)               |
+| =no-anim=  | bool   | =false= | No open, close or move animation (=animation= module) |
+| =idle-inhibit= | bool | =false= | While visible, holds the idle and dpms timers off as an idle-inhibit-v1 inhibitor would |
+
+Matchers (=app_id=, =title=, =initial-title=, =xwayland=, =pid=) must all match for a rule to apply; the first matching rule wins. =title= rules are re-evaluated when a window renames itself; =initial-title= ones are not.
 
 **** Example
 :PROPERTIES:
@@ -1073,6 +1085,12 @@ The scratchpad takes the dropdown's size settings --- =width-pct= and
 =height= in pixels, which win when not 0 --- plus =gap=, the pixels
 between the columns its windows are tiled in. A bad value is refused
 with a warning and the old one kept. See /Scratchpad/ in =modules.org=.
+
+*** Checking a config
+:PROPERTIES:
+:CUSTOM_ID: checking-a-config
+:END:
+Every section knows its keys, and a key it does not know is a problem: a warning names it and, when a known key is close, the one that was probably meant (=boarder-width= gets =border-width=). A value no key accepts -- a rule opacity of 7, an action that does not exist -- is a problem too. =gowl --check-config= (with =--config PATH= for a file other than the one on the search path) loads the config, prints =config ok= or the count, and exits non-zero on any; a reload logs the count. Module settings under =modules:= are not checked -- each module reads its own -- nor are the values of keys that accept free text.
 
 ** C Configuration
 :PROPERTIES:

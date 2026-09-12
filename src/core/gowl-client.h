@@ -53,6 +53,54 @@ void           gowl_client_set_urgent         (GowlClient  *self,
                                                gboolean     urgent);
 
 /**
+ * GowlClientRuleFlags:
+ * @GOWL_CLIENT_RULE_NONE: nothing special
+ * @GOWL_CLIENT_RULE_NO_BLUR: no frosted backdrop behind the window
+ * @GOWL_CLIENT_RULE_NO_SHADOW: no drop shadow
+ * @GOWL_CLIENT_RULE_NO_ANIM: no open, close or move animation
+ * @GOWL_CLIENT_RULE_IDLE_INHIBIT: while visible, holds the idle and
+ *   dpms timers off as an idle-inhibit-v1 inhibitor would
+ * @GOWL_CLIENT_RULE_NO_FOCUS: did not take the keyboard when it mapped
+ *
+ * What a window rule asked of the modules.  A module that draws or
+ * animates a window checks these; the rule sets them at map time.
+ */
+typedef enum {
+	GOWL_CLIENT_RULE_NONE         = 0,
+	GOWL_CLIENT_RULE_NO_BLUR      = 1 << 0,
+	GOWL_CLIENT_RULE_NO_SHADOW    = 1 << 1,
+	GOWL_CLIENT_RULE_NO_ANIM      = 1 << 2,
+	GOWL_CLIENT_RULE_IDLE_INHIBIT = 1 << 3,
+	GOWL_CLIENT_RULE_NO_FOCUS     = 1 << 4
+} GowlClientRuleFlags;
+
+/**
+ * gowl_client_get_rule_flags:
+ * @self: a #GowlClient
+ *
+ * Returns: the #GowlClientRuleFlags a rule set on this window
+ */
+guint          gowl_client_get_rule_flags     (GowlClient  *self);
+
+/**
+ * gowl_client_set_rule_flags:
+ * @self: a #GowlClient
+ * @flags: #GowlClientRuleFlags, replacing the current set
+ *
+ * Emits #GowlClient::state-changed on a change.
+ */
+void           gowl_client_set_rule_flags     (GowlClient  *self,
+                                               guint        flags);
+
+/**
+ * gowl_client_get_xwayland:
+ * @self: a #GowlClient
+ *
+ * Returns: %TRUE if the window is an X11 client under XWayland
+ */
+gboolean       gowl_client_get_xwayland       (GowlClient  *self);
+
+/**
  * gowl_client_get_sticky:
  * @self: a #GowlClient
  *

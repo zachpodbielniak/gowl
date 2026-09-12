@@ -92,6 +92,9 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   headless output off, input powers it on, an explicit `output-power off'
   survives the key release that follows it, and `xkb-layout: us,de` gives
   two layouts that `switch-layout` steps through with the signal
+- `test-config-keys.sh` -- every top-level key the YAML parser reads is
+  in the validator's known-key list, or a valid config would warn about
+  its own keys and `gowl --check-config` would fail on it
 - `test-focus-nav` -- Focus by direction (straight across beats diagonal,
   a window on another tag is not there), sticky windows being on every tag,
   the urgent window and the previously focused one, without a seat

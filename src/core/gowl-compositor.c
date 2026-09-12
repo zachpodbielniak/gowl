@@ -8455,7 +8455,12 @@ run_keybind_entry(
 		gowl_compositor_set_config(self, new_config);
 		self->owned_config = new_config;
 		g_clear_object(&replaced);
-		g_info("Configuration reloaded");
+		if (gowl_config_get_problem_count(new_config) > 0)
+			g_warning("Configuration reloaded with %u problem(s); "
+			          "see the warnings above",
+			          gowl_config_get_problem_count(new_config));
+		else
+			g_info("Configuration reloaded");
 
 		if (self->idle_mgr != NULL) {
 			gowl_idle_manager_set_timeout(self->idle_mgr,
@@ -10574,6 +10579,14 @@ on_client_map(struct wl_listener *listener, void *data)
 	 * pending_rule_* fields; we consume them here. */
 	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_PRE_MAP],
 	              0, c);
+
+	/* A rule that says no-focus: the window goes to the bottom of the
+	 * focus stack before placement, so the focustop() setmon() runs
+	 * lands on whatever had the keyboard. */
+	if (c->rule_flags & GOWL_CLIENT_RULE_NO_FOCUS) {
+		self->fstack = g_list_remove(self->fstack, c);
+		self->fstack = g_list_append(self->fstack, c);
+	}
 
 	/* Resolve placement hints BEFORE setmon can run a layout. An overlay
 	 * must never spend even one configure as a tile and squeeze neighbours. */

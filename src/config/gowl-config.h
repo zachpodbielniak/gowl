@@ -186,6 +186,18 @@ typedef struct {
  * @regex_mode: when %TRUE, interpret @app_id and @title as PCRE
  *              regexes (via #GRegex) rather than shell globs
  * @sticky: pin the matched client to every tag of its monitor
+ * @initial_title: (nullable): title pattern matched only at map time,
+ *   never on a later title change (a browser's tab titles)
+ * @xwayland: -1 any, 1 only X11 clients, 0 only Wayland clients
+ * @pid: the client's process id to match, or 0 for any
+ * @no_focus: do not give the client the keyboard when it maps
+ * @fullscreen: open the client fullscreen
+ * @opacity: opacity 0.05..1.0, or 0 to leave it
+ * @no_blur: no frosted backdrop behind it (blur module)
+ * @no_shadow: no drop shadow (blur module)
+ * @no_anim: no open/close/move animation (animation module)
+ * @idle_inhibit: while visible, hold the idle and dpms timers off as
+ *   an idle-inhibit-v1 inhibitor would
  *
  * A window rule entry stored in the config.
  */
@@ -200,6 +212,16 @@ typedef struct {
 	gboolean  center;
 	gboolean  regex_mode;
 	gboolean  sticky;
+	gchar    *initial_title;
+	gint      xwayland;
+	gint      pid;
+	gboolean  no_focus;
+	gboolean  fullscreen;
+	gdouble   opacity;
+	gboolean  no_blur;
+	gboolean  no_shadow;
+	gboolean  no_anim;
+	gboolean  idle_inhibit;
 } GowlRuleEntry;
 
 /* --- GowlMonitorConfig --- */
@@ -1055,6 +1077,17 @@ gowl_config_add_rule_full(
 	gboolean     center,
 	gboolean     regex_mode
 );
+
+/**
+ * gowl_config_get_problem_count:
+ * @self: a #GowlConfig
+ *
+ * Returns: how many problems the last YAML load found: keys no
+ *   section knows, values no key accepts.  Each was also logged as a
+ *   warning naming the key and, where one is close, the key that was
+ *   probably meant.  `gowl --check-config' exits non-zero on any.
+ */
+guint gowl_config_get_problem_count (GowlConfig *self);
 
 /**
  * gowl_config_add_rule_entry:

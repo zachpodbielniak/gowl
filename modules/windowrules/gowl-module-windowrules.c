@@ -132,7 +132,8 @@ G_DEFINE_TYPE_WITH_CODE(GowlModuleWindowrules, gowl_module_windowrules,
 
 /* Forward declarations */
 static void wr_apply_rules_to_client(GowlModuleWindowrules *self,
-                                      GowlClient            *c);
+                                      GowlClient            *c,
+                                      gboolean               initial);
 static void wr_on_client_pre_map(GowlCompositor *compositor,
                                   GowlClient     *c,
                                   gpointer        user_data);
@@ -167,6 +168,26 @@ wr_rule_entry_matches(
 
 	app_id_ok = TRUE;
 	title_ok = TRUE;
+
+	/* `initial-title' is matched exactly as `title' is; the caller
+	 * decides whether this is the moment it may be looked at. */
+	if (rule->initial_title != NULL) {
+		gboolean ok;
+
+		if (title == NULL)
+			return FALSE;
+		if (rule->regex_mode) {
+			GRegex *rx = g_regex_new(rule->initial_title,
+			                          G_REGEX_OPTIMIZE, 0, NULL);
+			ok = (rx != NULL && g_regex_match(rx, title, 0, NULL));
+			if (rx != NULL)
+				g_regex_unref(rx);
+		} else {
+			ok = g_pattern_match_simple(rule->initial_title, title);
+		}
+		if (!ok)
+			return FALSE;
+	}
 
 	if (rule->app_id != NULL) {
 		if (app_id == NULL)
@@ -400,7 +421,8 @@ wr_configure(GowlModule *mod, gpointer config)
 static void
 wr_apply_rules_to_client(
 	GowlModuleWindowrules *self,
-	GowlClient            *c
+	GowlClient            *c,
+	gboolean               initial
 ){
 	GowlConfig  *cfg;
 	GPtrArray   *rules;
@@ -426,6 +448,16 @@ wr_apply_rules_to_client(
 		GowlRuleEntry *rule;
 
 		rule = (GowlRuleEntry *)g_ptr_array_index(rules, i);
+		/* A rule on the initial title is only for the moment the
+		 * window maps: a browser renaming itself per tab must not
+		 * re-trigger it. */
+		if (rule->initial_title != NULL && !initial)
+			continue;
+		if (rule->xwayland >= 0
+		    && (rule->xwayland != 0) != gowl_client_get_xwayland(c))
+			continue;
+		if (rule->pid > 0 && (gint)gowl_client_get_pid(c) != rule->pid)
+			continue;
 		if (!wr_rule_entry_matches(rule, app_id, title))
 			continue;
 
@@ -443,6 +475,27 @@ wr_apply_rules_to_client(
 		}
 		if (rule->sticky && !gowl_client_get_sticky(c))
 			gowl_client_set_sticky(c, TRUE);
+		/* Fullscreen set before placement is honoured by the
+		 * compositor's setmon(); after it, by the state change. */
+		if (rule->fullscreen && !gowl_client_get_fullscreen(c))
+			gowl_client_set_fullscreen(c, TRUE);
+		if (rule->opacity > 0.0)
+			gowl_client_set_alpha(c, (gfloat)rule->opacity);
+		{
+			guint flags = gowl_client_get_rule_flags(c);
+
+			if (rule->no_blur)
+				flags |= GOWL_CLIENT_RULE_NO_BLUR;
+			if (rule->no_shadow)
+				flags |= GOWL_CLIENT_RULE_NO_SHADOW;
+			if (rule->no_anim)
+				flags |= GOWL_CLIENT_RULE_NO_ANIM;
+			if (rule->idle_inhibit)
+				flags |= GOWL_CLIENT_RULE_IDLE_INHIBIT;
+			if (rule->no_focus && initial)
+				flags |= GOWL_CLIENT_RULE_NO_FOCUS;
+			gowl_client_set_rule_flags(c, flags);
+		}
 
 		/* Stash initial-placement overrides via the public
 		 * setter; the compositor consumes these inside
@@ -502,7 +555,7 @@ wr_on_client_pre_map(
 	(void)compositor;
 	self = (GowlModuleWindowrules *)user_data;
 
-	wr_apply_rules_to_client(self, c);
+	wr_apply_rules_to_client(self, c, TRUE);
 
 	/* Attach a set-title listener so rules matching on title can
 	 * still apply after a post-map rename.  g_signal_connect does
@@ -535,7 +588,7 @@ wr_on_client_set_title(
 
 	(void)title;
 	self = (GowlModuleWindowrules *)user_data;
-	wr_apply_rules_to_client(self, c);
+	wr_apply_rules_to_client(self, c, FALSE);
 }
 
 static void

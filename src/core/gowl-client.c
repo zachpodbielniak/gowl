@@ -497,6 +497,39 @@ gowl_client_set_urgent(
 	}
 }
 
+guint
+gowl_client_get_rule_flags(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), 0);
+
+	return self->rule_flags;
+}
+
+void
+gowl_client_set_rule_flags(
+	GowlClient *self,
+	guint       flags
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	if (self->rule_flags == flags)
+		return;
+	self->rule_flags = flags;
+	g_signal_emit(self, client_signals[SIGNAL_STATE_CHANGED], 0);
+}
+
+gboolean
+gowl_client_get_xwayland(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), FALSE);
+
+#ifdef GOWL_HAVE_XWAYLAND
+	return self->xwayland_surface != NULL;
+#else
+	return FALSE;
+#endif
+}
+
 gboolean
 gowl_client_get_sticky(GowlClient *self)
 {

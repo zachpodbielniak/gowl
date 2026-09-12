@@ -368,6 +368,20 @@ gowl_idle_manager_check_inhibitors(GowlIdleManager *self)
 
 		inhibited = inhibitor_counts(comp, e->inhibitor);
 	}
+	/* A window rule can say the same for a client that does not ask
+	 * (a video player without the protocol), on the same terms: only
+	 * while it is visible. */
+	for (l = comp->clients; l != NULL && !inhibited; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if ((c->rule_flags & GOWL_CLIENT_RULE_IDLE_INHIBIT)
+		    && c->mon != NULL && c->mon->wlr_output != NULL
+		    && c->mon->wlr_output->enabled
+		    && (c->isoverlay ? c->overlay_visible
+		        : (c->issticky
+		           || (c->tags & c->mon->tagset[c->mon->seltags]) != 0)))
+			inhibited = TRUE;
+	}
 
 	if (inhibited == self->inhibited)
 		return;

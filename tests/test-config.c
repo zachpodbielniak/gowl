@@ -602,6 +602,107 @@ test_config_xkb(void)
 	g_object_unref(config);
 }
 
+static void expect_warning(const char *substring);
+static const char *expected_warning;
+
+static void
+test_config_rule_vocabulary(void)
+{
+	GowlConfig *config;
+	GowlRuleEntry *r;
+	GError *err = NULL;
+	gchar *out;
+	const gchar *yaml =
+		"rules:\n"
+		"  - app-id: \"mpv\"\n"
+		"    initial-title: \"*.mkv*\"\n"
+		"    xwayland: false\n"
+		"    pid: 4242\n"
+		"    no-focus: true\n"
+		"    fullscreen: true\n"
+		"    opacity: 0.85\n"
+		"    no-blur: true\n"
+		"    no-shadow: true\n"
+		"    no-anim: true\n"
+		"    idle-inhibit: true\n"
+		"    sticky: true\n"
+		"  - app-id: \"steam\"\n"
+		"    opacity: 7\n";
+
+	config = gowl_config_new();
+	/* The second rule's opacity is out of range and warns. */
+	expect_warning("gowl_config: rule opacity");
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	expected_warning = NULL;
+	g_assert_cmpuint(gowl_config_get_rules(config)->len, ==, 2);
+
+	r = g_ptr_array_index(gowl_config_get_rules(config), 0);
+	g_assert_cmpstr(r->initial_title, ==, "*.mkv*");
+	g_assert_cmpint(r->xwayland, ==, 0);
+	g_assert_cmpint(r->pid, ==, 4242);
+	g_assert_true(r->no_focus);
+	g_assert_true(r->fullscreen);
+	g_assert_cmpfloat_with_epsilon(r->opacity, 0.85, 0.001);
+	g_assert_true(r->no_blur && r->no_shadow && r->no_anim
+	              && r->idle_inhibit && r->sticky);
+
+	/* Unset matchers stay "any"; an opacity out of range is a
+	 * problem, reported and ignored. */
+	r = g_ptr_array_index(gowl_config_get_rules(config), 1);
+	g_assert_cmpint(r->xwayland, ==, -1);
+	g_assert_cmpint(r->pid, ==, 0);
+	g_assert_cmpfloat(r->opacity, ==, 0.0);
+	g_assert_cmpuint(gowl_config_get_problem_count(config), ==, 1);
+
+	out = gowl_config_generate_yaml(config);
+	g_assert_nonnull(strstr(out, "initial-title: \"*.mkv*\""));
+	g_assert_nonnull(strstr(out, "xwayland: false"));
+	g_assert_nonnull(strstr(out, "opacity: 0.85"));
+	g_assert_nonnull(strstr(out, "idle-inhibit: true"));
+	g_free(out);
+	g_object_unref(config);
+}
+
+static void
+test_config_unknown_keys_are_counted(void)
+{
+	GowlConfig *config;
+	GError *err = NULL;
+	const gchar *yaml =
+		"boarder-width: 3\n"          /* top level, near a known key */
+		"sloppyfocus: true\n"
+		"keybinds:\n"
+		"  \"Super+x\": { action: zoom, dsec: \"typo\" }\n"
+		"monitors:\n"
+		"  DP-1:\n"
+		"    scael: 2.0\n"
+		"input:\n"
+		"  touchpad:\n"
+		"    natural-scrolling: true\n"
+		"rules:\n"
+		"  - app-id: x\n"
+		"    sticky: true\n"
+		"    flaoting: true\n";
+
+	config = gowl_config_new();
+	g_assert_cmpuint(gowl_config_get_problem_count(config), ==, 0);
+	/* Every unknown key warns; swallow them all for this load. */
+	expect_warning("unknown key");
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	expected_warning = NULL;
+	/* One per section: config, keybinds, monitors, input, rules.  The
+	 * known keys around them did not count. */
+	g_assert_cmpuint(gowl_config_get_problem_count(config), ==, 5);
+	g_assert_true(gowl_config_get_sloppyfocus(config));
+
+	/* A clean load resets the count. */
+	g_assert_true(load_yaml_from_string(config, "sloppyfocus: false\n", &err));
+	g_assert_cmpuint(gowl_config_get_problem_count(config), ==, 0);
+	g_object_unref(config);
+}
+
 static void
 test_config_monitors_transform_string(void)
 {
@@ -1388,6 +1489,9 @@ main(int argc, char *argv[])
 	g_test_add_func("/config/gestures", test_config_gestures);
 	g_test_add_func("/config/input", test_config_input_settings);
 	g_test_add_func("/config/xkb", test_config_xkb);
+	g_test_add_func("/config/rules/vocabulary", test_config_rule_vocabulary);
+	g_test_add_func("/config/unknown-keys-counted",
+	                test_config_unknown_keys_are_counted);
 	g_test_add_func("/config/set-properties", test_config_set_properties);
 	g_test_add_func("/config/generate-yaml", test_config_generate_yaml);
 	g_test_add_func("/config/add-rule", test_config_add_rule);

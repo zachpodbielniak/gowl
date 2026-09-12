@@ -153,7 +153,7 @@ open_duration(GowlCompositor *self)
 static gdouble
 jiggle_strength(GowlCompositor *self, GowlClient *c)
 {
-	if (c->isembedded || c->isfullscreen || c->isoverlay || gowl_layout_allows_overflow(self, c->mon) || self->config == NULL)
+	if (c->isembedded || c->isfullscreen || c->isoverlay || (c->rule_flags & GOWL_CLIENT_RULE_NO_ANIM) || gowl_layout_allows_overflow(self, c->mon) || self->config == NULL)
 		return 0.0;
 	return gowl_config_get_animation_jiggle_strength(self->config);
 }
@@ -237,7 +237,7 @@ gowl_animation_open_start(GowlCompositor *self, GowlClient *c)
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 	g_return_if_fail(c != NULL);
 
-	if (c->isembedded || c->isoverlay || gowl_layout_allows_overflow(self, c->mon) || open_duration(self) <= 0)
+	if (c->isembedded || c->isoverlay || (c->rule_flags & GOWL_CLIENT_RULE_NO_ANIM) || gowl_layout_allows_overflow(self, c->mon) || open_duration(self) <= 0)
 		return;
 
 	/* A centered pop has no residual rise to reappear after the
@@ -419,6 +419,7 @@ gowl_animation_close_start(GowlCompositor *self, GowlClient *c)
 
 	if (!gowl_animation_enabled(self) || c->scene == NULL
 	    || !gowl_animation_state(c)->anim_placed || c->isembedded || c->isoverlay
+	    || (c->rule_flags & GOWL_CLIENT_RULE_NO_ANIM)
 	    || gowl_layout_allows_overflow(self, c->mon)
 	    || !wlr_scene_node_coords(&c->scene->node, &x, &y))
 		return;
@@ -644,7 +645,8 @@ ghost_capture(GowlClient *c)
 {
 	gint width, height;
 
-	if (c->isembedded || c->scene_surface == NULL)
+	if (c->isembedded || c->scene_surface == NULL
+	    || (c->rule_flags & GOWL_CLIENT_RULE_NO_ANIM))
 		return FALSE;
 	surface_size(c, &width, &height);
 	gowl_animation_state(c)->anim_ghost = gowl_scene_snapshot_new(c->scene, c->scene_surface,

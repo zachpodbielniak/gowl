@@ -641,6 +641,7 @@ main(int argc, char *argv[])
 	gboolean no_c_config = FALSE;
 	gboolean no_yaml_config = FALSE;
 	gboolean recompile = FALSE;
+	gboolean check_config = FALSE;
 	gchar *config_path = NULL;
 	gchar *c_config_path = NULL;
 	gchar *startup_cmd = NULL;
@@ -677,6 +678,9 @@ main(int argc, char *argv[])
 			"Skip YAML config loading", NULL },
 		{ "recompile", 0, 0, G_OPTION_ARG_NONE, &recompile,
 			"Compile C config and exit", NULL },
+		{ "check-config", 0, 0, G_OPTION_ARG_NONE, &check_config,
+			"Load the YAML config, report unknown keys and bad values, "
+			"and exit non-zero if there were any", NULL },
 		{ "startup", 's', 0, G_OPTION_ARG_STRING, &startup_cmd,
 			"Startup command", "CMD" },
 		{ NULL }
@@ -820,6 +824,20 @@ main(int argc, char *argv[])
 				g_clear_error(&error);
 			}
 		}
+	}
+
+	/* --check-config: say what the load found and stop.  Warnings
+	 * naming each key have already gone to stderr. */
+	if (check_config) {
+		guint problems = gowl_config_get_problem_count(config);
+
+		if (problems == 0)
+			g_print("config ok\n");
+		else
+			g_print("%u problem(s) in the config\n", problems);
+		/* The process ends here; the config global stays valid for
+		 * whatever runs at exit. */
+		return problems == 0 ? 0 : 1;
 	}
 
 	/* Load C config if available */

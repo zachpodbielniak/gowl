@@ -288,6 +288,9 @@ struct _GowlConfig {
 	 * from the YAML modules section. */
 	GHashTable *module_configs;
 
+	/* Problems the last YAML load found (unknown keys, bad values) */
+	guint problems;
+
 	/* Monitor configs - maps output name (gchar*) to a heap-allocated
 	 * GowlMonitorConfig* parsed from the YAML monitors: section.
 	 * Each field is independently optional (sentinel-driven). */
@@ -325,6 +328,7 @@ gowl_rule_entry_free(gpointer entry)
 		return;
 	g_free(r->app_id);
 	g_free(r->title);
+	g_free(r->initial_title);
 	g_free(r);
 }
 
@@ -1368,6 +1372,151 @@ gowl_config_apply_palette_mapping(GowlConfig *self, YamlMapping *mapping)
 }
 
 /* -----------------------------------------------------------
+ * Validation: the keys each section knows
+ *
+ * A typo in a key used to be silent: the parser asked for the keys it
+ * knew and never looked at the rest.  Each section now checks its
+ * mapping against a list, warns for anything else -- naming the known
+ * key it is closest to, when one is close -- and counts it, so that
+ * `gowl --check-config' can fail and a reload can say how many.
+ * tests/test-config-keys.sh keeps the top-level list complete: every
+ * key the parser asks for must be in it.
+ * ----------------------------------------------------------- */
+
+static const gchar *const top_level_keys[] = {
+	"ignore_yaml", "log-level", "log-file", "repeat-rate", "repeat-delay",
+	"terminal", "menu", "sloppyfocus", "manage_lid", "idle-timeout",
+	"dpms-timeout", "allow-tearing", "focus-on-activate",
+	"input-recording", "input-recording-deny-apps",
+	"evaluate_gowl_config_with_cmacs", "evaluate-gowl-config-with-cmacs",
+	"evaluate_c_config_with_cmacs", "evaluate-c-config-with-cmacs",
+	"xkb-layout", "xkb-variant", "xkb-model", "xkb-options", "xkb-rules",
+	"xkb-file", "palette", "border-width", "border-color-focus",
+	"border-color-unfocus", "border-color-urgent", "mfact", "nmaster",
+	"tag-count", "scroll-column-width", "animations", "animation-duration",
+	"animation-duration-open", "animation-duration-close",
+	"animation-curve-open", "animation-curve", "animation-popin-scale",
+	"animation-jiggle-strength", "cube", "cube-duration",
+	"cube-step-duration", "cube-curve", "cube-faces", "cube-zoom",
+	"cube-pitch", "cube-shading", "cube-reflection", "cube-motion-blur",
+	"cube-backdrop-color", "cube-caps", "cube-all-monitors", "cube-gesture",
+	"magnifier", "magnifier-max", "magnifier-step", "magnifier-smoothing",
+	"magnifier-follow-cursor", "magnifier-smooth", "magnifier-modifier",
+	"expo", "expo-duration", "expo-curve", "expo-tags", "expo-columns",
+	"expo-gap", "expo-corner", "expo-dim", "expo-hide-empty",
+	"expo-backdrop-color", "switcher", "switcher-duration", "switcher-curve",
+	"switcher-scale", "switcher-spacing", "switcher-angle",
+	"switcher-reflection", "switcher-all-tags", "switcher-backdrop-color",
+	"blur", "blur-downscale", "blur-passes", "blur-brightness", "shadow",
+	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
+	"shadow-color", "wallpaper-fade", "wallpaper-tags", "keybinds", "modes",
+	"mousebinds", "gestures", "input", "rules", "dropdowns", "autostart",
+	"monitors", "modules", "profiles",
+	NULL
+};
+
+static const gchar *const rule_keys[] = {
+	"app-id", "app_id", "title", "tags", "floating", "monitor", "width",
+	"height", "center", "regex", "sticky", "initial-title", "xwayland",
+	"pid", "no-focus", "fullscreen", "opacity", "no-blur", "no-shadow",
+	"no-anim", "idle-inhibit", NULL
+};
+
+static const gchar *const bind_keys[] = {
+	"action", "arg", "desc", "mode", "locked", "release", "repeat", NULL
+};
+
+static const gchar *const monitor_keys[] = {
+	"width", "height", "refresh", "x", "y", "scale", "enabled",
+	"transform", "vrr", NULL
+};
+
+static const gchar *const input_keys[] = {
+	"enabled", "tap", "tap-drag", "tap-drag-lock", "tap-button-map",
+	"natural-scroll", "scroll-method", "scroll-button", "click-method",
+	"accel-profile", "accel-speed", "left-handed", "middle-emulation",
+	"dwt", "dwtp", "rotation", NULL
+};
+
+/* Edit distance, for "did you mean". */
+static guint
+edit_distance(const gchar *a, const gchar *b)
+{
+	gsize la = strlen(a), lb = strlen(b), i, j;
+	guint *row = g_new(guint, lb + 1);
+	guint result;
+
+	for (j = 0; j <= lb; j++)
+		row[j] = (guint)j;
+	for (i = 1; i <= la; i++) {
+		guint prev = row[0];
+
+		row[0] = (guint)i;
+		for (j = 1; j <= lb; j++) {
+			guint tmp = row[j];
+			guint cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
+
+			row[j] = MIN(MIN(row[j] + 1, row[j - 1] + 1), prev + cost);
+			prev = tmp;
+		}
+	}
+	result = row[lb];
+	g_free(row);
+	return result;
+}
+
+/* Warns about every key of @mapping not in @known, counting each. */
+static void
+check_known_keys(
+	GowlConfig         *self,
+	YamlMapping        *mapping,
+	const gchar        *section,
+	const gchar *const *known
+){
+	guint n = yaml_mapping_get_size(mapping);
+	guint i;
+
+	for (i = 0; i < n; i++) {
+		const gchar *key = yaml_mapping_get_key(mapping, i);
+		const gchar *best = NULL;
+		guint best_d = 4;
+		gsize k;
+		gboolean found = FALSE;
+
+		if (key == NULL)
+			continue;
+		for (k = 0; known[k] != NULL; k++) {
+			guint d;
+
+			if (g_strcmp0(known[k], key) == 0) {
+				found = TRUE;
+				break;
+			}
+			d = edit_distance(known[k], key);
+			if (d < best_d) {
+				best_d = d;
+				best = known[k];
+			}
+		}
+		if (found)
+			continue;
+		self->problems++;
+		if (best != NULL)
+			g_warning("gowl_config: %s: unknown key '%s' (did you mean "
+			          "'%s'?)", section, key, best);
+		else
+			g_warning("gowl_config: %s: unknown key '%s'", section, key);
+	}
+}
+
+guint
+gowl_config_get_problem_count(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0);
+	return self->problems;
+}
+
+/* -----------------------------------------------------------
  * Shared pieces of a bind entry in YAML
  * ----------------------------------------------------------- */
 
@@ -1376,6 +1525,7 @@ gowl_config_apply_palette_mapping(GowlConfig *self, YamlMapping *mapping)
  * a warning, when there is no usable action. */
 static gboolean
 yaml_action_entry(
+	GowlConfig   *self,
 	YamlMapping  *val_map,
 	gint         *out_action,
 	const gchar **out_arg,
@@ -1398,8 +1548,10 @@ yaml_action_entry(
 	g_type_class_unref(action_class);
 	if (enum_val == NULL) {
 		g_warning("gowl_config: unknown action '%s'", action_str);
+		self->problems++;
 		return FALSE;
 	}
+	check_known_keys(self, val_map, "bind", bind_keys);
 	*out_action = enum_val->value;
 	*out_arg = yaml_mapping_has_member(val_map, "arg")
 	           ? yaml_mapping_get_string_member(val_map, "arg") : NULL;
@@ -1459,7 +1611,7 @@ gowl_config_load_keybind_mapping(
 		val_map = yaml_node_get_mapping(val_node);
 		if (val_map == NULL)
 			continue;
-		if (!yaml_action_entry(val_map, &action, &arg_str, &desc_str))
+		if (!yaml_action_entry(self, val_map, &action, &arg_str, &desc_str))
 			continue;
 		if (!gowl_keybind_parse(bind_str, &mods, &keysym)) {
 			g_warning("gowl_config: failed to parse keybind '%s' "
@@ -1496,6 +1648,11 @@ gowl_config_apply_mapping(
 	 * keys above it --- a failure with no error and a plausible result.
 	 */
 	gowl_config_apply_palette_mapping(self, mapping);
+
+	/* Everything the sections below do not know is reported here; the
+	 * count is what --check-config and a reload's message read. */
+	self->problems = 0;
+	check_known_keys(self, mapping, "config", top_level_keys);
 
 	if (yaml_mapping_has_member(mapping, "border-width")) {
 		gint64 val = yaml_mapping_get_int_member(mapping, "border-width");
@@ -2050,7 +2207,7 @@ gowl_config_apply_mapping(
 			val_map = yaml_node_get_mapping(val_node);
 			if (val_map == NULL)
 				continue;
-			if (!yaml_action_entry(val_map, &action, &arg_str, &desc_str))
+			if (!yaml_action_entry(self, val_map, &action, &arg_str, &desc_str))
 				continue;
 			if (!gowl_mousebind_parse(bind_str, &mods, &button))
 				continue;
@@ -2082,7 +2239,7 @@ gowl_config_apply_mapping(
 			val_map = yaml_node_get_mapping(val_node);
 			if (val_map == NULL)
 				continue;
-			if (!yaml_action_entry(val_map, &action, &arg_str, &desc_str))
+			if (!yaml_action_entry(self, val_map, &action, &arg_str, &desc_str))
 				continue;
 			if (!gowl_gesture_parse(bind_str, &kind, &dir, &fingers))
 				continue;
@@ -2118,6 +2275,7 @@ gowl_config_apply_mapping(
 			settings = yaml_node_get_mapping(val_node);
 			if (settings == NULL)
 				continue;
+			check_known_keys(self, settings, "input", input_keys);
 			n = yaml_mapping_get_size(settings);
 			for (si = 0; si < n; si++) {
 				const gchar *key = yaml_mapping_get_key(settings, si);
@@ -2202,12 +2360,15 @@ gowl_config_apply_mapping(
 				action = GOWL_ACTION_NONE;
 				if (enum_val != NULL)
 					action = enum_val->value;
-				else
+				else {
 					g_warning("gowl_config: unknown action '%s'", action_str);
+					self->problems++;
+				}
 				g_type_class_unref(action_class);
 
 				g_debug("gowl_config: keybind '%s' -> mods=0x%x sym=0x%x action=%d",
 			        bind_str, mods, keysym, action);
+			check_known_keys(self, val_map, "keybinds", bind_keys);
 			gowl_config_add_keybind_ex(self, mods, keysym, action,
 			                           arg_str, desc_str,
 			                           yaml_keybind_mode(val_map, NULL),
@@ -2277,12 +2438,53 @@ gowl_config_apply_mapping(
 				                           floating, monitor,
 				                           width, height, center,
 				                           regex_mode);
-				if (yaml_mapping_has_member(rule_map, "sticky")) {
+				{
 					GowlRuleEntry *added = g_ptr_array_index(
 						self->rules, self->rules->len - 1);
 
-					added->sticky = yaml_mapping_get_boolean_member(
-						rule_map, "sticky");
+					if (yaml_mapping_has_member(rule_map, "sticky"))
+						added->sticky = yaml_mapping_get_boolean_member(
+							rule_map, "sticky");
+					if (yaml_mapping_has_member(rule_map, "initial-title"))
+						added->initial_title = g_strdup(
+							yaml_mapping_get_string_member(rule_map,
+								"initial-title"));
+					if (yaml_mapping_has_member(rule_map, "xwayland"))
+						added->xwayland = yaml_mapping_get_boolean_member(
+							rule_map, "xwayland") ? 1 : 0;
+					if (yaml_mapping_has_member(rule_map, "pid"))
+						added->pid = (gint)yaml_mapping_get_int_member(
+							rule_map, "pid");
+					if (yaml_mapping_has_member(rule_map, "no-focus"))
+						added->no_focus = yaml_mapping_get_boolean_member(
+							rule_map, "no-focus");
+					if (yaml_mapping_has_member(rule_map, "fullscreen"))
+						added->fullscreen = yaml_mapping_get_boolean_member(
+							rule_map, "fullscreen");
+					if (yaml_mapping_has_member(rule_map, "opacity")) {
+						gdouble o = yaml_mapping_get_double_member(
+							rule_map, "opacity");
+						if (o < 0.05 || o > 1.0) {
+							g_warning("gowl_config: rule opacity %.2f "
+							          "is outside 0.05..1.0; ignored", o);
+							self->problems++;
+						} else {
+							added->opacity = o;
+						}
+					}
+					if (yaml_mapping_has_member(rule_map, "no-blur"))
+						added->no_blur = yaml_mapping_get_boolean_member(
+							rule_map, "no-blur");
+					if (yaml_mapping_has_member(rule_map, "no-shadow"))
+						added->no_shadow = yaml_mapping_get_boolean_member(
+							rule_map, "no-shadow");
+					if (yaml_mapping_has_member(rule_map, "no-anim"))
+						added->no_anim = yaml_mapping_get_boolean_member(
+							rule_map, "no-anim");
+					if (yaml_mapping_has_member(rule_map, "idle-inhibit"))
+						added->idle_inhibit = yaml_mapping_get_boolean_member(
+							rule_map, "idle-inhibit");
+					check_known_keys(self, rule_map, "rules", rule_keys);
 				}
 			}
 		}
@@ -2574,6 +2776,7 @@ gowl_config_apply_mapping(
 							mon_cfg_map, "vrr") ? 1 : 0;
 				}
 
+				check_known_keys(self, mon_cfg_map, "monitors", monitor_keys);
 				g_debug("gowl_config: monitor '%s': "
 				        "w=%d h=%d refresh=%.1f x=%d y=%d "
 				        "scale=%.2f transform=%d enabled=%d",
@@ -3034,6 +3237,29 @@ gowl_config_generate_yaml(GowlConfig *self)
 				g_string_append(yaml, "    regex: true\n");
 			if (rule->sticky)
 				g_string_append(yaml, "    sticky: true\n");
+			if (rule->initial_title != NULL) {
+				g_autofree gchar *esc = gowl_config_escape_yaml(rule->initial_title);
+				g_string_append_printf(yaml, "    initial-title: \"%s\"\n", esc);
+			}
+			if (rule->xwayland >= 0)
+				g_string_append_printf(yaml, "    xwayland: %s\n",
+				                       rule->xwayland ? "true" : "false");
+			if (rule->pid > 0)
+				g_string_append_printf(yaml, "    pid: %d\n", rule->pid);
+			if (rule->no_focus)
+				g_string_append(yaml, "    no-focus: true\n");
+			if (rule->fullscreen)
+				g_string_append(yaml, "    fullscreen: true\n");
+			if (rule->opacity > 0.0)
+				g_string_append_printf(yaml, "    opacity: %.2f\n", rule->opacity);
+			if (rule->no_blur)
+				g_string_append(yaml, "    no-blur: true\n");
+			if (rule->no_shadow)
+				g_string_append(yaml, "    no-shadow: true\n");
+			if (rule->no_anim)
+				g_string_append(yaml, "    no-anim: true\n");
+			if (rule->idle_inhibit)
+				g_string_append(yaml, "    idle-inhibit: true\n");
 		}
 	}
 
@@ -3843,6 +4069,7 @@ gowl_config_add_rule_full(
 	rule->center     = center;
 	rule->regex_mode = regex_mode;
 	rule->sticky     = FALSE;
+	rule->xwayland   = -1;
 
 	g_ptr_array_add(self->rules, rule);
 }
@@ -3861,6 +4088,7 @@ gowl_config_add_rule_entry(
 	*rule = *entry;
 	rule->app_id = g_strdup(entry->app_id);
 	rule->title  = g_strdup(entry->title);
+	rule->initial_title = g_strdup(entry->initial_title);
 	g_ptr_array_add(self->rules, rule);
 }
 

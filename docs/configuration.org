@@ -176,7 +176,7 @@ Layout engine settings.
 
 | Property  | Type   | Default  | Description                                      |
 |-----------+--------+----------+--------------------------------------------------|
-| =default= | string | ="tile"= | Default layout: ="tile"=, ="float"=, ="monocle"=, ="scrolling"=, ="tabbed"= |
+| =default= | string | ="tile"= | Default layout: any layout a loaded module registered --- ="tile"=, ="float"=, ="monocle"=, ="scrolling"=, ="tabbed"=, ="bstack"=, ="deck"=, ="grid"=, ="mirrortile"=, ="columns"=, ="centeredmaster"=, ="fibonacci"= |
 | =mfact=   | float  | =0.55=   | Master area factor (0.05 - 0.95)                 |
 | =nmaster= | int    | =1=      | Number of windows in the master area             |
 | =scroll-column-width= | float | =0.5= | Window size as a fraction of usable width (landscape/square) or height (portrait).  0.5 shows two columns or rows, 1.0 shows one.  Matches Hyprland's =scrolling.column_width= |
@@ -193,6 +193,8 @@ An explicitly enabled =vsplit= continues to select top/bottom tiling
 on landscape and square monitors too.
 
 =tabbed= is monocle with a strip of tabs across the top of the area, one per window, the focused one in the focus colour and an urgent one in orange; a click on a tab focuses its window. The tag is the group -- there is no container tree to manage -- and the strip is compositor chrome, so every client gets it. =modules: tabbed: height:= (default 26) and =font:= size and set the strip.
+
+The rest of the catalogue: =bstack= splits across instead of down, so the master takes the full width of a wide screen and the stack is a row beneath it (=mfact= is then the master's share of the *height*); =deck= gives every stack window the whole stack area, piled up with the focused one on top, which beats eight unreadable strips; =grid= is equal cells with no master; =mirrortile= is tile with the columns swapped, for a left-handed desk or so two screens' masters meet in the middle; =columns= gives every window an equal full-height column. =fibonacci= is the dwindle spiral and =centeredmaster= puts the master between two stacks.
 
 Layouts are plugins. The standalone defaults enable =tile=, =monocle=,
 =tabbed= and =float=; enable scrolling and the optional layout toast in the

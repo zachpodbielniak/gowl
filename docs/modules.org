@@ -624,6 +624,11 @@ Gowl ships with several modules in the =modules/= directory:
 | =tile=           | Master/stack tiling, including vertical split          |
 | =monocle=        | Full-area stacked windows                             |
 | =tabbed=         | Monocle under a strip of clickable tabs               |
+| =bstack=         | Master across the top, stack in a row below           |
+| =deck=           | Master, with the stack piled full-size behind it      |
+| =grid=           | Equal cells, no master                                |
+| =mirrortile=     | Tile with the columns swapped: master on the right    |
+| =columns=        | One equal full-height column per window              |
 | =float=          | Free window placement                                 |
 | =scrolling=      | Horizontal scrolling columns                          |
 | =layout-indicator= | Brief, click-through layout-change toast            |

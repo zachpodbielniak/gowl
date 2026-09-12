@@ -651,11 +651,22 @@ modules:
   # the bar and a count on its notifications widget.  Idle under cmacs,
   # whose own daemon has the name.
   # Layouts beyond the four above; select them with `set_layout' or by
-  # cycling (Super+Tab).
+  # cycling (Super+Tab).  Each registers one layout and costs nothing
+  # until it is selected.
   fibonacci:
     enabled: false         # spiral: each window halves what is left
   centeredmaster:
     enabled: false         # master in the middle, stack either side
+  bstack:
+    enabled: false         # master across the top, stack in a row below
+  deck:
+    enabled: false         # master, with the stack piled full-size behind
+  grid:
+    enabled: false         # equal cells, no master
+  mirrortile:
+    enabled: false         # tile with the columns swapped: master right
+  columns:
+    enabled: false         # one equal full-height column per window
   # Move the focused window up and down the stack (`move_stack' action).
   movestack:
     enabled: true

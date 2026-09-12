@@ -643,7 +643,7 @@ $(OBJDIR)/tests/test-compositor-teardown.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DI
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 $(OUTDIR)/test-notifyd: $(OUTDIR)/modules/notifyd.so
-$(OUTDIR)/test-tabbed: $(OUTDIR)/modules/tabbed.so
+$(OUTDIR)/test-tabbed: $(addprefix $(OUTDIR)/modules/,tabbed.so bstack.so deck.so grid.so mirrortile.so columns.so)
 $(OUTDIR)/test-tabbed: TEST_LDFLAGS += -Wl,--export-dynamic
 $(OBJDIR)/tests/test-tabbed.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 $(OBJDIR)/tests/test-notifyd.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

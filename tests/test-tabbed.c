@@ -128,10 +128,118 @@ test_tabbed_geometry(void)
 	g_object_unref(mon);
 }
 
+/*
+ * The five layouts added alongside tabbed, checked for the properties
+ * that make each one what it is rather than for exact pixels: bstack
+ * splits across instead of down, deck piles the stack in one box,
+ * grid fills columns with no hole at the end, mirrortile puts the
+ * master on the right, and columns gives everyone equal width.
+ *
+ * Every one of them must also cover the area exactly -- no gap at the
+ * far edge from integer division, which is the bug this shape of
+ * arithmetic invites.
+ */
+static void
+test_extra_layouts(void)
+{
+	GowlCompositor *comp = gowl_compositor_new();
+	GowlMonitor *mon = g_object_new(GOWL_TYPE_MONITOR, NULL);
+	GowlClient clients[5] = {0};
+	const gchar *names[] = { "bstack", "deck", "grid", "mirrortile",
+	                         "columns" };
+	guint i;
+
+	comp->module_mgr = gowl_module_manager_new();
+	comp->selmon = mon;
+	mon->compositor = comp;
+	mon->m = mon->w = (struct wlr_box){0, 0, 1000, 600};
+	mon->tagset[0] = 1;
+	mon->nmaster = 1;
+	mon->mfact = 0.5;
+	for (i = 0; i < G_N_ELEMENTS(clients); i++) {
+		clients[i].mon = mon;
+		clients[i].tags = 1;
+		clients[i].compositor = comp;
+		comp->clients = g_list_append(comp->clients, &clients[i]);
+	}
+
+	gowl_layout_registry_init(comp);
+	for (i = 0; i < G_N_ELEMENTS(names); i++) {
+		gchar *path = g_strdup_printf("%s/%s.so",
+		                              GOWL_TEST_LAYOUT_MODULE_DIR, names[i]);
+
+		g_assert_true(gowl_module_manager_load_module(comp->module_mgr,
+		                                              path, NULL));
+		g_free(path);
+	}
+	gowl_module_manager_activate_all(comp->module_mgr);
+	gowl_layout_adopt_providers(comp);
+
+	/* bstack: master across the top at mfact of the HEIGHT, the four
+	 * others side by side beneath it. */
+	g_assert_true(gowl_layout_set(comp, mon, "bstack"));
+	gowl_layout_apply(comp, mon);
+	g_assert_cmpint(clients[0].geom.width, ==, 1000);
+	g_assert_cmpint(clients[0].geom.height, ==, 300);
+	g_assert_cmpint(clients[1].geom.y, ==, 300);
+	g_assert_cmpint(clients[1].geom.height, ==, 300);
+	g_assert_cmpint(clients[4].geom.x + clients[4].geom.width, ==, 1000);
+
+	/* deck: every stack window is the same full-height box. */
+	g_assert_true(gowl_layout_set(comp, mon, "deck"));
+	gowl_layout_apply(comp, mon);
+	g_assert_cmpint(clients[0].geom.width, ==, 500);
+	g_assert_cmpint(clients[0].geom.height, ==, 600);
+	for (i = 1; i < G_N_ELEMENTS(clients); i++) {
+		g_assert_cmpint(clients[i].geom.x, ==, 500);
+		g_assert_cmpint(clients[i].geom.y, ==, 0);
+		g_assert_cmpint(clients[i].geom.width, ==, 500);
+		g_assert_cmpint(clients[i].geom.height, ==, 600);
+	}
+
+	/* grid: five windows in a 2x3-ish grid that reaches both edges. */
+	g_assert_true(gowl_layout_set(comp, mon, "grid"));
+	gowl_layout_apply(comp, mon);
+	g_assert_cmpint(clients[0].geom.x, ==, 0);
+	g_assert_cmpint(clients[0].geom.y, ==, 0);
+	for (i = 0; i < G_N_ELEMENTS(clients); i++) {
+		g_assert_cmpint(clients[i].geom.width, >, 0);
+		g_assert_cmpint(clients[i].geom.height, >, 0);
+		g_assert_cmpint(clients[i].geom.x + clients[i].geom.width, <=, 1000);
+		g_assert_cmpint(clients[i].geom.y + clients[i].geom.height, <=, 600);
+	}
+	g_assert_cmpint(clients[G_N_ELEMENTS(clients) - 1].geom.x
+	                + clients[G_N_ELEMENTS(clients) - 1].geom.width, ==, 1000);
+
+	/* mirrortile: master on the right, stack starting at the left. */
+	g_assert_true(gowl_layout_set(comp, mon, "mirrortile"));
+	gowl_layout_apply(comp, mon);
+	g_assert_cmpint(clients[0].geom.x, ==, 500);
+	g_assert_cmpint(clients[0].geom.width, ==, 500);
+	g_assert_cmpint(clients[1].geom.x, ==, 0);
+	g_assert_cmpint(clients[4].geom.y + clients[4].geom.height, ==, 600);
+
+	/* columns: five equal full-height columns covering the width. */
+	g_assert_true(gowl_layout_set(comp, mon, "columns"));
+	gowl_layout_apply(comp, mon);
+	for (i = 0; i < G_N_ELEMENTS(clients); i++) {
+		g_assert_cmpint(clients[i].geom.width, ==, 200);
+		g_assert_cmpint(clients[i].geom.height, ==, 600);
+		g_assert_cmpint(clients[i].geom.x, ==, (gint)i * 200);
+	}
+
+	g_list_free(comp->clients);
+	comp->clients = NULL;
+	comp->selmon = NULL;
+	g_object_unref(comp);
+	g_object_unref(mon);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
 	g_test_add_func("/tabbed/geometry", test_tabbed_geometry);
+	g_test_add_func("/layouts/extra", test_extra_layouts);
 	return g_test_run();
 }

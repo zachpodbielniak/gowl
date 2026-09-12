@@ -219,7 +219,12 @@ keybinds:
 
   # Layout selection
   "Super+t": { action: set_layout, arg: "tile", desc: "Tile layout" }
-  "Super+f": { action: set_layout, arg: "float", desc: "Float layout" }
+  # Super+f is the window, not the layout: fullscreen is the thing you
+  # reach for mid-task, and changing the whole tag's layout by accident
+  # while looking for it is the more expensive mistake.  The float
+  # LAYOUT moved to Super+Shift+f.
+  "Super+f": { action: toggle_fullscreen, desc: "Fullscreen this window" }
+  "Super+Shift+f": { action: set_layout, arg: "float", desc: "Float layout" }
   "Super+m": { action: set_layout, arg: "monocle", desc: "Monocle layout" }
   "Super+Shift+m": { action: set_layout, arg: "tabbed", desc: "Tabbed layout" }
   # HDR on this output, where it is offered.  Not tone mapping: SDR

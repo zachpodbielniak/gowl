@@ -434,7 +434,11 @@ $(OBJDIR)/tests/test-ipc.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags gio-un
 
 # test-protocols connects a real Wayland client to the headless
 # compositor to read its registry.
-$(OUTDIR)/test-protocols: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs wayland-client)
+# The fullscreen test drives a real xdg-shell toplevel, so it links the
+# client-side protocol code as well.
+$(OUTDIR)/test-protocols: $(OBJDIR)/bar/xdg-shell-protocol.o
+$(OBJDIR)/tests/test-protocols.o: xdg-shell-client-protocol.h
+$(OUTDIR)/test-protocols: TEST_LDFLAGS += $(OBJDIR)/bar/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 
 $(OUTDIR)/test-%: $(OBJDIR)/tests/test-%.o $(OUTDIR)/$(LIB_SHARED_FULL)

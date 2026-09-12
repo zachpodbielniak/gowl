@@ -4253,8 +4253,13 @@ gowl_compositor_apply_frame_geometry(
 	for (bi = 0; bi < 4; bi++)
 		color[bi] = c->border_color[bi] * c->effect_alpha;
 
-	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
-	          self->module_mgr);
+	/* A compositor with no module manager -- a test fixture, or an
+	 * embedder that loads none -- has no decorator, and asking for one
+	 * is a critical rather than a NULL. */
+	dec = self->module_mgr != NULL
+	      ? (GowlClientDecorator *)gowl_module_manager_get_decorator(
+	            self->module_mgr)
+	      : NULL;
 	if (dec != NULL) {
 		/* Hide rect borders when a decorator is active */
 		for (bi = 0; bi < 4; bi++) {
@@ -4510,6 +4515,23 @@ setfullscreen(
 		c->prev = c->geom;
 		resize_client(self, c, c->mon->m, FALSE);
 	} else {
+		/*
+		 * A window that mapped straight into fullscreen -- which is
+		 * what a game launched fullscreen does -- has no earlier
+		 * geometry to go back to, and restoring an empty box leaves
+		 * it 0x0 and invisible.  Half the usable area, centred, is
+		 * somewhere it can be seen and grabbed; a tiled window is
+		 * re-placed by the arrange() below either way.
+		 */
+		if (wlr_box_empty(&c->prev)) {
+			gint aw = c->mon->w.width / 2;
+			gint ah = c->mon->w.height / 2;
+
+			c->prev.width = aw > 0 ? aw : c->mon->w.width;
+			c->prev.height = ah > 0 ? ah : c->mon->w.height;
+			c->prev.x = c->mon->w.x + (c->mon->w.width - c->prev.width) / 2;
+			c->prev.y = c->mon->w.y + (c->mon->w.height - c->prev.height) / 2;
+		}
 		resize_client(self, c, c->prev, FALSE);
 	}
 	gowl_compositor_arrange(self, c->mon);
@@ -4524,6 +4546,15 @@ gowl_compositor_set_client_fullscreen(
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 	g_return_if_fail(GOWL_IS_CLIENT(c));
 
+	/*
+	 * Everything that reaches this is acting for the user -- the
+	 * keybind, Lisp, the socket -- so taking a window OUT of
+	 * fullscreen also refuses the client's own requests to go back in.
+	 * A game re-asserts fullscreen the instant it loses it, some
+	 * engines every frame, and without this the window cannot be
+	 * recovered.  Putting it back in lifts the refusal.
+	 */
+	c->fullscreen_denied = fullscreen ? FALSE : TRUE;
 	if (c->scene != NULL)
 		setfullscreen(self, c, fullscreen);
 }
@@ -4719,8 +4750,13 @@ client_set_border_color(
 	color = faded;
 
 	/* If a decorator module is active, delegate to it */
-	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
-	          self->module_mgr);
+	/* A compositor with no module manager -- a test fixture, or an
+	 * embedder that loads none -- has no decorator, and asking for one
+	 * is a critical rather than a NULL. */
+	dec = self->module_mgr != NULL
+	      ? (GowlClientDecorator *)gowl_module_manager_get_decorator(
+	            self->module_mgr)
+	      : NULL;
 	if (dec != NULL) {
 		struct wlr_box box = gowl_effects_geometry(c);
 		if (c->mon != NULL && !c->isfloating && !c->isfullscreen
@@ -5618,8 +5654,13 @@ gowl_compositor_refresh_client_decoration(
 	if (self->module_mgr == NULL)
 		return;
 
-	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
-	          self->module_mgr);
+	/* A compositor with no module manager -- a test fixture, or an
+	 * embedder that loads none -- has no decorator, and asking for one
+	 * is a critical rather than a NULL. */
+	dec = self->module_mgr != NULL
+	      ? (GowlClientDecorator *)gowl_module_manager_get_decorator(
+	            self->module_mgr)
+	      : NULL;
 	if (dec == NULL)
 		return;
 
@@ -8409,8 +8450,20 @@ run_keybind_entry(
 	}
 	case GOWL_ACTION_TOGGLE_FULLSCREEN: {
 		GowlClient *sel = focustop(self, self->selmon);
-		if (sel != NULL)
-			setfullscreen(self, sel, !sel->isfullscreen);
+
+		if (sel != NULL) {
+			gboolean want = !sel->isfullscreen;
+
+			/*
+			 * Taking a window out of fullscreen by hand also says
+			 * "and stay out": a game that re-asks every frame would
+			 * otherwise undo this before the key is released.  Asking
+			 * for fullscreen lifts the ban again, so the pair is a
+			 * plain toggle from the user's side.
+			 */
+			sel->fullscreen_denied = want ? FALSE : TRUE;
+			setfullscreen(self, sel, want);
+		}
 		return TRUE;
 	}
 	case GOWL_ACTION_TAG_VIEW: {
@@ -11176,8 +11229,10 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	{
 		GowlClientDecorator *dec;
 
-		dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
-		          self->module_mgr);
+		dec = self->module_mgr != NULL
+		      ? (GowlClientDecorator *)gowl_module_manager_get_decorator(
+		            self->module_mgr)
+		      : NULL;
 		if (dec != NULL)
 			gowl_client_decorator_destroy_decoration(dec, c);
 	}
@@ -11289,12 +11344,52 @@ static void
 on_client_fullscreen(struct wl_listener *listener, void *data)
 {
 	GowlClient *c;
+	gboolean want;
 
 	c = wl_container_of(listener, c, fullscreen);
 	(void)data;
 
-	if (c->compositor != NULL)
-		setfullscreen(c->compositor, c, !c->isfullscreen);
+	if (c->compositor == NULL)
+		return;
+
+	/*
+	 * What the client actually asked for, not the opposite of where it
+	 * is now.  This used to toggle, which is wrong in both directions:
+	 * a client re-asserting fullscreen while already fullscreen got
+	 * un-fullscreened, and one asking to leave while windowed was
+	 * thrown into it.
+	 */
+#ifdef GOWL_HAVE_XWAYLAND
+	if (client_is_x11(c))
+		want = c->xwayland_surface != NULL
+		       && c->xwayland_surface->fullscreen;
+	else
+#endif
+		want = c->xdg_toplevel != NULL
+		       && c->xdg_toplevel->requested.fullscreen;
+
+	/*
+	 * The user's decision outranks the client's.  A game told to go
+	 * back to tiled asks for fullscreen again immediately -- every
+	 * frame, in some engines -- so without this the window fights the
+	 * keybind and wins.  Refusing means re-sending the windowed
+	 * configure, or the client keeps drawing at fullscreen size.
+	 */
+	if (want && c->fullscreen_denied) {
+		g_debug("%s asked for fullscreen again; the user said no",
+		        c->app_id != NULL ? c->app_id : "a window");
+#ifdef GOWL_HAVE_XWAYLAND
+		if (client_is_x11(c))
+			wlr_xwayland_surface_set_fullscreen(c->xwayland_surface,
+			                                    false);
+		else
+#endif
+			wlr_xdg_toplevel_set_fullscreen(c->xdg_toplevel, false);
+		return;
+	}
+
+	if (want != (c->isfullscreen ? TRUE : FALSE))
+		setfullscreen(c->compositor, c, want);
 }
 
 /**

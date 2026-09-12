@@ -1045,6 +1045,26 @@ void gowl_compositor_place_client (GowlCompositor *self,
                                     gint            height);
 
 /**
+ * gowl_compositor_set_client_fullscreen:
+ * @self: a #GowlCompositor
+ * @client: the window
+ * @fullscreen: %TRUE to fill the output, %FALSE to restore it
+ *
+ * Puts a window into fullscreen or takes it out, the way the
+ * `toggle_fullscreen' keybind does: the client is told, the window is
+ * re-parented between the fullscreen and tile/float layers, its
+ * geometry is restored and the output is re-arranged.
+ *
+ * Taking a window OUT also refuses the client's own later requests to
+ * go back in, until something puts it in again.  Without that a game
+ * re-asserts fullscreen the instant it loses it -- some engines every
+ * frame -- and the window cannot be recovered.
+ */
+void gowl_compositor_set_client_fullscreen (GowlCompositor *self,
+                                            GowlClient     *client,
+                                            gboolean        fullscreen);
+
+/**
  * gowl_compositor_tiling_clients:
  * @self: a #GowlCompositor
  * @monitor: the monitor

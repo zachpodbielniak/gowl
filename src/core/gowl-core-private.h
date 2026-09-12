@@ -706,6 +706,12 @@ struct _GowlClient {
 	/* Pinned: shown on every tag of its monitor, whatever is viewed.
 	 * Its own tags are kept, so unpinning puts it back where it was. */
 	gboolean issticky;
+
+	/* The user took this window out of fullscreen by hand.  A client
+	 * that asks to go fullscreen again is refused until the user says
+	 * otherwise -- without this a game re-asserts fullscreen the
+	 * instant it loses it, and the key appears not to work. */
+	gboolean fullscreen_denied;
 	/* #GowlClientRuleFlags set by a window rule: what the effect
 	 * modules and the idle manager leave alone or take up. */
 	guint    rule_flags;

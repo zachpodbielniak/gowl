@@ -451,14 +451,33 @@ gowl_client_set_fullscreen(
 	if (self->isoverlay)
 		return;
 
-	if (self->isfullscreen != fullscreen) {
-		/* save geometry before going fullscreen */
-		if (fullscreen && !self->isfullscreen)
-			self->prev = self->geom;
+	if (self->isfullscreen == (fullscreen ? TRUE : FALSE))
+		return;
 
-		self->isfullscreen = fullscreen;
+	/*
+	 * With a compositor attached this has to be the real thing: tell
+	 * the client, move it between scene layers, restore its geometry,
+	 * re-arrange.  Setting the flag alone left the window drawing at
+	 * fullscreen size with the compositor believing otherwise, which
+	 * is what `gowl-toggle-client-fullscreen' used to do from Lisp.
+	 *
+	 * Before a client is mapped there is no compositor on it yet, and
+	 * a rule asking for fullscreen still just sets the flag -- which
+	 * is what the map path reads.
+	 */
+	if (self->compositor != NULL) {
+		gowl_compositor_set_client_fullscreen(self->compositor, self,
+		                                      fullscreen);
 		g_signal_emit(self, client_signals[SIGNAL_STATE_CHANGED], 0);
+		return;
 	}
+
+	/* save geometry before going fullscreen */
+	if (fullscreen && !self->isfullscreen)
+		self->prev = self->geom;
+
+	self->isfullscreen = fullscreen;
+	g_signal_emit(self, client_signals[SIGNAL_STATE_CHANGED], 0);
 }
 
 /**

@@ -861,8 +861,16 @@ Rules match clients by =app_id= and/or =title= and apply settings.
 | =no-shadow= | bool  | =false= | No drop shadow (=blur= module)               |
 | =no-anim=  | bool   | =false= | No open, close or move animation (=animation= module) |
 | =idle-inhibit= | bool | =false= | While visible, holds the idle and dpms timers off as an idle-inhibit-v1 inhibitor would |
+| =is-floating= | bool | unset | Match only windows that already float (=false=: only tiled ones) |
+| =is-fullscreen= | bool | unset | Match only windows that are already fullscreen (=false=: only windowed ones) |
+| =on-tag=   | int    | =0=     | 1--9: apply only while that tag is the one being viewed on the window's monitor |
+| =focus=    | bool   | =false= | Take the keyboard when it maps, viewing the tags the rule assigns.  The opposite of =no-focus=, and it wins if both are set |
+| =width-pct= | float | unset   | Width as a fraction of the output's usable area (=0.6= or ="60%"=), so one rule fits every screen.  An explicit =width= overrides it |
+| =height-pct= | float | unset  | Height as a fraction of the usable area                     |
 
-Matchers (=app_id=, =title=, =initial-title=, =xwayland=, =pid=) must all match for a rule to apply; the first matching rule wins. =title= rules are re-evaluated when a window renames itself; =initial-title= ones are not.
+Matchers (=app_id=, =title=, =initial-title=, =xwayland=, =pid=, =is-floating=, =is-fullscreen=, =on-tag=) must all match for a rule to apply; the first matching rule wins. =title= rules are re-evaluated when a window renames itself; =initial-title= ones are not, and the state matchers are read again each time a rule is re-applied.
+
+Assigning =tags= is silent: the window goes to that tag and the view does not follow it, and nothing is marked urgent. =focus: true= is how a rule says the view *should* follow.
 
 **** Example
 :PROPERTIES:

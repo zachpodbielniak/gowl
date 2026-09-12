@@ -10797,6 +10797,21 @@ on_client_map(struct wl_listener *listener, void *data)
 		self->fstack = g_list_append(self->fstack, c);
 	}
 
+	/* A rule that says focus: view the tags it is about to land on, so
+	 * a window placed on another tag is one the keyboard reaches.
+	 * Without this the rule would only mean "focus it if it happens to
+	 * be visible", which is what mapping does anyway. */
+	if ((c->rule_flags & GOWL_CLIENT_RULE_FOCUS) != 0
+	    && c->pending_rule_tags != 0) {
+		GowlMonitor *fm = c->mon != NULL ? c->mon : self->selmon;
+
+		if (fm != NULL && (fm->tagset[fm->seltags] & c->pending_rule_tags) == 0) {
+			fm->seltags ^= 1;
+			fm->tagset[fm->seltags] = c->pending_rule_tags;
+			gowl_compositor_arrange(self, fm);
+		}
+	}
+
 	/* Resolve placement hints BEFORE setmon can run a layout. An overlay
 	 * must never spend even one configure as a tile and squeeze neighbours. */
 	if (self->prefloat_hints != NULL) {

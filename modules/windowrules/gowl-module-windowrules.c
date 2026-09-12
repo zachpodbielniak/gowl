@@ -458,6 +458,32 @@ wr_apply_rules_to_client(
 			continue;
 		if (rule->pid > 0 && (gint)gowl_client_get_pid(c) != rule->pid)
 			continue;
+		/* State matchers: what the window already is.  A rule can
+		 * then say "every floating window gets no shadow" without
+		 * naming any of them.  Read live, so a rule re-applied from
+		 * a title change sees the state the window is in now. */
+		if (rule->match_floating >= 0
+		    && (rule->match_floating != 0) != gowl_client_get_floating(c))
+			continue;
+		if (rule->match_fullscreen >= 0
+		    && (rule->match_fullscreen != 0) != gowl_client_get_fullscreen(c))
+			continue;
+		/* `on-tag': only while that tag is the one being viewed on
+		 * the window's monitor -- "when I am on tag 3, open this
+		 * floating".  A window with no monitor yet is judged by the
+		 * selected one, which is where it is about to land. */
+		if (rule->on_tag > 0) {
+			GowlMonitor *rm = gowl_client_get_monitor(c);
+			guint32 viewed;
+
+			if (rm == NULL)
+				rm = gowl_compositor_get_selected_monitor(self->compositor);
+			if (rm == NULL)
+				continue;
+			viewed = gowl_monitor_get_tags(rm);
+			if ((viewed & (1u << (rule->on_tag - 1))) == 0)
+				continue;
+		}
 		if (!wr_rule_entry_matches(rule, app_id, title))
 			continue;
 
@@ -494,6 +520,13 @@ wr_apply_rules_to_client(
 				flags |= GOWL_CLIENT_RULE_IDLE_INHIBIT;
 			if (rule->no_focus && initial)
 				flags |= GOWL_CLIENT_RULE_NO_FOCUS;
+			/* The opposite of no-focus, and it wins: a rule that
+			 * says both was written by someone who changed their
+			 * mind about the second one. */
+			if (rule->focus && initial) {
+				flags |= GOWL_CLIENT_RULE_FOCUS;
+				flags &= ~(guint)GOWL_CLIENT_RULE_NO_FOCUS;
+			}
 			gowl_client_set_rule_flags(c, flags);
 		}
 
@@ -509,10 +542,29 @@ wr_apply_rules_to_client(
 			gboolean geom_set = FALSE;
 
 			if (rule->floating &&
-			    (rule->width > 0 || rule->height > 0)) {
+			    (rule->width > 0 || rule->height > 0
+			     || rule->width_pct > 0.0 || rule->height_pct > 0.0)) {
 				gint gx, gy, gw, gh;
 
 				gowl_client_get_geometry(c, &gx, &gy, &gw, &gh);
+				/* Percentages first, so an explicit pixel size in
+				 * the same rule is the one that stands. */
+				if (rule->width_pct > 0.0 || rule->height_pct > 0.0) {
+					GowlMonitor *rm = gowl_client_get_monitor(c);
+					gint ax, ay, aw, ah;
+
+					if (rm == NULL)
+						rm = gowl_compositor_get_selected_monitor(
+							self->compositor);
+					if (rm != NULL) {
+						gowl_monitor_get_window_area(rm, &ax, &ay,
+						                             &aw, &ah);
+						if (rule->width_pct > 0.0)
+							gw = (gint)(aw * rule->width_pct + 0.5);
+						if (rule->height_pct > 0.0)
+							gh = (gint)(ah * rule->height_pct + 0.5);
+					}
+				}
 				if (rule->width > 0)
 					gw = rule->width;
 				if (rule->height > 0)

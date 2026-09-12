@@ -1352,6 +1352,33 @@ parse_monitor_config(YamlMapping *mon_cfg_map)
 }
 
 /**
+ * gowl_parse_percent:
+ * @text: (nullable): the raw scalar, "0.5" or "50%"
+ *
+ * A fraction written either way.  yaml-glib keeps a scalar's text, so
+ * a percentage and a fraction arrive identically and one reader takes
+ * both.  Out-of-range values are clamped rather than refused: a rule
+ * asking for 150% of the screen means "as wide as it goes".
+ *
+ * Returns: the fraction, 0.0 when unparseable (which reads as "unset")
+ */
+static gdouble
+gowl_parse_percent(const gchar *text)
+{
+	gdouble v;
+	gchar *end = NULL;
+
+	if (text == NULL || *text == '\0')
+		return 0.0;
+	v = g_ascii_strtod(text, &end);
+	if (end != NULL && *end == '%')
+		v /= 100.0;
+	if (v < 0.0)
+		return 0.0;
+	return v > 1.0 ? 1.0 : v;
+}
+
+/**
  * gowl_parse_monitor_transform:
  * @cm: a #YamlMapping describing one monitor's config
  *
@@ -1509,7 +1536,8 @@ static const gchar *const rule_keys[] = {
 	"app-id", "app_id", "title", "tags", "floating", "monitor", "width",
 	"height", "center", "regex", "sticky", "initial-title", "xwayland",
 	"pid", "no-focus", "fullscreen", "opacity", "no-blur", "no-shadow",
-	"no-anim", "idle-inhibit", NULL
+	"no-anim", "idle-inhibit", "is-floating", "is-fullscreen", "on-tag",
+	"focus", "width-pct", "height-pct", NULL
 };
 
 static const gchar *const bind_keys[] = {
@@ -2657,6 +2685,45 @@ gowl_config_apply_mapping(
 					if (yaml_mapping_has_member(rule_map, "idle-inhibit"))
 						added->idle_inhibit = yaml_mapping_get_boolean_member(
 							rule_map, "idle-inhibit");
+					/* State matchers.  `floating:' and `fullscreen:'
+					 * are what the rule DOES; `is-floating:' and
+					 * `is-fullscreen:' are what the window must
+					 * already be for the rule to apply at all.  Both
+					 * are tri-state, so an absent key keeps -1. */
+					if (yaml_mapping_has_member(rule_map, "is-floating"))
+						added->match_floating =
+							yaml_mapping_get_boolean_member(
+								rule_map, "is-floating") ? 1 : 0;
+					if (yaml_mapping_has_member(rule_map, "is-fullscreen"))
+						added->match_fullscreen =
+							yaml_mapping_get_boolean_member(
+								rule_map, "is-fullscreen") ? 1 : 0;
+					if (yaml_mapping_has_member(rule_map, "on-tag")) {
+						gint t = (gint)yaml_mapping_get_int_member(
+							rule_map, "on-tag");
+
+						if (t < 1 || t > 9) {
+							g_warning("gowl_config: rules: on-tag %d is "
+							          "not a tag (1-9)", t);
+							self->problems++;
+						} else {
+							added->on_tag = t;
+						}
+					}
+					if (yaml_mapping_has_member(rule_map, "focus"))
+						added->focus = yaml_mapping_get_boolean_member(
+							rule_map, "focus");
+					/* Sizes as a fraction of the output's usable area,
+					 * so one rule fits every screen the window lands
+					 * on.  Written 0.5 or "50%"; both read here. */
+					if (yaml_mapping_has_member(rule_map, "width-pct"))
+						added->width_pct = gowl_parse_percent(
+							yaml_mapping_get_string_member(
+								rule_map, "width-pct"));
+					if (yaml_mapping_has_member(rule_map, "height-pct"))
+						added->height_pct = gowl_parse_percent(
+							yaml_mapping_get_string_member(
+								rule_map, "height-pct"));
 					check_known_keys(self, rule_map, "rules", rule_keys);
 				}
 			}
@@ -3389,6 +3456,24 @@ gowl_config_generate_yaml(GowlConfig *self)
 				g_string_append(yaml, "    no-anim: true\n");
 			if (rule->idle_inhibit)
 				g_string_append(yaml, "    idle-inhibit: true\n");
+			if (rule->match_floating >= 0)
+				g_string_append_printf(yaml, "    is-floating: %s\n",
+				                       rule->match_floating ? "true" : "false");
+			if (rule->match_fullscreen >= 0)
+				g_string_append_printf(yaml, "    is-fullscreen: %s\n",
+				                       rule->match_fullscreen
+				                       ? "true" : "false");
+			if (rule->on_tag > 0)
+				g_string_append_printf(yaml, "    on-tag: %d\n",
+				                       rule->on_tag);
+			if (rule->focus)
+				g_string_append(yaml, "    focus: true\n");
+			if (rule->width_pct > 0.0)
+				g_string_append_printf(yaml, "    width-pct: %.3f\n",
+				                       rule->width_pct);
+			if (rule->height_pct > 0.0)
+				g_string_append_printf(yaml, "    height-pct: %.3f\n",
+				                       rule->height_pct);
 		}
 	}
 
@@ -4200,7 +4285,12 @@ gowl_config_add_rule_full(
 	rule->center     = center;
 	rule->regex_mode = regex_mode;
 	rule->sticky     = FALSE;
-	rule->xwayland   = -1;
+	/* The tri-states: -1 is "any", and 0 is a real value for each of
+	 * them, so they cannot be left zeroed.  Same trap as
+	 * gowl_rule_entry_init guards for callers building an entry. */
+	rule->xwayland         = -1;
+	rule->match_floating   = -1;
+	rule->match_fullscreen = -1;
 
 	g_ptr_array_add(self->rules, rule);
 }
@@ -4220,6 +4310,8 @@ gowl_rule_entry_init(GowlRuleEntry *entry)
 	entry->monitor = -1;
 	entry->center = TRUE;
 	entry->xwayland = -1;
+	entry->match_floating = -1;
+	entry->match_fullscreen = -1;
 }
 
 void

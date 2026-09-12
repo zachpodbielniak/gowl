@@ -643,6 +643,12 @@ test_config_rule_vocabulary(void)
 		"    no-anim: true\n"
 		"    idle-inhibit: true\n"
 		"    sticky: true\n"
+		"    is-floating: true\n"
+		"    is-fullscreen: false\n"
+		"    on-tag: 3\n"
+		"    focus: true\n"
+		"    width-pct: \"60%\"\n"
+		"    height-pct: 0.5\n"
 		"  - app-id: \"steam\"\n"
 		"    opacity: 7\n";
 
@@ -663,6 +669,15 @@ test_config_rule_vocabulary(void)
 	g_assert_cmpfloat_with_epsilon(r->opacity, 0.85, 0.001);
 	g_assert_true(r->no_blur && r->no_shadow && r->no_anim
 	              && r->idle_inhibit && r->sticky);
+	/* State matchers are tri-state, so "false" is a real value and
+	 * not the same as absent. */
+	g_assert_cmpint(r->match_floating, ==, 1);
+	g_assert_cmpint(r->match_fullscreen, ==, 0);
+	g_assert_cmpint(r->on_tag, ==, 3);
+	g_assert_true(r->focus);
+	/* A percentage and a fraction are the same number. */
+	g_assert_cmpfloat_with_epsilon(r->width_pct, 0.6, 0.001);
+	g_assert_cmpfloat_with_epsilon(r->height_pct, 0.5, 0.001);
 
 	/* Unset matchers stay "any"; an opacity out of range is a
 	 * problem, reported and ignored. */
@@ -670,6 +685,10 @@ test_config_rule_vocabulary(void)
 	g_assert_cmpint(r->xwayland, ==, -1);
 	g_assert_cmpint(r->pid, ==, 0);
 	g_assert_cmpfloat(r->opacity, ==, 0.0);
+	g_assert_cmpint(r->match_floating, ==, -1);
+	g_assert_cmpint(r->match_fullscreen, ==, -1);
+	g_assert_cmpint(r->on_tag, ==, 0);
+	g_assert_cmpfloat(r->width_pct, ==, 0.0);
 	g_assert_cmpuint(gowl_config_get_problem_count(config), ==, 1);
 
 	out = gowl_config_generate_yaml(config);
@@ -677,6 +696,11 @@ test_config_rule_vocabulary(void)
 	g_assert_nonnull(strstr(out, "xwayland: false"));
 	g_assert_nonnull(strstr(out, "opacity: 0.85"));
 	g_assert_nonnull(strstr(out, "idle-inhibit: true"));
+	g_assert_nonnull(strstr(out, "is-floating: true"));
+	g_assert_nonnull(strstr(out, "is-fullscreen: false"));
+	g_assert_nonnull(strstr(out, "on-tag: 3"));
+	g_assert_nonnull(strstr(out, "focus: true"));
+	g_assert_nonnull(strstr(out, "width-pct: 0.600"));
 	g_free(out);
 	g_object_unref(config);
 }

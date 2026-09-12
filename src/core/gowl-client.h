@@ -61,6 +61,8 @@ void           gowl_client_set_urgent         (GowlClient  *self,
  * @GOWL_CLIENT_RULE_IDLE_INHIBIT: while visible, holds the idle and
  *   dpms timers off as an idle-inhibit-v1 inhibitor would
  * @GOWL_CLIENT_RULE_NO_FOCUS: did not take the keyboard when it mapped
+ * @GOWL_CLIENT_RULE_FOCUS: takes the keyboard when it maps, even onto
+ *   a tag that is not being viewed -- the rule's `focus' property
  *
  * What a window rule asked of the modules.  A module that draws or
  * animates a window checks these; the rule sets them at map time.
@@ -71,7 +73,8 @@ typedef enum {
 	GOWL_CLIENT_RULE_NO_SHADOW    = 1 << 1,
 	GOWL_CLIENT_RULE_NO_ANIM      = 1 << 2,
 	GOWL_CLIENT_RULE_IDLE_INHIBIT = 1 << 3,
-	GOWL_CLIENT_RULE_NO_FOCUS     = 1 << 4
+	GOWL_CLIENT_RULE_NO_FOCUS     = 1 << 4,
+	GOWL_CLIENT_RULE_FOCUS        = 1 << 5
 } GowlClientRuleFlags;
 
 /**

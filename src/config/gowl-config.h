@@ -222,6 +222,12 @@ typedef struct {
 	gboolean  no_shadow;
 	gboolean  no_anim;
 	gboolean  idle_inhibit;
+	gint      match_floating;    /* -1 unset, 0 tiled only, 1 floating only */
+	gint      match_fullscreen;  /* -1 unset, 0 windowed only, 1 fullscreen */
+	gint      on_tag;            /* 0 unset, else the tag (1-9) that must be viewed */
+	gboolean  focus;             /* take the keyboard when it maps */
+	gdouble   width_pct;         /* width as a fraction of the usable area */
+	gdouble   height_pct;        /* height as a fraction of the usable area */
 } GowlRuleEntry;
 
 /* --- GowlMonitorConfig --- */
@@ -1128,7 +1134,8 @@ void gowl_config_add_rule_entry (GowlConfig *self, const GowlRuleEntry *entry);
  * @entry: a #GowlRuleEntry to prepare
  *
  * Zeroes @entry and writes the defaults that are not zero: @monitor
- * -1 (any), @center %TRUE, and @xwayland -1 (either kind of window).
+ * -1 (any), @center %TRUE, @xwayland -1 (either kind of window), and
+ * @match_floating / @match_fullscreen -1 (match either state).
  * @xwayland is the one that bites -- 0 there is a real value meaning
  * "native Wayland only", so a zeroed entry silently refuses to match
  * X11 windows.

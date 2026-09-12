@@ -262,6 +262,11 @@ struct _GowlCompositor {
 	GowlModuleManager            *module_mgr;   /* borrowed ref */
 	GowlIpc                      *ipc;          /* borrowed ref (may be NULL) */
 
+	/* The `profiles:` entry whose outputs are all connected, chosen
+	 * again on every hotplug and reload; borrowed from the config. */
+	const GowlOutputProfile      *active_profile;
+	gchar                        *active_profile_name; /* owned copy */
+
 	/* Runtime-pluggable key policy.  When non-NULL, the compositor
 	 * consults it on each key press to decide whether to redirect
 	 * keyboard focus to an alternate target (typically the Emacs

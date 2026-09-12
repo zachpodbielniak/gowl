@@ -1176,6 +1176,108 @@ test_config_monitors_names_iter(void)
 }
 
 /*
+ * Output profiles.  A profile is a named set of outputs -- connector
+ * names or "Make Model [Serial]" descriptions -- and what each gets
+ * while all of them are connected.  The parser keeps file order (the
+ * first match wins at runtime), a bare output name means "must be
+ * present", and the lookup prefers the active profile's entry over
+ * the plain monitors: one, with a connector or full description
+ * beating "Make Model" beating "*".
+ */
+static void
+test_config_output_profiles(void)
+{
+	GowlConfig *config;
+	GError *err = NULL;
+	GList *profiles;
+	const GowlOutputProfile *docked;
+	const GowlOutputProfile *mobile;
+	const GowlMonitorConfig *mc;
+	const gchar *yaml =
+		"monitors:\n"
+		"  eDP-1:\n"
+		"    scale: 2.0\n"
+		"  '*':\n"
+		"    scale: 1.0\n"
+		"  Dell Inc. U2720Q:\n"
+		"    scale: 1.25\n"
+		"profiles:\n"
+		"  docked:\n"
+		"    eDP-1:\n"
+		"      enabled: false\n"
+		"    Dell Inc. U2720Q ABC123:\n"
+		"      x: 0\n"
+		"      y: 0\n"
+		"      scale: 1.5\n"
+		"  mobile:\n"
+		"    eDP-1:\n";
+
+	config = gowl_config_new();
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	g_assert_cmpuint(gowl_config_get_problem_count(config), ==, 0);
+
+	profiles = gowl_config_get_output_profiles(config);
+	g_assert_cmpuint(g_list_length(profiles), ==, 2);
+	docked = (const GowlOutputProfile *)profiles->data;
+	mobile = (const GowlOutputProfile *)profiles->next->data;
+	g_assert_cmpstr(docked->name, ==, "docked");
+	g_assert_cmpstr(mobile->name, ==, "mobile");
+	g_assert_cmpuint(g_hash_table_size(docked->outputs), ==, 2);
+	g_assert_cmpuint(g_hash_table_size(mobile->outputs), ==, 1);
+
+	/* Matching: connector, full description, make+model, wildcard;
+	 * case does not matter. */
+	g_assert_true(gowl_config_output_key_matches("eDP-1", "eDP-1",
+	                                             NULL, NULL, NULL));
+	g_assert_true(gowl_config_output_key_matches("edp-1", "eDP-1",
+	                                             NULL, NULL, NULL));
+	g_assert_true(gowl_config_output_key_matches("Dell Inc. U2720Q ABC123",
+	                                             "DP-3", "Dell Inc.",
+	                                             "U2720Q", "ABC123"));
+	g_assert_true(gowl_config_output_key_matches("Dell Inc. U2720Q",
+	                                             "DP-3", "Dell Inc.",
+	                                             "U2720Q", "ABC123"));
+	g_assert_false(gowl_config_output_key_matches("Dell Inc. U2720Q XYZ",
+	                                              "DP-3", "Dell Inc.",
+	                                              "U2720Q", "ABC123"));
+	g_assert_true(gowl_config_output_key_matches("*", "DP-3",
+	                                             NULL, NULL, NULL));
+
+	/* Lookup: the active profile's entry first, then monitors:. */
+	mc = gowl_config_lookup_monitor_config(config, docked, "eDP-1",
+	                                       NULL, NULL, NULL);
+	g_assert_nonnull(mc);
+	g_assert_cmpint(mc->enabled, ==, 0);
+	mc = gowl_config_lookup_monitor_config(config, docked, "DP-3",
+	                                       "Dell Inc.", "U2720Q", "ABC123");
+	g_assert_nonnull(mc);
+	g_assert_cmpfloat(mc->scale, ==, 1.5);
+	g_assert_cmpint(mc->x, ==, 0);
+	/* Not in the mobile profile: falls back to monitors:, where the
+	 * make+model key beats the wildcard. */
+	mc = gowl_config_lookup_monitor_config(config, mobile, "DP-3",
+	                                       "Dell Inc.", "U2720Q", "ABC123");
+	g_assert_nonnull(mc);
+	g_assert_cmpfloat(mc->scale, ==, 1.25);
+	/* A bare `eDP-1:` in the mobile profile sets nothing, so the
+	 * monitors: entry applies through it. */
+	mc = gowl_config_lookup_monitor_config(config, mobile, "eDP-1",
+	                                       NULL, NULL, NULL);
+	g_assert_nonnull(mc);
+	g_assert_cmpfloat(mc->scale, ==, 0.0);
+	/* No profile: connector wins, then the wildcard. */
+	mc = gowl_config_lookup_monitor_config(config, NULL, "eDP-1",
+	                                       NULL, NULL, NULL);
+	g_assert_cmpfloat(mc->scale, ==, 2.0);
+	mc = gowl_config_lookup_monitor_config(config, NULL, "HDMI-A-1",
+	                                       "Acme", "X1", NULL);
+	g_assert_cmpfloat(mc->scale, ==, 1.0);
+
+	g_object_unref(config);
+}
+
+/*
  * The cube's settings, which live in GowlConfig alongside the animation
  * keys because a gowl module has no config schema of its own.
  *
@@ -1539,6 +1641,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/config/rules-d-absent", test_config_rules_d_absent);
 	g_test_add_func("/config/monitors-names-iter",
 	                test_config_monitors_names_iter);
+	g_test_add_func("/config/output-profiles",
+	                test_config_output_profiles);
 
 	return g_test_run();
 }

@@ -205,6 +205,16 @@ test_queries_answer_json(Fixture *f, gconstpointer data)
 	json_node_unref(n);
 	g_free(r);
 
+	/* No profiles configured: nothing active, an empty list. */
+	r = ask(f, "profile");
+	n = parse(r);
+	o = json_node_get_object(n);
+	g_assert_true(json_object_get_null_member(o, "active"));
+	g_assert_cmpuint(json_array_get_length(
+		json_object_get_array_member(o, "profiles")), ==, 0);
+	json_node_unref(n);
+	g_free(r);
+
 	r = ask(f, "tags");
 	n = parse(r);
 	o = json_node_get_object(n);

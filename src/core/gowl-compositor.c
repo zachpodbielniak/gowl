@@ -472,6 +472,7 @@ gowl_compositor_dispose(GObject *object)
 	}
 	g_clear_object(&self->input_recorder);
 	g_clear_pointer(&self->key_mode, g_free);
+	g_clear_pointer(&self->active_profile_name, g_free);
 
 	/* Release GObject sub-object wrappers */
 	g_clear_object(&self->seat);
@@ -682,6 +683,18 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	 */
 	g_signal_new("output-power-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
 	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_MONITOR, G_TYPE_BOOLEAN);
+
+	/**
+	 * GowlCompositor::output-profile-changed:
+	 * @compositor: the compositor
+	 * @name: the profile now in force, or "" for none
+	 *
+	 * An output came or went (or the config was reloaded) and a
+	 * different `profiles:` entry now matches the connected outputs.
+	 * Emitted after the profile's settings were applied.
+	 */
+	g_signal_new("output-profile-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_STRING);
 
 	/**
 	 * GowlCompositor::mode-changed:
@@ -1100,10 +1113,109 @@ gowl_compositor_apply_monitor_configs(GowlCompositor *self)
 
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
+	/* A reload may have rewritten the profiles; the pointer we hold
+	 * belongs to the old config either way.  The name survives, so
+	 * the same profile re-read is not a change. */
+	self->active_profile = NULL;
+	if (gowl_compositor_select_output_profile(self))
+		return; /* applied to every monitor already */
 	for (ml = self->monitors; ml != NULL; ml = ml->next) {
 		GowlMonitor *m = (GowlMonitor *)ml->data;
 		apply_monitor_yaml_config(self, m);
 	}
+}
+
+/**
+ * profile_matches_outputs:
+ *
+ * Every output the profile names is connected.
+ */
+static gboolean
+profile_matches_outputs(GowlCompositor *self, const GowlOutputProfile *p)
+{
+	GHashTableIter iter;
+	gpointer k;
+
+	g_hash_table_iter_init(&iter, p->outputs);
+	while (g_hash_table_iter_next(&iter, &k, NULL)) {
+		GList *ml;
+		gboolean found = FALSE;
+
+		for (ml = self->monitors; ml != NULL && !found; ml = ml->next) {
+			GowlMonitor *m = (GowlMonitor *)ml->data;
+
+			if (m->wlr_output == NULL)
+				continue;
+			found = gowl_config_output_key_matches((const gchar *)k,
+				m->wlr_output->name, m->wlr_output->make,
+				m->wlr_output->model, m->wlr_output->serial);
+		}
+		if (!found)
+			return FALSE;
+	}
+	return TRUE;
+}
+
+/**
+ * gowl_compositor_get_output_profile:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the name of the profile in force
+ */
+const gchar *
+gowl_compositor_get_output_profile(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	return self->active_profile_name;
+}
+
+/**
+ * gowl_compositor_select_output_profile:
+ * @self: a #GowlCompositor
+ *
+ * The first profile all of whose outputs are connected wins, kanshi
+ * style, so a "docked" profile listed before "mobile" takes over the
+ * moment the desk monitor is plugged in and "mobile" comes back when
+ * it is pulled.  A change re-applies every monitor's configuration,
+ * since the outputs the profile does not mention fall back to
+ * `monitors:` and may need their old settings again.
+ *
+ * Returns: %TRUE if the profile in force changed
+ */
+gboolean
+gowl_compositor_select_output_profile(GowlCompositor *self)
+{
+	const GowlOutputProfile *chosen = NULL;
+	GList *l;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	if (self->config == NULL)
+		return FALSE;
+
+	for (l = gowl_config_get_output_profiles(self->config); l != NULL;
+	     l = l->next) {
+		const GowlOutputProfile *p = (const GowlOutputProfile *)l->data;
+
+		if (profile_matches_outputs(self, p)) {
+			chosen = p;
+			break;
+		}
+	}
+	self->active_profile = chosen;
+	if (g_strcmp0(chosen != NULL ? chosen->name : NULL,
+	              self->active_profile_name) == 0)
+		return FALSE;
+	g_free(self->active_profile_name);
+	self->active_profile_name = chosen != NULL ? g_strdup(chosen->name) : NULL;
+	g_debug("output profile: %s", chosen != NULL ? chosen->name : "(none)");
+	for (l = self->monitors; l != NULL; l = l->next)
+		apply_monitor_yaml_config(self, (GowlMonitor *)l->data);
+	g_signal_emit_by_name(self, "output-profile-changed",
+	                      chosen != NULL ? chosen->name : "");
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT profile %s",
+		                    chosen != NULL ? chosen->name : "");
+	return TRUE;
 }
 
 /**
@@ -5682,7 +5794,11 @@ apply_monitor_yaml_config(GowlCompositor *self, GowlMonitor *m)
 	if (name == NULL)
 		return;
 
-	mc = gowl_config_get_monitor_config(self->config, name);
+	mc = gowl_config_lookup_monitor_config(self->config,
+	                                       self->active_profile, name,
+	                                       m->wlr_output->make,
+	                                       m->wlr_output->model,
+	                                       m->wlr_output->serial);
 	if (mc == NULL)
 		return;
 
@@ -6137,8 +6253,11 @@ on_new_output(struct wl_listener *listener, void *data)
 
 	/* Apply per-output overrides from YAML `monitors:` section
 	 * (transform, scale, mode, position, enabled).  Fires now so a
-	 * portrait-default mobile display can boot already-rotated. */
-	apply_monitor_yaml_config(self, m);
+	 * portrait-default mobile display can boot already-rotated.  If
+	 * this output completes a profile, that applies to everything
+	 * instead. */
+	if (!gowl_compositor_select_output_profile(self))
+		apply_monitor_yaml_config(self, m);
 
 	/* Reconcile internal panels against the lid state now that this
 	 * output (possibly the external that lets us shut the lid panel)
@@ -6385,6 +6504,10 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 
 	/* Remove from compositor's monitor list */
 	self->monitors = g_list_remove(self->monitors, m);
+
+	/* The profile that needed this output no longer matches. */
+	if (self->config != NULL)
+		gowl_compositor_select_output_profile(self);
 
 	/* Clear wlr_output back-pointer */
 	m->wlr_output->data = NULL;

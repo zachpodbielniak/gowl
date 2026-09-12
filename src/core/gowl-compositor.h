@@ -1188,6 +1188,30 @@ void         gowl_compositor_apply_keymap (GowlCompositor *self);
 void         gowl_compositor_apply_input_config (GowlCompositor *self);
 gboolean     gowl_compositor_switch_keyboard_layout (GowlCompositor *self,
                                                      const gchar *which);
+/**
+ * gowl_compositor_get_output_profile:
+ * @self: a #GowlCompositor
+ *
+ * The name of the output profile in force -- the first `profiles:`
+ * entry all of whose outputs are connected -- or %NULL.
+ *
+ * Returns: (transfer none) (nullable): the profile name
+ */
+const gchar *gowl_compositor_get_output_profile (GowlCompositor *self);
+
+/**
+ * gowl_compositor_select_output_profile:
+ * @self: a #GowlCompositor
+ *
+ * Picks the output profile again from the connected outputs and, if
+ * it changed, applies it to every monitor and emits
+ * #GowlCompositor::output-profile-changed.  Called on hotplug and
+ * reload; callers that changed the profiles from Lisp call it too.
+ *
+ * Returns: %TRUE if the profile in force changed
+ */
+gboolean     gowl_compositor_select_output_profile (GowlCompositor *self);
+
 const gchar *gowl_compositor_get_keyboard_layout (GowlCompositor *self,
                                                   guint *index);
 gboolean gowl_compositor_dispatch_keybind (GowlCompositor *self,

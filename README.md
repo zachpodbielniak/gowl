@@ -72,6 +72,7 @@ gowl -s waybar
 # Generate a default YAML config
 gowl --generate-yaml-config > ~/.config/gowl/config.yaml
 gowl --check-config            # unknown keys and bad values, exit 1 on any
+gowl --supervise               # restart the compositor after a crash, keep the session
 gowl-msg clients | jq .        # the IPC socket; see docs/ipc.org
 
 # Generate a default C config

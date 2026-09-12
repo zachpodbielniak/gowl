@@ -297,9 +297,15 @@ struct _GowlConfig {
 	 * GowlMonitorConfig* parsed from the YAML monitors: section.
 	 * Each field is independently optional (sentinel-driven). */
 	GHashTable *monitor_configs;
+
+	/* Output profiles from `profiles:`, in file order */
+	GList *profiles;
 };
 
 G_DEFINE_FINAL_TYPE(GowlConfig, gowl_config, G_TYPE_OBJECT)
+
+static void output_profile_free(gpointer data);
+static gint gowl_parse_monitor_transform(YamlMapping *cm);
 
 /* --- Signal IDs --- */
 enum {
@@ -806,6 +812,8 @@ gowl_config_finalize(GObject *object)
 
 	g_clear_pointer(&self->module_configs, g_hash_table_unref);
 	g_clear_pointer(&self->monitor_configs, g_hash_table_unref);
+	g_list_free_full(self->profiles, output_profile_free);
+	self->profiles = NULL;
 
 	G_OBJECT_CLASS(gowl_config_parent_class)->finalize(object);
 }
@@ -1267,6 +1275,87 @@ static const gchar *const gowl_monitor_transform_names[] = {
 };
 
 /**
+ * output_profile_free:
+ * @data: a #GowlOutputProfile
+ *
+ * Destroy function for the profiles list.
+ */
+static void
+output_profile_free(gpointer data)
+{
+	GowlOutputProfile *p = (GowlOutputProfile *)data;
+
+	if (p == NULL)
+		return;
+	g_free(p->name);
+	g_clear_pointer(&p->outputs, g_hash_table_unref);
+	g_free(p);
+}
+
+/**
+ * parse_monitor_config:
+ * @mon_cfg_map: one output's mapping, from `monitors:` or a profile
+ *
+ * Reads the per-output keys; unset fields keep their sentinels.
+ *
+ * Returns: (transfer full): a new #GowlMonitorConfig
+ */
+static GowlMonitorConfig *
+parse_monitor_config(YamlMapping *mon_cfg_map)
+{
+	GowlMonitorConfig *mc = g_new0(GowlMonitorConfig, 1);
+
+	mc->x = G_MININT;
+	mc->y = G_MININT;
+	mc->transform = -1;
+	mc->enabled = -1;
+	mc->vrr = -1;
+	if (mon_cfg_map == NULL)
+		return mc;
+
+	if (yaml_mapping_has_member(mon_cfg_map, "width"))
+		mc->width = (gint)yaml_mapping_get_int_member(
+			mon_cfg_map, "width");
+	if (yaml_mapping_has_member(mon_cfg_map, "height"))
+		mc->height = (gint)yaml_mapping_get_int_member(
+			mon_cfg_map, "height");
+	if (yaml_mapping_has_member(mon_cfg_map, "refresh"))
+		mc->refresh = yaml_mapping_get_double_member(
+			mon_cfg_map, "refresh");
+	if (yaml_mapping_has_member(mon_cfg_map, "x"))
+		mc->x = (gint)yaml_mapping_get_int_member(
+			mon_cfg_map, "x");
+	if (yaml_mapping_has_member(mon_cfg_map, "y"))
+		mc->y = (gint)yaml_mapping_get_int_member(
+			mon_cfg_map, "y");
+	if (yaml_mapping_has_member(mon_cfg_map, "scale"))
+		mc->scale = yaml_mapping_get_double_member(
+			mon_cfg_map, "scale");
+	if (yaml_mapping_has_member(mon_cfg_map, "enabled"))
+		mc->enabled = yaml_mapping_get_boolean_member(
+			mon_cfg_map, "enabled") ? 1 : 0;
+	if (yaml_mapping_has_member(mon_cfg_map, "transform"))
+		mc->transform = gowl_parse_monitor_transform(
+			mon_cfg_map);
+	/* `vrr' takes a bool or the string "on-demand":
+	 * adaptive sync only while a fullscreen game or
+	 * video is up, which is the mode that does not
+	 * make the cursor stutter on the desktop. */
+	if (yaml_mapping_has_member(mon_cfg_map, "vrr")) {
+		const gchar *vs = yaml_mapping_get_string_member(
+			mon_cfg_map, "vrr");
+		if (vs != NULL
+		    && (g_ascii_strcasecmp(vs, "on-demand") == 0
+		        || g_ascii_strcasecmp(vs, "on_demand") == 0))
+			mc->vrr = 2;
+		else
+			mc->vrr = yaml_mapping_get_boolean_member(
+				mon_cfg_map, "vrr") ? 1 : 0;
+	}
+	return mc;
+}
+
+/**
  * gowl_parse_monitor_transform:
  * @cm: a #YamlMapping describing one monitor's config
  *
@@ -1513,6 +1602,81 @@ check_known_keys(
 			g_warning("gowl_config: %s: unknown key '%s'", section, key);
 	}
 }
+
+/**
+ * parse_output_profiles:
+ * @self: the config
+ * @mapping: the document root
+ *
+ * Reads `profiles:`, a mapping of profile name to a mapping of output
+ * key to the same keys `monitors:` takes.  Replaces the list on a
+ * reload.
+ */
+static void
+parse_output_profiles(GowlConfig *self, YamlMapping *mapping)
+{
+	YamlMapping *profiles_map;
+	guint count;
+	guint i;
+
+	g_list_free_full(self->profiles, output_profile_free);
+	self->profiles = NULL;
+	if (!yaml_mapping_has_member(mapping, "profiles"))
+		return;
+	profiles_map = yaml_mapping_get_mapping_member(mapping, "profiles");
+	if (profiles_map == NULL)
+		return;
+
+	count = yaml_mapping_get_size(profiles_map);
+	for (i = 0; i < count; i++) {
+		const gchar *pname = yaml_mapping_get_key(profiles_map, i);
+		YamlNode *pnode = yaml_mapping_get_value(profiles_map, i);
+		YamlMapping *outputs;
+		GowlOutputProfile *profile;
+		guint n_outputs;
+		guint j;
+
+		if (pname == NULL || pnode == NULL)
+			continue;
+		outputs = yaml_node_get_mapping(pnode);
+		if (outputs == NULL) {
+			g_warning("gowl_config: profiles.%s: expected a mapping of "
+			          "outputs", pname);
+			self->problems++;
+			continue;
+		}
+		profile = g_new0(GowlOutputProfile, 1);
+		profile->name = g_strdup(pname);
+		profile->outputs = g_hash_table_new_full(g_str_hash, g_str_equal,
+		                                         g_free, g_free);
+		n_outputs = yaml_mapping_get_size(outputs);
+		for (j = 0; j < n_outputs; j++) {
+			const gchar *okey = yaml_mapping_get_key(outputs, j);
+			YamlNode *onode = yaml_mapping_get_value(outputs, j);
+			YamlMapping *omap;
+
+			if (okey == NULL || onode == NULL)
+				continue;
+			omap = yaml_node_get_mapping(onode);
+			if (omap == NULL) {
+				/* `eDP-1: {}` and a bare `eDP-1:` both mean "must be
+				 * present, leave it as it is". */
+				g_hash_table_insert(profile->outputs, g_strdup(okey),
+				                    parse_monitor_config(NULL));
+				continue;
+			}
+			check_known_keys(self, omap, "profiles", monitor_keys);
+			g_hash_table_insert(profile->outputs, g_strdup(okey),
+			                    parse_monitor_config(omap));
+		}
+		if (g_hash_table_size(profile->outputs) == 0) {
+			g_warning("gowl_config: profiles.%s names no outputs", pname);
+			self->problems++;
+		}
+		self->profiles = g_list_append(self->profiles, profile);
+	}
+}
+
 
 guint
 gowl_config_get_problem_count(GowlConfig *self)
@@ -2742,53 +2906,7 @@ gowl_config_apply_mapping(
 				if (mon_cfg_map == NULL)
 					continue;
 
-				mc = g_new0(GowlMonitorConfig, 1);
-				mc->x = G_MININT;
-				mc->y = G_MININT;
-				mc->transform = -1;
-				mc->enabled = -1;
-				mc->vrr = -1;
-
-				if (yaml_mapping_has_member(mon_cfg_map, "width"))
-					mc->width = (gint)yaml_mapping_get_int_member(
-						mon_cfg_map, "width");
-				if (yaml_mapping_has_member(mon_cfg_map, "height"))
-					mc->height = (gint)yaml_mapping_get_int_member(
-						mon_cfg_map, "height");
-				if (yaml_mapping_has_member(mon_cfg_map, "refresh"))
-					mc->refresh = yaml_mapping_get_double_member(
-						mon_cfg_map, "refresh");
-				if (yaml_mapping_has_member(mon_cfg_map, "x"))
-					mc->x = (gint)yaml_mapping_get_int_member(
-						mon_cfg_map, "x");
-				if (yaml_mapping_has_member(mon_cfg_map, "y"))
-					mc->y = (gint)yaml_mapping_get_int_member(
-						mon_cfg_map, "y");
-				if (yaml_mapping_has_member(mon_cfg_map, "scale"))
-					mc->scale = yaml_mapping_get_double_member(
-						mon_cfg_map, "scale");
-				if (yaml_mapping_has_member(mon_cfg_map, "enabled"))
-					mc->enabled = yaml_mapping_get_boolean_member(
-						mon_cfg_map, "enabled") ? 1 : 0;
-				if (yaml_mapping_has_member(mon_cfg_map, "transform"))
-					mc->transform = gowl_parse_monitor_transform(
-						mon_cfg_map);
-				/* `vrr' takes a bool or the string "on-demand":
-				 * adaptive sync only while a fullscreen game or
-				 * video is up, which is the mode that does not
-				 * make the cursor stutter on the desktop. */
-				if (yaml_mapping_has_member(mon_cfg_map, "vrr")) {
-					const gchar *vs = yaml_mapping_get_string_member(
-						mon_cfg_map, "vrr");
-					if (vs != NULL
-					    && (g_ascii_strcasecmp(vs, "on-demand") == 0
-					        || g_ascii_strcasecmp(vs, "on_demand") == 0))
-						mc->vrr = 2;
-					else
-						mc->vrr = yaml_mapping_get_boolean_member(
-							mon_cfg_map, "vrr") ? 1 : 0;
-				}
-
+				mc = parse_monitor_config(mon_cfg_map);
 				check_known_keys(self, mon_cfg_map, "monitors", monitor_keys);
 				g_debug("gowl_config: monitor '%s': "
 				        "w=%d h=%d refresh=%.1f x=%d y=%d "
@@ -2802,6 +2920,8 @@ gowl_config_apply_mapping(
 			}
 		}
 	}
+
+	parse_output_profiles(self, mapping);
 }
 
 /**
@@ -3611,6 +3731,8 @@ gowl_config_reset_values_to_defaults(GowlConfig *self)
 		g_hash_table_remove_all(self->module_configs);
 	if (self->monitor_configs != NULL)
 		g_hash_table_remove_all(self->monitor_configs);
+	g_list_free_full(self->profiles, output_profile_free);
+	self->profiles = NULL;
 
 	g_object_thaw_notify(G_OBJECT(self));
 
@@ -4332,6 +4454,132 @@ gowl_config_get_monitor_names(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
 	return g_hash_table_get_keys(self->monitor_configs);
+}
+
+/**
+ * gowl_config_get_output_profiles:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlOutputProfile): the
+ *          `profiles:` section in file order
+ */
+GList *
+gowl_config_get_output_profiles(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->profiles;
+}
+
+/**
+ * gowl_config_output_key_matches:
+ * @key: a key from `monitors:` or a profile's outputs
+ * @name: the connector name of an output
+ * @make: (nullable): its make
+ * @model: (nullable): its model
+ * @serial: (nullable): its serial
+ *
+ * Whether @key names this output; see the header.
+ *
+ * Returns: %TRUE if it matches
+ */
+gboolean
+gowl_config_output_key_matches(
+	const gchar *key,
+	const gchar *name,
+	const gchar *make,
+	const gchar *model,
+	const gchar *serial
+){
+	g_autofree gchar *mms = NULL;
+	g_autofree gchar *mm = NULL;
+
+	if (key == NULL)
+		return FALSE;
+	if (g_strcmp0(key, "*") == 0)
+		return TRUE;
+	if (name != NULL && g_ascii_strcasecmp(key, name) == 0)
+		return TRUE;
+	if (make == NULL || model == NULL)
+		return FALSE;
+	mm = g_strdup_printf("%s %s", make, model);
+	if (g_ascii_strcasecmp(key, mm) == 0)
+		return TRUE;
+	if (serial == NULL)
+		return FALSE;
+	mms = g_strdup_printf("%s %s %s", make, model, serial);
+	return g_ascii_strcasecmp(key, mms) == 0;
+}
+
+/**
+ * lookup_by_key:
+ * @table: output key -> #GowlMonitorConfig
+ *
+ * The entry whose key matches the output.  A connector name or a full
+ * description wins over a "Make Model" key, which wins over "*".
+ */
+static const GowlMonitorConfig *
+lookup_by_key(
+	GHashTable  *table,
+	const gchar *name,
+	const gchar *make,
+	const gchar *model,
+	const gchar *serial
+){
+	GHashTableIter iter;
+	gpointer k;
+	gpointer v;
+	const GowlMonitorConfig *wildcard = NULL;
+	const GowlMonitorConfig *by_mm = NULL;
+
+	if (table == NULL)
+		return NULL;
+	g_hash_table_iter_init(&iter, table);
+	while (g_hash_table_iter_next(&iter, &k, &v)) {
+		const gchar *key = (const gchar *)k;
+
+		if (!gowl_config_output_key_matches(key, name, make, model, serial))
+			continue;
+		if (g_strcmp0(key, "*") == 0)
+			wildcard = (const GowlMonitorConfig *)v;
+		else if (name != NULL && g_ascii_strcasecmp(key, name) == 0)
+			return (const GowlMonitorConfig *)v;
+		else if (serial != NULL && g_str_has_suffix(key, serial))
+			return (const GowlMonitorConfig *)v;
+		else
+			by_mm = (const GowlMonitorConfig *)v;
+	}
+	return by_mm != NULL ? by_mm : wildcard;
+}
+
+/**
+ * gowl_config_lookup_monitor_config:
+ * @self: a #GowlConfig
+ * @profile: (nullable): the output profile in force
+ * @name: the connector name of an output
+ * @make: (nullable): its make
+ * @model: (nullable): its model
+ * @serial: (nullable): its serial
+ *
+ * Returns: (transfer none) (nullable): the profile's entry for the
+ *          output, else the `monitors:` one
+ */
+const GowlMonitorConfig *
+gowl_config_lookup_monitor_config(
+	GowlConfig              *self,
+	const GowlOutputProfile *profile,
+	const gchar             *name,
+	const gchar             *make,
+	const gchar             *model,
+	const gchar             *serial
+){
+	const GowlMonitorConfig *mc = NULL;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	if (profile != NULL)
+		mc = lookup_by_key(profile->outputs, name, make, model, serial);
+	if (mc == NULL)
+		mc = lookup_by_key(self->monitor_configs, name, make, model, serial);
+	return mc;
 }
 
 /* ── Palette ─────────────────────────────────────────────────────── */

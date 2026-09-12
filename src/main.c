@@ -23,6 +23,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 /*
  * Global pointers exported for C config shared objects.
@@ -642,6 +646,7 @@ main(int argc, char *argv[])
 	gboolean no_yaml_config = FALSE;
 	gboolean recompile = FALSE;
 	gboolean check_config = FALSE;
+	gboolean supervise = FALSE;
 	gchar *config_path = NULL;
 	gchar *c_config_path = NULL;
 	gchar *startup_cmd = NULL;
@@ -678,6 +683,10 @@ main(int argc, char *argv[])
 			"Skip YAML config loading", NULL },
 		{ "recompile", 0, 0, G_OPTION_ARG_NONE, &recompile,
 			"Compile C config and exit", NULL },
+		{ "supervise", 0, 0, G_OPTION_ARG_NONE, &supervise,
+			"Run the compositor in a child and restart it if it "
+			"crashes (up to 5 times a minute); the session stays up",
+			NULL },
 		{ "check-config", 0, 0, G_OPTION_ARG_NONE, &check_config,
 			"Load the YAML config, report unknown keys and bad values, "
 			"and exit non-zero if there were any", NULL },
@@ -724,6 +733,52 @@ main(int argc, char *argv[])
 		return 1;
 	}
 	g_option_context_free(opt_ctx);
+
+	/* --supervise: this process only watches.  The compositor runs in
+	 * a child; a crash (a signal, or an exit that is not ours) is
+	 * logged and the child started again, so the seat stays taken and
+	 * a display manager does not see the session end.  Clients of the
+	 * dead compositor are gone either way -- what survives is the
+	 * login and the chance to look at the core dump -- and a child
+	 * that keeps dying stops being restarted rather than looping. */
+	if (supervise && !show_version && !check_config) {
+		gint restarts = 0;
+		gint64 window_start = g_get_monotonic_time();
+
+		for (;;) {
+			pid_t child = fork();
+			int status = 0;
+
+			if (child < 0) {
+				g_printerr("gowl: --supervise: fork failed: %s\n",
+				           g_strerror(errno));
+				return 1;
+			}
+			if (child == 0)
+				break; /* the compositor: carry on below */
+			while (waitpid(child, &status, 0) < 0 && errno == EINTR)
+				;
+			if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+				return 0;
+			if (WIFEXITED(status))
+				g_printerr("gowl: compositor exited with %d\n",
+				           WEXITSTATUS(status));
+			else if (WIFSIGNALED(status))
+				g_printerr("gowl: compositor died with signal %d\n",
+				           WTERMSIG(status));
+			if (g_get_monotonic_time() - window_start > 60 * G_USEC_PER_SEC) {
+				window_start = g_get_monotonic_time();
+				restarts = 0;
+			}
+			if (++restarts > 5) {
+				g_printerr("gowl: crashed %d times in a minute; "
+				           "not restarting\n", restarts - 1);
+				return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+			}
+			g_printerr("gowl: restarting the compositor (%d/5)\n",
+			           restarts);
+		}
+	}
 
 	/* Handle --version */
 	if (show_version) {

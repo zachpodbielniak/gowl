@@ -267,6 +267,26 @@ typedef struct {
 	gint     vrr;
 } GowlMonitorConfig;
 
+/**
+ * GowlOutputProfile:
+ * @name: the profile's name, the key under `profiles:`
+ * @outputs: maps an output key (connector name such as "eDP-1", or
+ *           a "Make Model Serial" / "Make Model" description) to a
+ *           #GowlMonitorConfig
+ *
+ * A named set of outputs that must all be connected for the profile
+ * to be in force, with the configuration each one gets while it is.
+ * Modelled on kanshi: a laptop has a "docked" profile naming the
+ * panel and the desk monitor, and a "mobile" one naming the panel
+ * alone; whichever matches the connected outputs first, in file
+ * order, wins.  The compositor picks the profile again whenever an
+ * output comes or goes.
+ */
+typedef struct {
+	gchar      *name;
+	GHashTable *outputs;
+} GowlOutputProfile;
+
 /* --- Property IDs (for GObject property enumeration) --- */
 
 /**
@@ -1246,6 +1266,60 @@ gowl_config_get_monitor_config(GowlConfig  *self,
  *          must g_list_free() the list itself but not the strings
  */
 GList *gowl_config_get_monitor_names(GowlConfig *self);
+
+/**
+ * gowl_config_get_output_profiles:
+ * @self: a #GowlConfig
+ *
+ * The `profiles:` section, in file order.
+ *
+ * Returns: (transfer none) (element-type GowlOutputProfile): a list
+ *          of #GowlOutputProfile owned by @self
+ */
+GList *gowl_config_get_output_profiles(GowlConfig *self);
+
+/**
+ * gowl_config_output_key_matches:
+ * @key: a key from `monitors:` or a profile's outputs
+ * @name: the connector name of an output
+ * @make: (nullable): its make
+ * @model: (nullable): its model
+ * @serial: (nullable): its serial
+ *
+ * Whether @key names this output: the connector name, "Make Model
+ * Serial", or "Make Model", compared case-insensitively, and "*"
+ * matches anything.
+ *
+ * Returns: %TRUE if it matches
+ */
+gboolean gowl_config_output_key_matches(const gchar *key,
+                                        const gchar *name,
+                                        const gchar *make,
+                                        const gchar *model,
+                                        const gchar *serial);
+
+/**
+ * gowl_config_lookup_monitor_config:
+ * @self: a #GowlConfig
+ * @profile: (nullable): the output profile in force, if any
+ * @name: the connector name of an output
+ * @make: (nullable): its make
+ * @model: (nullable): its model
+ * @serial: (nullable): its serial
+ *
+ * The configuration for an output: the active profile's entry for
+ * it if there is one, otherwise the `monitors:` entry whose key
+ * matches (see gowl_config_output_key_matches()).
+ *
+ * Returns: (transfer none) (nullable): a #GowlMonitorConfig
+ */
+const GowlMonitorConfig *
+gowl_config_lookup_monitor_config(GowlConfig              *self,
+                                  const GowlOutputProfile *profile,
+                                  const gchar             *name,
+                                  const gchar             *make,
+                                  const gchar             *model,
+                                  const gchar             *serial);
 
 gint gowl_config_get_animation_duration_open  (GowlConfig *self);
 gint gowl_config_get_animation_duration_close (GowlConfig *self);

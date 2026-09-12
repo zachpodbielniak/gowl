@@ -1023,6 +1023,29 @@ monitors:
 | =transform= | int 0--7 / string | =wl_output_transform= code, or one of the canonical names below.         |
 | =vrr=       | bool / =on-demand= | Adaptive sync. =true= always, =false= never, =on-demand= only while a fullscreen window declares game or video content (content-type-v1) -- the mode that does not make the desktop cursor stutter. Unset leaves the output alone. |
 
+An output's key is its connector name (=eDP-1=, =DP-3=), or -- since connector names change with the port and the dock -- its description: =Make Model Serial= or =Make Model=, matched case-insensitively (=gowl-msg monitors= prints all three fields). =*= matches any output. A connector name or a full description beats a =Make Model= key, which beats =*=.
+
+**** Output profiles
+:PROPERTIES:
+:CUSTOM_ID: output-profiles
+:END:
+=profiles:= is kanshi in the config: a named set of outputs and what each gets while all of them are connected.
+
+#+begin_src yaml
+profiles:
+  docked:                        # first profile whose outputs are all present wins
+    eDP-1:
+      enabled: false
+    Dell Inc. U2720Q ABC123:     # any key monitors: accepts
+      x: 0
+      y: 0
+      scale: 1.5
+  mobile:
+    eDP-1:                       # bare: must be present, settings from monitors:
+#+end_src
+
+Profiles are tried in file order on every hotplug and reload; the first whose outputs are all connected is in force, and its per-output entries take precedence over =monitors:=. Outputs a profile does not mention, and every output when no profile matches, get their =monitors:= entry. A change of profile re-applies every output, fires the compositor's =output-profile-changed= signal (=cmacs-gowl-output-profile-changed-hook= in cmacs, =EVENT profile NAME= on the socket) and =gowl-msg profile= shows which is active.
+
 **** =transform= values
 :PROPERTIES:
 :CUSTOM_ID: transform-values
@@ -1354,6 +1377,8 @@ gowl_config_init(void)
 | =--startup CMD=, =-s CMD= | Run a command after startup               |
 | =--generate-yaml-config=  | Print default YAML config to stdout       |
 | =--generate-c-config=     | Print default C config template to stdout |
+| =--check-config=          | Load the config, report problems, exit    |
+| =--supervise=             | Run the compositor in a child and restart it after a crash (up to 5 times a minute); the session -- the seat, the login -- stays up while the core dump is written. Clients of the crashed compositor are gone either way. |
 
 ** Environment Variables
 :PROPERTIES:

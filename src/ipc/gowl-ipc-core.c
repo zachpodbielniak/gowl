@@ -123,6 +123,18 @@ add_monitor(GowlCompositor *self, JsonBuilder *b, GowlMonitor *m)
 	json_builder_set_member_name(b, "name");
 	json_builder_add_string_value(b,
 		m->wlr_output != NULL ? m->wlr_output->name : "");
+	json_builder_set_member_name(b, "make");
+	json_builder_add_string_value(b,
+		m->wlr_output != NULL && m->wlr_output->make != NULL
+		? m->wlr_output->make : "");
+	json_builder_set_member_name(b, "model");
+	json_builder_add_string_value(b,
+		m->wlr_output != NULL && m->wlr_output->model != NULL
+		? m->wlr_output->model : "");
+	json_builder_set_member_name(b, "serial");
+	json_builder_add_string_value(b,
+		m->wlr_output != NULL && m->wlr_output->serial != NULL
+		? m->wlr_output->serial : "");
 	json_builder_set_member_name(b, "focused");
 	json_builder_add_boolean_value(b, m == self->selmon);
 	json_builder_set_member_name(b, "enabled");
@@ -291,6 +303,40 @@ gowl_compositor_ipc_command(
 		for (l = self->monitors; l != NULL; l = l->next)
 			add_monitor(self, b, (GowlMonitor *)l->data);
 		json_builder_end_array(b);
+		return json_finish(b);
+	}
+	if (g_strcmp0(word, "profile") == 0 || g_strcmp0(word, "profiles") == 0) {
+		const gchar *active = gowl_compositor_get_output_profile(self);
+
+		b = json_builder_new();
+		json_builder_begin_object(b);
+		json_builder_set_member_name(b, "active");
+		if (active != NULL)
+			json_builder_add_string_value(b, active);
+		else
+			json_builder_add_null_value(b);
+		json_builder_set_member_name(b, "profiles");
+		json_builder_begin_array(b);
+		for (l = self->config != NULL
+		         ? gowl_config_get_output_profiles(self->config) : NULL;
+		     l != NULL; l = l->next) {
+			const GowlOutputProfile *p = (const GowlOutputProfile *)l->data;
+			GHashTableIter iter;
+			gpointer k;
+
+			json_builder_begin_object(b);
+			json_builder_set_member_name(b, "name");
+			json_builder_add_string_value(b, p->name);
+			json_builder_set_member_name(b, "outputs");
+			json_builder_begin_array(b);
+			g_hash_table_iter_init(&iter, p->outputs);
+			while (g_hash_table_iter_next(&iter, &k, NULL))
+				json_builder_add_string_value(b, (const gchar *)k);
+			json_builder_end_array(b);
+			json_builder_end_object(b);
+		}
+		json_builder_end_array(b);
+		json_builder_end_object(b);
 		return json_finish(b);
 	}
 	if (g_strcmp0(word, "tags") == 0) {

@@ -346,6 +346,74 @@ test_reload_reapplies_timeouts(Fixture *f, gconstpointer data)
 	g_assert_cmpint(gowl_idle_manager_get_state(idle), ==, 0);
 }
 
+/* --- output profiles --- */
+
+static void
+on_profile_changed(GowlCompositor *c, const gchar *name, gpointer data)
+{
+	gchar **seen = (gchar **)data;
+	(void)c;
+
+	g_free(*seen);
+	*seen = g_strdup(name);
+}
+
+/*
+ * The first profile whose outputs are all connected is the one in
+ * force: "desk" names an output that is not there and is skipped for
+ * "alone", which names the headless one and scales it.  A reload that
+ * drops the profiles ends it, announced the same way.
+ */
+static void
+test_output_profiles(Fixture *f, gconstpointer data)
+{
+	g_autofree gchar *path = g_build_filename(f->runtime, "profiles.yaml",
+	                                          NULL);
+	gchar *seen = NULL;
+	const gchar *name = f->monitor->wlr_output->name;
+	g_autofree gchar *yaml = g_strdup_printf(
+		"profiles:\n"
+		"  desk:\n"
+		"    %s:\n"
+		"    DP-9:\n"
+		"  alone:\n"
+		"    %s:\n"
+		"      scale: 2.0\n", name, name);
+	(void)data;
+
+	g_signal_connect(f->compositor, "output-profile-changed",
+	                 G_CALLBACK(on_profile_changed), &seen);
+	g_assert_null(gowl_compositor_get_output_profile(f->compositor));
+
+	g_assert_true(g_file_set_contents(path, yaml, -1, NULL));
+	g_assert_true(gowl_config_load_yaml(f->config, path, NULL));
+	gowl_compositor_apply_monitor_configs(f->compositor);
+	pump(f, 50);
+	g_assert_cmpstr(gowl_compositor_get_output_profile(f->compositor),
+	                ==, "alone");
+	g_assert_cmpstr(seen, ==, "alone");
+	g_assert_cmpfloat(f->monitor->wlr_output->scale, ==, 2.0);
+
+	/* Nothing changed: no second emission. */
+	g_free(seen);
+	seen = NULL;
+	g_assert_false(gowl_compositor_select_output_profile(f->compositor));
+	g_assert_null(seen);
+
+	/* The profiles go away on a reload. */
+	g_assert_true(g_file_set_contents(path, "border-width: 2\n", -1, NULL));
+	g_assert_true(gowl_config_load_yaml(f->config, path, NULL));
+	gowl_compositor_apply_monitor_configs(f->compositor);
+	g_assert_null(gowl_compositor_get_output_profile(f->compositor));
+	g_assert_cmpstr(seen, ==, "");
+
+	g_signal_handlers_disconnect_by_func(f->compositor,
+	                                     G_CALLBACK(on_profile_changed),
+	                                     &seen);
+	g_free(seen);
+	g_unlink(path);
+}
+
 /* --- keyboard layouts --- */
 
 typedef struct {
@@ -431,6 +499,8 @@ main(int argc, char *argv[])
 	           fixture_setup, test_output_power_action, fixture_teardown);
 	g_test_add("/protocols/keyboard/layouts", Fixture, NULL,
 	           fixture_setup, test_keyboard_layouts, fixture_teardown);
+	g_test_add("/protocols/output-profiles", Fixture, NULL,
+	           fixture_setup, test_output_profiles, fixture_teardown);
 	g_test_add("/protocols/idle/timeouts-parked", Fixture, NULL,
 	           fixture_setup, test_reload_reapplies_timeouts, fixture_teardown);
 

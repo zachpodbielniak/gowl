@@ -26,7 +26,8 @@ It exits non-zero on an =ERROR= reply or when nothing answers; =--socket PATH= n
 |-------------------------------+----------------------------------------------------|
 | =clients=                     | JSON array: id, app_id, title, pid, tags, monitor, floating, fullscreen, urgent, sticky, xwayland, x, y, width, height |
 | =focused=                     | The focused window as above, or =null=            |
-| =monitors=                    | JSON array: name, focused, enabled, powered_off, x, y, width, height, tags, occupied, urgent, layout, mfact, nmaster |
+| =monitors=                    | JSON array: name, make, model, serial, focused, enabled, powered_off, x, y, width, height, tags, occupied, urgent, layout, mfact, nmaster |
+| =profile=                     | ={"active": NAME or null, "profiles": [{"name", "outputs"}]}= -- the output profile in force |
 | =tags [OUTPUT]=               | ={"active", "occupied", "urgent"}= bitmasks for an output (the focused one by default) |
 | =layouts=                     | JSON array of layout names                        |
 | =layout [NAME]=               | The focused output's layout; with NAME, selects it |
@@ -61,6 +62,7 @@ A subscriber receives one line per event, =EVENT <name> <args>=:
 | =mode NAME=                        | a key mode was entered or left                 |
 | =keymap INDEX NAME=                | the keyboard layout changed                    |
 | =power OUTPUT on\vert{}off=        | an output was powered on or off                |
+| =profile NAME=                     | a different output profile matches (empty NAME = none) |
 | =command LINE=                     | a module command ran, from any source          |
 
 Events are pushed from the compositor's own code paths, so a change made from a keybind, from Elisp, from MCP or from this socket is announced the same way.

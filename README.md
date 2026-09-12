@@ -143,6 +143,8 @@ See [docs/configuration.org](docs/configuration.org) for the full configuration 
 
 Modules are `.so` plugins that subclass `GowlModule` and implement one or more of 18 GObject interfaces to hook into compositor events. Each module exports a `gowl_module_register()` function that returns its GType.
 
+Screen sharing: `xdg-desktop-portal-gowl` serves `ScreenCast` as well as `InputCapture`/`RemoteDesktop`, so a video call can share **one window** rather than a whole output — `ext-image-capture-source-v1` makes a toplevel an addressable capture source, which `wlr-screencopy` (and so `xdg-desktop-portal-wlr`) cannot do. Needs PipeWire; falls back to portal-wlr when it is missing.
+
 Bundled modules include: autostart, notifyd (an org.freedesktop.Notifications daemon for standalone sessions), vanitygaps, pertag, scratchpad, swallow, movestack, fibonacci, centeredmaster, and IPC.
 
 `make install` puts modules in `$(LIBDIR)/gowl/modules/`, and a development build loads them from `build/release/modules/`. A module is only loaded when it is set `enabled: true` under `modules:` in the YAML config. There is no per-user module directory; per-user compositor code belongs in `~/.config/gowl/config.c`.

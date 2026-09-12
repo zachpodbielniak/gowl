@@ -97,9 +97,47 @@ if [ -f "$wl" ]; then
 	done
 fi
 
+# Guard: the ScreenCast backend must capture WINDOWS, not just outputs.
+#
+# The whole reason gowl serves ScreenCast at all is that
+# xdg-desktop-portal-wlr cannot share a single window: wlr-screencopy
+# addresses outputs.  A backend that bound only the output source
+# manager would build, run, and pass every other check while quietly
+# being a worse portal-wlr -- so the toplevel source manager, the
+# toplevel list and WINDOW in AvailableSourceTypes are asserted here.
+sc="$root/tools/xdg-desktop-portal-gowl/portal-capture.c"
+if [ -f "$sc" ]; then
+	for sym in ext_foreign_toplevel_image_capture_source_manager_v1_create_source \
+	           ext_output_image_capture_source_manager_v1_create_source \
+	           ext_image_copy_capture_manager_v1_create_session; do
+		if ! grep -q "$sym" "$sc"; then
+			echo "FAIL: portal-capture.c never calls $sym"
+			fail=1
+		fi
+	done
+else
+	echo "FAIL: the ScreenCast capture backend is missing"
+	fail=1
+fi
+
+sccast="$root/tools/xdg-desktop-portal-gowl/portal-screencast.c"
+if [ -f "$sccast" ]; then
+	if ! grep -q 'SOURCE_TYPE_WINDOW' "$sccast"; then
+		echo "FAIL: portal-screencast.c does not offer window sources"
+		fail=1
+	fi
+	# The routing has to name the interface, or the frontend never asks.
+	if ! grep -q 'org.freedesktop.impl.portal.ScreenCast' \
+	     "$root/data/gowl.portal"; then
+		echo "FAIL: gowl.portal does not declare ScreenCast"
+		fail=1
+	fi
+fi
+
 if [ "$fail" -ne 0 ]; then
 	echo "portal guard FAILED"
 	exit 1
 fi
-echo "portal guard PASSED (both libei directions served, injection guarded)"
+echo "portal guard PASSED (both libei directions served, injection guarded,"
+echo "                     ScreenCast captures windows as well as outputs)"
 exit 0

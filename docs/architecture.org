@@ -481,7 +481,7 @@ Not served: security-context, drm-lease, wp-color-management, alpha-modifier, xd
 *** Input, as configured
 The keymap is built by =build_keymap()= from the =xkb-*= keys (a keymap file, else rules/model/layout/variant/options, else the environment) and applied to the keyboard group and every keyboard =gowl-input-config.c= tracks. Per-device libinput settings from the =input:= section are applied by the same file when a device appears and again on reload. Key modes, bind flags, pointer binds and gestures all end in =run_keybind_entry()=: one function runs an action whatever bound it, so =dispatch_key()= (mode, lock and press/release filtering), =dispatch_mousebind()= and =dispatch_gesture()= only decide whether a bind matched. A finger count with a configured gesture is claimed before the module gesture handlers, like a module claimant, and summed until the gesture ends.
 
-** Screen Sharing (xdg-desktop-portal-wlr)
+** Screen Sharing (the gowl ScreenCast portal, and portal-wlr)
 
 Screen capture is abstracted behind the =GowlCaptureProvider= GObject
 interface (=src/interfaces/gowl-capture-provider.h=), so the compositor
@@ -512,6 +512,20 @@ The provider advertises the globals the portal needs:
 
 Selection of the wlroots portal backend is environment-driven (see the
 =XDG_CURRENT_DESKTOP=/=:wlroots= note above), not a gowl protocol matter.
+
+*** Sharing one window
+
+portal-wlr can only offer whole outputs, because =wlr-screencopy= addresses outputs: "share this window" in a video call means sharing the screen it is on and everything else there with it. gowl's own backend exists for that one reason.
+
+The standard =ext-image-capture-source-v1= makes an =ext_foreign_toplevel_handle= a capture source, and gowl already advertises it along with =ext-image-copy-capture-v1= and the toplevel list (=gowl_capture_provider_create_globals=, wlroots 0.20+). =tools/xdg-desktop-portal-gowl= binds all three as an ordinary Wayland client and implements =org.freedesktop.impl.portal.ScreenCast= on the bus name it already owns:
+
+- =portal-capture.c= is the Wayland half: it lists outputs and mapped toplevels, opens a capture session on the chosen one, and copies each frame into a buffer the caller supplies.
+- =portal-pw.c= is the PipeWire half: the buffers PipeWire allocates are memfds, each wrapped as a =wl_buffer= over a =wl_shm= pool, so a frame is copied once -- by the compositor -- straight into the memory the application reads. Frames are requested only when PipeWire returns a buffer, so a consumer that stops reading stops the capture rather than building a queue.
+- =portal-screencast.c= is the D-Bus half: =CreateSession=, =SelectSources=, =Start=. The chooser is an external dmenu-style command (=$GOWL_PORTAL_CHOOSER=, else the first of bemenu/fuzzel/wofi/rofi/dmenu found), because this process has no toolkit and the session already has a menu.
+
+Two things are easy to get wrong here and are both asserted by tests. The capture session's =shm_format= carries a *wl_shm* enum, not a DRM fourcc -- they agree except for ARGB8888 and XRGB8888, which are 0 and 1 -- and getting it wrong yields a stream that negotiates cleanly and shows the wrong colours. And the session's first size event arrives while the PipeWire stream is still being constructed, so the size callback has to tolerate not having one yet.
+
+The backend declines the interface when PipeWire is absent or the compositor offers no image-copy-capture, and the frontend then falls back to portal-wlr, so a session missing either is no worse off than before. =tests/test-portal-screencast.sh= drives the whole handshake against a headless compositor on a private bus; =tests/test-portal-guard.sh= asserts the window path specifically, since a backend that bound only the output source manager would pass everything else while being a worse portal-wlr.
 
 ** Input Capture & Injection (deskflow / KVM)
 :PROPERTIES:

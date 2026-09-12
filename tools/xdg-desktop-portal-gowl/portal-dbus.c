@@ -35,6 +35,9 @@
  */
 
 #include "portal-dbus.h"
+#ifdef GOWL_HAVE_PIPEWIRE
+#include "portal-screencast.h"
+#endif
 
 #include <gio/gio.h>
 #include <gio/gunixfdlist.h>
@@ -68,6 +71,14 @@ struct _PortalDbus {
 	gchar           *session_handle;
 	guint            session_reg_id;
 	guint            zone_set;      /* last zones reported */
+
+#ifdef GOWL_HAVE_PIPEWIRE
+	/* The ScreenCast backend shares this bus name and connection.  It
+	 * is optional at run time as well as at build time: a session
+	 * without PipeWire, or a compositor without image-copy-capture,
+	 * leaves it NULL and the frontend routes casting elsewhere. */
+	PortalScreenCast *screencast;
+#endif
 };
 
 static GDBusNodeInfo *node_info;
@@ -1119,6 +1130,19 @@ on_bus_acquired(GDBusConnection *conn, const gchar *name, gpointer user_data)
 		g_clear_error(&error);
 	}
 
+#ifdef GOWL_HAVE_PIPEWIRE
+	{
+		GError *sc_error = NULL;
+
+		self->screencast = portal_screencast_new(conn, &sc_error);
+		if (self->screencast == NULL) {
+			g_message("portal: no ScreenCast backend: %s",
+				sc_error != NULL ? sc_error->message : "?");
+			g_clear_error(&sc_error);
+		}
+	}
+#endif
+
 	self->rd_reg_id = g_dbus_connection_register_object(conn,
 		PORTAL_OBJ_PATH, node_info->interfaces[1], &rd_vtable,
 		self, NULL, &error);
@@ -1139,7 +1163,13 @@ on_name_acquired(GDBusConnection *conn, const gchar *name, gpointer user_data)
 static void
 on_name_lost(GDBusConnection *conn, const gchar *name, gpointer user_data)
 {
-	(void)conn; (void)user_data;
+	PortalDbus *self = user_data;
+
+	(void)conn;
+	/* The connection this held is no longer ours to use; teardown has
+	 * to know that rather than unregister against a dangling one. */
+	if (self != NULL)
+		self->conn = NULL;
 	g_warning("portal: lost bus name %s", name);
 }
 
@@ -1201,7 +1231,20 @@ portal_dbus_free(PortalDbus *self)
 	if (self == NULL)
 		return;
 
-	if (self->conn != NULL) {
+#ifdef GOWL_HAVE_PIPEWIRE
+	/* Before the connection goes: it unregisters its own objects. */
+	g_clear_pointer(&self->screencast, portal_screencast_free);
+#endif
+
+	/*
+	 * The connection is borrowed from g_bus_own_name and is gone the
+	 * moment the name is lost -- another backend replacing us, or the
+	 * bus shutting down.  Unregistering against it then is a critical
+	 * on every exit, and it was: `on_name_lost' does not clear the
+	 * pointer.
+	 */
+	if (self->conn != NULL && G_IS_DBUS_CONNECTION(self->conn)
+	    && !g_dbus_connection_is_closed(self->conn)) {
 		portal_dbus_end_session(self, FALSE);
 		if (self->ic_reg_id)
 			g_dbus_connection_unregister_object(self->conn,

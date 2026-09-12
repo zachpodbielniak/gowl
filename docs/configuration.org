@@ -243,6 +243,7 @@ fullscreen and embedded windows.
 | =animation-popin-scale=    | float  | =0.84=            | Entrance starting / exit ending scale, from =0.5= to =1.0= |
 | =animation-jiggle-strength= | float | =1.0=             | Squash/stretch intensity, =0= off through =2= double strength |
 | =animation-curve-open=     | string | ="ease-out-back"= | Entrance geometry curve |
+| =animation-curve-close=    | string | ="almost-linear"= | Exit squeeze curve; an ease-out makes a closing window all but vanish in its first frame |
 | =animation-curve=          | string | ="ease-out-expo"= | Layout geometry curve |
 
 Open and close durations of =-1= inherit =animation-duration=.

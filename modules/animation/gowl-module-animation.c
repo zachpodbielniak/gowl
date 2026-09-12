@@ -544,8 +544,11 @@ close_tick(GowlCompositor *self, GowlMonitor *m, gint64 now_us)
 			t = 0.0;
 
 		/* A linear shrink remains visible through the exit. Reusing
-		 * the move's ease-out made it almost disappear in one frame. */
-		e = gowl_curve_eval("almost-linear", t);
+		 * the move's ease-out made it almost disappear in one frame;
+		 * `animation-curve-close' can say otherwise. */
+		e = gowl_curve_eval(self->config != NULL
+			? gowl_config_get_animation_curve_close(self->config)
+			: "almost-linear", t);
 		gowl_scene_snapshot_set_opacity(a->snapshot, a->alpha * (1.0 - e));
 		scale = 1.0 - t * (1.0 - a->target_scale);
 		w = MAX(1, (gint)lround(a->w * scale));

@@ -606,6 +606,23 @@ static void expect_warning(const char *substring);
 static const char *expected_warning;
 
 static void
+test_config_animation_curve_close(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+
+	g_assert_cmpstr(gowl_config_get_animation_curve_close(config), ==,
+	                "almost-linear");
+	g_assert_true(load_yaml_from_string(config,
+		"animation-curve-close: \"ease-out-expo\"\n", &err));
+	g_assert_no_error(err);
+	g_assert_cmpstr(gowl_config_get_animation_curve_close(config), ==,
+	                "ease-out-expo");
+	g_assert_cmpuint(gowl_config_get_problem_count(config), ==, 0);
+	g_object_unref(config);
+}
+
+static void
 test_config_rule_vocabulary(void)
 {
 	GowlConfig *config;
@@ -1489,6 +1506,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/config/gestures", test_config_gestures);
 	g_test_add_func("/config/input", test_config_input_settings);
 	g_test_add_func("/config/xkb", test_config_xkb);
+	g_test_add_func("/config/animation-curve-close",
+	                test_config_animation_curve_close);
 	g_test_add_func("/config/rules/vocabulary", test_config_rule_vocabulary);
 	g_test_add_func("/config/unknown-keys-counted",
 	                test_config_unknown_keys_are_counted);

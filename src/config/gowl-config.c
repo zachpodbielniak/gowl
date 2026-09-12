@@ -56,6 +56,7 @@
 #define GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_CLOSE (180)
 #define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE     "ease-out-expo"
 #define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_OPEN "ease-out-back"
+#define GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_CLOSE "almost-linear"
 #define GOWL_CONFIG_DEFAULT_ANIMATION_POPIN_SCALE (0.84)
 
 /* Desktop cube.  260 ms of animation is right for a window sliding a few
@@ -167,6 +168,7 @@ struct _GowlConfig {
 	gint     animation_duration;
 	gchar   *animation_curve;
 	gchar   *animation_curve_open;
+	gchar   *animation_curve_close;
 	gdouble  animation_popin_scale;
 	gdouble  animation_jiggle_strength;
 
@@ -768,6 +770,7 @@ gowl_config_finalize(GObject *object)
 	g_free(self->focus_on_activate);
 	g_free(self->animation_curve);
 	g_free(self->animation_curve_open);
+	g_free(self->animation_curve_close);
 	g_free(self->cube_curve);
 	g_free(self->cube_backdrop_color);
 	g_free(self->magnifier_modifier);
@@ -1110,6 +1113,7 @@ gowl_config_init(GowlConfig *self)
 		GOWL_CONFIG_DEFAULT_ANIMATION_DURATION_CLOSE;
 	self->animation_curve     = g_strdup(GOWL_CONFIG_DEFAULT_ANIMATION_CURVE);
 	self->animation_curve_open = g_strdup(GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_OPEN);
+	self->animation_curve_close = g_strdup(GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_CLOSE);
 	self->animation_popin_scale = GOWL_CONFIG_DEFAULT_ANIMATION_POPIN_SCALE;
 	self->animation_jiggle_strength = 1.0;
 
@@ -1395,7 +1399,8 @@ static const gchar *const top_level_keys[] = {
 	"border-color-unfocus", "border-color-urgent", "mfact", "nmaster",
 	"tag-count", "scroll-column-width", "animations", "animation-duration",
 	"animation-duration-open", "animation-duration-close",
-	"animation-curve-open", "animation-curve", "animation-popin-scale",
+	"animation-curve-open", "animation-curve-close", "animation-curve",
+	"animation-popin-scale",
 	"animation-jiggle-strength", "cube", "cube-duration",
 	"cube-step-duration", "cube-curve", "cube-faces", "cube-zoom",
 	"cube-pitch", "cube-shading", "cube-reflection", "cube-motion-blur",
@@ -1697,6 +1702,14 @@ gowl_config_apply_mapping(
 		if (v != NULL) {
 			g_free(self->animation_curve_open);
 			self->animation_curve_open = g_strdup(v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "animation-curve-close")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "animation-curve-close");
+
+		if (v != NULL) {
+			g_free(self->animation_curve_close);
+			self->animation_curve_close = g_strdup(v);
 		}
 	}
 	if (yaml_mapping_has_member(mapping, "animation-popin-scale")) {
@@ -4462,6 +4475,15 @@ gowl_config_get_animation_curve_open(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_OPEN);
 	return self->animation_curve_open;
+}
+
+const gchar *
+gowl_config_get_animation_curve_close(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_CLOSE);
+	return self->animation_curve_close != NULL
+	       ? self->animation_curve_close
+	       : GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_CLOSE;
 }
 
 gdouble

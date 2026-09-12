@@ -26,8 +26,11 @@
 #include "module/gowl-module.h"
 #include "interfaces/gowl-startup-handler.h"
 #include "interfaces/gowl-shutdown-handler.h"
+#include "interfaces/gowl-scene-effect.h"
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"
+#include "core/gowl-core-private.h"
+#include <wlr/types/wlr_scene.h>
 
 /**
  * GowlModuleAlpha:
@@ -41,6 +44,18 @@
  * Configuration keys:
  *   - "focused-alpha":   opacity for the focused window (default 1.0)
  *   - "unfocused-alpha": opacity for unfocused windows (default 0.8)
+ *   - "dim-inactive":    darken unfocused windows with a translucent
+ *                        black layer over them (default false)
+ *   - "dim-strength":    how dark, 0.0 (nothing) to 1.0 (black),
+ *                        default 0.25
+ *
+ * Opacity lets the wallpaper (and the blur module's frosted backdrop)
+ * show through; dimming keeps the window opaque and darkens it, which
+ * is what reads as "not this one" on a busy tag.  The dim is a
+ * wlr_scene_rect child of the window's scene tree, sized to the frame
+ * as drawn and re-sized from the client_placed effect hook, so it
+ * follows a move and an animation.  Its node goes with the tree, so
+ * the pointer to it is cleared from the node's destroy signal.
  */
 
 #define GOWL_TYPE_MODULE_ALPHA (gowl_module_alpha_get_type())
@@ -58,7 +73,21 @@ struct _GowlModuleAlpha {
 	   changes opacity as you move between them is distracting. */
 	gulong     focus_handler_id;  /* g_signal_connect handler */
 	gpointer   prev_focused;      /* last focused GowlClient* */
+
+	gboolean   dim_inactive;      /* darken unfocused windows */
+	gfloat     dim_strength;      /* 0..1 */
 };
+
+/* The dim layer of one client: the rect and the listener that clears
+ * the pointer when the scene tree takes the rect with it. */
+typedef struct {
+	struct wlr_scene_rect *rect;
+	struct wl_listener     destroy;
+} GowlAlphaDim;
+
+#define GOWL_ALPHA_DIM_KEY "gowl-alpha-dim"
+
+static void alpha_effect_init(GowlSceneEffectInterface *iface);
 
 static void alpha_startup_init(GowlStartupHandlerInterface *iface);
 static void alpha_shutdown_init(GowlShutdownHandlerInterface *iface);
@@ -68,7 +97,139 @@ G_DEFINE_TYPE_WITH_CODE(GowlModuleAlpha, gowl_module_alpha,
 	G_IMPLEMENT_INTERFACE(GOWL_TYPE_STARTUP_HANDLER,
 		alpha_startup_init)
 	G_IMPLEMENT_INTERFACE(GOWL_TYPE_SHUTDOWN_HANDLER,
-		alpha_shutdown_init))
+		alpha_shutdown_init)
+	G_IMPLEMENT_INTERFACE(GOWL_TYPE_SCENE_EFFECT,
+		alpha_effect_init))
+
+/* --- The dim layer --- */
+
+static void
+alpha_on_dim_destroy(struct wl_listener *listener, void *data)
+{
+	GowlAlphaDim *d = wl_container_of(listener, d, destroy);
+	(void)data;
+
+	wl_list_remove(&d->destroy.link);
+	wl_list_init(&d->destroy.link);
+	d->rect = NULL;
+}
+
+static void
+alpha_dim_free(gpointer data)
+{
+	GowlAlphaDim *d = (GowlAlphaDim *)data;
+
+	if (d->rect != NULL) {
+		wl_list_remove(&d->destroy.link);
+		wlr_scene_node_destroy(&d->rect->node);
+	}
+	g_free(d);
+}
+
+/* Makes, sizes, shows or hides the client's dim layer to match
+ * whether it is focused and whether dimming is on at all. */
+static void
+alpha_dim_update(GowlModuleAlpha *self, GowlClient *c, gboolean focused)
+{
+	GowlAlphaDim *d;
+	float color[4];
+	gboolean want;
+
+	if (c == NULL || c->scene == NULL || gowl_client_get_embedded(c))
+		return;
+	want = self->dim_inactive && !focused && self->dim_strength > 0.0f
+	       && !c->isfullscreen;
+	d = g_object_get_data(G_OBJECT(c), GOWL_ALPHA_DIM_KEY);
+	if (!want) {
+		if (d != NULL && d->rect != NULL)
+			wlr_scene_node_set_enabled(&d->rect->node, FALSE);
+		return;
+	}
+	color[0] = color[1] = color[2] = 0.0f;
+	color[3] = CLAMP(self->dim_strength, 0.0f, 1.0f);
+	if (d == NULL) {
+		d = g_new0(GowlAlphaDim, 1);
+		wl_list_init(&d->destroy.link);
+		g_object_set_data_full(G_OBJECT(c), GOWL_ALPHA_DIM_KEY, d,
+		                       alpha_dim_free);
+	}
+	if (d->rect == NULL) {
+		d->rect = wlr_scene_rect_create(c->scene, MAX(c->frame.width, 1),
+		                                MAX(c->frame.height, 1), color);
+		if (d->rect == NULL)
+			return;
+		d->destroy.notify = alpha_on_dim_destroy;
+		wl_signal_add(&d->rect->node.events.destroy, &d->destroy);
+	}
+	wlr_scene_rect_set_color(d->rect, color);
+	wlr_scene_rect_set_size(d->rect, MAX(c->frame.width, 1),
+	                        MAX(c->frame.height, 1));
+	/* Above the content; the frame decoration a decorator draws is a
+	 * sibling too, and the dim should cover it as well. */
+	wlr_scene_node_raise_to_top(&d->rect->node);
+	wlr_scene_node_set_enabled(&d->rect->node, TRUE);
+}
+
+static void
+alpha_dim_all(GowlModuleAlpha *self)
+{
+	GowlCompositor *comp = (GowlCompositor *)self->compositor;
+	GowlClient *focused;
+	GList *clients, *l;
+
+	if (comp == NULL)
+		return;
+	focused = gowl_compositor_get_focused_client(comp);
+	clients = gowl_compositor_get_clients(comp);
+	for (l = clients; l != NULL; l = l->next)
+		alpha_dim_update(self, GOWL_CLIENT(l->data),
+		                 GOWL_CLIENT(l->data) == focused);
+}
+
+/* --- GowlSceneEffect: the dim follows the frame as drawn --- */
+
+static void
+alpha_client_placed(GowlSceneEffect *effect, GowlCompositor *comp,
+                    GowlClient *c, gboolean settled)
+{
+	GowlModuleAlpha *self = GOWL_MODULE_ALPHA(effect);
+	(void)settled;
+
+	if (c == NULL || !self->dim_inactive)
+		return;
+	alpha_dim_update(self, c,
+	                 c == gowl_compositor_get_focused_client(comp));
+}
+
+static gboolean
+alpha_client_event(GowlSceneEffect *effect, GowlCompositor *comp,
+                   GowlClient *c, GowlSceneEffectEvent event,
+                   const struct wlr_box *box, gboolean settled)
+{
+	(void)effect; (void)comp; (void)box; (void)settled;
+
+	switch (event) {
+	case GOWL_SCENE_EFFECT_UNMAP:
+	case GOWL_SCENE_EFFECT_DESTROY:
+		/* The tree goes, or is being taken over: drop our rect now
+		 * rather than have the next placement find a dead one.  The
+		 * destroy listener makes this safe either way. */
+		if (c != NULL)
+			g_object_set_data(G_OBJECT(c), GOWL_ALPHA_DIM_KEY, NULL);
+		break;
+	default:
+		break;
+	}
+	/* Never claimed: the dim is decoration, not a placement. */
+	return FALSE;
+}
+
+static void
+alpha_effect_init(GowlSceneEffectInterface *iface)
+{
+	iface->client_event  = alpha_client_event;
+	iface->client_placed = alpha_client_placed;
+}
 
 /* --- Focus change callback --- */
 
@@ -95,6 +256,13 @@ alpha_on_focus_changed(GowlCompositor *comp,
 	/* Brighten the newly focused client */
 	if (client != NULL && !gowl_client_get_embedded(client))
 		gowl_client_set_alpha(client, self->focused_alpha);
+
+	if (self->dim_inactive) {
+		if (prev != NULL && prev != client)
+			alpha_dim_update(self, prev, FALSE);
+		if (client != NULL)
+			alpha_dim_update(self, client, TRUE);
+	}
 
 	self->prev_focused = client;
 }
@@ -174,6 +342,17 @@ static void
 alpha_detach(GowlModuleAlpha *self)
 {
 	if (self->compositor != NULL) {
+		/* The dim layers are ours; a module switched off must not
+		 * leave the windows dark. */
+		{
+			GList *clients, *l;
+
+			clients = gowl_compositor_get_clients(
+				(GowlCompositor *)self->compositor);
+			for (l = clients; l != NULL; l = l->next)
+				g_object_set_data(G_OBJECT(l->data),
+				                  GOWL_ALPHA_DIM_KEY, NULL);
+		}
 		if (self->focus_handler_id != 0)
 			g_signal_handler_disconnect(self->compositor,
 			                            self->focus_handler_id);
@@ -251,6 +430,15 @@ alpha_configure(GowlModule *mod, gpointer config)
 	if (val != NULL)
 		self->unfocused_alpha = (gfloat)g_ascii_strtod(val, NULL);
 
+	val = (const gchar *)g_hash_table_lookup(settings, "dim-inactive");
+	if (val != NULL)
+		self->dim_inactive = g_ascii_strcasecmp(val, "true") == 0
+		                     || g_strcmp0(val, "1") == 0;
+	val = (const gchar *)g_hash_table_lookup(settings, "dim-strength");
+	if (val != NULL)
+		self->dim_strength = CLAMP((gfloat)g_ascii_strtod(val, NULL),
+		                           0.0f, 1.0f);
+
 	/* Clamp to valid range */
 	if (self->focused_alpha < 0.0f)   self->focused_alpha = 0.0f;
 	if (self->focused_alpha > 1.0f)   self->focused_alpha = 0.9f;
@@ -261,8 +449,10 @@ alpha_configure(GowlModule *mod, gpointer config)
 	          self->focused_alpha, self->unfocused_alpha);
 
 	/* Re-apply to existing clients if compositor is running */
-	if (self->compositor != NULL)
+	if (self->compositor != NULL) {
 		alpha_apply_initial(self);
+		alpha_dim_all(self);
+	}
 }
 
 /* --- GowlStartupHandler --- */
@@ -291,6 +481,7 @@ alpha_on_startup(GowlStartupHandler *handler, gpointer compositor)
 
 	/* Apply initial alpha to any clients already present */
 	alpha_apply_initial(self);
+	alpha_dim_all(self);
 
 	g_debug("alpha: startup, focused=%.2f unfocused=%.2f",
 	        self->focused_alpha, self->unfocused_alpha);
@@ -367,6 +558,8 @@ gowl_module_alpha_init(GowlModuleAlpha *self)
 	self->unfocused_alpha  = 0.9f;
 	self->focus_handler_id = 0;
 	self->prev_focused     = NULL;
+	self->dim_inactive     = FALSE;
+	self->dim_strength     = 0.25f;
 }
 
 /* --- Shared-object entry point --- */

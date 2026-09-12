@@ -1250,6 +1250,15 @@ GList *gowl_config_get_monitor_names(GowlConfig *self);
 gint gowl_config_get_animation_duration_open  (GowlConfig *self);
 gint gowl_config_get_animation_duration_close (GowlConfig *self);
 const gchar *gowl_config_get_animation_curve_open (GowlConfig *self);
+/**
+ * gowl_config_get_animation_curve_close:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none): the curve a closing window's squeeze
+ *   follows; "almost-linear" by default, since an ease-out made a
+ *   closing window all but vanish in its first frame
+ */
+const gchar *gowl_config_get_animation_curve_close (GowlConfig *self);
 gdouble gowl_config_get_animation_popin_scale (GowlConfig *self);
 /* Squash/stretch and settling motion: 0 disables jiggle, 1 is normal,
  * 2 doubles it. Invalid YAML values leave the previous setting intact. */

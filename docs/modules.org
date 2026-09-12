@@ -1060,6 +1060,8 @@ The alpha module controls per-client window opacity. When the focused client cha
 |-------------------+-------+---------+-------------------------------------------|
 | =focused-alpha=   | float | 1.0     | Opacity for the focused window (0.0--1.0) |
 | =unfocused-alpha= | float | 0.8     | Opacity for unfocused windows (0.0--1.0)  |
+| =dim-inactive=    | bool  | false   | Darken unfocused windows with a translucent black layer, keeping them opaque; what reads as "not this one" on a busy tag |
+| =dim-strength=    | float | 0.25    | How dark, 0.0 (nothing) to 1.0 (black)    |
 
 *YAML example:*
 

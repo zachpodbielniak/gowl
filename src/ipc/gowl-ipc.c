@@ -579,6 +579,19 @@ gowl_ipc_start(
  * Stops the IPC server, closes all client connections,
  * and removes the socket file.
  */
+/**
+ * gowl_ipc_get_socket_path:
+ * @self: a #GowlIpc
+ *
+ * Returns: (transfer none): the path the server listens on
+ */
+const gchar *
+gowl_ipc_get_socket_path(GowlIpc *self)
+{
+	g_return_val_if_fail(GOWL_IS_IPC(self), NULL);
+	return self->socket_path;
+}
+
 void
 gowl_ipc_stop(GowlIpc *self)
 {

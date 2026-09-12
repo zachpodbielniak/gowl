@@ -102,6 +102,18 @@ void
 gowl_ipc_stop(GowlIpc *self);
 
 /**
+ * gowl_ipc_get_socket_path:
+ * @self: a #GowlIpc
+ *
+ * The path the server listens on, whether it was given to
+ * gowl_ipc_new() or defaulted to $XDG_RUNTIME_DIR/gowl.sock.
+ *
+ * Returns: (transfer none): the socket path
+ */
+const gchar *
+gowl_ipc_get_socket_path(GowlIpc *self);
+
+/**
  * gowl_ipc_push_event:
  * @self: the IPC server
  * @format: printf-style format string for the event line

@@ -20,6 +20,8 @@ gowl-msg -s                      # subscribe; print events until killed
 
 It exits non-zero on an =ERROR= reply or when nothing answers; =--socket PATH= names another socket.  It links only GLib, so it installs anywhere.
 
+Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cmacs-gowl-ipc= turns it off or moves it; every command below works the same against an embedded session.
+
 * Commands
 
 | Command                       | Reply                                              |

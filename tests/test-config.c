@@ -1278,6 +1278,41 @@ test_config_output_profiles(void)
 }
 
 /*
+ * A rule built in code, the way an embedder builds one.  Two fields of
+ * GowlRuleEntry do not mean "unset" when zero: monitor 0 is a real
+ * output and xwayland 0 is a real value meaning "native Wayland only".
+ * A caller that only memsets therefore gets a rule pinned to the first
+ * output that silently refuses to match X11 windows, which is what
+ * cmacs's `gowl-add-rule-entry' did.  gowl_rule_entry_init is the
+ * prepared starting point.
+ */
+static void
+test_config_rule_entry_init(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GowlRuleEntry entry;
+	GPtrArray *rules;
+	const GowlRuleEntry *stored;
+
+	gowl_rule_entry_init(&entry);
+	g_assert_cmpint(entry.monitor, ==, -1);
+	g_assert_cmpint(entry.xwayland, ==, -1);
+	g_assert_true(entry.center);
+	g_assert_cmpint(entry.pid, ==, 0);
+
+	/* The defaults survive into the stored rule. */
+	entry.app_id = (gchar *)"foot";
+	gowl_config_add_rule_entry(config, &entry);
+	rules = gowl_config_get_rules(config);
+	g_assert_cmpuint(rules->len, ==, 1);
+	stored = (const GowlRuleEntry *)g_ptr_array_index(rules, 0);
+	g_assert_cmpstr(stored->app_id, ==, "foot");
+	g_assert_cmpint(stored->monitor, ==, -1);
+	g_assert_cmpint(stored->xwayland, ==, -1);
+	g_object_unref(config);
+}
+
+/*
  * Profiles and monitor entries built from code rather than from YAML.
  * This is the path `cmacs --gowl' takes: it loads no config file, so
  * without these setters an embedded session could not use profiles at
@@ -1716,6 +1751,7 @@ main(int argc, char *argv[])
 	                test_config_output_profiles);
 	g_test_add_func("/config/output-profiles-from-code",
 	                test_config_output_profiles_from_code);
+	g_test_add_func("/config/rule-entry-init", test_config_rule_entry_init);
 
 	return g_test_run();
 }

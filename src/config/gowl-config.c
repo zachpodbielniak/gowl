@@ -4205,6 +4205,23 @@ gowl_config_add_rule_full(
 	g_ptr_array_add(self->rules, rule);
 }
 
+/**
+ * gowl_rule_entry_init:
+ * @entry: a #GowlRuleEntry to prepare
+ *
+ * Zeroes @entry and writes its non-zero defaults; see the header.
+ */
+void
+gowl_rule_entry_init(GowlRuleEntry *entry)
+{
+	g_return_if_fail(entry != NULL);
+
+	memset(entry, 0, sizeof *entry);
+	entry->monitor = -1;
+	entry->center = TRUE;
+	entry->xwayland = -1;
+}
+
 void
 gowl_config_add_rule_entry(
 	GowlConfig          *self,

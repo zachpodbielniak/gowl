@@ -1116,8 +1116,24 @@ guint gowl_config_get_problem_count (GowlConfig *self);
  *
  * Appends a window rule with every field, including the ones
  * gowl_config_add_rule_full() predates (@sticky).
+ *
+ * Prepare @entry with gowl_rule_entry_init(): two of its fields mean
+ * something other than "unset" when zero, so a `memset' alone builds a
+ * rule that matches only Wayland windows on monitor 0.
  */
 void gowl_config_add_rule_entry (GowlConfig *self, const GowlRuleEntry *entry);
+
+/**
+ * gowl_rule_entry_init:
+ * @entry: a #GowlRuleEntry to prepare
+ *
+ * Zeroes @entry and writes the defaults that are not zero: @monitor
+ * -1 (any), @center %TRUE, and @xwayland -1 (either kind of window).
+ * @xwayland is the one that bites -- 0 there is a real value meaning
+ * "native Wayland only", so a zeroed entry silently refuses to match
+ * X11 windows.
+ */
+void gowl_rule_entry_init (GowlRuleEntry *entry);
 
 /**
  * gowl_config_remove_rule:

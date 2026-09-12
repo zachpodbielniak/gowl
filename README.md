@@ -71,6 +71,8 @@ gowl -s waybar
 
 # Generate a default YAML config
 gowl --generate-yaml-config > ~/.config/gowl/config.yaml
+gowl --check-config            # unknown keys and bad values, exit 1 on any
+gowl-msg clients | jq .        # the IPC socket; see docs/ipc.org
 
 # Generate a default C config
 gowl --generate-c-config > ~/.config/gowl/config.c

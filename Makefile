@@ -92,6 +92,7 @@ LIB_SRCS := \
 	src/config/gowl-config-compiler.c \
 	src/config/gowl-keybind.c \
 	src/ipc/gowl-ipc.c \
+	src/ipc/gowl-ipc-core.c \
 	src/util/gowl-log.c \
 	src/util/gowl-easing.c \
 	src/fx/gowl-fx-gl.c \
@@ -319,6 +320,16 @@ endif
 ifeq ($(MCP_AVAILABLE),1)
 all: gowl-mcp
 endif
+all: gowl-msg
+
+# gowl-msg: the socket's command-line client.  GLib only; links no
+# libgowl, so it can be installed on a machine that only drives gowl
+# from outside.
+.PHONY: gowl-msg
+gowl-msg: $(OUTDIR)/gowl-msg
+
+$(OUTDIR)/gowl-msg: tools/gowl-msg/gowl-msg.c | $(OUTDIR)
+	$(MAKE) -C tools/gowl-msg OUTDIR=$(abspath $(OUTDIR))
 ifeq ($(LIBEIS_AVAILABLE),1)
 all: xdg-desktop-portal-gowl
 endif
@@ -416,6 +427,10 @@ $(OBJDIR)/tests/test-animation-scene.o: TEST_CFLAGS += -DGOWL_TEST_ANIMATION_MOD
 
 # Build individual test binaries
 $(OUTDIR)/test-animation-scene: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs pixman-1)
+
+# test-ipc speaks to the headless compositor's socket as a plain client.
+$(OUTDIR)/test-ipc: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs gio-unix-2.0 json-glib-1.0)
+$(OBJDIR)/tests/test-ipc.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags gio-unix-2.0 json-glib-1.0)
 
 # test-protocols connects a real Wayland client to the headless
 # compositor to read its registry.

@@ -374,6 +374,7 @@ install-bin: $(OBJDIR)/main.o $(OUTDIR)/$(LIB_SHARED_FULL)
 		-L$(OUTDIR) -lgowl $(LDFLAGS) -rdynamic \
 		-Wl,-rpath,$(LIBDIR)
 	chmod 755 $(DESTDIR)$(BINDIR)/gowl
+	$(INSTALL_PROGRAM) $(OUTDIR)/gowl-msg $(DESTDIR)$(BINDIR)/gowl-msg
 
 install-lib: $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(MKDIR_P) $(DESTDIR)$(LIBDIR)

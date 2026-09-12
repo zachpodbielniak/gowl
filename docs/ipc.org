@@ -1,0 +1,70 @@
+#+title: The IPC socket and gowl-msg
+
+* The socket
+
+gowl listens on =$XDG_RUNTIME_DIR/gowl.sock= (a Unix stream socket, created by =main()= and, under =cmacs --gowl=, by cmacs).  The protocol is lines: a client sends one command line and reads one reply line.  Queries reply with JSON on a single line; everything else replies =OK ...= or =ERROR ...=.  Until 2026-09 the socket read commands and answered none -- the signal it emitted had no listener -- so every command sent to it was dropped; =tests/test-ipc.c= now speaks to it end to end.
+
+=gowl-msg= is the command-line client:
+
+#+begin_src sh
+gowl-msg clients | jq .
+gowl-msg focused | jq -r .app_id
+gowl-msg view 4                  # tag 3: tags are bitmasks
+gowl-msg dispatch Super+Return   # run what a key is bound to
+gowl-msg action tag-view 2       # run an action by name
+gowl-msg mode resize             # enter a key mode; `mode' alone reads it
+gowl-msg power off
+gowl-msg expo                    # a module's command, by name
+gowl-msg -s                      # subscribe; print events until killed
+#+end_src
+
+It exits non-zero on an =ERROR= reply or when nothing answers; =--socket PATH= names another socket.  It links only GLib, so it installs anywhere.
+
+* Commands
+
+| Command                       | Reply                                              |
+|-------------------------------+----------------------------------------------------|
+| =clients=                     | JSON array: id, app_id, title, pid, tags, monitor, floating, fullscreen, urgent, sticky, xwayland, x, y, width, height |
+| =focused=                     | The focused window as above, or =null=            |
+| =monitors=                    | JSON array: name, focused, enabled, powered_off, x, y, width, height, tags, occupied, urgent, layout, mfact, nmaster |
+| =tags [OUTPUT]=               | ={"active", "occupied", "urgent"}= bitmasks for an output (the focused one by default) |
+| =layouts=                     | JSON array of layout names                        |
+| =layout [NAME]=               | The focused output's layout; with NAME, selects it |
+| =mode [NAME]=                 | The key mode in force; with NAME, enters it (=default= leaves) |
+| =keybinds=                    | JSON array: key, action, arg, desc, mode           |
+| =keyboard-layout [next\vert{}prev\vert{}N]= | ={"name", "index"}=; with an argument, switches first |
+| =focus ID=                    | Activates a window by id, under =focus-on-activate= |
+| =close ID=                    | Asks a window to close                             |
+| =view TAGMASK [OUTPUT]=       | Views tags on an output                            |
+| =dispatch KEY=                | Runs what =KEY= (="Super+Return"=) is bound to     |
+| =action NAME [ARG]=           | Runs a keybind action by nick with an argument     |
+| =power on\vert{}off\vert{}toggle= | Powers every output                             |
+| =reload=                      | Reloads the config; =OK with problems= when the validator found any |
+| =ping=, =version=, =help=     |                                                    |
+| =subscribe=                   | =OK subscribed=; events follow on this connection  |
+| anything else                 | A module's command (=expo=, =screenshot-area=, =scratchpad-toggle=, =clipboard-list=, ...), or =ERROR unknown command= |
+
+A tag argument is a bitmask, as everywhere in gowl: tag 1 is =1=, tag 3 is =4=, all nine =511=.
+
+* Events
+
+A subscriber receives one line per event, =EVENT <name> <args>=:
+
+| Event                              | When                                           |
+|------------------------------------+------------------------------------------------|
+| =client-added ID APP_ID=           | a window mapped and was placed                 |
+| =client-removed ID=                | a window unmapped                              |
+| =focus ID=                         | keyboard focus moved (=0= = nothing focused)   |
+| =title TEXT=                       | the focused window's title (also on focus)     |
+| =tags OUTPUT ACTIVE OCCUPIED 0 ACTIVE= | the tags an output views changed           |
+| =layout OUTPUT SYMBOL=             | an output's layout changed                     |
+| =mode NAME=                        | a key mode was entered or left                 |
+| =keymap INDEX NAME=                | the keyboard layout changed                    |
+| =power OUTPUT on\vert{}off=        | an output was powered on or off                |
+| =command LINE=                     | a module command ran, from any source          |
+
+Events are pushed from the compositor's own code paths, so a change made from a keybind, from Elisp, from MCP or from this socket is announced the same way.
+
+* From a module
+
+A module implementing =GowlIpcHandler= answers its own command names; =gowl_compositor_run_command()= is the shared entry point for the =ipc-command= keybind action, cmacs's =gowl-run-command=, MCP and this socket, so a command means the same thing from each.  Core commands are answered first (=src/ipc/gowl-ipc-core.c=), then the modules.  =gowl_ipc_push_event()= adds an event.

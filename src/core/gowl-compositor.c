@@ -207,6 +207,7 @@ static void on_monitor_request_state(struct wl_listener *listener, void *data);
 
 /* key repeat timer callback */
 static int  on_key_repeat         (void *data);
+static gchar *ipc_command_handler (GowlIpc *ipc, const gchar *line, gpointer data);
 static struct xkb_keymap *build_keymap (GowlCompositor *self);
 static void announce_keyboard_layout (GowlCompositor *self, gboolean force);
 static gboolean run_keybind_entry (GowlCompositor *self, const GowlKeybindEntry *kb);
@@ -1138,6 +1139,17 @@ gowl_compositor_set_ipc(
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
 	self->ipc = ipc;
+	/* The socket answers with the compositor's commands from here on:
+	 * core queries and actions, then every module command. */
+	if (ipc != NULL)
+		gowl_ipc_set_command_handler(ipc, ipc_command_handler, self);
+}
+
+static gchar *
+ipc_command_handler(GowlIpc *ipc, const gchar *line, gpointer data)
+{
+	(void)ipc;
+	return gowl_compositor_ipc_command((GowlCompositor *)data, line);
 }
 
 void
@@ -5547,8 +5559,10 @@ gowl_compositor_focus_client(
 		              0, NULL);
 
 		/* Push empty title to IPC subscribers */
-		if (self->ipc != NULL)
+		if (self->ipc != NULL) {
 			gowl_ipc_push_event(self->ipc, "EVENT title ");
+			gowl_ipc_push_event(self->ipc, "EVENT focus 0");
+		}
 		return;
 	}
 
@@ -5588,9 +5602,11 @@ gowl_compositor_focus_client(
 	g_signal_emit(self, compositor_signals[SIGNAL_FOCUS_CHANGED], 0, c);
 
 	/* Push title to IPC subscribers */
-	if (self->ipc != NULL)
+	if (self->ipc != NULL) {
 		gowl_ipc_push_event(self->ipc, "EVENT title %s",
 		                     c->title != NULL ? c->title : "");
+		gowl_ipc_push_event(self->ipc, "EVENT focus %u", c->id);
+	}
 }
 
 /*
@@ -8597,6 +8613,23 @@ run_keybind_entry(
 	return TRUE;
 }
 
+gboolean
+gowl_compositor_run_keybind_entry(
+	GowlCompositor         *self,
+	const GowlKeybindEntry *kb
+){
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	g_return_val_if_fail(kb != NULL, FALSE);
+
+	return run_keybind_entry(self, kb);
+}
+
+GowlClient *
+focustop_public(GowlCompositor *self, GowlMonitor *m)
+{
+	return focustop(self, m);
+}
+
 /*
  * Every bind the key mode, the lock and the press/release side allow.
  * Returns TRUE when one matched and ran.
@@ -10735,6 +10768,10 @@ on_client_map(struct wl_listener *listener, void *data)
 	 * show (gowl-foreign-toplevel.c). */
 	gowl_foreign_toplevel_client_map(self, c);
 
+	if (self->ipc != NULL && !c->isembedded)
+		gowl_ipc_push_event(self->ipc, "EVENT client-added %u %s",
+		                     c->id, c->app_id != NULL ? c->app_id : "");
+
 	/* Register as a screencast-capturable window (no-op on monitor-only
 	 * wlroots).  Embedded clients are Emacs-managed and not shareable as
 	 * standalone windows; unmanaged override-redirect popups already
@@ -10769,6 +10806,8 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	gowl_effects_client_event(self, c, GOWL_SCENE_EFFECT_UNMAP, NULL, FALSE);
 
 	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_REMOVED], 0, c);
+	if (self->ipc != NULL && !c->isembedded)
+		gowl_ipc_push_event(self->ipc, "EVENT client-removed %u", c->id);
 
 #ifdef GOWL_HAVE_XWAYLAND
 	/* Unmanaged X11 surfaces (override-redirect popups) never entered

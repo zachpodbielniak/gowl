@@ -81,6 +81,10 @@ struct _GowlIpc {
 
 	/* Connected clients */
 	GList                   *clients;       /* GList of GowlIpcClient* */
+
+	/* What answers a command line; see gowl_ipc_set_command_handler() */
+	GowlIpcCommandFunc       command_func;
+	gpointer                 command_data;
 };
 
 G_DEFINE_FINAL_TYPE(GowlIpc, gowl_ipc, G_TYPE_OBJECT)
@@ -118,6 +122,43 @@ set_nonblocking(int fd)
 }
 
 /* --- Client line processing --- */
+
+/* Writes one line to a client.  A failed write is the client gone;
+ * it is removed and FALSE returned. */
+static gboolean
+send_line(GowlIpc *self, GowlIpcClient *client, const gchar *text)
+{
+	g_autofree gchar *line = g_strdup_printf("%s\n", text);
+	gsize len = strlen(line);
+	gsize off = 0;
+
+	while (off < len) {
+		ssize_t n = write(client->fd, line + off, len - off);
+
+		if (n < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+				continue;
+			g_debug("gowl-ipc: client fd=%d write failed: %s",
+			        client->fd, g_strerror(errno));
+			remove_client(self, client);
+			return FALSE;
+		}
+		off += (gsize)n;
+	}
+	return TRUE;
+}
+
+void
+gowl_ipc_set_command_handler(
+	GowlIpc            *self,
+	GowlIpcCommandFunc  func,
+	gpointer            user_data
+){
+	g_return_if_fail(GOWL_IS_IPC(self));
+
+	self->command_func = func;
+	self->command_data = user_data;
+}
 
 /**
  * process_line:
@@ -159,10 +200,33 @@ process_line(
 			client->subscribed = TRUE;
 			g_debug("gowl-ipc: client fd=%d subscribed", client->fd);
 		}
+		g_signal_emit(self, ipc_signals[SIGNAL_COMMAND_RECEIVED], 0,
+		              command, args);
+		g_free(command);
+		send_line(self, client, "OK subscribed");
+		return;
 	}
 
 	g_signal_emit(self, ipc_signals[SIGNAL_COMMAND_RECEIVED], 0,
 	              command, args);
+
+	/* The answer.  Every command gets exactly one line back, so a
+	 * client can send a line and read a line; before there was a
+	 * handler the socket read commands and said nothing. */
+	if (self->command_func != NULL) {
+		g_autofree gchar *reply =
+			self->command_func(self, line, self->command_data);
+
+		if (reply != NULL)
+			send_line(self, client, reply);
+		else {
+			g_autofree gchar *err = g_strdup_printf(
+				"ERROR unknown command '%s'", command);
+			send_line(self, client, err);
+		}
+	} else {
+		send_line(self, client, "ERROR no command handler");
+	}
 
 	g_free(command);
 }

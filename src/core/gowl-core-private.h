@@ -938,6 +938,13 @@ void gowl_compositor_set_client_floating   (GowlCompositor *self, GowlClient *c,
  * gowl-compositor.c. */
 void gowl_compositor_activate_client (GowlCompositor *self, GowlClient *c);
 
+/* The socket's commands (gowl-ipc-core.c) and two entry points it
+ * needs from gowl-compositor.c. */
+gchar   *gowl_compositor_ipc_command       (GowlCompositor *self, const gchar *line);
+gboolean gowl_compositor_run_keybind_entry (GowlCompositor *self,
+                                            const GowlKeybindEntry *kb);
+GowlClient *focustop_public                (GowlCompositor *self, GowlMonitor *m);
+
 /* idle-inhibit and the idle/dpms timers: gowl-idle-manager.c */
 void     gowl_idle_manager_attach          (GowlIdleManager *self, GowlCompositor *comp);
 void     gowl_idle_manager_detach          (GowlIdleManager *self);

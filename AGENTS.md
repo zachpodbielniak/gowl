@@ -92,6 +92,12 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   headless output off, input powers it on, an explicit `output-power off'
   survives the key release that follows it, and `xkb-layout: us,de` gives
   two layouts that `switch-layout` steps through with the signal
+- `test-ipc` -- The IPC socket end to end: a plain socket client against
+  a headless compositor gets one line back per line sent -- JSON for
+  `clients`/`monitors`/`tags`, OK/ERROR for `view`/`action`/`dispatch`,
+  `ERROR unknown command` for nonsense -- and a subscriber sees `EVENT
+  mode` and `EVENT power` lines.  Before the handler existed the socket
+  answered nothing at all
 - `test-config-keys.sh` -- every top-level key the YAML parser reads is
   in the validator's known-key list, or a valid config would warn about
   its own keys and `gowl --check-config` would fail on it

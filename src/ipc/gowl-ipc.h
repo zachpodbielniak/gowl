@@ -59,6 +59,40 @@ gowl_ipc_start(
 );
 
 /**
+ * GowlIpcCommandFunc:
+ * @ipc: the IPC server
+ * @line: the whole line a client sent, without its newline
+ * @user_data: what was given to gowl_ipc_set_command_handler()
+ *
+ * Answers one command line.  The reply is written back to the client
+ * as one line; %NULL means "unknown command" and the client is told
+ * so.  A reply containing newlines is sent as is, so a handler that
+ * wants one line per reply keeps them out.
+ *
+ * Returns: (transfer full) (nullable): the reply
+ */
+typedef gchar *(*GowlIpcCommandFunc) (GowlIpc     *ipc,
+                                      const gchar *line,
+                                      gpointer     user_data);
+
+/**
+ * gowl_ipc_set_command_handler:
+ * @self: the IPC server
+ * @func: (nullable): the handler, or %NULL for none
+ * @user_data: passed to @func
+ *
+ * Installs what answers the socket's commands.  The compositor
+ * installs its own from gowl_compositor_set_ipc(): core queries first
+ * (`clients', `monitors', `mode', ...), then every module command.
+ * Without a handler a command is acknowledged with an error, which
+ * is what the socket did for every command before this existed.
+ */
+void
+gowl_ipc_set_command_handler(GowlIpc            *self,
+                             GowlIpcCommandFunc  func,
+                             gpointer            user_data);
+
+/**
  * gowl_ipc_stop:
  * @self: the IPC server
  *

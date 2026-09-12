@@ -116,6 +116,9 @@ gowl_compositor_set_monitor_powered(
 	g_debug("output-power: '%s' %s", m->wlr_output->name,
 	        on ? "on" : "off");
 	g_signal_emit_by_name(self, "output-power-changed", m, on);
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT power %s %s",
+		                     m->wlr_output->name, on ? "on" : "off");
 }
 
 /**

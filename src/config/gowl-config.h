@@ -1313,6 +1313,74 @@ gboolean gowl_config_output_key_matches(const gchar *key,
  *
  * Returns: (transfer none) (nullable): a #GowlMonitorConfig
  */
+/**
+ * gowl_monitor_config_init:
+ * @mc: a #GowlMonitorConfig to prepare
+ *
+ * Zeroes @mc and writes the out-of-band "unset" sentinels: @x and @y
+ * become %G_MININT (0 being a valid position), @transform, @enabled
+ * and @vrr become -1.  A caller building a config by hand -- an
+ * embedder, a test -- must start here, or a zeroed struct would read
+ * as "position 0,0, disabled, no adaptive sync".
+ */
+void gowl_monitor_config_init (GowlMonitorConfig *mc);
+
+/**
+ * gowl_config_set_monitor_config:
+ * @self: a #GowlConfig
+ * @key: an output key: a connector name ("eDP-1"), a description
+ *       ("Make Model" or "Make Model Serial"), or "*"
+ * @mc: (nullable): the configuration, copied; %NULL removes the entry
+ *
+ * Sets the `monitors:' entry for @key, as the YAML section does.  This
+ * is the embedder's door into the same table: `cmacs --gowl' loads no
+ * YAML, so without it a monitor could only be configured by writing a
+ * file and reloading it.
+ */
+void gowl_config_set_monitor_config (GowlConfig              *self,
+                                     const gchar             *key,
+                                     const GowlMonitorConfig *mc);
+
+/**
+ * gowl_config_add_output_profile:
+ * @self: a #GowlConfig
+ * @name: the profile's name
+ *
+ * Returns the `profiles:' entry called @name, creating an empty one at
+ * the end of the list if there is none.  Order is the order profiles
+ * were added, and the first whose outputs are all connected wins, so a
+ * "docked" profile added before "mobile" behaves as it would written
+ * above it in the file.
+ *
+ * Returns: (transfer none): the profile, owned by @self
+ */
+GowlOutputProfile *
+gowl_config_add_output_profile (GowlConfig *self, const gchar *name);
+
+/**
+ * gowl_output_profile_set_output:
+ * @profile: a #GowlOutputProfile
+ * @key: an output key, as gowl_config_set_monitor_config() takes
+ * @mc: (nullable): what the output gets while the profile is in force,
+ *      copied; %NULL means "must be connected, settings from
+ *      `monitors:'"
+ *
+ * Adds or replaces one output of @profile.
+ */
+void gowl_output_profile_set_output (GowlOutputProfile       *profile,
+                                     const gchar             *key,
+                                     const GowlMonitorConfig *mc);
+
+/**
+ * gowl_config_remove_output_profile:
+ * @self: a #GowlConfig
+ * @name: the profile to remove
+ *
+ * Returns: %TRUE if a profile called @name was removed
+ */
+gboolean
+gowl_config_remove_output_profile (GowlConfig *self, const gchar *name);
+
 const GowlMonitorConfig *
 gowl_config_lookup_monitor_config(GowlConfig              *self,
                                   const GowlOutputProfile *profile,

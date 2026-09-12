@@ -1278,6 +1278,77 @@ test_config_output_profiles(void)
 }
 
 /*
+ * Profiles and monitor entries built from code rather than from YAML.
+ * This is the path `cmacs --gowl' takes: it loads no config file, so
+ * without these setters an embedded session could not use profiles at
+ * all.  Adding a profile twice refines it rather than duplicating it,
+ * and order is the order they were added, since first match wins.
+ */
+static void
+test_config_output_profiles_from_code(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GowlOutputProfile *docked;
+	GowlOutputProfile *mobile;
+	GowlMonitorConfig mc;
+	const GowlMonitorConfig *got;
+	GList *profiles;
+
+	/* A monitors: entry, as YAML would have made. */
+	gowl_monitor_config_init(&mc);
+	mc.scale = 2.0;
+	gowl_config_set_monitor_config(config, "eDP-1", &mc);
+	got = gowl_config_lookup_monitor_config(config, NULL, "eDP-1",
+	                                        NULL, NULL, NULL);
+	g_assert_nonnull(got);
+	g_assert_cmpfloat(got->scale, ==, 2.0);
+	/* The sentinels survived the copy: nothing else was "set". */
+	g_assert_cmpint(got->x, ==, G_MININT);
+	g_assert_cmpint(got->enabled, ==, -1);
+	g_assert_cmpint(got->transform, ==, -1);
+
+	docked = gowl_config_add_output_profile(config, "docked");
+	gowl_output_profile_set_output(docked, "eDP-1", NULL);
+	gowl_monitor_config_init(&mc);
+	mc.x = 0;
+	mc.y = 0;
+	mc.scale = 1.5;
+	gowl_output_profile_set_output(docked, "Dell Inc. U2720Q", &mc);
+	mobile = gowl_config_add_output_profile(config, "mobile");
+	gowl_output_profile_set_output(mobile, "eDP-1", NULL);
+
+	/* Same name again: the same profile, refined. */
+	g_assert_true(gowl_config_add_output_profile(config, "docked") == docked);
+	profiles = gowl_config_get_output_profiles(config);
+	g_assert_cmpuint(g_list_length(profiles), ==, 2);
+	g_assert_cmpstr(((GowlOutputProfile *)profiles->data)->name, ==, "docked");
+	g_assert_cmpuint(g_hash_table_size(docked->outputs), ==, 2);
+
+	/* The profile's entry wins; an output it names without settings
+	 * falls back to monitors:. */
+	got = gowl_config_lookup_monitor_config(config, docked, "DP-3",
+	                                        "Dell Inc.", "U2720Q", "X1");
+	g_assert_nonnull(got);
+	g_assert_cmpfloat(got->scale, ==, 1.5);
+	got = gowl_config_lookup_monitor_config(config, docked, "eDP-1",
+	                                        NULL, NULL, NULL);
+	g_assert_nonnull(got);
+	g_assert_cmpfloat(got->scale, ==, 0.0);
+
+	g_assert_true(gowl_config_remove_output_profile(config, "docked"));
+	g_assert_false(gowl_config_remove_output_profile(config, "docked"));
+	g_assert_cmpuint(g_list_length(gowl_config_get_output_profiles(config)),
+	                 ==, 1);
+
+	/* Removing the monitors: entry leaves the lookup with nothing. */
+	gowl_config_set_monitor_config(config, "eDP-1", NULL);
+	g_assert_null(gowl_config_lookup_monitor_config(config, NULL, "eDP-1",
+	                                                NULL, NULL, NULL));
+
+	g_object_unref(config);
+}
+
+/*
  * The cube's settings, which live in GowlConfig alongside the animation
  * keys because a gowl module has no config schema of its own.
  *
@@ -1643,6 +1714,8 @@ main(int argc, char *argv[])
 	                test_config_monitors_names_iter);
 	g_test_add_func("/config/output-profiles",
 	                test_config_output_profiles);
+	g_test_add_func("/config/output-profiles-from-code",
+	                test_config_output_profiles_from_code);
 
 	return g_test_run();
 }

@@ -1046,6 +1046,8 @@ profiles:
     eDP-1:                       # bare: must be present, settings from monitors:
 #+end_src
 
+An embedder builds the same thing from code: =gowl_config_add_output_profile()= returns a named profile (creating it at the end of the list, or returning the one already there so a second call refines it), =gowl_output_profile_set_output()= adds one output, and =gowl_config_set_monitor_config()= writes a =monitors:= entry. Start every #GowlMonitorConfig with =gowl_monitor_config_init()=, which writes the out-of-band "unset" sentinels --- a zeroed struct would read as "position 0,0, disabled". =cmacs --gowl= loads no YAML at all, so this is the only door it has; see =gowl-add-output-profile= in the cmacs manual.
+
 Profiles are tried in file order on every hotplug and reload; the first whose outputs are all connected is in force, and its per-output entries take precedence over =monitors:=. Outputs a profile does not mention, and every output when no profile matches, get their =monitors:= entry. A change of profile re-applies every output, fires the compositor's =output-profile-changed= signal (=cmacs-gowl-output-profile-changed-hook= in cmacs, =EVENT profile NAME= on the socket) and =gowl-msg profile= shows which is active.
 
 **** =transform= values

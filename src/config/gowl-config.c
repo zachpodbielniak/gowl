@@ -1305,11 +1305,7 @@ parse_monitor_config(YamlMapping *mon_cfg_map)
 {
 	GowlMonitorConfig *mc = g_new0(GowlMonitorConfig, 1);
 
-	mc->x = G_MININT;
-	mc->y = G_MININT;
-	mc->transform = -1;
-	mc->enabled = -1;
-	mc->vrr = -1;
+	gowl_monitor_config_init(mc);
 	if (mon_cfg_map == NULL)
 		return mc;
 
@@ -4454,6 +4450,139 @@ gowl_config_get_monitor_names(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
 	return g_hash_table_get_keys(self->monitor_configs);
+}
+
+/**
+ * gowl_monitor_config_init:
+ * @mc: a #GowlMonitorConfig to prepare
+ *
+ * Zeroes @mc and writes the "unset" sentinels; see the header.
+ */
+void
+gowl_monitor_config_init(GowlMonitorConfig *mc)
+{
+	g_return_if_fail(mc != NULL);
+
+	memset(mc, 0, sizeof *mc);
+	mc->x = G_MININT;
+	mc->y = G_MININT;
+	mc->transform = -1;
+	mc->enabled = -1;
+	mc->vrr = -1;
+}
+
+/**
+ * gowl_config_set_monitor_config:
+ * @self: a #GowlConfig
+ * @key: an output key
+ * @mc: (nullable): the configuration, copied; %NULL removes the entry
+ *
+ * Sets one `monitors:` entry from code rather than from YAML.
+ */
+void
+gowl_config_set_monitor_config(
+	GowlConfig              *self,
+	const gchar             *key,
+	const GowlMonitorConfig *mc
+){
+	GowlMonitorConfig *copy;
+
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_return_if_fail(key != NULL);
+
+	if (mc == NULL) {
+		g_hash_table_remove(self->monitor_configs, key);
+		return;
+	}
+	copy = g_new0(GowlMonitorConfig, 1);
+	*copy = *mc;
+	g_hash_table_insert(self->monitor_configs, g_strdup(key), copy);
+}
+
+/**
+ * gowl_config_add_output_profile:
+ * @self: a #GowlConfig
+ * @name: the profile's name
+ *
+ * Returns: (transfer none): the named profile, created empty at the end
+ *          of the list if it did not exist
+ */
+GowlOutputProfile *
+gowl_config_add_output_profile(GowlConfig *self, const gchar *name)
+{
+	GowlOutputProfile *profile;
+	GList *l;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	g_return_val_if_fail(name != NULL, NULL);
+
+	for (l = self->profiles; l != NULL; l = l->next) {
+		profile = (GowlOutputProfile *)l->data;
+		if (g_strcmp0(profile->name, name) == 0)
+			return profile;
+	}
+	profile = g_new0(GowlOutputProfile, 1);
+	profile->name = g_strdup(name);
+	profile->outputs = g_hash_table_new_full(g_str_hash, g_str_equal,
+	                                         g_free, g_free);
+	self->profiles = g_list_append(self->profiles, profile);
+	return profile;
+}
+
+/**
+ * gowl_output_profile_set_output:
+ * @profile: a #GowlOutputProfile
+ * @key: an output key
+ * @mc: (nullable): what the output gets, copied; %NULL for "present,
+ *      settings from `monitors:`"
+ *
+ * Adds or replaces one output of @profile.
+ */
+void
+gowl_output_profile_set_output(
+	GowlOutputProfile       *profile,
+	const gchar             *key,
+	const GowlMonitorConfig *mc
+){
+	GowlMonitorConfig *copy;
+
+	g_return_if_fail(profile != NULL);
+	g_return_if_fail(key != NULL);
+
+	copy = g_new0(GowlMonitorConfig, 1);
+	if (mc != NULL)
+		*copy = *mc;
+	else
+		gowl_monitor_config_init(copy);
+	g_hash_table_insert(profile->outputs, g_strdup(key), copy);
+}
+
+/**
+ * gowl_config_remove_output_profile:
+ * @self: a #GowlConfig
+ * @name: the profile to remove
+ *
+ * Returns: %TRUE if one was removed
+ */
+gboolean
+gowl_config_remove_output_profile(GowlConfig *self, const gchar *name)
+{
+	GList *l;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	g_return_val_if_fail(name != NULL, FALSE);
+
+	for (l = self->profiles; l != NULL; l = l->next) {
+		GowlOutputProfile *profile = (GowlOutputProfile *)l->data;
+
+		if (g_strcmp0(profile->name, name) != 0)
+			continue;
+		self->profiles = g_list_remove_link(self->profiles, l);
+		output_profile_free(profile);
+		g_list_free_1(l);
+		return TRUE;
+	}
+	return FALSE;
 }
 
 /**

@@ -642,6 +642,13 @@ modules:
     enabled: false
   autostart:
     enabled: true
+  # org.freedesktop.Notifications for a standalone session: toasts on
+  # the bar and a count on its notifications widget.  Idle under cmacs,
+  # whose own daemon has the name.
+  notifyd:
+    enabled: true
+    timeout: 5000          # ms when the sender does not say; 0 never
+    widget: notifications
   scratchpad:
     enabled: true
     # The panel's size, the dropdown's settings: fractions of the output's

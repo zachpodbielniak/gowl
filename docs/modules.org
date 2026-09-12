@@ -634,6 +634,7 @@ Gowl ships with several modules in the =modules/= directory:
 | =magnifier=      | Zooms the whole output around the pointer              |
 | =blur=           | Frosted glass behind translucent windows, plus shadows |
 | =autostart=      | Runs autostart commands from config                   |
+| =notifyd=        | org.freedesktop.Notifications daemon feeding the bar   |
 | =vanitygaps=     | Adds configurable inner/outer gaps to layouts         |
 | =pertag=         | Per-tag layout and mfact settings                     |
 | =scratchpad=     | Slide-up panel of windows, the dropdown's twin        |
@@ -711,6 +712,28 @@ gowl osd show "Something"    # a message with no level
 the module is not loaded, so a session without it still reports the
 level rather than going silent. The pill is click-through: it is
 decoration, and a click belongs to whatever is beneath it.
+
+*** The notifyd module
+
+Standalone gowl's notification daemon. It owns =org.freedesktop.Notifications= on the session bus, so =notify-send=, browsers, chat clients and anything else that speaks the spec land as a toast on the bar (=bar-notify=) and as a count on the bar's =notifications= widget --- the same two things =cmacs-notify-daemon= and =cmacs-notify-bar= do for the bar under =cmacs --gowl=. Under cmacs the name is already taken and the module stays idle: it asks for the name without queueing or replacing (=G_BUS_NAME_OWNER_FLAGS_NONE=), logs that another daemon has it, and serves nothing, so loading it in both sessions is harmless.
+
+The compositor's loop is a =wl_event_loop=, on which GDBus cannot run, so the bus lives on a thread of its own with its own =GMainContext=. A =Notify= is answered there at once with its id --- the bus thread never waits on the compositor --- and the notification is queued to the compositor thread through an eventfd on the =wl_event_loop=, the mcp module's dispatch pattern. Critical notifications get through do-not-disturb, as the spec asks; =NotificationClosed= is emitted when a toast's time is up or a sender closes it.
+
+#+begin_src sh
+gowl-msg notify-dnd on         # counted, not shown (also: off, toggle)
+gowl-msg notify-clear          # every notification read
+gowl-msg notify-count          # the unread count
+#+end_src
+
+#+begin_src yaml
+modules:
+  notifyd:
+    enabled: true
+    timeout: 5000              # ms when the sender does not say; 0 never
+    widget: notifications      # the bar widget that gets count/dnd/last
+#+end_src
+
+=tests/test-notifyd.c= runs the module against a =GTestDBus= session bus. Two things it holds that are not obvious: =g_test_dbus_up()= unsets =XDG_RUNTIME_DIR=, so the compositor's runtime dir goes into the environment after it; and unowning the name releases its reference to the connection through the bus thread's context, which has to be turned after the loop quits or the connection outlives the thread (=GTestDBus= then fails its teardown with "Weak notify timeout").
 
 *** The screenshot module
 

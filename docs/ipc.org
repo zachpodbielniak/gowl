@@ -43,7 +43,7 @@ It exits non-zero on an =ERROR= reply or when nothing answers; =--socket PATH= n
 | =reload=                      | Reloads the config; =OK with problems= when the validator found any |
 | =ping=, =version=, =help=     |                                                    |
 | =subscribe=                   | =OK subscribed=; events follow on this connection  |
-| anything else                 | A module's command (=expo=, =screenshot-area=, =scratchpad-toggle=, =clipboard-list=, ...), or =ERROR unknown command= |
+| anything else                 | A module's command (=expo=, =screenshot-area=, =scratchpad-toggle=, =clipboard-list=, =notify-dnd=, ...), or =ERROR unknown command= |
 
 A tag argument is a bitmask, as everywhere in gowl: tag 1 is =1=, tag 3 is =4=, all nine =511=.
 

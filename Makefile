@@ -642,6 +642,9 @@ $(OBJDIR)/tests/test-compositor-teardown.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DI
 
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
+$(OUTDIR)/test-notifyd: $(OUTDIR)/modules/notifyd.so
+$(OBJDIR)/tests/test-notifyd.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
 $(OUTDIR)/test-layout-orientation: $(addprefix $(OUTDIR)/modules/,tile.so monocle.so scrolling.so centeredmaster.so fibonacci.so)
 $(OUTDIR)/test-layout-orientation: TEST_LDFLAGS += -Wl,--export-dynamic
 $(OBJDIR)/tests/test-layout-orientation.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

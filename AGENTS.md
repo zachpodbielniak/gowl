@@ -376,7 +376,7 @@ src/
 
 data/                       # Default config files (YAML and C)
 deps/yaml-glib/             # yaml-glib submodule (built-in dependency)
-modules/                    # Bundled module sources (autostart, vanitygaps, pertag, etc.)
+modules/                    # Bundled module sources (autostart, notifyd, vanitygaps, pertag, etc.)
 tests/                      # GTest test sources
 docs/                       # Documentation (architecture, building, configuration, modules)
 ```

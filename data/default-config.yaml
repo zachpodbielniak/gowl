@@ -650,6 +650,56 @@ modules:
   # org.freedesktop.Notifications for a standalone session: toasts on
   # the bar and a count on its notifications widget.  Idle under cmacs,
   # whose own daemon has the name.
+  # Layouts beyond the four above; select them with `set_layout' or by
+  # cycling (Super+Tab).
+  fibonacci:
+    enabled: false         # spiral: each window halves what is left
+  centeredmaster:
+    enabled: false         # master in the middle, stack either side
+  # Move the focused window up and down the stack (`move_stack' action).
+  movestack:
+    enabled: true
+  # Window rules, and the float-nudging actions the keybinds use.
+  windowrules:
+    enabled: true
+    step-px: 40            # how far move-float-* and grow-float-* go
+  # Rounded window corners.  Stroke only: the corner is drawn, not
+  # clipped, so a window's own square corner still shows beneath a
+  # busy background.
+  roundcorners:
+    enabled: false
+    radius: 8
+  # Clipboard history in the compositor, so no helper daemon is needed.
+  # `clipboard-list', `clipboard-copy ID', `clipboard-delete ID',
+  # `clipboard-clear' -- over the IPC socket or a keybind's ipc_command.
+  clipboard:
+    enabled: false
+  # The centred pill for a level that just changed: `osd volume 45',
+  # `osd brightness 70', `osd show "text"'.
+  osd:
+    enabled: false
+  # Screenshots: `screenshot', `screenshot-area', `screenshot-client'.
+  screenshot:
+    enabled: false
+    save-directory: "~/Pictures"
+    filename-format: "screenshot-%Y%m%d-%H%M%S.png"
+    copy-to-clipboard: true
+  # Screen recording through ffmpeg: `record-start', `record-stop'.
+  recording:
+    enabled: false
+    save-directory: "~/Videos"
+    framerate: 30
+    codec: libx264
+    container: mp4
+  # The toggleable overlay terminal (and friends); what each dropdown
+  # is lives in the top-level `dropdowns:' section above.
+  dropdown:
+    enabled: false
+  # The bare ping/version/quit IPC handler.  The compositor answers
+  # every query and command itself (see docs/ipc.org), so this is only
+  # needed by something that speaks to the module directly.
+  ipc:
+    enabled: false
   notifyd:
     enabled: true
     timeout: 5000          # ms when the sender does not say; 0 never

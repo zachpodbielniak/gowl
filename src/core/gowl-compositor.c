@@ -697,6 +697,32 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	             0, NULL, NULL, NULL, G_TYPE_NONE, 1, GOWL_TYPE_CLIENT);
 
 	/**
+	 * GowlCompositor::monitor-added:
+	 * @compositor: the compositor
+	 * @monitor: the output that appeared
+	 *
+	 * An output was plugged in (or found at startup) and is configured
+	 * and in the layout.  Anything that watches a monitor's own signals
+	 * connects here as well, since a monitor that appears later has
+	 * none of the handlers the ones present at startup were given.
+	 */
+	g_signal_new("monitor-added", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 1, GOWL_TYPE_MONITOR);
+
+	/**
+	 * GowlCompositor::monitor-removed:
+	 * @compositor: the compositor
+	 * @monitor: the output that went
+	 *
+	 * An output was unplugged.  Emitted while the monitor is still
+	 * alive but already out of the compositor's list, so a handler may
+	 * read its name and drop what it keyed on it; the object is
+	 * released as soon as the emission returns.
+	 */
+	g_signal_new("monitor-removed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 1, GOWL_TYPE_MONITOR);
+
+	/**
 	 * GowlCompositor::output-profile-changed:
 	 * @compositor: the compositor
 	 * @name: the profile now in force, or "" for none
@@ -6279,6 +6305,13 @@ on_new_output(struct wl_listener *listener, void *data)
 	g_debug("New output: %s (%dx%d)",
 	        wlr_output->name,
 	        wlr_output->width, wlr_output->height);
+
+	/* Last, so a handler sees an output that is configured and in the
+	 * layout rather than one half-built. */
+	g_signal_emit_by_name(self, "monitor-added", m);
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT monitor-added %s",
+		                    wlr_output->name != NULL ? wlr_output->name : "");
 }
 
 /*
@@ -6568,6 +6601,14 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 	 * destroyed by wlroots when the output goes away) */
 	g_list_free(m->layer_surfaces);
 	m->layer_surfaces = NULL;
+
+	/* While it is still alive: a handler that keyed anything on this
+	 * output has this one chance to read its name. */
+	g_signal_emit_by_name(self, "monitor-removed", m);
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT monitor-removed %s",
+		                    gowl_monitor_get_name(m) != NULL
+		                    ? gowl_monitor_get_name(m) : "");
 
 	g_object_unref(m);
 

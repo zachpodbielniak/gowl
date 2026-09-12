@@ -65,6 +65,8 @@ A subscriber receives one line per event, =EVENT <name> <args>=:
 | =keymap INDEX NAME=                | the keyboard layout changed                    |
 | =power OUTPUT on\vert{}off=        | an output was powered on or off                |
 | =profile NAME=                     | a different output profile matches (empty NAME = none) |
+| =monitor-added OUTPUT=             | an output was plugged in                       |
+| =monitor-removed OUTPUT=           | an output was unplugged                        |
 | =command LINE=                     | a module command ran, from any source          |
 
 Events are pushed from the compositor's own code paths, so a change made from a keybind, from Elisp, from MCP or from this socket is announced the same way.

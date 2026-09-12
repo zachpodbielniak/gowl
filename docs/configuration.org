@@ -1380,7 +1380,7 @@ gowl_config_init(void)
 | =--generate-yaml-config=  | Print default YAML config to stdout       |
 | =--generate-c-config=     | Print default C config template to stdout |
 | =--check-config=          | Load the config, report problems, exit    |
-| =--supervise=             | Run the compositor in a child and restart it after a crash (up to 5 times a minute); the session -- the seat, the login -- stays up while the core dump is written. Clients of the crashed compositor are gone either way. |
+| =--supervise=             | Run the compositor in a child and restart it after a crash signal (SIGSEGV, SIGABRT, ...; up to 5 times a minute); the session -- the seat, the login -- stays up while the core dump is written. A deliberate exit or a SIGTERM is passed through, and a stop sent to the supervisor reaches the compositor. Clients of the crashed compositor are gone either way. |
 
 ** Environment Variables
 :PROPERTIES:

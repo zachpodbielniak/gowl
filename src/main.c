@@ -27,6 +27,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <signal.h>
 
 /*
  * Global pointers exported for C config shared objects.
@@ -634,6 +635,37 @@ static const gchar *default_c_config =
 	"{\n"
 	"} */\n";
 
+/* --- --supervise helpers --- */
+
+static volatile pid_t supervised_child = 0;
+
+/* Async-signal-safe: pass the stop on to the compositor. */
+static void
+supervisor_forward_signal(int signo)
+{
+	if (supervised_child > 0)
+		kill(supervised_child, signo);
+}
+
+/* The signals that mean the compositor crashed rather than was told to
+ * stop. */
+static gboolean
+supervisor_is_crash(int signo)
+{
+	switch (signo) {
+	case SIGSEGV:
+	case SIGABRT:
+	case SIGBUS:
+	case SIGILL:
+	case SIGFPE:
+	case SIGTRAP:
+	case SIGSYS:
+		return TRUE;
+	default:
+		return FALSE;
+	}
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -744,6 +776,16 @@ main(int argc, char *argv[])
 	if (supervise && !show_version && !check_config) {
 		gint restarts = 0;
 		gint64 window_start = g_get_monotonic_time();
+		struct sigaction sa;
+
+		/* A stop aimed at the supervisor (the session manager, a
+		 * Ctrl-C) is passed to the compositor, whose clean exit then
+		 * ends the supervisor too. */
+		memset(&sa, 0, sizeof sa);
+		sa.sa_handler = supervisor_forward_signal;
+		sigaction(SIGTERM, &sa, NULL);
+		sigaction(SIGINT, &sa, NULL);
+		sigaction(SIGHUP, &sa, NULL);
 
 		for (;;) {
 			pid_t child = fork();
@@ -754,18 +796,28 @@ main(int argc, char *argv[])
 				           g_strerror(errno));
 				return 1;
 			}
-			if (child == 0)
-				break; /* the compositor: carry on below */
+			if (child == 0) {
+				/* the compositor: default signals, carry on below */
+				sa.sa_handler = SIG_DFL;
+				sigaction(SIGTERM, &sa, NULL);
+				sigaction(SIGINT, &sa, NULL);
+				sigaction(SIGHUP, &sa, NULL);
+				break;
+			}
+			supervised_child = child;
 			while (waitpid(child, &status, 0) < 0 && errno == EINTR)
 				;
-			if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
-				return 0;
+			supervised_child = 0;
+			/* Only a crash is restarted.  A deliberate exit -- zero, a
+			 * config it refused, a SIGTERM from the session manager --
+			 * is the compositor's answer, and looping on it would turn
+			 * a bad config into a runaway. */
 			if (WIFEXITED(status))
-				g_printerr("gowl: compositor exited with %d\n",
-				           WEXITSTATUS(status));
-			else if (WIFSIGNALED(status))
-				g_printerr("gowl: compositor died with signal %d\n",
-				           WTERMSIG(status));
+				return WEXITSTATUS(status);
+			if (WIFSIGNALED(status) && !supervisor_is_crash(WTERMSIG(status)))
+				return 128 + WTERMSIG(status);
+			g_printerr("gowl: compositor died with signal %d\n",
+			           WTERMSIG(status));
 			if (g_get_monotonic_time() - window_start > 60 * G_USEC_PER_SEC) {
 				window_start = g_get_monotonic_time();
 				restarts = 0;
@@ -773,7 +825,7 @@ main(int argc, char *argv[])
 			if (++restarts > 5) {
 				g_printerr("gowl: crashed %d times in a minute; "
 				           "not restarting\n", restarts - 1);
-				return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+				return 128 + WTERMSIG(status);
 			}
 			g_printerr("gowl: restarting the compositor (%d/5)\n",
 			           restarts);

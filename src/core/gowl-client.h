@@ -52,6 +52,27 @@ gboolean       gowl_client_get_urgent         (GowlClient  *self);
 void           gowl_client_set_urgent         (GowlClient  *self,
                                                gboolean     urgent);
 
+/**
+ * gowl_client_get_sticky:
+ * @self: a #GowlClient
+ *
+ * Returns: %TRUE if the window is pinned to every tag of its monitor
+ */
+gboolean       gowl_client_get_sticky         (GowlClient  *self);
+
+/**
+ * gowl_client_set_sticky:
+ * @self: a #GowlClient
+ * @sticky: %TRUE to pin the window to every tag of its monitor, %FALSE
+ *   to put it back on its own tags
+ *
+ * Emits #GowlClient::state-changed on a change.  The compositor
+ * re-arranges its monitor; the `toggle-sticky' action and the `sticky'
+ * rule property call this.
+ */
+void           gowl_client_set_sticky         (GowlClient  *self,
+                                               gboolean     sticky);
+
 /* String accessors */
 const gchar   *gowl_client_get_title          (GowlClient  *self);
 void           gowl_client_set_title          (GowlClient  *self,

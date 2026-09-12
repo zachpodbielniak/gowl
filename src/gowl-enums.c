@@ -281,6 +281,15 @@ gowl_action_get_type(void)
 			{ GOWL_ACTION_IPC_COMMAND,       "GOWL_ACTION_IPC_COMMAND",       "ipc-command" },
 			{ GOWL_ACTION_LOCK,              "GOWL_ACTION_LOCK",              "lock" },
 			{ GOWL_ACTION_CUSTOM,            "GOWL_ACTION_CUSTOM",            "custom" },
+			{ GOWL_ACTION_OUTPUT_POWER,      "GOWL_ACTION_OUTPUT_POWER",      "output-power" },
+			{ GOWL_ACTION_MODE,              "GOWL_ACTION_MODE",              "mode" },
+			{ GOWL_ACTION_SWITCH_LAYOUT,     "GOWL_ACTION_SWITCH_LAYOUT",     "switch-layout" },
+			{ GOWL_ACTION_MOVE_WINDOW,       "GOWL_ACTION_MOVE_WINDOW",       "move-window" },
+			{ GOWL_ACTION_RESIZE_WINDOW,     "GOWL_ACTION_RESIZE_WINDOW",     "resize-window" },
+			{ GOWL_ACTION_TOGGLE_STICKY,     "GOWL_ACTION_TOGGLE_STICKY",     "toggle-sticky" },
+			{ GOWL_ACTION_FOCUS_DIR,         "GOWL_ACTION_FOCUS_DIR",         "focus-dir" },
+			{ GOWL_ACTION_FOCUS_URGENT,      "GOWL_ACTION_FOCUS_URGENT",      "focus-urgent" },
+			{ GOWL_ACTION_FOCUS_LAST,        "GOWL_ACTION_FOCUS_LAST",        "focus-last" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlAction", values);

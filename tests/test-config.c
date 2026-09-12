@@ -17,6 +17,7 @@
  */
 
 #include "config/gowl-config.h"
+#include "config/gowl-keybind.h"
 #include "gowl-enums.h"
 #include <glib/gstdio.h>
 #include <string.h>
@@ -254,6 +255,350 @@ test_config_monitors_partial(void)
 	g_assert_cmpfloat(mc->scale, ==, 0.0);
 	g_assert_cmpint(mc->enabled, ==, -1);
 
+	g_object_unref(config);
+}
+
+static void
+test_config_monitors_vrr(void)
+{
+	GowlConfig *config;
+	const GowlMonitorConfig *mc;
+	GError *err = NULL;
+	const gchar *yaml =
+		"monitors:\n"
+		"  DP-1:\n"
+		"    vrr: true\n"
+		"  DP-2:\n"
+		"    vrr: on-demand\n"
+		"  DP-3:\n"
+		"    vrr: false\n"
+		"  DP-4:\n"
+		"    scale: 2.0\n";
+
+	config = gowl_config_new();
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+
+	mc = gowl_config_get_monitor_config(config, "DP-1");
+	g_assert_nonnull(mc);
+	g_assert_cmpint(mc->vrr, ==, 1);
+	mc = gowl_config_get_monitor_config(config, "DP-2");
+	g_assert_cmpint(mc->vrr, ==, 2);
+	mc = gowl_config_get_monitor_config(config, "DP-3");
+	g_assert_cmpint(mc->vrr, ==, 0);
+	/* Unset stays unset: the compositor must not touch adaptive sync
+	 * on an output the file says nothing about. */
+	mc = gowl_config_get_monitor_config(config, "DP-4");
+	g_assert_cmpint(mc->vrr, ==, -1);
+
+	g_object_unref(config);
+}
+
+static void
+test_config_idle_power_tearing_activation(void)
+{
+	GowlConfig *config;
+	GError *err = NULL;
+	gchar *yaml_out;
+	const gchar *yaml =
+		"idle-timeout: 120\n"
+		"dpms-timeout: 600\n"
+		"allow-tearing: true\n"
+		"focus-on-activate: urgent\n";
+
+	config = gowl_config_new();
+	/* Defaults: idle after five minutes, never blank, never tear,
+	 * the activation behaviour gowl always had. */
+	g_assert_cmpint(gowl_config_get_idle_timeout(config), ==, 300);
+	g_assert_cmpint(gowl_config_get_dpms_timeout(config), ==, 0);
+	g_assert_false(gowl_config_get_allow_tearing(config));
+	g_assert_cmpstr(gowl_config_get_focus_on_activate(config), ==, "smart");
+
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	g_assert_cmpint(gowl_config_get_idle_timeout(config), ==, 120);
+	g_assert_cmpint(gowl_config_get_dpms_timeout(config), ==, 600);
+	g_assert_true(gowl_config_get_allow_tearing(config));
+	g_assert_cmpstr(gowl_config_get_focus_on_activate(config), ==, "urgent");
+
+	/* Round-trips through the generated YAML. */
+	yaml_out = gowl_config_generate_yaml(config);
+	g_assert_nonnull(strstr(yaml_out, "idle-timeout: 120"));
+	g_assert_nonnull(strstr(yaml_out, "dpms-timeout: 600"));
+	g_assert_nonnull(strstr(yaml_out, "allow-tearing: true"));
+	g_assert_nonnull(strstr(yaml_out, "focus-on-activate: \"urgent\""));
+	g_free(yaml_out);
+
+	/* Reset takes them back. */
+	gowl_config_reset_values_to_defaults(config);
+	g_assert_cmpint(gowl_config_get_idle_timeout(config), ==, 300);
+	g_assert_cmpstr(gowl_config_get_focus_on_activate(config), ==, "smart");
+
+	g_object_unref(config);
+}
+
+/* The bind for a keysym in a mode (NULL = the default mode). */
+static GowlKeybindEntry *
+find_bind(GArray *kbs, guint keysym, const gchar *mode)
+{
+	guint i;
+
+	for (i = 0; i < kbs->len; i++) {
+		GowlKeybindEntry *kb = &g_array_index(kbs, GowlKeybindEntry, i);
+
+		if (kb->keysym == keysym && g_strcmp0(kb->mode, mode) == 0)
+			return kb;
+	}
+	return NULL;
+}
+
+static void
+test_config_modes_and_flags(void)
+{
+	GowlConfig *config;
+	GArray *kbs;
+	GowlKeybindEntry *kb;
+	GError *err = NULL;
+	gchar *out;
+	const gchar *yaml =
+		"keybinds:\n"
+		"  \"XF86AudioMute\": { action: spawn, arg: \"mute\", locked: true, repeat: false }\n"
+		"  \"Super+r\": { action: mode, arg: resize }\n"
+		"  \"Super+x\": { action: zoom, release: true }\n"
+		"modes:\n"
+		"  resize:\n"
+		"    \"h\": { action: set-mfact, arg: \"-0.05\" }\n"
+		"    \"Escape\": { action: mode, arg: default }\n";
+
+	config = gowl_config_new();
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	kbs = gowl_config_get_keybinds(config);
+	g_assert_cmpuint(kbs->len, ==, 5);
+
+	kb = find_bind(kbs, XKB_KEY_XF86AudioMute, NULL);
+	g_assert_nonnull(kb);
+	g_assert_cmpuint(kb->flags, ==,
+	                 GOWL_KEYBIND_FLAG_LOCKED | GOWL_KEYBIND_FLAG_NO_REPEAT);
+	kb = find_bind(kbs, XKB_KEY_r, NULL);
+	g_assert_nonnull(kb);
+	g_assert_cmpint(kb->action, ==, GOWL_ACTION_MODE);
+	g_assert_cmpstr(kb->arg, ==, "resize");
+	kb = find_bind(kbs, XKB_KEY_x, NULL);
+	g_assert_nonnull(kb);
+	g_assert_cmpuint(kb->flags, ==, GOWL_KEYBIND_FLAG_RELEASE);
+	/* The mode's binds carry the mode; h alone is not a default bind. */
+	g_assert_null(find_bind(kbs, XKB_KEY_h, NULL));
+	kb = find_bind(kbs, XKB_KEY_h, "resize");
+	g_assert_nonnull(kb);
+	g_assert_cmpint(kb->action, ==, GOWL_ACTION_SET_MFACT);
+	kb = find_bind(kbs, XKB_KEY_Escape, "resize");
+	g_assert_nonnull(kb);
+	g_assert_cmpint(kb->action, ==, GOWL_ACTION_MODE);
+
+	/* "default" is stored as no mode at all. */
+	gowl_config_add_keybind_ex(config, 0, XKB_KEY_a, GOWL_ACTION_NONE,
+	                           NULL, NULL, "default", 0);
+	kb = find_bind(kbs, XKB_KEY_a, NULL);
+	g_assert_nonnull(kb);
+	g_assert_null(kb->mode);
+
+	out = gowl_config_generate_yaml(config);
+	g_assert_nonnull(strstr(out, "locked: true"));
+	g_assert_nonnull(strstr(out, "repeat: false"));
+	g_assert_nonnull(strstr(out, "release: true"));
+	g_assert_nonnull(strstr(out, "mode: \"resize\""));
+	g_free(out);
+	g_object_unref(config);
+}
+
+static void
+test_config_mousebinds(void)
+{
+	GowlConfig *config;
+	GArray *mbs;
+	GowlMousebindEntry *mb;
+	GError *err = NULL;
+	gchar *out;
+	const gchar *yaml =
+		"mousebinds:\n"
+		"  \"Super+Button1\": { action: toggle-float }\n"
+		"  \"Super+WheelUp\": { action: tag-view, arg: \"1\" }\n";
+
+	config = gowl_config_new();
+	/* The two grabs gowl always had are in the array from the start. */
+	mbs = gowl_config_get_mousebinds(config);
+	g_assert_cmpuint(mbs->len, ==, 2);
+	mb = &g_array_index(mbs, GowlMousebindEntry, 0);
+	g_assert_cmpint(mb->action, ==, GOWL_ACTION_MOVE_WINDOW);
+	g_assert_cmpuint(mb->button, ==, 0x110);
+	mb = &g_array_index(mbs, GowlMousebindEntry, 1);
+	g_assert_cmpint(mb->action, ==, GOWL_ACTION_RESIZE_WINDOW);
+
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	/* Super+Button1 was redefined, not duplicated. */
+	g_assert_cmpuint(mbs->len, ==, 3);
+	mb = &g_array_index(mbs, GowlMousebindEntry, 0);
+	g_assert_cmpint(mb->action, ==, GOWL_ACTION_RESIZE_WINDOW);
+	mb = &g_array_index(mbs, GowlMousebindEntry, 1);
+	g_assert_cmpint(mb->action, ==, GOWL_ACTION_TOGGLE_FLOAT);
+	g_assert_cmpuint(mb->button, ==, 0x110);
+	mb = &g_array_index(mbs, GowlMousebindEntry, 2);
+	g_assert_cmpuint(mb->button, ==, GOWL_BUTTON_WHEEL_UP);
+	g_assert_cmpstr(mb->arg, ==, "1");
+
+	g_assert_cmpuint(gowl_config_remove_mousebind(config, GOWL_KEY_MOD_LOGO,
+	                                              GOWL_BUTTON_WHEEL_UP), ==, 1);
+	g_assert_cmpuint(mbs->len, ==, 2);
+
+	out = gowl_config_generate_yaml(config);
+	g_assert_nonnull(strstr(out, "\"Super+Button1\": { action: toggle-float"));
+	g_free(out);
+
+	gowl_config_reset_values_to_defaults(config);
+	g_assert_cmpuint(mbs->len, ==, 2);
+	mb = &g_array_index(mbs, GowlMousebindEntry, 0);
+	g_assert_cmpint(mb->action, ==, GOWL_ACTION_MOVE_WINDOW);
+	g_object_unref(config);
+}
+
+static void
+test_config_gestures(void)
+{
+	GowlConfig *config;
+	GArray *gs;
+	GowlGestureEntry *ge;
+	GError *err = NULL;
+	gchar *out;
+	const gchar *yaml =
+		"gestures:\n"
+		"  \"swipe-left-3\": { action: tag-view, arg: \"2\" }\n"
+		"  \"pinch-in-4\": { action: ipc-command, arg: expo }\n"
+		"  \"swipe-left-3\": { action: tag-view, arg: \"4\" }\n";
+
+	config = gowl_config_new();
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	gs = gowl_config_get_gestures(config);
+	/* The repeated key replaced the first, whichever of the parser and
+	 * the config did the replacing: two gestures, the swipe with the
+	 * later argument. */
+	g_assert_cmpuint(gs->len, ==, 2);
+	{
+		gboolean saw_pinch = FALSE, saw_swipe = FALSE;
+		guint i;
+
+		for (i = 0; i < gs->len; i++) {
+			ge = &g_array_index(gs, GowlGestureEntry, i);
+			if (ge->kind == GOWL_GESTURE_PINCH) {
+				g_assert_cmpint(ge->direction, ==, GOWL_GESTURE_IN);
+				g_assert_cmpuint(ge->fingers, ==, 4);
+				g_assert_cmpstr(ge->arg, ==, "expo");
+				saw_pinch = TRUE;
+			} else {
+				g_assert_cmpint(ge->direction, ==, GOWL_GESTURE_LEFT);
+				g_assert_cmpuint(ge->fingers, ==, 3);
+				g_assert_cmpstr(ge->arg, ==, "4");
+				saw_swipe = TRUE;
+			}
+		}
+		g_assert_true(saw_pinch && saw_swipe);
+	}
+	/* Adding the same gesture again replaces rather than duplicates. */
+	gowl_config_add_gesture(config, GOWL_GESTURE_PINCH, GOWL_GESTURE_IN, 4,
+	                        GOWL_ACTION_ZOOM, NULL, NULL);
+	g_assert_cmpuint(gs->len, ==, 2);
+
+	out = gowl_config_generate_yaml(config);
+	g_assert_nonnull(strstr(out, "\"pinch-in-4\": { action: zoom"));
+	g_free(out);
+	g_object_unref(config);
+}
+
+static void
+test_config_input_settings(void)
+{
+	GowlConfig *config;
+	GError *err = NULL;
+	gchar *out;
+	const gchar *yaml =
+		"input:\n"
+		"  \"*\":\n"
+		"    accel-profile: adaptive\n"
+		"  touchpad:\n"
+		"    tap: true\n"
+		"    natural-scroll: true\n"
+		"    accel-speed: 0.3\n"
+		"  \"*TrackPoint*\":\n"
+		"    accel-profile: flat\n"
+		"    accel-speed: -0.2\n";
+
+	config = gowl_config_new();
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	g_assert_cmpuint(gowl_config_get_input_configs(config)->len, ==, 3);
+
+	/* Later blocks refine earlier ones; the class block applies to
+	 * every touchpad; the glob to the one device. */
+	g_assert_cmpstr(gowl_config_lookup_input_setting(config,
+		"Apple Inc. Magic Trackpad", "touchpad", "tap"), ==, "true");
+	g_assert_cmpstr(gowl_config_lookup_input_setting(config,
+		"Apple Inc. Magic Trackpad", "touchpad", "accel-profile"), ==, "adaptive");
+	g_assert_cmpstr(gowl_config_lookup_input_setting(config,
+		"TPPS/2 IBM TrackPoint", "pointer", "accel-profile"), ==, "flat");
+	g_assert_cmpstr(gowl_config_lookup_input_setting(config,
+		"TPPS/2 IBM TrackPoint", "pointer", "accel-speed"), ==, "-0.2");
+	g_assert_null(gowl_config_lookup_input_setting(config,
+		"TPPS/2 IBM TrackPoint", "pointer", "tap"));
+	g_assert_null(gowl_config_lookup_input_setting(config,
+		"Logitech USB Mouse", "pointer", "natural-scroll"));
+	/* "mouse" in the file means the pointer class. */
+	gowl_config_add_input_setting(config, "mouse", "left-handed", "true");
+	g_assert_cmpstr(gowl_config_lookup_input_setting(config,
+		"Logitech USB Mouse", "pointer", "left-handed"), ==, "true");
+
+	out = gowl_config_generate_yaml(config);
+	g_assert_nonnull(strstr(out, "\"*TrackPoint*\":"));
+	g_assert_nonnull(strstr(out, "accel-profile: \"flat\""));
+	g_free(out);
+
+	gowl_config_clear_input_settings(config);
+	g_assert_cmpuint(gowl_config_get_input_configs(config)->len, ==, 0);
+	g_object_unref(config);
+}
+
+static void
+test_config_xkb(void)
+{
+	GowlConfig *config;
+	GError *err = NULL;
+	gchar *out;
+	const gchar *yaml =
+		"xkb-layout: \"us,de\"\n"
+		"xkb-variant: \",nodeadkeys\"\n"
+		"xkb-options: \"grp:alt_shift_toggle,caps:escape\"\n";
+
+	config = gowl_config_new();
+	/* Unset means "the environment / the default", not "". */
+	g_assert_null(gowl_config_get_xkb_layout(config));
+	g_assert_null(gowl_config_get_xkb_options(config));
+
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	g_assert_cmpstr(gowl_config_get_xkb_layout(config), ==, "us,de");
+	g_assert_cmpstr(gowl_config_get_xkb_variant(config), ==, ",nodeadkeys");
+	g_assert_cmpstr(gowl_config_get_xkb_options(config), ==,
+	                "grp:alt_shift_toggle,caps:escape");
+	g_assert_null(gowl_config_get_xkb_model(config));
+
+	out = gowl_config_generate_yaml(config);
+	g_assert_nonnull(strstr(out, "xkb-layout: \"us,de\""));
+	g_assert_null(strstr(out, "xkb-model:"));
+	g_free(out);
+
+	gowl_config_reset_values_to_defaults(config);
+	g_assert_null(gowl_config_get_xkb_layout(config));
 	g_object_unref(config);
 }
 
@@ -1035,6 +1380,14 @@ main(int argc, char *argv[])
 	                test_config_wallpaper_tags_rejects_bad_keys);
 	g_test_add_func("/config/defaults", test_config_defaults);
 	g_test_add_func("/config/manage-lid", test_config_manage_lid);
+	g_test_add_func("/config/idle-power-tearing-activation",
+	                test_config_idle_power_tearing_activation);
+	g_test_add_func("/config/monitors/vrr", test_config_monitors_vrr);
+	g_test_add_func("/config/keybinds/modes-and-flags", test_config_modes_and_flags);
+	g_test_add_func("/config/mousebinds", test_config_mousebinds);
+	g_test_add_func("/config/gestures", test_config_gestures);
+	g_test_add_func("/config/input", test_config_input_settings);
+	g_test_add_func("/config/xkb", test_config_xkb);
 	g_test_add_func("/config/set-properties", test_config_set_properties);
 	g_test_add_func("/config/generate-yaml", test_config_generate_yaml);
 	g_test_add_func("/config/add-rule", test_config_add_rule);

@@ -25,6 +25,7 @@
 #include <glib.h>
 #include <glib-object.h>
 #include <string.h>
+#include <linux/input-event-codes.h>
 
 /* yaml-glib headers -- available via -Ideps/yaml-glib/src */
 #include "yaml-glib.h"
@@ -111,6 +112,11 @@
 #define GOWL_CONFIG_DEFAULT_MENU                "bemenu-run"
 #define GOWL_CONFIG_DEFAULT_SLOPPYFOCUS         (TRUE)
 #define GOWL_CONFIG_DEFAULT_MANAGE_LID          (TRUE)
+#define GOWL_CONFIG_DEFAULT_IDLE_TIMEOUT        (300)
+#define GOWL_CONFIG_DEFAULT_XKB_LAYOUT          (NULL)
+#define GOWL_CONFIG_DEFAULT_DPMS_TIMEOUT        (0)
+#define GOWL_CONFIG_DEFAULT_ALLOW_TEARING       (FALSE)
+#define GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE   ("smart")
 #define GOWL_CONFIG_DEFAULT_INPUT_RECORDING     (FALSE)
 #define GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS ""
 #define GOWL_CONFIG_DEFAULT_LOG_LEVEL           "warning"
@@ -232,6 +238,16 @@ struct _GowlConfig {
 	gint     repeat_delay;
 	gboolean sloppyfocus;
 	gboolean manage_lid;
+	gchar   *xkb_layout;
+	gchar   *xkb_variant;
+	gchar   *xkb_model;
+	gchar   *xkb_options;
+	gchar   *xkb_rules;
+	gchar   *xkb_file;
+	gint     idle_timeout;
+	gint     dpms_timeout;
+	gboolean allow_tearing;
+	gchar   *focus_on_activate;
 	gboolean input_recording;
 	gchar   *input_recording_deny_apps;
 
@@ -251,6 +267,15 @@ struct _GowlConfig {
 
 	/* Keybinds - array of GowlKeybindEntry */
 	GArray  *keybinds;
+
+	/* Pointer binds - array of GowlMousebindEntry */
+	GArray  *mousebinds;
+
+	/* Gesture binds - array of GowlGestureEntry */
+	GArray  *gestures;
+
+	/* input: blocks - array of GowlInputConfigEntry* (heap) */
+	GPtrArray *input_configs;
 
 	/* Rules - array of GowlRuleEntry* (heap-allocated) */
 	GPtrArray *rules;
@@ -377,6 +402,46 @@ gowl_config_escape_yaml(const gchar *str)
 
 /* --- Helper: free a GowlKeybindEntry (array element) --- */
 
+/* Clear funcs for the pointer bind, gesture and input arrays. */
+static void
+gowl_mousebind_entry_clear(gpointer entry)
+{
+	GowlMousebindEntry *mb = (GowlMousebindEntry *)entry;
+
+	g_clear_pointer(&mb->arg, g_free);
+	g_clear_pointer(&mb->desc, g_free);
+}
+
+static void
+gowl_gesture_entry_clear(gpointer entry)
+{
+	GowlGestureEntry *ge = (GowlGestureEntry *)entry;
+
+	g_clear_pointer(&ge->arg, g_free);
+	g_clear_pointer(&ge->desc, g_free);
+}
+
+static void
+gowl_input_config_entry_free(gpointer entry)
+{
+	GowlInputConfigEntry *ic = (GowlInputConfigEntry *)entry;
+
+	g_free(ic->match);
+	g_clear_pointer(&ic->settings, g_hash_table_unref);
+	g_free(ic);
+}
+
+/* The two grabs gowl always had.  In the array so that a config can
+ * see, replace or remove them like any other bind. */
+static void
+gowl_config_add_default_mousebinds(GowlConfig *self)
+{
+	gowl_config_add_mousebind(self, GOWL_KEY_MOD_LOGO, BTN_LEFT,
+	                          GOWL_ACTION_MOVE_WINDOW, NULL, "Move window");
+	gowl_config_add_mousebind(self, GOWL_KEY_MOD_LOGO, BTN_RIGHT,
+	                          GOWL_ACTION_RESIZE_WINDOW, NULL, "Resize window");
+}
+
 /**
  * gowl_keybind_entry_clear:
  * @entry: pointer to a #GowlKeybindEntry stored in a GArray
@@ -387,6 +452,8 @@ static void
 gowl_keybind_entry_clear(gpointer entry)
 {
 	GowlKeybindEntry *kb = (GowlKeybindEntry *)entry;
+
+	g_clear_pointer(&kb->mode, g_free);
 
 	g_clear_pointer(&kb->arg, g_free);
 	g_clear_pointer(&kb->desc, g_free);
@@ -456,6 +523,43 @@ gowl_config_set_property(
 		break;
 	case GOWL_CONFIG_PROP_MANAGE_LID:
 		self->manage_lid = g_value_get_boolean(value);
+		break;
+	case GOWL_CONFIG_PROP_XKB_LAYOUT:
+		g_free(self->xkb_layout);
+		self->xkb_layout = g_value_dup_string(value);
+		break;
+	case GOWL_CONFIG_PROP_XKB_VARIANT:
+		g_free(self->xkb_variant);
+		self->xkb_variant = g_value_dup_string(value);
+		break;
+	case GOWL_CONFIG_PROP_XKB_MODEL:
+		g_free(self->xkb_model);
+		self->xkb_model = g_value_dup_string(value);
+		break;
+	case GOWL_CONFIG_PROP_XKB_OPTIONS:
+		g_free(self->xkb_options);
+		self->xkb_options = g_value_dup_string(value);
+		break;
+	case GOWL_CONFIG_PROP_XKB_RULES:
+		g_free(self->xkb_rules);
+		self->xkb_rules = g_value_dup_string(value);
+		break;
+	case GOWL_CONFIG_PROP_XKB_FILE:
+		g_free(self->xkb_file);
+		self->xkb_file = g_value_dup_string(value);
+		break;
+	case GOWL_CONFIG_PROP_IDLE_TIMEOUT:
+		self->idle_timeout = g_value_get_int(value);
+		break;
+	case GOWL_CONFIG_PROP_DPMS_TIMEOUT:
+		self->dpms_timeout = g_value_get_int(value);
+		break;
+	case GOWL_CONFIG_PROP_ALLOW_TEARING:
+		self->allow_tearing = g_value_get_boolean(value);
+		break;
+	case GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE:
+		g_free(self->focus_on_activate);
+		self->focus_on_activate = g_value_dup_string(value);
 		break;
 	case GOWL_CONFIG_PROP_INPUT_RECORDING:
 		self->input_recording = g_value_get_boolean(value);
@@ -540,6 +644,36 @@ gowl_config_get_property(
 		break;
 	case GOWL_CONFIG_PROP_MANAGE_LID:
 		g_value_set_boolean(value, self->manage_lid);
+		break;
+	case GOWL_CONFIG_PROP_XKB_LAYOUT:
+		g_value_set_string(value, self->xkb_layout);
+		break;
+	case GOWL_CONFIG_PROP_XKB_VARIANT:
+		g_value_set_string(value, self->xkb_variant);
+		break;
+	case GOWL_CONFIG_PROP_XKB_MODEL:
+		g_value_set_string(value, self->xkb_model);
+		break;
+	case GOWL_CONFIG_PROP_XKB_OPTIONS:
+		g_value_set_string(value, self->xkb_options);
+		break;
+	case GOWL_CONFIG_PROP_XKB_RULES:
+		g_value_set_string(value, self->xkb_rules);
+		break;
+	case GOWL_CONFIG_PROP_XKB_FILE:
+		g_value_set_string(value, self->xkb_file);
+		break;
+	case GOWL_CONFIG_PROP_IDLE_TIMEOUT:
+		g_value_set_int(value, self->idle_timeout);
+		break;
+	case GOWL_CONFIG_PROP_DPMS_TIMEOUT:
+		g_value_set_int(value, self->dpms_timeout);
+		break;
+	case GOWL_CONFIG_PROP_ALLOW_TEARING:
+		g_value_set_boolean(value, self->allow_tearing);
+		break;
+	case GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE:
+		g_value_set_string(value, self->focus_on_activate);
 		break;
 	case GOWL_CONFIG_PROP_INPUT_RECORDING:
 		g_value_set_boolean(value, self->input_recording);
@@ -627,6 +761,7 @@ gowl_config_finalize(GObject *object)
 	g_free(self->log_level);
 	g_free(self->log_file);
 	g_free(self->input_recording_deny_apps);
+	g_free(self->focus_on_activate);
 	g_free(self->animation_curve);
 	g_free(self->animation_curve_open);
 	g_free(self->cube_curve);
@@ -646,6 +781,17 @@ gowl_config_finalize(GObject *object)
 
 	if (self->keybinds != NULL)
 		g_array_unref(self->keybinds);
+	if (self->mousebinds != NULL)
+		g_array_unref(self->mousebinds);
+	if (self->gestures != NULL)
+		g_array_unref(self->gestures);
+	g_clear_pointer(&self->input_configs, g_ptr_array_unref);
+	g_free(self->xkb_layout);
+	g_free(self->xkb_variant);
+	g_free(self->xkb_model);
+	g_free(self->xkb_options);
+	g_free(self->xkb_rules);
+	g_free(self->xkb_file);
 	if (self->rules != NULL)
 		g_ptr_array_unref(self->rules);
 	if (self->dropdowns != NULL)
@@ -773,6 +919,64 @@ gowl_config_class_init(GowlConfigClass *klass)
 		                      "lid is shut and an external display is present",
 		                      GOWL_CONFIG_DEFAULT_MANAGE_LID,
 		                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_XKB_LAYOUT] =
+		g_param_spec_string("xkb-layout", "XKB Layout",
+		                    "Keyboard layout list, e.g. \"us,de\"; unset "
+		                    "takes XKB_DEFAULT_LAYOUT / the system default",
+		                    NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+	properties[GOWL_CONFIG_PROP_XKB_VARIANT] =
+		g_param_spec_string("xkb-variant", "XKB Variant",
+		                    "Keyboard variant list, one per layout",
+		                    NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+	properties[GOWL_CONFIG_PROP_XKB_MODEL] =
+		g_param_spec_string("xkb-model", "XKB Model", "Keyboard model",
+		                    NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+	properties[GOWL_CONFIG_PROP_XKB_OPTIONS] =
+		g_param_spec_string("xkb-options", "XKB Options",
+		                    "Keyboard options, e.g. "
+		                    "\"grp:alt_shift_toggle,caps:escape\"",
+		                    NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+	properties[GOWL_CONFIG_PROP_XKB_RULES] =
+		g_param_spec_string("xkb-rules", "XKB Rules", "Keyboard rules set",
+		                    NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+	properties[GOWL_CONFIG_PROP_XKB_FILE] =
+		g_param_spec_string("xkb-file", "XKB File",
+		                    "A complete keymap file, overriding the "
+		                    "rules/model/layout/variant/options set",
+		                    NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_IDLE_TIMEOUT] =
+		g_param_spec_int("idle-timeout",
+		                 "Idle Timeout",
+		                 "Seconds without input before the session is "
+		                 "idle; 0 never",
+		                 0, G_MAXINT, GOWL_CONFIG_DEFAULT_IDLE_TIMEOUT,
+		                 G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_DPMS_TIMEOUT] =
+		g_param_spec_int("dpms-timeout",
+		                 "DPMS Timeout",
+		                 "Seconds without input before every output is "
+		                 "powered off; 0 never",
+		                 0, G_MAXINT, GOWL_CONFIG_DEFAULT_DPMS_TIMEOUT,
+		                 G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_ALLOW_TEARING] =
+		g_param_spec_boolean("allow-tearing",
+		                      "Allow Tearing",
+		                      "Present a fullscreen window that asks for "
+		                      "tearing without waiting for vblank",
+		                      GOWL_CONFIG_DEFAULT_ALLOW_TEARING,
+		                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE] =
+		g_param_spec_string("focus-on-activate",
+		                    "Focus On Activate",
+		                    "What a window's activation request does: "
+		                    "smart, urgent, focus or none",
+		                    GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE,
+		                    G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
 	properties[GOWL_CONFIG_PROP_INPUT_RECORDING] =
 		g_param_spec_boolean("input-recording",
@@ -971,6 +1175,16 @@ gowl_config_init(GowlConfig *self)
 	self->repeat_delay        = GOWL_CONFIG_DEFAULT_REPEAT_DELAY;
 	self->sloppyfocus         = GOWL_CONFIG_DEFAULT_SLOPPYFOCUS;
 	self->manage_lid          = GOWL_CONFIG_DEFAULT_MANAGE_LID;
+	self->xkb_layout          = NULL;
+	self->xkb_variant         = NULL;
+	self->xkb_model           = NULL;
+	self->xkb_options         = NULL;
+	self->xkb_rules           = NULL;
+	self->xkb_file            = NULL;
+	self->idle_timeout        = GOWL_CONFIG_DEFAULT_IDLE_TIMEOUT;
+	self->dpms_timeout        = GOWL_CONFIG_DEFAULT_DPMS_TIMEOUT;
+	self->allow_tearing       = GOWL_CONFIG_DEFAULT_ALLOW_TEARING;
+	self->focus_on_activate   = g_strdup(GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE);
 	self->input_recording     = GOWL_CONFIG_DEFAULT_INPUT_RECORDING;
 	self->input_recording_deny_apps =
 		g_strdup(GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS);
@@ -985,6 +1199,13 @@ gowl_config_init(GowlConfig *self)
 
 	self->keybinds = g_array_new(FALSE, TRUE, sizeof(GowlKeybindEntry));
 	g_array_set_clear_func(self->keybinds, gowl_keybind_entry_clear);
+	self->mousebinds = g_array_new(FALSE, TRUE, sizeof(GowlMousebindEntry));
+	g_array_set_clear_func(self->mousebinds, gowl_mousebind_entry_clear);
+	self->gestures = g_array_new(FALSE, TRUE, sizeof(GowlGestureEntry));
+	g_array_set_clear_func(self->gestures, gowl_gesture_entry_clear);
+	self->input_configs = g_ptr_array_new_with_free_func(
+		gowl_input_config_entry_free);
+	gowl_config_add_default_mousebinds(self);
 
 	self->rules = g_ptr_array_new_with_free_func(gowl_rule_entry_free);
 	self->dropdowns = g_ptr_array_new_with_free_func(
@@ -1144,6 +1365,112 @@ gowl_config_apply_palette_mapping(GowlConfig *self, YamlMapping *mapping)
 	}
 
 	gowl_config_rebuild_palette(self, from_file);
+}
+
+/* -----------------------------------------------------------
+ * Shared pieces of a bind entry in YAML
+ * ----------------------------------------------------------- */
+
+/* The `action', `arg' and `desc' of a bind mapping.  Resolves the
+ * action nick (underscores accepted for hyphens).  Returns FALSE, with
+ * a warning, when there is no usable action. */
+static gboolean
+yaml_action_entry(
+	YamlMapping  *val_map,
+	gint         *out_action,
+	const gchar **out_arg,
+	const gchar **out_desc
+){
+	const gchar *action_str;
+	GEnumClass *action_class;
+	GEnumValue *enum_val;
+	g_autofree gchar *norm = NULL;
+
+	action_str = yaml_mapping_get_string_member(val_map, "action");
+	if (action_str == NULL) {
+		g_warning("gowl_config: bind without an action");
+		return FALSE;
+	}
+	action_class = (GEnumClass *)g_type_class_ref(gowl_action_get_type());
+	norm = g_strdup(action_str);
+	g_strdelimit(norm, "_", '-');
+	enum_val = g_enum_get_value_by_nick(action_class, norm);
+	g_type_class_unref(action_class);
+	if (enum_val == NULL) {
+		g_warning("gowl_config: unknown action '%s'", action_str);
+		return FALSE;
+	}
+	*out_action = enum_val->value;
+	*out_arg = yaml_mapping_has_member(val_map, "arg")
+	           ? yaml_mapping_get_string_member(val_map, "arg") : NULL;
+	*out_desc = yaml_mapping_has_member(val_map, "desc")
+	            ? yaml_mapping_get_string_member(val_map, "desc") : NULL;
+	return TRUE;
+}
+
+/* A bind's `mode', or the mode of the section it sits in. */
+static const gchar *
+yaml_keybind_mode(YamlMapping *val_map, const gchar *section_mode)
+{
+	if (yaml_mapping_has_member(val_map, "mode"))
+		return yaml_mapping_get_string_member(val_map, "mode");
+	return section_mode;
+}
+
+/* `locked', `release' and `repeat' as #GowlKeybindFlags. */
+static guint
+yaml_keybind_flags(YamlMapping *val_map)
+{
+	guint flags = GOWL_KEYBIND_FLAG_NONE;
+
+	if (yaml_mapping_has_member(val_map, "locked")
+	    && yaml_mapping_get_boolean_member(val_map, "locked"))
+		flags |= GOWL_KEYBIND_FLAG_LOCKED;
+	if (yaml_mapping_has_member(val_map, "release")
+	    && yaml_mapping_get_boolean_member(val_map, "release"))
+		flags |= GOWL_KEYBIND_FLAG_RELEASE;
+	if (yaml_mapping_has_member(val_map, "repeat")
+	    && !yaml_mapping_get_boolean_member(val_map, "repeat"))
+		flags |= GOWL_KEYBIND_FLAG_NO_REPEAT;
+	return flags;
+}
+
+/* A keybinds mapping whose every bind belongs to @mode: the body of
+ * one entry of `modes:'. */
+static void
+gowl_config_load_keybind_mapping(
+	GowlConfig  *self,
+	YamlMapping *binds,
+	const gchar *mode
+){
+	guint count = yaml_mapping_get_size(binds);
+	guint i;
+
+	for (i = 0; i < count; i++) {
+		const gchar *bind_str = yaml_mapping_get_key(binds, i);
+		YamlNode *val_node = yaml_mapping_get_value(binds, i);
+		YamlMapping *val_map;
+		gint action;
+		const gchar *arg_str, *desc_str;
+		guint mods, keysym;
+
+		if (bind_str == NULL || val_node == NULL)
+			continue;
+		val_map = yaml_node_get_mapping(val_node);
+		if (val_map == NULL)
+			continue;
+		if (!yaml_action_entry(val_map, &action, &arg_str, &desc_str))
+			continue;
+		if (!gowl_keybind_parse(bind_str, &mods, &keysym)) {
+			g_warning("gowl_config: failed to parse keybind '%s' "
+			          "in mode '%s'", bind_str, mode);
+			continue;
+		}
+		gowl_config_add_keybind_ex(self, mods, keysym, action, arg_str,
+		                           desc_str,
+		                           yaml_keybind_mode(val_map, mode),
+		                           yaml_keybind_flags(val_map));
+	}
 }
 
 /**
@@ -1572,6 +1899,24 @@ gowl_config_apply_mapping(
 		gboolean val = yaml_mapping_get_boolean_member(mapping, "manage_lid");
 		g_object_set(self, "manage-lid", val, NULL);
 	}
+	if (yaml_mapping_has_member(mapping, "idle-timeout")) {
+		gint val = (gint)yaml_mapping_get_int_member(mapping, "idle-timeout");
+		g_object_set(self, "idle-timeout", val, NULL);
+	}
+	if (yaml_mapping_has_member(mapping, "dpms-timeout")) {
+		gint val = (gint)yaml_mapping_get_int_member(mapping, "dpms-timeout");
+		g_object_set(self, "dpms-timeout", val, NULL);
+	}
+	if (yaml_mapping_has_member(mapping, "allow-tearing")) {
+		gboolean val = yaml_mapping_get_boolean_member(mapping, "allow-tearing");
+		g_object_set(self, "allow-tearing", val, NULL);
+	}
+	if (yaml_mapping_has_member(mapping, "focus-on-activate")) {
+		const gchar *val = yaml_mapping_get_string_member(mapping,
+			"focus-on-activate");
+		if (val != NULL)
+			g_object_set(self, "focus-on-activate", val, NULL);
+	}
 	if (yaml_mapping_has_member(mapping, "input-recording")) {
 		gboolean val = yaml_mapping_get_boolean_member(mapping,
 			"input-recording");
@@ -1629,6 +1974,158 @@ gowl_config_apply_mapping(
 				             "evaluate-c-config-with-cmacs",
 				             val, NULL);
 				break;
+			}
+		}
+	}
+
+	/* Keyboard layout.  Each is independently optional; an unset one
+	 * falls back to the XKB_DEFAULT_* environment and then to xkb's
+	 * own defaults, which is what happened before these keys existed. */
+	{
+		static const gchar *const xkb_keys[] = {
+			"xkb-layout", "xkb-variant", "xkb-model",
+			"xkb-options", "xkb-rules", "xkb-file"
+		};
+		gsize xi;
+
+		for (xi = 0; xi < G_N_ELEMENTS(xkb_keys); xi++) {
+			if (yaml_mapping_has_member(mapping, xkb_keys[xi])) {
+				const gchar *val = yaml_mapping_get_string_member(
+					mapping, xkb_keys[xi]);
+				g_object_set(self, xkb_keys[xi],
+				             (val != NULL && *val != '\0') ? val : NULL,
+				             NULL);
+			}
+		}
+	}
+
+	/* Key modes: mapping of mode name to a keybinds mapping.  Every
+	 * bind inside belongs to that mode; `mode: X' inside an ordinary
+	 * keybinds entry does the same for one bind.
+	 *
+	 *   modes:
+	 *     resize:
+	 *       "h": { action: set_mfact, arg: "-0.05" }
+	 *       "Escape": { action: mode, arg: default }
+	 */
+	if (yaml_mapping_has_member(mapping, "modes")) {
+		YamlMapping *modes = yaml_mapping_get_mapping_member(mapping, "modes");
+		guint mcount = modes != NULL ? yaml_mapping_get_size(modes) : 0;
+		guint mi;
+
+		for (mi = 0; mi < mcount; mi++) {
+			const gchar *mode_name = yaml_mapping_get_key(modes, mi);
+			YamlNode *mode_node = yaml_mapping_get_value(modes, mi);
+			YamlMapping *binds;
+
+			if (mode_name == NULL || mode_node == NULL)
+				continue;
+			binds = yaml_node_get_mapping(mode_node);
+			if (binds != NULL)
+				gowl_config_load_keybind_mapping(self, binds, mode_name);
+		}
+	}
+
+	/* Pointer binds: mapping of
+	 *   "Mod+Button": { action: <name>, arg: "<value>", desc: "<text>" }
+	 * Buttons: Button1..9, Left/Middle/Right/Side/Extra, WheelUp/Down/
+	 * Left/Right.  A section that names Super+Button1 or Super+Button3
+	 * replaces the shipped move/resize grab on that button. */
+	if (yaml_mapping_has_member(mapping, "mousebinds")) {
+		YamlMapping *mb_mapping = yaml_mapping_get_mapping_member(
+			mapping, "mousebinds");
+		guint mb_count = mb_mapping != NULL ? yaml_mapping_get_size(mb_mapping) : 0;
+		guint i;
+
+		for (i = 0; i < mb_count; i++) {
+			const gchar *bind_str = yaml_mapping_get_key(mb_mapping, i);
+			YamlNode *val_node = yaml_mapping_get_value(mb_mapping, i);
+			YamlMapping *val_map;
+			gint action;
+			const gchar *arg_str, *desc_str;
+			guint mods, button;
+
+			if (bind_str == NULL || val_node == NULL)
+				continue;
+			val_map = yaml_node_get_mapping(val_node);
+			if (val_map == NULL)
+				continue;
+			if (!yaml_action_entry(val_map, &action, &arg_str, &desc_str))
+				continue;
+			if (!gowl_mousebind_parse(bind_str, &mods, &button))
+				continue;
+			gowl_config_add_mousebind(self, mods, button, action,
+			                          arg_str, desc_str);
+		}
+	}
+
+	/* Gesture binds: mapping of
+	 *   "swipe-left-3": { action: <name>, arg: "<value>" } */
+	if (yaml_mapping_has_member(mapping, "gestures")) {
+		YamlMapping *g_mapping = yaml_mapping_get_mapping_member(
+			mapping, "gestures");
+		guint g_count = g_mapping != NULL ? yaml_mapping_get_size(g_mapping) : 0;
+		guint i;
+
+		for (i = 0; i < g_count; i++) {
+			const gchar *bind_str = yaml_mapping_get_key(g_mapping, i);
+			YamlNode *val_node = yaml_mapping_get_value(g_mapping, i);
+			YamlMapping *val_map;
+			gint action;
+			const gchar *arg_str, *desc_str;
+			GowlGestureKind kind;
+			GowlGestureDirection dir;
+			guint fingers;
+
+			if (bind_str == NULL || val_node == NULL)
+				continue;
+			val_map = yaml_node_get_mapping(val_node);
+			if (val_map == NULL)
+				continue;
+			if (!yaml_action_entry(val_map, &action, &arg_str, &desc_str))
+				continue;
+			if (!gowl_gesture_parse(bind_str, &kind, &dir, &fingers))
+				continue;
+			gowl_config_add_gesture(self, kind, dir, fingers, action,
+			                        arg_str, desc_str);
+		}
+	}
+
+	/* Per-device input settings: mapping of a device match to a
+	 * mapping of settings, kept as strings.
+	 *
+	 *   input:
+	 *     touchpad:
+	 *       tap: true
+	 *       natural-scroll: true
+	 *     "*TrackPoint*":
+	 *       accel-profile: flat
+	 */
+	if (yaml_mapping_has_member(mapping, "input")) {
+		YamlMapping *in_mapping = yaml_mapping_get_mapping_member(
+			mapping, "input");
+		guint in_count = in_mapping != NULL ? yaml_mapping_get_size(in_mapping) : 0;
+		guint i;
+
+		for (i = 0; i < in_count; i++) {
+			const gchar *match = yaml_mapping_get_key(in_mapping, i);
+			YamlNode *val_node = yaml_mapping_get_value(in_mapping, i);
+			YamlMapping *settings;
+			guint n, si;
+
+			if (match == NULL || val_node == NULL)
+				continue;
+			settings = yaml_node_get_mapping(val_node);
+			if (settings == NULL)
+				continue;
+			n = yaml_mapping_get_size(settings);
+			for (si = 0; si < n; si++) {
+				const gchar *key = yaml_mapping_get_key(settings, si);
+				YamlNode *vn = yaml_mapping_get_value(settings, si);
+				const gchar *val = vn != NULL ? yaml_node_get_string(vn) : NULL;
+
+				if (key != NULL && val != NULL)
+					gowl_config_add_input_setting(self, match, key, val);
 			}
 		}
 	}
@@ -1711,8 +2208,10 @@ gowl_config_apply_mapping(
 
 				g_debug("gowl_config: keybind '%s' -> mods=0x%x sym=0x%x action=%d",
 			        bind_str, mods, keysym, action);
-			gowl_config_add_keybind_full(self, mods, keysym, action,
-			                              arg_str, desc_str);
+			gowl_config_add_keybind_ex(self, mods, keysym, action,
+			                           arg_str, desc_str,
+			                           yaml_keybind_mode(val_map, NULL),
+			                           yaml_keybind_flags(val_map));
 			}
 		}
 	}
@@ -1778,6 +2277,13 @@ gowl_config_apply_mapping(
 				                           floating, monitor,
 				                           width, height, center,
 				                           regex_mode);
+				if (yaml_mapping_has_member(rule_map, "sticky")) {
+					GowlRuleEntry *added = g_ptr_array_index(
+						self->rules, self->rules->len - 1);
+
+					added->sticky = yaml_mapping_get_boolean_member(
+						rule_map, "sticky");
+				}
 			}
 		}
 	}
@@ -2026,6 +2532,7 @@ gowl_config_apply_mapping(
 				mc->y = G_MININT;
 				mc->transform = -1;
 				mc->enabled = -1;
+				mc->vrr = -1;
 
 				if (yaml_mapping_has_member(mon_cfg_map, "width"))
 					mc->width = (gint)yaml_mapping_get_int_member(
@@ -2051,6 +2558,21 @@ gowl_config_apply_mapping(
 				if (yaml_mapping_has_member(mon_cfg_map, "transform"))
 					mc->transform = gowl_parse_monitor_transform(
 						mon_cfg_map);
+				/* `vrr' takes a bool or the string "on-demand":
+				 * adaptive sync only while a fullscreen game or
+				 * video is up, which is the mode that does not
+				 * make the cursor stutter on the desktop. */
+				if (yaml_mapping_has_member(mon_cfg_map, "vrr")) {
+					const gchar *vs = yaml_mapping_get_string_member(
+						mon_cfg_map, "vrr");
+					if (vs != NULL
+					    && (g_ascii_strcasecmp(vs, "on-demand") == 0
+					        || g_ascii_strcasecmp(vs, "on_demand") == 0))
+						mc->vrr = 2;
+					else
+						mc->vrr = yaml_mapping_get_boolean_member(
+							mon_cfg_map, "vrr") ? 1 : 0;
+				}
 
 				g_debug("gowl_config: monitor '%s': "
 				        "w=%d h=%d refresh=%.1f x=%d y=%d "
@@ -2311,6 +2833,34 @@ gowl_config_generate_yaml(GowlConfig *self)
 	g_string_append_printf(yaml, "repeat-delay: %d\n", self->repeat_delay);
 	g_string_append_printf(yaml, "sloppyfocus: %s\n", self->sloppyfocus ? "true" : "false");
 	g_string_append_printf(yaml, "manage_lid: %s\n", self->manage_lid ? "true" : "false");
+	g_string_append_printf(yaml, "idle-timeout: %d\n", self->idle_timeout);
+	g_string_append_printf(yaml, "dpms-timeout: %d\n", self->dpms_timeout);
+	g_string_append_printf(yaml, "allow-tearing: %s\n",
+	                       self->allow_tearing ? "true" : "false");
+	g_string_append_printf(yaml, "focus-on-activate: \"%s\"\n",
+	                       self->focus_on_activate != NULL
+	                       ? self->focus_on_activate : "smart");
+	{
+		const gchar *const xkb_keys[] = {
+			"xkb-layout", "xkb-variant", "xkb-model",
+			"xkb-options", "xkb-rules", "xkb-file"
+		};
+		const gchar *const xkb_vals[] = {
+			self->xkb_layout, self->xkb_variant, self->xkb_model,
+			self->xkb_options, self->xkb_rules, self->xkb_file
+		};
+		gsize xi;
+
+		for (xi = 0; xi < G_N_ELEMENTS(xkb_keys); xi++) {
+			if (xkb_vals[xi] == NULL)
+				continue;
+			{
+				g_autofree gchar *esc = gowl_config_escape_yaml(xkb_vals[xi]);
+				g_string_append_printf(yaml, "%s: \"%s\"\n",
+				                       xkb_keys[xi], esc);
+			}
+		}
+	}
 	g_string_append_printf(yaml, "input-recording: %s\n",
 	                       self->input_recording ? "true" : "false");
 	g_string_append_printf(yaml, "input-recording-deny-apps: \"%s\"\n",
@@ -2364,10 +2914,100 @@ gowl_config_generate_yaml(GowlConfig *self)
 				g_autofree gchar *esc = gowl_config_escape_yaml(kb->desc);
 				g_string_append_printf(yaml, ", desc: \"%s\"", esc);
 			}
+			if (kb->mode != NULL) {
+				g_autofree gchar *esc = gowl_config_escape_yaml(kb->mode);
+				g_string_append_printf(yaml, ", mode: \"%s\"", esc);
+			}
+			if (kb->flags & GOWL_KEYBIND_FLAG_LOCKED)
+				g_string_append(yaml, ", locked: true");
+			if (kb->flags & GOWL_KEYBIND_FLAG_RELEASE)
+				g_string_append(yaml, ", release: true");
+			if (kb->flags & GOWL_KEYBIND_FLAG_NO_REPEAT)
+				g_string_append(yaml, ", repeat: false");
 			g_string_append(yaml, " }\n");
 		}
 
 		g_type_class_unref(action_class);
+	}
+
+	/* Pointer binds -- always, since the two defaults are in here and
+	 * a reader should see what Super+Button1 does. */
+	if (self->mousebinds->len > 0) {
+		GEnumClass *action_class = (GEnumClass *)g_type_class_ref(
+			gowl_action_get_type());
+
+		g_string_append(yaml, "\nmousebinds:\n");
+		for (i = 0; i < self->mousebinds->len; i++) {
+			GowlMousebindEntry *mb =
+				&g_array_index(self->mousebinds, GowlMousebindEntry, i);
+			g_autofree gchar *bind_str =
+				gowl_mousebind_to_string(mb->modifiers, mb->button);
+			GEnumValue *enum_val = g_enum_get_value(action_class, mb->action);
+
+			g_string_append_printf(yaml, "  \"%s\": { action: %s",
+			                       bind_str,
+			                       enum_val != NULL ? enum_val->value_nick : "none");
+			if (mb->arg != NULL) {
+				g_autofree gchar *esc = gowl_config_escape_yaml(mb->arg);
+				g_string_append_printf(yaml, ", arg: \"%s\"", esc);
+			}
+			if (mb->desc != NULL) {
+				g_autofree gchar *esc = gowl_config_escape_yaml(mb->desc);
+				g_string_append_printf(yaml, ", desc: \"%s\"", esc);
+			}
+			g_string_append(yaml, " }\n");
+		}
+		g_type_class_unref(action_class);
+	}
+
+	/* Gesture binds */
+	if (self->gestures->len > 0) {
+		GEnumClass *action_class = (GEnumClass *)g_type_class_ref(
+			gowl_action_get_type());
+
+		g_string_append(yaml, "\ngestures:\n");
+		for (i = 0; i < self->gestures->len; i++) {
+			GowlGestureEntry *ge =
+				&g_array_index(self->gestures, GowlGestureEntry, i);
+			g_autofree gchar *bind_str = gowl_gesture_to_string(
+				(GowlGestureKind)ge->kind,
+				(GowlGestureDirection)ge->direction, ge->fingers);
+			GEnumValue *enum_val = g_enum_get_value(action_class, ge->action);
+
+			g_string_append_printf(yaml, "  \"%s\": { action: %s",
+			                       bind_str,
+			                       enum_val != NULL ? enum_val->value_nick : "none");
+			if (ge->arg != NULL) {
+				g_autofree gchar *esc = gowl_config_escape_yaml(ge->arg);
+				g_string_append_printf(yaml, ", arg: \"%s\"", esc);
+			}
+			if (ge->desc != NULL) {
+				g_autofree gchar *esc = gowl_config_escape_yaml(ge->desc);
+				g_string_append_printf(yaml, ", desc: \"%s\"", esc);
+			}
+			g_string_append(yaml, " }\n");
+		}
+		g_type_class_unref(action_class);
+	}
+
+	/* input: blocks, settings in hash order (they are independent) */
+	if (self->input_configs->len > 0) {
+		g_string_append(yaml, "\ninput:\n");
+		for (i = 0; i < self->input_configs->len; i++) {
+			GowlInputConfigEntry *ic =
+				g_ptr_array_index(self->input_configs, i);
+			GHashTableIter it;
+			gpointer k, v;
+			g_autofree gchar *esc_match = gowl_config_escape_yaml(ic->match);
+
+			g_string_append_printf(yaml, "  \"%s\":\n", esc_match);
+			g_hash_table_iter_init(&it, ic->settings);
+			while (g_hash_table_iter_next(&it, &k, &v)) {
+				g_autofree gchar *esc = gowl_config_escape_yaml((const gchar *)v);
+				g_string_append_printf(yaml, "    %s: \"%s\"\n",
+				                       (const gchar *)k, esc);
+			}
+		}
 	}
 
 	/* Rules */
@@ -2392,6 +3032,8 @@ gowl_config_generate_yaml(GowlConfig *self)
 				g_string_append(yaml, "    center: false\n");
 			if (rule->regex_mode)
 				g_string_append(yaml, "    regex: true\n");
+			if (rule->sticky)
+				g_string_append(yaml, "    sticky: true\n");
 		}
 	}
 
@@ -2524,6 +3166,59 @@ gowl_config_get_manage_lid(GowlConfig *self)
 	return self->manage_lid;
 }
 
+/**
+ * gowl_config_get_idle_timeout:
+ * @self: a #GowlConfig
+ *
+ * Returns: the idle timeout in seconds, 0 for never
+ */
+gint
+gowl_config_get_idle_timeout(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_IDLE_TIMEOUT);
+	return self->idle_timeout;
+}
+
+/**
+ * gowl_config_get_dpms_timeout:
+ * @self: a #GowlConfig
+ *
+ * Returns: the output power-off timeout in seconds, 0 for never
+ */
+gint
+gowl_config_get_dpms_timeout(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_DPMS_TIMEOUT);
+	return self->dpms_timeout;
+}
+
+/**
+ * gowl_config_get_allow_tearing:
+ * @self: a #GowlConfig
+ *
+ * Returns: %TRUE if fullscreen windows may tear when they ask to
+ */
+gboolean
+gowl_config_get_allow_tearing(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_ALLOW_TEARING);
+	return self->allow_tearing;
+}
+
+/**
+ * gowl_config_get_focus_on_activate:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none): "smart", "urgent", "focus" or "none"
+ */
+const gchar *
+gowl_config_get_focus_on_activate(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE);
+	return self->focus_on_activate != NULL
+	       ? self->focus_on_activate : GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE;
+}
+
 gboolean
 gowl_config_get_input_recording(GowlConfig *self)
 {
@@ -2642,6 +3337,16 @@ gowl_config_reset_values_to_defaults(GowlConfig *self)
 	             "menu",                GOWL_CONFIG_DEFAULT_MENU,
 	             "sloppyfocus",         GOWL_CONFIG_DEFAULT_SLOPPYFOCUS,
 	             "manage-lid",          GOWL_CONFIG_DEFAULT_MANAGE_LID,
+	             "idle-timeout",        GOWL_CONFIG_DEFAULT_IDLE_TIMEOUT,
+	             "dpms-timeout",        GOWL_CONFIG_DEFAULT_DPMS_TIMEOUT,
+	             "allow-tearing",       GOWL_CONFIG_DEFAULT_ALLOW_TEARING,
+	             "focus-on-activate",   GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE,
+	             "xkb-layout",          NULL,
+	             "xkb-variant",         NULL,
+	             "xkb-model",           NULL,
+	             "xkb-options",         NULL,
+	             "xkb-rules",           NULL,
+	             "xkb-file",            NULL,
 	             "input-recording",     GOWL_CONFIG_DEFAULT_INPUT_RECORDING,
 	             "input-recording-deny-apps",
 	                 GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS,
@@ -2651,6 +3356,14 @@ gowl_config_reset_values_to_defaults(GowlConfig *self)
 
 	if (self->keybinds != NULL)
 		g_array_set_size(self->keybinds, 0);
+	if (self->mousebinds != NULL) {
+		g_array_set_size(self->mousebinds, 0);
+		gowl_config_add_default_mousebinds(self);
+	}
+	if (self->gestures != NULL)
+		g_array_set_size(self->gestures, 0);
+	if (self->input_configs != NULL)
+		g_ptr_array_set_size(self->input_configs, 0);
 	if (self->rules != NULL)
 		g_ptr_array_set_size(self->rules, 0);
 	if (self->dropdowns != NULL)
@@ -2711,6 +3424,21 @@ gowl_config_add_keybind_full(
 	const gchar *arg,
 	const gchar *desc
 ){
+	gowl_config_add_keybind_ex(self, modifiers, keysym, action, arg, desc,
+	                           NULL, GOWL_KEYBIND_FLAG_NONE);
+}
+
+void
+gowl_config_add_keybind_ex(
+	GowlConfig  *self,
+	guint        modifiers,
+	guint        keysym,
+	gint         action,
+	const gchar *arg,
+	const gchar *desc,
+	const gchar *mode,
+	guint        flags
+){
 	GowlKeybindEntry entry;
 
 	g_return_if_fail(GOWL_IS_CONFIG(self));
@@ -2720,8 +3448,256 @@ gowl_config_add_keybind_full(
 	entry.action    = action;
 	entry.arg       = g_strdup(arg);
 	entry.desc      = g_strdup(desc);
+	/* "default" and "" are the default mode, stored as NULL so that
+	 * one comparison covers every way of writing it. */
+	entry.mode      = (mode != NULL && *mode != '\0'
+	                   && g_strcmp0(mode, "default") != 0)
+	                  ? g_strdup(mode) : NULL;
+	entry.flags     = flags;
 
 	g_array_append_val(self->keybinds, entry);
+}
+
+/* --- Pointer binds --- */
+
+void
+gowl_config_add_mousebind(
+	GowlConfig  *self,
+	guint        modifiers,
+	guint        button,
+	gint         action,
+	const gchar *arg,
+	const gchar *desc
+){
+	GowlMousebindEntry entry;
+
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	gowl_config_remove_mousebind(self, modifiers, button);
+	entry.modifiers = modifiers;
+	entry.button    = button;
+	entry.action    = action;
+	entry.arg       = g_strdup(arg);
+	entry.desc      = g_strdup(desc);
+	g_array_append_val(self->mousebinds, entry);
+}
+
+guint
+gowl_config_remove_mousebind(
+	GowlConfig *self,
+	guint       modifiers,
+	guint       button
+){
+	guint i;
+	guint removed = 0;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0);
+
+	for (i = 0; i < self->mousebinds->len; ) {
+		GowlMousebindEntry *mb =
+			&g_array_index(self->mousebinds, GowlMousebindEntry, i);
+
+		if (mb->modifiers == modifiers && mb->button == button) {
+			g_array_remove_index(self->mousebinds, i);
+			removed++;
+			continue;
+		}
+		i++;
+	}
+	return removed;
+}
+
+void
+gowl_config_clear_mousebinds(GowlConfig *self)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_array_set_size(self->mousebinds, 0);
+}
+
+GArray *
+gowl_config_get_mousebinds(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->mousebinds;
+}
+
+/* --- Gesture binds --- */
+
+void
+gowl_config_add_gesture(
+	GowlConfig  *self,
+	gint         kind,
+	gint         direction,
+	guint        fingers,
+	gint         action,
+	const gchar *arg,
+	const gchar *desc
+){
+	GowlGestureEntry entry;
+	guint i;
+
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	for (i = 0; i < self->gestures->len; i++) {
+		GowlGestureEntry *ge =
+			&g_array_index(self->gestures, GowlGestureEntry, i);
+
+		if (ge->kind == kind && ge->direction == direction
+		    && ge->fingers == fingers) {
+			g_array_remove_index(self->gestures, i);
+			break;
+		}
+	}
+	entry.kind      = kind;
+	entry.direction = direction;
+	entry.fingers   = fingers;
+	entry.action    = action;
+	entry.arg       = g_strdup(arg);
+	entry.desc      = g_strdup(desc);
+	g_array_append_val(self->gestures, entry);
+}
+
+void
+gowl_config_clear_gestures(GowlConfig *self)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_array_set_size(self->gestures, 0);
+}
+
+GArray *
+gowl_config_get_gestures(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->gestures;
+}
+
+/* --- input: blocks --- */
+
+void
+gowl_config_add_input_setting(
+	GowlConfig  *self,
+	const gchar *match,
+	const gchar *key,
+	const gchar *value
+){
+	GowlInputConfigEntry *ic = NULL;
+	guint i;
+
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_return_if_fail(match != NULL && key != NULL && value != NULL);
+
+	for (i = 0; i < self->input_configs->len; i++) {
+		GowlInputConfigEntry *e = g_ptr_array_index(self->input_configs, i);
+
+		if (g_strcmp0(e->match, match) == 0) {
+			ic = e;
+			break;
+		}
+	}
+	if (ic == NULL) {
+		ic = g_new0(GowlInputConfigEntry, 1);
+		ic->match = g_strdup(match);
+		ic->settings = g_hash_table_new_full(g_str_hash, g_str_equal,
+		                                     g_free, g_free);
+		g_ptr_array_add(self->input_configs, ic);
+	}
+	g_hash_table_insert(ic->settings, g_strdup(key), g_strdup(value));
+}
+
+void
+gowl_config_clear_input_settings(GowlConfig *self)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_ptr_array_set_size(self->input_configs, 0);
+}
+
+GPtrArray *
+gowl_config_get_input_configs(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->input_configs;
+}
+
+const gchar *
+gowl_config_lookup_input_setting(
+	GowlConfig  *self,
+	const gchar *device_name,
+	const gchar *device_class,
+	const gchar *key
+){
+	const gchar *found = NULL;
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	g_return_val_if_fail(key != NULL, NULL);
+
+	for (i = 0; i < self->input_configs->len; i++) {
+		GowlInputConfigEntry *e = g_ptr_array_index(self->input_configs, i);
+		const gchar *v;
+		gboolean matches;
+
+		if (g_strcmp0(e->match, "*") == 0)
+			matches = TRUE;
+		else if (device_class != NULL
+		         && (g_ascii_strcasecmp(e->match, device_class) == 0
+		             || (g_ascii_strcasecmp(e->match, "mouse") == 0
+		                 && g_strcmp0(device_class, "pointer") == 0)))
+			matches = TRUE;
+		else if (device_name != NULL)
+			matches = g_pattern_match_simple(e->match, device_name);
+		else
+			matches = FALSE;
+		if (!matches)
+			continue;
+		v = g_hash_table_lookup(e->settings, key);
+		if (v != NULL)
+			found = v;
+	}
+	return found;
+}
+
+/* --- XKB --- */
+
+const gchar *
+gowl_config_get_xkb_layout(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->xkb_layout;
+}
+
+const gchar *
+gowl_config_get_xkb_variant(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->xkb_variant;
+}
+
+const gchar *
+gowl_config_get_xkb_model(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->xkb_model;
+}
+
+const gchar *
+gowl_config_get_xkb_options(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->xkb_options;
+}
+
+const gchar *
+gowl_config_get_xkb_rules(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->xkb_rules;
+}
+
+const gchar *
+gowl_config_get_xkb_file(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->xkb_file;
 }
 
 /**
@@ -2866,7 +3842,25 @@ gowl_config_add_rule_full(
 	rule->height     = height;
 	rule->center     = center;
 	rule->regex_mode = regex_mode;
+	rule->sticky     = FALSE;
 
+	g_ptr_array_add(self->rules, rule);
+}
+
+void
+gowl_config_add_rule_entry(
+	GowlConfig          *self,
+	const GowlRuleEntry *entry
+){
+	GowlRuleEntry *rule;
+
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_return_if_fail(entry != NULL);
+
+	rule = g_new0(GowlRuleEntry, 1);
+	*rule = *entry;
+	rule->app_id = g_strdup(entry->app_id);
+	rule->title  = g_strdup(entry->title);
 	g_ptr_array_add(self->rules, rule);
 }
 

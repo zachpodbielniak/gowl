@@ -497,6 +497,29 @@ gowl_client_set_urgent(
 	}
 }
 
+gboolean
+gowl_client_get_sticky(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), FALSE);
+
+	return self->issticky;
+}
+
+void
+gowl_client_set_sticky(
+	GowlClient *self,
+	gboolean    sticky
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	if (self->issticky == sticky)
+		return;
+	self->issticky = sticky;
+	g_signal_emit(self, client_signals[SIGNAL_STATE_CHANGED], 0);
+	if (self->compositor != NULL && self->mon != NULL)
+		gowl_compositor_arrange(self->compositor, self->mon);
+}
+
 /**
  * gowl_client_get_title:
  * @self: a #GowlClient

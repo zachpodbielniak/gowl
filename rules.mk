@@ -10,6 +10,7 @@ PROTO_HDRS := \
 	tablet-v2-protocol.h \
 	ext-image-copy-capture-v1-protocol.h \
 	ext-workspace-v1-protocol.h \
+	wlr-output-power-management-unstable-v1-protocol.h \
 	gowl-input-capture-v1-protocol.h
 
 # All source objects depend on generated version header and protocol headers
@@ -226,6 +227,13 @@ ext-image-copy-capture-v1-protocol.h:
 ext-workspace-v1-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
 		$(WAYLAND_PROTOCOLS_DIR)/staging/ext-workspace/ext-workspace-v1.xml $@
+
+# wlr-output-power-management: wlroots's own header includes the
+# generated server header by bare name on every version, so the XML
+# vendored in protocols/ is run through the scanner here.
+wlr-output-power-management-unstable-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		protocols/wlr-output-power-management-unstable-v1.xml $@
 
 ext-workspace-v1-protocol.c: ext-workspace-v1-protocol.h
 	$(WAYLAND_SCANNER) private-code \

@@ -88,6 +88,16 @@
 
 /* wlroots - misc protocols */
 #include <wlr/types/wlr_idle_inhibit_v1.h>
+#include <wlr/types/wlr_output_power_management_v1.h>
+#include <wlr/types/wlr_keyboard_shortcuts_inhibit_v1.h>
+#include <wlr/types/wlr_foreign_toplevel_management_v1.h>
+#include <wlr/types/wlr_tearing_control_v1.h>
+#include <wlr/types/wlr_content_type_v1.h>
+#include <wlr/types/wlr_xdg_foreign_registry.h>
+#include <wlr/types/wlr_xdg_foreign_v1.h>
+#include <wlr/types/wlr_xdg_foreign_v2.h>
+#include <wlr/types/wlr_linux_drm_syncobj_v1.h>
+#include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/types/wlr_idle_notify_v1.h>
 #include <wlr/types/wlr_server_decoration.h>
 #include <wlr/types/wlr_session_lock_v1.h>
@@ -210,6 +220,42 @@ struct _GowlCompositor {
 	struct wlr_xdg_decoration_manager_v1    *xdg_decoration_mgr;
 	struct wlr_output_manager_v1            *output_mgr;
 
+	/* wlr-output-power-management: wlopm, swayidle and the like turn
+	 * outputs off and on through it; the idle manager's dpms-timeout
+	 * uses the same path (see gowl-output-power.c). */
+	struct wlr_output_power_manager_v1      *output_power_mgr;
+	struct wl_listener                       output_power_set_mode;
+	/* When the idle timer turned the outputs off, so that the next
+	 * input turns them back on.  An explicit `output-power off' does
+	 * not set it: the key release that follows must not undo it, so
+	 * that one is left to a later input past @output_power_grace. */
+	gboolean                                 outputs_off_by_idle;
+	gint64                                   output_power_grace;
+
+	/* keyboard-shortcuts-inhibit: a VM console, a VNC viewer or a game
+	 * asks for every key, compositor chords included.  Honoured only
+	 * for the focused surface (see gowl-shortcuts-inhibit.c). */
+	struct wlr_keyboard_shortcuts_inhibit_manager_v1 *shortcuts_inhibit_mgr;
+	struct wl_listener                       new_shortcuts_inhibitor;
+
+	/* wlr-foreign-toplevel-management: the writable twin of the
+	 * ext-foreign-toplevel-list gowl already served.  Taskbars, wlrctl
+	 * and window pickers list, activate and close windows through it
+	 * (see gowl-foreign-toplevel.c). */
+	struct wlr_foreign_toplevel_manager_v1  *foreign_toplevel_mgr;
+
+	/* tearing-control-v1 and content-type-v1.  The first is how a game
+	 * asks to be page-flipped without vsync; the second is how it (or a
+	 * video player) says what it is showing, which is what an
+	 * `on-demand' adaptive-sync output keys off. */
+	struct wlr_tearing_control_manager_v1   *tearing_control_mgr;
+	struct wlr_content_type_manager_v1      *content_type_mgr;
+
+	/* text-input-v3 / input-method-v2 relay, and the virtual keyboards
+	 * an input method sends declined keys back through.  Opaque; see
+	 * gowl-text-input.c. */
+	gpointer                                 text_input_relay;
+
 	/* gowl sub-objects (compositor-owned) */
 	GowlConfig                   *config;       /* borrowed ref */
 	GowlConfig                   *owned_config; /* the last one a reload made */
@@ -273,6 +319,35 @@ struct _GowlCompositor {
 	const xkb_keysym_t          *kb_keysyms;
 	guint32                       kb_mods;
 	struct wl_event_source       *key_repeat_source;
+	/* Whether the bind that last matched may repeat while held
+	 * (GOWL_KEYBIND_FLAG_NO_REPEAT unset). */
+	gboolean                      kb_repeat_ok;
+
+	/* The key mode in force, or NULL for the default.  A bind in a
+	 * mode is only consulted while its mode is in force; a key not
+	 * bound in the mode goes to the client as usual. */
+	gchar                        *key_mode;
+
+	/* The keyboard layout group last seen, so a switch made by an xkb
+	 * option (grp:alt_shift_toggle) is announced like one made by the
+	 * `switch-layout' action. */
+	guint                         last_kb_group;
+
+	/* Every input device handed over by the backend (gowl-input-config.c),
+	 * so a settings or keymap change on reload reaches devices already
+	 * plugged in. */
+	GList                        *input_devices;
+
+	/* A configured gesture in progress.  A finger count with any
+	 * gesture bound is claimed for the whole gesture, like a module
+	 * claimant; the travel is summed and read at the end. */
+	gboolean                      gesture_bound;
+	guint                         gesture_fingers;
+	gdouble                       gesture_dx;
+	gdouble                       gesture_dy;
+	gboolean                      pinch_bound;
+	guint                         pinch_fingers;
+	gdouble                       pinch_scale;
 
 	/* client / monitor lists */
 	GList                        *monitors;   /* GList of GowlMonitor* */
@@ -527,6 +602,16 @@ struct _GowlMonitor {
 	gboolean effect_live;
 	struct wlr_scene_rect   *fullscreen_bg;
 
+	/* Powered off through wlr-output-power-management or the idle
+	 * timer, as opposed to disabled by the lid policy: the output
+	 * stays in the layout with its clients, and comes straight back. */
+	gboolean powered_off;
+	/* Adaptive sync as configured (`vrr' in monitors:), -1 unset, 0
+	 * off, 1 on, 2 on demand; and whether the last commit enabled it,
+	 * so on-demand only touches the output state on a change. */
+	gint     vrr_mode;
+	gboolean vrr_enabled;
+
 	struct wlr_box m;   /* monitor area, layout-relative */
 	struct wlr_box w;   /* window area (minus bar / layer-shell) */
 
@@ -601,6 +686,9 @@ struct _GowlClient {
 	gboolean isfloating;
 	gboolean isurgent;
 	gboolean isfullscreen;
+	/* Pinned: shown on every tag of its monitor, whatever is viewed.
+	 * Its own tags are kept, so unpinning puts it back where it was. */
+	gboolean issticky;
 	gboolean isembedded;     /* externally managed (skip arrange) */
 	gfloat   alpha;          /* opacity: 0.0 (transparent) to 1.0 (opaque) */
 
@@ -636,6 +724,14 @@ struct _GowlClient {
 
 	/* XDG decoration (may be NULL if client doesn't negotiate) */
 	struct wlr_xdg_toplevel_decoration_v1 *decoration;
+
+	/* The window as a taskbar sees it (wlr-foreign-toplevel-management).
+	 * NULL for embedded and unmanaged clients, which no taskbar should
+	 * list.  See gowl-foreign-toplevel.c. */
+	struct wlr_foreign_toplevel_handle_v1 *foreign_toplevel;
+	struct wl_listener ft_request_activate;
+	struct wl_listener ft_request_close;
+	struct wl_listener ft_request_fullscreen;
 
 	GowlMonitor    *mon;         /* assigned monitor (unowned) */
 	GowlCompositor *compositor;  /* back-reference (unowned) */
@@ -751,6 +847,20 @@ struct _GowlIdleManager {
 	gpointer  wlr_idle_inhibit_manager;   /* struct wlr_idle_inhibit_manager_v1* */
 	gint      timeout_secs;
 	gint      state;                       /* 0 = ACTIVE, 1 = IDLE */
+
+	/* Set by gowl_idle_manager_attach().  The compositor is unowned:
+	 * it owns the manager. */
+	gpointer  compositor;                  /* GowlCompositor* */
+	struct wl_event_source *idle_timer;    /* fires "idle" */
+	struct wl_event_source *dpms_timer;    /* powers the outputs off */
+	gint      dpms_timeout_secs;           /* 0 = never */
+
+	/* idle-inhibit-v1: one entry per live inhibitor, and whether any
+	 * of them is on a visible surface right now.  While inhibited
+	 * neither timer runs and ext-idle-notify clients are told so. */
+	struct wl_listener new_inhibitor;
+	GList    *inhibitors;                  /* GowlIdleInhibitor* */
+	gboolean  inhibited;
 };
 
 /**
@@ -811,4 +921,62 @@ void gowl_color_parse_to_floats   (const gchar *hex, float out[4]);
 /* Apply an output viewport to live content and decorations. */
 gboolean gowl_compositor_clip_client_geometry(GowlCompositor *self, GowlClient *client,
                                                const struct wlr_box *box);
+
+/* The static setfullscreen()/setfloating() in gowl-compositor.c, for the
+ * other core files (foreign-toplevel requests) that need them. */
+void gowl_compositor_set_client_fullscreen (GowlCompositor *self, GowlClient *c,
+                                            gboolean fullscreen);
+void gowl_compositor_set_client_floating   (GowlCompositor *self, GowlClient *c,
+                                            gboolean floating);
+
+/* A window asked to be activated (xdg-activation, an X11 client, a
+ * taskbar through foreign-toplevel).  Applies the `focus-on-activate'
+ * policy: focus it, mark it urgent, or nothing.  Where it lives:
+ * gowl-compositor.c. */
+void gowl_compositor_activate_client (GowlCompositor *self, GowlClient *c);
+
+/* idle-inhibit and the idle/dpms timers: gowl-idle-manager.c */
+void     gowl_idle_manager_attach          (GowlIdleManager *self, GowlCompositor *comp);
+void     gowl_idle_manager_detach          (GowlIdleManager *self);
+void     gowl_idle_manager_check_inhibitors(GowlIdleManager *self);
+
+/* wlr-output-power-management and the dpms path: gowl-output-power.c */
+void     gowl_output_power_init            (GowlCompositor *self);
+void     gowl_output_power_finish          (GowlCompositor *self);
+void     gowl_compositor_set_monitor_powered(GowlCompositor *self, GowlMonitor *m,
+                                             gboolean on);
+gboolean gowl_compositor_wake_outputs      (GowlCompositor *self);
+
+/* keyboard-shortcuts-inhibit: gowl-shortcuts-inhibit.c */
+void     gowl_shortcuts_inhibit_init       (GowlCompositor *self);
+void     gowl_shortcuts_inhibit_finish     (GowlCompositor *self);
+void     gowl_shortcuts_inhibit_sync       (GowlCompositor *self);
+gboolean gowl_shortcuts_inhibited          (GowlCompositor *self);
+
+/* text-input / input-method / virtual keyboards: gowl-text-input.c */
+void     gowl_text_input_init              (GowlCompositor *self);
+void     gowl_text_input_finish            (GowlCompositor *self);
+gboolean gowl_text_input_grab_key          (GowlCompositor *self, struct wlr_keyboard *kb,
+                                            guint32 time_msec, guint32 keycode,
+                                            guint32 state);
+gboolean gowl_text_input_grab_modifiers    (GowlCompositor *self, struct wlr_keyboard *kb);
+
+/* per-device input settings: gowl-input-config.c */
+void     gowl_input_config_track_device    (GowlCompositor *self, struct wlr_input_device *dev);
+void     gowl_input_config_apply_device    (GowlCompositor *self, struct wlr_input_device *dev);
+void     gowl_input_config_apply_all       (GowlCompositor *self);
+void     gowl_input_config_finish          (GowlCompositor *self);
+void     gowl_input_config_foreach_keyboard(GowlCompositor *self,
+                                            void (*func)(struct wlr_keyboard *kb, gpointer user_data),
+                                            gpointer user_data);
+
+/* wlr-foreign-toplevel-management: gowl-foreign-toplevel.c */
+void     gowl_foreign_toplevel_init        (GowlCompositor *self);
+void     gowl_foreign_toplevel_client_map  (GowlCompositor *self, GowlClient *c);
+void     gowl_foreign_toplevel_client_unmap(GowlClient *c);
+void     gowl_foreign_toplevel_client_title(GowlClient *c);
+void     gowl_foreign_toplevel_client_activated (GowlClient *c, gboolean activated);
+void     gowl_foreign_toplevel_client_fullscreen(GowlClient *c, gboolean fullscreen);
+void     gowl_foreign_toplevel_client_monitor   (GowlClient *c, GowlMonitor *old_mon,
+                                                 GowlMonitor *new_mon);
 #endif /* GOWL_CORE_PRIVATE_H */

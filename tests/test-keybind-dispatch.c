@@ -388,6 +388,124 @@ test_move_stack(void)
 	g_object_unref(cfg);
 }
 
+/* --- key modes and bind flags --- */
+
+typedef struct {
+	guint calls;
+	gchar *last;
+} ModeProbe;
+
+static void
+on_mode_changed(GowlCompositor *c, const gchar *mode, gpointer data)
+{
+	ModeProbe *p = (ModeProbe *)data;
+	(void)c;
+
+	p->calls++;
+	g_free(p->last);
+	p->last = g_strdup(mode);
+}
+
+static void
+test_modes(void)
+{
+	GowlCompositor *c = gowl_compositor_new();
+	GowlConfig     *cfg = gowl_config_new();
+	CustomProbe     probe = { 0, NULL, FALSE };
+	ModeProbe       mp = { 0, NULL };
+
+	/* Super+r enters "resize"; inside it h runs a custom action and
+	 * Escape leaves; h alone means nothing in the default mode. */
+	gowl_config_add_keybind_full(cfg, GOWL_KEY_MOD_LOGO, XKB_KEY_r,
+	                             GOWL_ACTION_MODE, "resize", NULL);
+	gowl_config_add_keybind_ex(cfg, 0, XKB_KEY_h, GOWL_ACTION_CUSTOM,
+	                           "(shrink)", NULL, "resize", 0);
+	gowl_config_add_keybind_ex(cfg, 0, XKB_KEY_Escape, GOWL_ACTION_MODE,
+	                           "default", NULL, "resize", 0);
+	gowl_compositor_set_config(c, cfg);
+	gowl_compositor_set_custom_action_handler(c, probe_custom, &probe);
+	g_signal_connect(c, "mode-changed", G_CALLBACK(on_mode_changed), &mp);
+
+	g_assert_cmpstr(gowl_compositor_get_key_mode(c), ==, "default");
+	g_assert_false(gowl_compositor_dispatch_keybind(c, 0, XKB_KEY_h));
+	g_assert_cmpuint(probe.calls, ==, 0);
+
+	g_assert_true(gowl_compositor_dispatch_keybind(c, GOWL_KEY_MOD_LOGO, XKB_KEY_r));
+	g_assert_cmpstr(gowl_compositor_get_key_mode(c), ==, "resize");
+	g_assert_cmpuint(mp.calls, ==, 1);
+	g_assert_cmpstr(mp.last, ==, "resize");
+
+	/* In the mode: h fires, Super+r (a default-mode bind) does not. */
+	g_assert_true(gowl_compositor_dispatch_keybind(c, 0, XKB_KEY_h));
+	g_assert_cmpuint(probe.calls, ==, 1);
+	g_assert_false(gowl_compositor_dispatch_keybind(c, GOWL_KEY_MOD_LOGO, XKB_KEY_r));
+
+	g_assert_true(gowl_compositor_dispatch_keybind(c, 0, XKB_KEY_Escape));
+	g_assert_cmpstr(gowl_compositor_get_key_mode(c), ==, "default");
+	g_assert_cmpuint(mp.calls, ==, 2);
+	g_assert_cmpstr(mp.last, ==, "default");
+	/* Entering the mode one is in is not a change. */
+	gowl_compositor_set_key_mode(c, NULL);
+	gowl_compositor_set_key_mode(c, "");
+	g_assert_cmpuint(mp.calls, ==, 2);
+
+	g_free(mp.last);
+	g_free(probe.last_arg);
+	g_object_unref(c);
+	g_object_unref(cfg);
+}
+
+static void
+test_locked_and_release_flags(void)
+{
+	GowlCompositor *c = gowl_compositor_new();
+	GowlConfig     *cfg = gowl_config_new();
+	CustomProbe     probe = { 0, NULL, FALSE };
+
+	gowl_config_add_keybind_ex(cfg, 0, XKB_KEY_XF86AudioMute,
+	                           GOWL_ACTION_CUSTOM, "(mute)", NULL, NULL,
+	                           GOWL_KEYBIND_FLAG_LOCKED);
+	gowl_config_add_keybind_ex(cfg, GOWL_KEY_MOD_LOGO, XKB_KEY_x,
+	                           GOWL_ACTION_CUSTOM, "(released)", NULL, NULL,
+	                           GOWL_KEYBIND_FLAG_RELEASE);
+	gowl_config_add_keybind_ex(cfg, GOWL_KEY_MOD_LOGO, XKB_KEY_n,
+	                           GOWL_ACTION_CUSTOM, "(once)", NULL, NULL,
+	                           GOWL_KEYBIND_FLAG_NO_REPEAT);
+	gowl_compositor_set_config(c, cfg);
+	gowl_compositor_set_custom_action_handler(c, probe_custom, &probe);
+
+	/* Locked: only the locked bind answers. */
+	g_assert_true(gowl_compositor_dispatch_key(c, 0, XKB_KEY_XF86AudioMute,
+	                                           TRUE, TRUE));
+	g_assert_cmpstr(probe.last_arg, ==, "(mute)");
+	g_assert_false(gowl_compositor_dispatch_key(c, GOWL_KEY_MOD_LOGO, XKB_KEY_n,
+	                                            TRUE, TRUE));
+	/* Unlocked it answers as well. */
+	g_assert_true(gowl_compositor_dispatch_key(c, 0, XKB_KEY_XF86AudioMute,
+	                                           TRUE, FALSE));
+
+	/* Release: not on the press, on the release. */
+	g_assert_false(gowl_compositor_dispatch_key(c, GOWL_KEY_MOD_LOGO, XKB_KEY_x,
+	                                            TRUE, FALSE));
+	g_assert_true(gowl_compositor_dispatch_key(c, GOWL_KEY_MOD_LOGO, XKB_KEY_x,
+	                                           FALSE, FALSE));
+	g_assert_cmpstr(probe.last_arg, ==, "(released)");
+	/* An ordinary bind does nothing on release. */
+	g_assert_false(gowl_compositor_dispatch_key(c, GOWL_KEY_MOD_LOGO, XKB_KEY_n,
+	                                            FALSE, FALSE));
+
+	/* repeat: false is remembered for the key-repeat timer. */
+	g_assert_true(gowl_compositor_dispatch_keybind(c, GOWL_KEY_MOD_LOGO, XKB_KEY_n));
+	g_assert_false(c->kb_repeat_ok);
+	g_assert_true(gowl_compositor_dispatch_key(c, 0, XKB_KEY_XF86AudioMute,
+	                                           TRUE, FALSE));
+	g_assert_true(c->kb_repeat_ok);
+
+	g_free(probe.last_arg);
+	g_object_unref(c);
+	g_object_unref(cfg);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -413,5 +531,9 @@ main(int argc, char *argv[])
 	                test_reload_keeps_the_given_config);
 
 	g_test_add_func("/keybind-dispatch/move-stack", test_move_stack);
+	g_test_add_func("/keybind-dispatch/modes", test_modes);
+	g_test_add_func("/keybind-dispatch/locked-and-release-flags",
+	                test_locked_and_release_flags);
+
 	return g_test_run();
 }

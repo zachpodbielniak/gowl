@@ -29,6 +29,18 @@ sloppyfocus: true
 # shut and an external display is connected.  Set false to keep driving
 # a closed-lid panel.
 manage_lid: true
+# Idle and power.  idle-timeout is when the session counts as idle (the
+# screenlock module's auto-lock has its own timer, see below); dpms-timeout
+# powers every output off, and any input powers them back on.  A window
+# holding an idle inhibitor -- a video player -- holds both off.
+idle-timeout: 300
+dpms-timeout: 0
+# Let a fullscreen window that asks for it (tearing-control-v1: a game)
+# be presented without vsync.  Never applied to anything else.
+allow-tearing: false
+# What a window's request to be activated does: smart (focus if visible
+# on the selected monitor, else mark urgent), urgent, focus, none.
+focus-on-activate: smart
 
 # Palette -- one set of colours for the whole session.
 #
@@ -296,6 +308,18 @@ keybinds:
 
   # Session
   "Super+Shift+q": { action: quit, desc: "Quit gowl" }
+  # Focus by direction, the previous window, and the urgent one.
+  "Super+Ctrl+h": { action: focus_dir, arg: left, desc: "Focus left" }
+  "Super+Ctrl+j": { action: focus_dir, arg: down, desc: "Focus down" }
+  "Super+Ctrl+k": { action: focus_dir, arg: up, desc: "Focus up" }
+  "Super+Ctrl+l": { action: focus_dir, arg: right, desc: "Focus right" }
+  "Super+Ctrl+u": { action: focus_urgent, desc: "Focus the urgent window" }
+  "Super+Ctrl+Tab": { action: focus_last, desc: "Focus the previous window" }
+  # Pin the focused window to every tag; enter resize mode (see modes:).
+  "Super+Shift+t": { action: toggle_sticky, desc: "Pin / unpin window" }
+  "Super+r": { action: mode, arg: resize, desc: "Resize mode" }
+  # Screen off by hand (any input half a second later turns it back on).
+  "Super+Ctrl+o": { action: output_power, arg: "off", desc: "Screens off" }
   "Super+Shift+r": { action: reload_config, desc: "Reload config" }
   "Super+Shift+l": { action: lock, desc: "Lock the session" }
 
@@ -460,6 +484,50 @@ autostart: []
 #       y: 0
 #       scale: 1.0
 monitors: {}
+# Adaptive sync per output: true, false, or on-demand (only while a
+# fullscreen window declares game or video content).
+#   monitors:
+#     DP-1:
+#       vrr: on-demand
+
+# Keyboard layout.  Unset keys fall back to XKB_DEFAULT_* and xkb's defaults.
+# xkb-layout: "us,de"
+# xkb-variant: ",nodeadkeys"
+# xkb-options: "grp:alt_shift_toggle,caps:escape"
+
+# Per-device input settings: a class (touchpad, pointer, keyboard), "*",
+# or a glob on the device name; later blocks override earlier ones.
+# input:
+#   touchpad:
+#     tap: true
+#     natural-scroll: true
+#     accel-speed: 0.2
+#   "*TrackPoint*":
+#     accel-profile: flat
+
+# Pointer binds.  Super+Button1 move_window and Super+Button3 resize_window
+# are always present; naming them here replaces them.
+# mousebinds:
+#   "Super+Button2":   { action: toggle_float }
+#   "Super+WheelDown": { action: focus_stack, arg: "+1" }
+
+# Touchpad gestures: swipe-<left|right|up|down>-<3|4>, pinch-<in|out>-<3|4>.
+# A finger count with a gesture bound is taken from the cube, the overview
+# and the applications for every gesture of that count.
+# gestures:
+#   "swipe-left-3":  { action: tag_view, arg: "2" }
+#   "swipe-right-3": { action: tag_view, arg: "1" }
+
+# Key modes: a second set of binds, in force while entered.  Super+r
+# above enters this one.
+modes:
+  resize:
+    "h":      { action: set_mfact, arg: "-0.05", desc: "Shrink master" }
+    "l":      { action: set_mfact, arg: "+0.05", desc: "Grow master" }
+    "j":      { action: inc_nmaster, arg: "+1", desc: "One more master" }
+    "k":      { action: inc_nmaster, arg: "-1", desc: "One less master" }
+    "Escape": { action: mode, arg: default, desc: "Leave resize mode" }
+    "Return": { action: mode, arg: default, desc: "Leave resize mode" }
 
 # Module configuration
 # Each key is a module name; nested values are passed to the module's configure() method.

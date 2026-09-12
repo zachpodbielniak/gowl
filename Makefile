@@ -121,6 +121,11 @@ LIB_SRCS := \
 	src/core/gowl-bar.c \
 	src/core/gowl-session-lock.c \
 	src/core/gowl-idle-manager.c \
+	src/core/gowl-output-power.c \
+	src/core/gowl-shortcuts-inhibit.c \
+	src/core/gowl-foreign-toplevel.c \
+	src/core/gowl-text-input.c \
+	src/core/gowl-input-config.c \
 	src/core/gowl-decor.c \
 	src/core/gowl-static-prefix-key-policy.c \
 	src/core/gowl-session-default.c \
@@ -411,6 +416,11 @@ $(OBJDIR)/tests/test-animation-scene.o: TEST_CFLAGS += -DGOWL_TEST_ANIMATION_MOD
 
 # Build individual test binaries
 $(OUTDIR)/test-animation-scene: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs pixman-1)
+
+# test-protocols connects a real Wayland client to the headless
+# compositor to read its registry.
+$(OUTDIR)/test-protocols: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs wayland-client)
+$(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 
 $(OUTDIR)/test-%: $(OBJDIR)/tests/test-%.o $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(CC) -o $@ $< $(TEST_LDFLAGS)

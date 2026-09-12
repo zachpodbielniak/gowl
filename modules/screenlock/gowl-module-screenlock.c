@@ -69,6 +69,7 @@
 #include "interfaces/gowl-lock-handler.h"
 #include "core/gowl-compositor.h"
 #include "core/gowl-monitor.h"
+#include "core/gowl-idle-manager.h"
 #include "module/gowl-module-manager.h"
 
 /* ----------------------------------------------------------------
@@ -746,10 +747,24 @@ on_idle_lock_timeout(void *data)
 	GowlModuleScreenlock *self;
 	GowlModuleManager *mgr;
 
+	GowlIdleManager *idle;
+
 	self = (GowlModuleScreenlock *)data;
 
 	if (self->is_locked)
 		return 0;
+
+	/* A video player holding an idle inhibitor is exactly the case
+	 * auto-lock must not fire in.  Look again a little later rather
+	 * than at the next keypress: the film ends eventually. */
+	idle = gowl_compositor_get_idle_manager(
+		(GowlCompositor *)self->compositor);
+	if (idle != NULL && gowl_idle_manager_is_inhibited(idle)) {
+		if (self->idle_timer != NULL && self->auto_lock_timeout > 0)
+			wl_event_source_timer_update(self->idle_timer,
+				MIN(self->auto_lock_timeout, 30) * 1000);
+		return 0;
+	}
 
 	mgr = gowl_compositor_get_module_manager(
 		(GowlCompositor *)self->compositor);

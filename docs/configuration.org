@@ -616,6 +616,28 @@ Tag (workspace) settings.
 |----------+------+---------+-------------------------|
 | =count=  | int  | =9=     | Number of tags (1 - 31) |
 
+**** Idle, power and presentation
+:PROPERTIES:
+:CUSTOM_ID: idle-power
+:END:
+#+begin_src yaml
+idle-timeout: 300       # seconds without input before the session is idle
+dpms-timeout: 0         # seconds without input before every output powers off; 0 never
+allow-tearing: false    # let a fullscreen window that asks for it tear
+focus-on-activate: smart  # smart | urgent | focus | none
+#+end_src
+
+| Key                 | Type   | Default | Meaning                                                        |
+|---------------------+--------+---------+----------------------------------------------------------------|
+| =idle-timeout=      | int    | 300     | After this many seconds without input the idle manager emits =idle= (the screenlock module's auto-lock, an embedder's hook); the next input emits =resume=. 0 never. |
+| =dpms-timeout=      | int    | 0       | After this many seconds without input every output is powered off. Any input powers them back on. 0 never. |
+| =allow-tearing=     | bool   | false   | A fullscreen window that asks for it through tearing-control-v1 (a game) is page-flipped without waiting for vblank. Never applied to anything but a fullscreen window. |
+| =focus-on-activate= | string | smart   | What a window's request to be activated does -- xdg-activation, an X11 =_NET_ACTIVE_WINDOW=, a taskbar's foreign-toplevel request. =smart= focuses it if it is visible on the selected monitor and marks it urgent otherwise; =urgent= only ever marks; =focus= views its tags and focuses it; =none= ignores the request. |
+
+Both timers are held off while a visible window holds an *idle inhibitor* (idle-inhibit-v1): a video player, a presentation. So is the screenlock module's auto-lock. An inhibitor on a window on another tag does not count -- a paused video behind the work you are doing must not keep the screen on.
+
+Outputs powered off this way keep their place in the layout and their windows; nothing migrates. That is the difference from the lid policy, which disables a panel that is genuinely gone. =wlopm= and =swayidle= drive the same path through wlr-output-power-management, and the =output_power= keybind action toggles it by hand. An explicit off is not undone by the very next input -- that is the release of the key that ran it -- but by any input half a second later.
+
 *** Keybinds
 :PROPERTIES:
 :CUSTOM_ID: keybinds
@@ -652,11 +674,15 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 "Super+Return": { action: spawn, arg: "gst", desc: "Terminal" }
 #+end_src
 
-| Field    | Type   | Required | Description                                   |
-|----------+--------+----------+-----------------------------------------------|
-| =action= | string | yes      | The action to perform (see action list below) |
-| =arg=    | string | no       | Argument for the action                       |
-| =desc=   | string | no       | Human-readable description of the bind        |
+| Field     | Type   | Required | Description                                   |
+|-----------+--------+----------+-----------------------------------------------|
+| =action=  | string | yes      | The action to perform (see action list below) |
+| =arg=     | string | no       | Argument for the action                       |
+| =desc=    | string | no       | Human-readable description of the bind        |
+| =mode=    | string | no       | The key mode the bind belongs to (see below); default mode when absent |
+| =locked=  | bool   | no       | =true=: the bind also runs while the session is locked -- media keys, brightness |
+| =release= | bool   | no       | =true=: the bind runs when the key is released rather than pressed |
+| =repeat=  | bool   | no       | =false=: the bind does not repeat while the key is held (it does by default) |
 
 =desc= never affects dispatch. It exists so that something can render what a bind /does/ rather than the action name it happens to use: the MCP =list_keybinds= tool returns it, and under cmacs =cmacs-gowl-describe-keybinds= builds a cheatsheet from it. A bind with no =desc= still lists, falling back to its action and argument.
 
@@ -686,7 +712,75 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =quit=              | --                               | Quit the compositor                         |
 | =reload_config=     | --                               | Reload configuration                        |
 | =ipc_command=       | IPC command string               | Execute an IPC command                      |
+| =move_stack=        | ="+1"= or ="-1"=                 | Move the focused tile up or down the stack  |
+| =lock=              | --                               | Lock the session through the lock module    |
+| =output_power=      | ="on"=, ="off"= or nothing       | Power every output on or off; no arg toggles |
+| =mode=              | mode name, ="default"= or nothing | Enter a key mode, or leave it               |
+| =switch_layout=     | ="next"=, ="prev"= or an index   | Switch the keyboard layout (see xkb-layout) |
+| =move_window=       | --                               | Drag the window under the pointer (a mouse bind) |
+| =resize_window=     | --                               | Resize the window under the pointer from its nearest corner |
+| =toggle_sticky=     | --                               | Pin the focused window to every tag of its monitor, or unpin it |
+| =focus_dir=         | ="left"=, ="right"=, ="up"=, ="down"= | Focus the nearest window that way, crossing to the next monitor when there is none |
+| =focus_urgent=      | --                               | Focus the window marked urgent, viewing its tags if need be |
+| =focus_last=        | --                               | Focus the window that had focus before this one |
 | =custom=            | passed to the embedder           | Embedder-defined action (see below)         |
+
+**** Key modes
+:PROPERTIES:
+:CUSTOM_ID: key-modes
+:END:
+A mode is a second set of binds that is only consulted while it is entered, the way i3, Sway and river have them. The =mode= action enters one; =mode= with =default= (or no argument) leaves it. A key that is not bound in the mode goes to the focused window as usual, so a mode does not have to re-bind everything.
+
+#+begin_src yaml
+keybinds:
+  "Super+r": { action: mode, arg: resize, desc: "Resize mode" }
+
+modes:
+  resize:
+    "h":      { action: set_mfact, arg: "-0.05" }
+    "l":      { action: set_mfact, arg: "+0.05" }
+    "j":      { action: inc_nmaster, arg: "+1" }
+    "k":      { action: inc_nmaster, arg: "-1" }
+    "Escape": { action: mode, arg: default }
+    "Return": { action: mode, arg: default }
+#+end_src
+
+The compositor emits =mode-changed= and pushes =EVENT mode <name>= to IPC subscribers whenever the mode changes, so a bar can show it. Under cmacs, =gowl-set-key-mode= and =gowl-key-mode= reach it from Elisp.
+
+**** Pointer binds
+:PROPERTIES:
+:CUSTOM_ID: mousebinds
+:END:
+The =mousebinds= section binds a pointer button, with modifiers, to any action. The last token is a button: =Button1= .. =Button9=, or the names =Left=, =Middle=, =Right=, =Side= / =Back=, =Extra= / =Forward=, =Task=, =WheelUp=, =WheelDown=, =WheelLeft=, =WheelRight=. A bound wheel step never reaches the window under the pointer.
+
+Two binds are always present, the grabs gowl has had since the start: =Super+Button1= runs =move_window= and =Super+Button3= runs =resize_window=. Naming either in the section replaces it.
+
+#+begin_src yaml
+mousebinds:
+  "Super+Button1":   { action: move_window }
+  "Super+Button3":   { action: resize_window }
+  "Super+Button2":   { action: toggle_float }
+  "Super+WheelUp":   { action: focus_stack, arg: "-1" }
+  "Super+WheelDown": { action: focus_stack, arg: "+1" }
+#+end_src
+
+=move_window= and =resize_window= start the interactive grab on the window under the pointer (a tile is floated first); from a keyboard bind they act on the focused window. =resize_window= takes the corner nearest the pointer.
+
+**** Gestures
+:PROPERTIES:
+:CUSTOM_ID: gestures
+:END:
+The =gestures= section binds a touchpad gesture to an action: =swipe-<left|right|up|down>-<fingers>= or =pinch-<in|out>-<fingers>=, with three or four fingers. A swipe counts once it has travelled 60 pixels along its dominant axis; a pinch counts below 0.8 or above 1.25 of its starting spread.
+
+#+begin_src yaml
+gestures:
+  "swipe-left-3":  { action: tag_view, arg: "2" }
+  "swipe-right-3": { action: tag_view, arg: "1" }
+  "swipe-up-4":    { action: ipc_command, arg: expo }
+  "pinch-in-4":    { action: ipc_command, arg: "switcher" }
+#+end_src
+
+A finger count with any gesture bound is the compositor's for every gesture of that count: it is taken before the cube (three fingers) and the overview (four) offer for it, and before the application under the pointer sees it. Bind =swipe-left-3= and the cube's three-finger drag is gone; that is the point of binding it.
 
 **** The =custom= action
 :PROPERTIES:
@@ -749,6 +843,11 @@ Rules match clients by =app_id= and/or =title= and apply settings.
 | =tags=     | int    | =0=     | Tag bitmask to assign (0 = no override)     |
 | =floating= | bool   | =false= | Whether the client should float             |
 | =monitor=  | int    | =-1=    | Monitor index (-1 = default)                |
+| =width=    | int    | =0=     | Width in pixels for a floated match (0 = natural) |
+| =height=   | int    | =0=     | Height in pixels for a floated match (0 = natural) |
+| =center=   | bool   | =true=  | Centre a floated match on its monitor       |
+| =regex=    | bool   | =false= | Match =app_id= and =title= as PCRE regexes rather than globs |
+| =sticky=   | bool   | =false= | Pin the match to every tag of its monitor   |
 
 **** Example
 :PROPERTIES:
@@ -817,6 +916,64 @@ autostart:
   - "swayidle -w"
 #+end_src
 
+*** Keyboard layout
+:PROPERTIES:
+:CUSTOM_ID: keyboard-layout
+:END:
+#+begin_src yaml
+xkb-layout: "us,de"
+xkb-variant: ",nodeadkeys"
+xkb-options: "grp:alt_shift_toggle,caps:escape"
+# xkb-model, xkb-rules, and xkb-file (a whole keymap file, overriding the rest)
+#+end_src
+
+Each key is optional; one that is unset falls back to the =XKB_DEFAULT_*= environment and then to xkb's own default, which is what gowl always did. The keymap is applied to the keyboard group and every keyboard in it, and rebuilt on reload. With more than one layout, the =switch_layout= action (=next=, =prev= or an index) changes the active one, as does an xkb =grp:= option; either way the compositor emits =keyboard-layout-changed= with the layout's name and pushes =EVENT keymap <index> <name>= to IPC subscribers, which is what the bar's =keymap= widget shows.
+
+*** Input devices
+:PROPERTIES:
+:CUSTOM_ID: input-devices
+:END:
+The =input= section sets libinput options per device. Each block names what it applies to -- =touchpad=, =pointer= (or =mouse=), =keyboard=, =*=, or a glob on the device name as libinput reports it -- and blocks apply in file order, later ones overriding earlier ones, so a class block followed by a named one refines it. Settings are applied on top of the touchpad defaults gowl always had (tap, tap-drag, natural scrolling, two-finger scroll, disable-while-typing), to devices already plugged in on reload as well as to new ones.
+
+#+begin_src yaml
+input:
+  touchpad:
+    tap: true
+    tap-drag: true
+    natural-scroll: true
+    scroll-method: two-finger     # two-finger | edge | button | none
+    click-method: clickfinger     # button-areas | clickfinger | none
+    dwt: true
+    accel-speed: 0.2              # -1.0 .. 1.0
+  pointer:
+    accel-profile: flat           # flat | adaptive
+    natural-scroll: false
+  "*TrackPoint*":
+    accel-speed: -0.3
+    scroll-method: button
+    scroll-button: 274            # BTN_MIDDLE
+  "Some USB Keyboard":
+    enabled: false
+#+end_src
+
+| Setting            | Values                                              |
+|--------------------+-----------------------------------------------------|
+| =enabled=          | =true=, =false=, =disabled-on-external-mouse=       |
+| =tap=, =tap-drag=, =tap-drag-lock= | bool                                 |
+| =tap-button-map=   | =lrm= (default), =lmr=                              |
+| =natural-scroll=   | bool                                                |
+| =scroll-method=    | =two-finger=, =edge=, =button=, =none=              |
+| =scroll-button=    | a BTN_* code for =scroll-method: button=            |
+| =click-method=     | =button-areas=, =clickfinger=, =none=               |
+| =accel-profile=    | =flat=, =adaptive=                                  |
+| =accel-speed=      | -1.0 .. 1.0                                         |
+| =left-handed=      | bool                                                |
+| =middle-emulation= | bool                                                |
+| =dwt=, =dwtp=      | bool: disable while typing / while the trackpoint is used |
+| =rotation=         | degrees                                             |
+
+A setting a device cannot do is skipped quietly: a config shared between a laptop and a desktop names touchpad settings the desktop's mouse has no use for. Device names come from =libinput list-devices=.
+
 *** Monitor Configuration
 :PROPERTIES:
 :CUSTOM_ID: monitor-configuration
@@ -851,6 +1008,7 @@ monitors:
 | =scale=     | float             | HiDPI scale factor (e.g. =1.0=, =1.5=, =2.0=).                           |
 | =enabled=   | bool              | =true= to power on, =false= to disable.                                  |
 | =transform= | int 0--7 / string | =wl_output_transform= code, or one of the canonical names below.         |
+| =vrr=       | bool / =on-demand= | Adaptive sync. =true= always, =false= never, =on-demand= only while a fullscreen window declares game or video content (content-type-v1) -- the mode that does not make the desktop cursor stutter. Unset leaves the output alone. |
 
 **** =transform= values
 :PROPERTIES:

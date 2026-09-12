@@ -20,7 +20,9 @@
 #include "gowl-enums.h"
 
 #include <glib.h>
+#include <math.h>
 #include <string.h>
+#include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon.h>
 
 /* Lookup table mapping modifier name strings to GowlKeyMod values.
@@ -183,4 +185,258 @@ gowl_keybind_to_string(
 	g_string_append(result, name_buf);
 
 	return g_string_free(result, FALSE);
+}
+
+/* -----------------------------------------------------------
+ * Mouse binds
+ * ----------------------------------------------------------- */
+
+typedef struct {
+	const gchar *name;
+	guint        code;
+} GowlButtonEntry;
+
+/* The first name for a code is the one gowl_mousebind_to_string()
+ * writes back. */
+static const GowlButtonEntry button_table[] = {
+	{ "button1",    BTN_LEFT   },
+	{ "left",       BTN_LEFT   },
+	{ "button2",    BTN_MIDDLE },
+	{ "middle",     BTN_MIDDLE },
+	{ "button3",    BTN_RIGHT  },
+	{ "right",      BTN_RIGHT  },
+	{ "button4",    GOWL_BUTTON_WHEEL_UP    },
+	{ "wheelup",    GOWL_BUTTON_WHEEL_UP    },
+	{ "button5",    GOWL_BUTTON_WHEEL_DOWN  },
+	{ "wheeldown",  GOWL_BUTTON_WHEEL_DOWN  },
+	{ "button6",    GOWL_BUTTON_WHEEL_LEFT  },
+	{ "wheelleft",  GOWL_BUTTON_WHEEL_LEFT  },
+	{ "button7",    GOWL_BUTTON_WHEEL_RIGHT },
+	{ "wheelright", GOWL_BUTTON_WHEEL_RIGHT },
+	{ "button8",    BTN_SIDE   },
+	{ "side",       BTN_SIDE   },
+	{ "back",       BTN_SIDE   },
+	{ "button9",    BTN_EXTRA  },
+	{ "extra",      BTN_EXTRA  },
+	{ "forward",    BTN_EXTRA  },
+	{ "task",       BTN_TASK   },
+	{ NULL,         0          }
+};
+
+/* Splits "Mod+Mod+Last" into a modifier mask and the last token, which
+ * the caller resolves.  Shared by the mouse and (via gowl_keybind_parse)
+ * the key form. */
+static gboolean
+split_modifiers(
+	const gchar  *str,
+	guint        *out_modifiers,
+	gchar       **out_last
+){
+	g_auto(GStrv) tokens = NULL;
+	guint n_tokens;
+	guint modifiers = 0;
+	guint i;
+
+	tokens = g_strsplit(str, "+", -1);
+	n_tokens = g_strv_length(tokens);
+	if (n_tokens == 0)
+		return FALSE;
+
+	for (i = 0; i < n_tokens - 1; i++) {
+		guint mod_val;
+
+		g_strstrip(tokens[i]);
+		if (!try_parse_modifier(tokens[i], &mod_val)) {
+			g_warning("gowl_mousebind_parse: unknown modifier '%s' in '%s'",
+			          tokens[i], str);
+			return FALSE;
+		}
+		modifiers |= mod_val;
+	}
+	g_strstrip(tokens[n_tokens - 1]);
+	*out_modifiers = modifiers;
+	*out_last = g_strdup(tokens[n_tokens - 1]);
+	return TRUE;
+}
+
+gboolean
+gowl_mousebind_parse(
+	const gchar *str,
+	guint       *out_modifiers,
+	guint       *out_button
+){
+	g_autofree gchar *last = NULL;
+	g_autofree gchar *lower = NULL;
+	const GowlButtonEntry *e;
+	guint modifiers;
+
+	g_return_val_if_fail(str != NULL, FALSE);
+	g_return_val_if_fail(out_modifiers != NULL, FALSE);
+	g_return_val_if_fail(out_button != NULL, FALSE);
+
+	if (!split_modifiers(str, &modifiers, &last))
+		return FALSE;
+
+	lower = g_ascii_strdown(last, -1);
+	for (e = button_table; e->name != NULL; e++) {
+		if (g_str_equal(lower, e->name)) {
+			*out_modifiers = modifiers;
+			*out_button = e->code;
+			return TRUE;
+		}
+	}
+	g_warning("gowl_mousebind_parse: unknown button '%s' in '%s'",
+	          last, str);
+	return FALSE;
+}
+
+/* The modifier prefix gowl_keybind_to_string() writes, reused. */
+static void
+append_modifiers(GString *result, guint modifiers)
+{
+	if (modifiers & GOWL_KEY_MOD_LOGO)
+		g_string_append(result, "Super+");
+	if (modifiers & GOWL_KEY_MOD_CTRL)
+		g_string_append(result, "Ctrl+");
+	if (modifiers & GOWL_KEY_MOD_ALT)
+		g_string_append(result, "Alt+");
+	if (modifiers & GOWL_KEY_MOD_SHIFT)
+		g_string_append(result, "Shift+");
+	if (modifiers & GOWL_KEY_MOD_MOD2)
+		g_string_append(result, "Mod2+");
+	if (modifiers & GOWL_KEY_MOD_MOD3)
+		g_string_append(result, "Mod3+");
+	if (modifiers & GOWL_KEY_MOD_MOD5)
+		g_string_append(result, "Mod5+");
+}
+
+gchar *
+gowl_mousebind_to_string(
+	guint modifiers,
+	guint button
+){
+	GString *result = g_string_new(NULL);
+	const GowlButtonEntry *e;
+
+	append_modifiers(result, modifiers);
+	for (e = button_table; e->name != NULL; e++) {
+		if (e->code == button) {
+			/* Capitalised the way the docs write them. */
+			g_string_append_c(result, g_ascii_toupper(e->name[0]));
+			g_string_append(result, e->name + 1);
+			return g_string_free(result, FALSE);
+		}
+	}
+	g_string_append_printf(result, "Button%u", button);
+	return g_string_free(result, FALSE);
+}
+
+/* -----------------------------------------------------------
+ * Gestures
+ * ----------------------------------------------------------- */
+
+gboolean
+gowl_gesture_parse(
+	const gchar          *str,
+	GowlGestureKind      *out_kind,
+	GowlGestureDirection *out_direction,
+	guint                *out_fingers
+){
+	g_auto(GStrv) parts = NULL;
+	g_autofree gchar *lower = NULL;
+	GowlGestureKind kind;
+	GowlGestureDirection dir;
+	gint fingers;
+
+	g_return_val_if_fail(str != NULL, FALSE);
+	g_return_val_if_fail(out_kind != NULL, FALSE);
+	g_return_val_if_fail(out_direction != NULL, FALSE);
+	g_return_val_if_fail(out_fingers != NULL, FALSE);
+
+	lower = g_ascii_strdown(str, -1);
+	g_strstrip(lower);
+	parts = g_strsplit(lower, "-", -1);
+	if (g_strv_length(parts) != 3)
+		goto bad;
+
+	if (g_str_equal(parts[0], "swipe"))
+		kind = GOWL_GESTURE_SWIPE;
+	else if (g_str_equal(parts[0], "pinch"))
+		kind = GOWL_GESTURE_PINCH;
+	else
+		goto bad;
+
+	if (kind == GOWL_GESTURE_SWIPE) {
+		if (g_str_equal(parts[1], "left"))
+			dir = GOWL_GESTURE_LEFT;
+		else if (g_str_equal(parts[1], "right"))
+			dir = GOWL_GESTURE_RIGHT;
+		else if (g_str_equal(parts[1], "up"))
+			dir = GOWL_GESTURE_UP;
+		else if (g_str_equal(parts[1], "down"))
+			dir = GOWL_GESTURE_DOWN;
+		else
+			goto bad;
+	} else {
+		if (g_str_equal(parts[1], "in"))
+			dir = GOWL_GESTURE_IN;
+		else if (g_str_equal(parts[1], "out"))
+			dir = GOWL_GESTURE_OUT;
+		else
+			goto bad;
+	}
+
+	fingers = atoi(parts[2]);
+	if (fingers < 1 || fingers > 5)
+		goto bad;
+
+	*out_kind = kind;
+	*out_direction = dir;
+	*out_fingers = (guint)fingers;
+	return TRUE;
+
+bad:
+	g_warning("gowl_gesture_parse: '%s' is not swipe-<dir>-<fingers> "
+	          "or pinch-<in|out>-<fingers>", str);
+	return FALSE;
+}
+
+gchar *
+gowl_gesture_to_string(
+	GowlGestureKind      kind,
+	GowlGestureDirection direction,
+	guint                fingers
+){
+	static const gchar *const names[] = {
+		"none", "left", "right", "up", "down", "in", "out"
+	};
+	const gchar *d = direction < G_N_ELEMENTS(names)
+	                 ? names[direction] : "none";
+
+	return g_strdup_printf("%s-%s-%u",
+	                       kind == GOWL_GESTURE_PINCH ? "pinch" : "swipe",
+	                       d, fingers);
+}
+
+GowlGestureDirection
+gowl_gesture_classify_swipe(
+	gdouble dx,
+	gdouble dy,
+	gdouble threshold
+){
+	if (fabs(dx) < threshold && fabs(dy) < threshold)
+		return GOWL_GESTURE_NONE;
+	if (fabs(dx) >= fabs(dy))
+		return dx < 0 ? GOWL_GESTURE_LEFT : GOWL_GESTURE_RIGHT;
+	return dy < 0 ? GOWL_GESTURE_UP : GOWL_GESTURE_DOWN;
+}
+
+GowlGestureDirection
+gowl_gesture_classify_pinch(gdouble scale)
+{
+	if (scale < 0.8)
+		return GOWL_GESTURE_IN;
+	if (scale > 1.25)
+		return GOWL_GESTURE_OUT;
+	return GOWL_GESTURE_NONE;
 }

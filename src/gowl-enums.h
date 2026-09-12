@@ -259,6 +259,25 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  * @GOWL_ACTION_LOCK: Lock the session via the lock handler module.
  * @GOWL_ACTION_MOVE_STACK: Reorder the focused tiled client.
  * @GOWL_ACTION_CUSTOM: Custom action handled by a module callback.
+ * @GOWL_ACTION_OUTPUT_POWER: Power every output on, off or toggle
+ *   (arg "on", "off", anything else toggles).
+ * @GOWL_ACTION_MODE: Enter a key mode (arg: the mode's name; "default",
+ *   empty or none leaves it).
+ * @GOWL_ACTION_SWITCH_LAYOUT: Switch the keyboard layout (arg "next",
+ *   "prev" or a layout index).
+ * @GOWL_ACTION_MOVE_WINDOW: Start dragging the window under the pointer
+ *   (a mouse bind), or the focused one from a key.
+ * @GOWL_ACTION_RESIZE_WINDOW: Start resizing the window under the pointer
+ *   from its nearest corner.
+ * @GOWL_ACTION_TOGGLE_STICKY: Pin the focused window to every tag of its
+ *   monitor, or unpin it.
+ * @GOWL_ACTION_FOCUS_DIR: Focus the nearest window in a direction (arg
+ *   "left", "right", "up" or "down"), crossing to the next monitor when
+ *   there is none.
+ * @GOWL_ACTION_FOCUS_URGENT: Focus the window most recently marked
+ *   urgent, viewing its tags if need be.
+ * @GOWL_ACTION_FOCUS_LAST: Focus the window that had focus before this
+ *   one, viewing its tags if need be.
  *
  * Compositor actions that can be bound to keys or IPC commands.
  */
@@ -286,7 +305,16 @@ typedef enum {
 	GOWL_ACTION_IPC_COMMAND,
 	GOWL_ACTION_LOCK,
 	GOWL_ACTION_CUSTOM,
-	GOWL_ACTION_MOVE_STACK
+	GOWL_ACTION_MOVE_STACK,
+	GOWL_ACTION_OUTPUT_POWER,
+	GOWL_ACTION_MODE,
+	GOWL_ACTION_SWITCH_LAYOUT,
+	GOWL_ACTION_MOVE_WINDOW,
+	GOWL_ACTION_RESIZE_WINDOW,
+	GOWL_ACTION_TOGGLE_STICKY,
+	GOWL_ACTION_FOCUS_DIR,
+	GOWL_ACTION_FOCUS_URGENT,
+	GOWL_ACTION_FOCUS_LAST
 } GowlAction;
 
 #define GOWL_TYPE_ACTION (gowl_action_get_type())

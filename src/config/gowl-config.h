@@ -49,7 +49,91 @@ typedef struct {
 	gint   action;
 	gchar *arg;
 	gchar *desc;
+	/* The key mode the bind belongs to, or %NULL for the default
+	 * mode.  A bind in a mode is only consulted while that mode is
+	 * entered (the `mode' action). */
+	gchar *mode;
+	/* #GowlKeybindFlags */
+	guint  flags;
 } GowlKeybindEntry;
+
+/**
+ * GowlKeybindFlags:
+ * @GOWL_KEYBIND_FLAG_NONE: an ordinary bind: on press, not while locked,
+ *   repeating while held
+ * @GOWL_KEYBIND_FLAG_LOCKED: also runs while the session is locked --
+ *   media keys, brightness
+ * @GOWL_KEYBIND_FLAG_RELEASE: runs on the key's release rather than
+ *   its press
+ * @GOWL_KEYBIND_FLAG_NO_REPEAT: does not repeat while the key is held
+ *
+ * Per-bind switches, the YAML keys `locked', `release' and `repeat'.
+ */
+typedef enum {
+	GOWL_KEYBIND_FLAG_NONE      = 0,
+	GOWL_KEYBIND_FLAG_LOCKED    = 1 << 0,
+	GOWL_KEYBIND_FLAG_RELEASE   = 1 << 1,
+	GOWL_KEYBIND_FLAG_NO_REPEAT = 1 << 2
+} GowlKeybindFlags;
+
+/**
+ * GowlMousebindEntry:
+ * @modifiers: modifier bitmask (#GowlKeyMod flags)
+ * @button: a BTN_* code, or a %GOWL_BUTTON_WHEEL_* value for a wheel step
+ * @action: a #GowlAction
+ * @arg: (nullable): the action's argument
+ * @desc: (nullable): human-readable description
+ *
+ * A pointer button bound to an action: the `mousebinds:' section.
+ * `move-window' and `resize-window' start the interactive grabs that
+ * were once hard-wired to Super+Button1 and Super+Button3; any other
+ * action runs as it would from a key.
+ */
+typedef struct {
+	guint  modifiers;
+	guint  button;
+	gint   action;
+	gchar *arg;
+	gchar *desc;
+} GowlMousebindEntry;
+
+/**
+ * GowlGestureEntry:
+ * @kind: swipe or pinch (#GowlGestureKind)
+ * @direction: which way (#GowlGestureDirection)
+ * @fingers: how many fingers
+ * @action: a #GowlAction
+ * @arg: (nullable): the action's argument
+ * @desc: (nullable): human-readable description
+ *
+ * A touchpad gesture bound to an action: the `gestures:' section.  A
+ * finger count with any gesture bound is taken from the modules and
+ * the applications for every gesture of that count.
+ */
+typedef struct {
+	gint   kind;
+	gint   direction;
+	guint  fingers;
+	gint   action;
+	gchar *arg;
+	gchar *desc;
+} GowlGestureEntry;
+
+/**
+ * GowlInputConfigEntry:
+ * @match: what devices it applies to: `touchpad', `pointer' (or
+ *   `mouse'), `keyboard', `*', or a glob on the device's name
+ * @settings: (element-type utf8 utf8): setting name to value, both
+ *   strings, as written in the file
+ *
+ * One block of the `input:' section.  Entries apply in file order to
+ * every device they match, later ones overriding earlier ones, so a
+ * `touchpad' block followed by a named one refines it.
+ */
+typedef struct {
+	gchar      *match;
+	GHashTable *settings;
+} GowlInputConfigEntry;
 
 /* --- GowlRuleEntry --- */
 
@@ -101,6 +185,7 @@ typedef struct {
  *          target monitor's usable area
  * @regex_mode: when %TRUE, interpret @app_id and @title as PCRE
  *              regexes (via #GRegex) rather than shell globs
+ * @sticky: pin the matched client to every tag of its monitor
  *
  * A window rule entry stored in the config.
  */
@@ -114,6 +199,7 @@ typedef struct {
 	gint      height;
 	gboolean  center;
 	gboolean  regex_mode;
+	gboolean  sticky;
 } GowlRuleEntry;
 
 /* --- GowlMonitorConfig --- */
@@ -137,6 +223,8 @@ typedef struct {
  *             0=normal, 1=90, 2=180, 3=270, 4=flipped,
  *             5=flipped-90, 6=flipped-180, 7=flipped-270.
  * @enabled: tri-state -1=unset, 0=disabled, 1=enabled.
+ * @vrr: adaptive sync: -1 unset, 0 off, 1 on, 2 on demand (only
+ *       while a fullscreen window declares game or video content).
  *
  * A per-output configuration parsed from the YAML `monitors:`
  * mapping.  Every field is independently optional so callers may
@@ -154,6 +242,7 @@ typedef struct {
 	gdouble  scale;
 	gint     transform;
 	gint     enabled;
+	gint     vrr;
 } GowlMonitorConfig;
 
 /* --- Property IDs (for GObject property enumeration) --- */
@@ -173,6 +262,23 @@ typedef struct {
  * @GOWL_CONFIG_PROP_MENU: "menu" property.
  * @GOWL_CONFIG_PROP_SLOPPYFOCUS: "sloppyfocus" property.
  * @GOWL_CONFIG_PROP_MANAGE_LID: "manage-lid" property.
+ * @GOWL_CONFIG_PROP_XKB_LAYOUT: "xkb-layout" property, e.g. "us,de".
+ * @GOWL_CONFIG_PROP_XKB_VARIANT: "xkb-variant" property.
+ * @GOWL_CONFIG_PROP_XKB_MODEL: "xkb-model" property.
+ * @GOWL_CONFIG_PROP_XKB_OPTIONS: "xkb-options" property, e.g.
+ *   "grp:alt_shift_toggle,caps:escape".
+ * @GOWL_CONFIG_PROP_XKB_RULES: "xkb-rules" property.
+ * @GOWL_CONFIG_PROP_XKB_FILE: "xkb-file" property: a complete keymap
+ *   file, which overrides the five above.
+ * @GOWL_CONFIG_PROP_IDLE_TIMEOUT: "idle-timeout" property.  Seconds of
+ *   no input before the idle manager reports the session idle; 0 never.
+ * @GOWL_CONFIG_PROP_DPMS_TIMEOUT: "dpms-timeout" property.  Seconds of
+ *   no input before every output is powered off; 0 never.
+ * @GOWL_CONFIG_PROP_ALLOW_TEARING: "allow-tearing" property.  Let a
+ *   fullscreen window that asks for it be presented with tearing.
+ * @GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE: "focus-on-activate" property.
+ *   What a window's request to be activated does: "smart", "urgent",
+ *   "focus" or "none".
  * @GOWL_CONFIG_PROP_INPUT_RECORDING: "input-recording" property.
  *   Consent for recording real input.  Deliberately separate from the
  *   switches that gate input *injection*.
@@ -209,6 +315,16 @@ typedef enum {
 	GOWL_CONFIG_PROP_MENU,
 	GOWL_CONFIG_PROP_SLOPPYFOCUS,
 	GOWL_CONFIG_PROP_MANAGE_LID,
+	GOWL_CONFIG_PROP_XKB_LAYOUT,
+	GOWL_CONFIG_PROP_XKB_VARIANT,
+	GOWL_CONFIG_PROP_XKB_MODEL,
+	GOWL_CONFIG_PROP_XKB_OPTIONS,
+	GOWL_CONFIG_PROP_XKB_RULES,
+	GOWL_CONFIG_PROP_XKB_FILE,
+	GOWL_CONFIG_PROP_IDLE_TIMEOUT,
+	GOWL_CONFIG_PROP_DPMS_TIMEOUT,
+	GOWL_CONFIG_PROP_ALLOW_TEARING,
+	GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE,
 	GOWL_CONFIG_PROP_INPUT_RECORDING,
 	GOWL_CONFIG_PROP_INPUT_RECORDING_DENY_APPS,
 	GOWL_CONFIG_PROP_LOG_LEVEL,
@@ -467,6 +583,89 @@ gboolean gowl_config_get_sloppyfocus(GowlConfig *self);
 gboolean gowl_config_get_manage_lid(GowlConfig *self);
 
 /**
+ * gowl_config_get_xkb_layout:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (nullable): the XKB layout list, or %NULL to
+ *   take it from the XKB_DEFAULT_LAYOUT environment / the system default
+ */
+const gchar *gowl_config_get_xkb_layout  (GowlConfig *self);
+/**
+ * gowl_config_get_xkb_variant:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (nullable): the XKB variant list, or %NULL
+ */
+const gchar *gowl_config_get_xkb_variant (GowlConfig *self);
+/**
+ * gowl_config_get_xkb_model:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (nullable): the XKB model, or %NULL
+ */
+const gchar *gowl_config_get_xkb_model   (GowlConfig *self);
+/**
+ * gowl_config_get_xkb_options:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (nullable): the XKB options, or %NULL
+ */
+const gchar *gowl_config_get_xkb_options (GowlConfig *self);
+/**
+ * gowl_config_get_xkb_rules:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (nullable): the XKB rules, or %NULL
+ */
+const gchar *gowl_config_get_xkb_rules   (GowlConfig *self);
+/**
+ * gowl_config_get_xkb_file:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (nullable): a keymap file that replaces the
+ *   rules/model/layout/variant/options set, or %NULL
+ */
+const gchar *gowl_config_get_xkb_file    (GowlConfig *self);
+
+/**
+ * gowl_config_get_idle_timeout:
+ * @self: a #GowlConfig
+ *
+ * Returns: seconds of no input before the session counts as idle, or 0
+ *   for never.  An idle-inhibit client (a video player) holds it off.
+ */
+gint gowl_config_get_idle_timeout(GowlConfig *self);
+
+/**
+ * gowl_config_get_dpms_timeout:
+ * @self: a #GowlConfig
+ *
+ * Returns: seconds of no input before every output is powered off, or
+ *   0 for never.  Any input powers them back on.
+ */
+gint gowl_config_get_dpms_timeout(GowlConfig *self);
+
+/**
+ * gowl_config_get_allow_tearing:
+ * @self: a #GowlConfig
+ *
+ * Returns: %TRUE if a fullscreen window that asks for tearing
+ *   (tearing-control-v1, a game) may be page-flipped without vsync.
+ */
+gboolean gowl_config_get_allow_tearing(GowlConfig *self);
+
+/**
+ * gowl_config_get_focus_on_activate:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none): the activation policy: "smart" focuses a
+ *   window that is visible on the selected monitor and marks any other
+ *   urgent; "urgent" only ever marks; "focus" views the window's tags
+ *   and focuses it; "none" ignores the request.
+ */
+const gchar *gowl_config_get_focus_on_activate(GowlConfig *self);
+
+/**
  * gowl_config_get_input_recording:
  * @self: a #GowlConfig
  *
@@ -620,6 +819,158 @@ gowl_config_add_keybind_full(
 );
 
 /**
+ * gowl_config_add_keybind_ex:
+ * @self: a #GowlConfig
+ * @modifiers: modifier bitmask
+ * @keysym: XKB keysym
+ * @action: a #GowlAction
+ * @arg: (nullable): the action's argument
+ * @desc: (nullable): human-readable description
+ * @mode: (nullable): the key mode the bind belongs to; %NULL or
+ *   "default" for the default mode
+ * @flags: #GowlKeybindFlags
+ *
+ * The whole keybind: gowl_config_add_keybind_full() is this with no
+ * mode and no flags.
+ */
+void
+gowl_config_add_keybind_ex(
+	GowlConfig  *self,
+	guint        modifiers,
+	guint        keysym,
+	gint         action,
+	const gchar *arg,
+	const gchar *desc,
+	const gchar *mode,
+	guint        flags
+);
+
+/**
+ * gowl_config_add_mousebind:
+ * @self: a #GowlConfig
+ * @modifiers: modifier bitmask
+ * @button: BTN_* code or a %GOWL_BUTTON_WHEEL_* value
+ * @action: a #GowlAction
+ * @arg: (nullable): the action's argument
+ * @desc: (nullable): human-readable description
+ *
+ * Appends a pointer bind.  A bind for the same modifiers and button
+ * replaces the earlier one, so the two the config starts with
+ * (Super+Button1 move-window, Super+Button3 resize-window) can be
+ * redefined.
+ */
+void gowl_config_add_mousebind (GowlConfig *self, guint modifiers,
+                                guint button, gint action,
+                                const gchar *arg, const gchar *desc);
+
+/**
+ * gowl_config_remove_mousebind:
+ * @self: a #GowlConfig
+ * @modifiers: modifier bitmask
+ * @button: the button
+ *
+ * Returns: how many binds were removed
+ */
+guint gowl_config_remove_mousebind (GowlConfig *self, guint modifiers,
+                                    guint button);
+
+/**
+ * gowl_config_clear_mousebinds:
+ * @self: a #GowlConfig
+ *
+ * Removes every pointer bind, the two defaults included.
+ */
+void gowl_config_clear_mousebinds (GowlConfig *self);
+
+/**
+ * gowl_config_get_mousebinds:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlMousebindEntry): the
+ *   pointer binds, in order
+ */
+GArray *gowl_config_get_mousebinds (GowlConfig *self);
+
+/**
+ * gowl_config_add_gesture:
+ * @self: a #GowlConfig
+ * @kind: #GowlGestureKind
+ * @direction: #GowlGestureDirection
+ * @fingers: finger count
+ * @action: a #GowlAction
+ * @arg: (nullable): the action's argument
+ * @desc: (nullable): human-readable description
+ *
+ * Appends a gesture bind, replacing one for the same gesture.
+ */
+void gowl_config_add_gesture (GowlConfig *self, gint kind, gint direction,
+                              guint fingers, gint action,
+                              const gchar *arg, const gchar *desc);
+
+/**
+ * gowl_config_clear_gestures:
+ * @self: a #GowlConfig
+ */
+void gowl_config_clear_gestures (GowlConfig *self);
+
+/**
+ * gowl_config_get_gestures:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlGestureEntry): the
+ *   gesture binds, in order
+ */
+GArray *gowl_config_get_gestures (GowlConfig *self);
+
+/**
+ * gowl_config_add_input_setting:
+ * @self: a #GowlConfig
+ * @match: the device match (see #GowlInputConfigEntry)
+ * @key: the setting, e.g. "tap", "accel-profile"
+ * @value: its value as a string, e.g. "true", "flat"
+ *
+ * Adds one setting to the `input:' block for @match, creating the
+ * block at the end of the list if there is none.
+ */
+void gowl_config_add_input_setting (GowlConfig *self, const gchar *match,
+                                    const gchar *key, const gchar *value);
+
+/**
+ * gowl_config_clear_input_settings:
+ * @self: a #GowlConfig
+ */
+void gowl_config_clear_input_settings (GowlConfig *self);
+
+/**
+ * gowl_config_get_input_configs:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlInputConfigEntry): the
+ *   `input:' blocks, in file order
+ */
+GPtrArray *gowl_config_get_input_configs (GowlConfig *self);
+
+/**
+ * gowl_config_lookup_input_setting:
+ * @self: a #GowlConfig
+ * @device_name: the device's name as libinput reports it
+ * @device_class: "touchpad", "pointer" or "keyboard"
+ * @key: the setting
+ *
+ * The value that applies to a device: the last matching block that
+ * sets @key wins.  `*' matches everything, the class name matches
+ * every device of that class, and anything else is a glob on the
+ * device name.
+ *
+ * Returns: (transfer none) (nullable): the value, or %NULL if no block
+ *   sets it
+ */
+const gchar *gowl_config_lookup_input_setting (GowlConfig  *self,
+                                               const gchar *device_name,
+                                               const gchar *device_class,
+                                               const gchar *key);
+
+/**
  * gowl_config_get_keybinds:
  * @self: a #GowlConfig
  *
@@ -704,6 +1055,16 @@ gowl_config_add_rule_full(
 	gboolean     center,
 	gboolean     regex_mode
 );
+
+/**
+ * gowl_config_add_rule_entry:
+ * @self: a #GowlConfig
+ * @entry: a filled-in #GowlRuleEntry; its strings are copied
+ *
+ * Appends a window rule with every field, including the ones
+ * gowl_config_add_rule_full() predates (@sticky).
+ */
+void gowl_config_add_rule_entry (GowlConfig *self, const GowlRuleEntry *entry);
 
 /**
  * gowl_config_remove_rule:

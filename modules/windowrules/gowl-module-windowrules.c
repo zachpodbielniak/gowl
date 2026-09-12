@@ -441,6 +441,8 @@ wr_apply_rules_to_client(
 			if (!gowl_client_get_floating(c))
 				gowl_client_set_floating(c, TRUE);
 		}
+		if (rule->sticky && !gowl_client_get_sticky(c))
+			gowl_client_set_sticky(c, TRUE);
 
 		/* Stash initial-placement overrides via the public
 		 * setter; the compositor consumes these inside

@@ -85,6 +85,16 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   the grid fitting, no overlap, the closed zoom landing EXACTLY on the
   anchor tile (the property that makes it cut-free), hit testing and
   keyboard stepping
+- `test-protocols` -- A real client reads a headless compositor's registry
+  for the globals applications give up silently without (idle-inhibit,
+  output-power, shortcuts-inhibit, foreign-toplevel, tearing, content-type,
+  xdg-foreign, text-input, input-method); then the dpms timer powers the
+  headless output off, input powers it on, an explicit `output-power off'
+  survives the key release that follows it, and `xkb-layout: us,de` gives
+  two layouts that `switch-layout` steps through with the signal
+- `test-focus-nav` -- Focus by direction (straight across beats diagonal,
+  a window on another tag is not there), sticky windows being on every tag,
+  the urgent window and the previously focused one, without a seat
 - `test-blur-shadow` -- The analytic drop shadow: falloff, rounded
   corners, and premultiplied output (straight colour gives every shadow a
   bright halo)

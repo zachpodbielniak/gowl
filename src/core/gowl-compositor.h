@@ -20,6 +20,7 @@
 #define GOWL_COMPOSITOR_H
 
 #include "gowl-types.h"
+#include "../gowl-enums.h"
 #include "../interfaces/gowl-prefix-key-policy.h"
 #include "../interfaces/gowl-workspace-provider.h"
 #include <wayland-server-core.h>
@@ -558,6 +559,28 @@ GowlKeyboardGroup *gowl_compositor_get_keyboard_group (GowlCompositor *self);
  * Returns: (transfer none) (nullable): the #GowlIdleManager, or %NULL
  */
 GowlIdleManager *gowl_compositor_get_idle_manager (GowlCompositor *self);
+
+/**
+ * gowl_compositor_set_outputs_powered:
+ * @self: a #GowlCompositor
+ * @on: %TRUE to power every output on, %FALSE to power every one off
+ *
+ * What the `output-power' keybind action does.  A powered-off output
+ * keeps its place in the layout and its windows; the next input after
+ * a short grace period, or a wlr-output-power-management client,
+ * powers it back on.  Emits #GowlCompositor::output-power-changed per
+ * output that changed.
+ */
+void gowl_compositor_set_outputs_powered (GowlCompositor *self, gboolean on);
+
+/**
+ * gowl_compositor_any_output_powered_off:
+ * @self: a #GowlCompositor
+ *
+ * Returns: %TRUE if at least one output is powered off through the
+ *   output-power path (the lid policy's disabled panel does not count)
+ */
+gboolean gowl_compositor_any_output_powered_off (GowlCompositor *self);
 
 /**
  * gowl_compositor_get_bar:
@@ -1139,6 +1162,34 @@ gowl_compositor_get_active_pointer_constraint (GowlCompositor *self);
  *
  * Returns: %TRUE if a bind matched and its action ran.
  */
+GowlClient *gowl_compositor_direction_neighbour (GowlCompositor *self,
+                                                 GowlClient *from,
+                                                 GowlDirection direction);
+gboolean    gowl_compositor_focus_direction (GowlCompositor *self,
+                                             GowlDirection direction);
+GowlClient *gowl_compositor_urgent_client   (GowlCompositor *self);
+gboolean    gowl_compositor_focus_urgent    (GowlCompositor *self);
+GowlClient *gowl_compositor_last_focused    (GowlCompositor *self);
+gboolean    gowl_compositor_focus_last      (GowlCompositor *self);
+gboolean gowl_compositor_dispatch_key (GowlCompositor *self, guint mods,
+                                       guint keysym, gboolean pressed,
+                                       gboolean while_locked);
+void         gowl_compositor_set_key_mode (GowlCompositor *self, const gchar *mode);
+const gchar *gowl_compositor_get_key_mode (GowlCompositor *self);
+void         gowl_compositor_apply_keymap (GowlCompositor *self);
+/**
+ * gowl_compositor_apply_input_config:
+ * @self: a #GowlCompositor
+ *
+ * Re-applies the config's `input:' settings to every input device
+ * known -- what a reload does, for an embedder that changed the
+ * settings itself.
+ */
+void         gowl_compositor_apply_input_config (GowlCompositor *self);
+gboolean     gowl_compositor_switch_keyboard_layout (GowlCompositor *self,
+                                                     const gchar *which);
+const gchar *gowl_compositor_get_keyboard_layout (GowlCompositor *self,
+                                                  guint *index);
 gboolean gowl_compositor_dispatch_keybind (GowlCompositor *self,
                                             guint           mods,
                                             guint           keysym);

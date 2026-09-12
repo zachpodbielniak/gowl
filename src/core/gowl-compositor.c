@@ -207,6 +207,15 @@ static void on_monitor_request_state(struct wl_listener *listener, void *data);
 
 /* key repeat timer callback */
 static int  on_key_repeat         (void *data);
+static struct xkb_keymap *build_keymap (GowlCompositor *self);
+static void announce_keyboard_layout (GowlCompositor *self, gboolean force);
+static gboolean run_keybind_entry (GowlCompositor *self, const GowlKeybindEntry *kb);
+static gboolean dispatch_mousebind (GowlCompositor *self, guint mods, guint button);
+static gboolean dispatch_gesture (GowlCompositor *self, GowlGestureKind kind,
+                                  GowlGestureDirection direction, guint fingers);
+static gboolean gesture_bound_for (GowlCompositor *self, GowlGestureKind kind,
+                                   guint fingers);
+static guint32  resize_edges_at_cursor (GowlCompositor *self, GowlClient *c);
 
 /* input recording */
 static void on_recording_changed  (GowlInputRecorder *recorder,
@@ -320,9 +329,12 @@ static GowlMonitor *xytomon       (GowlCompositor *self,
                                    gdouble x, gdouble y);
 
 /* Macros ported from dwl */
+/* Least travel, in layout pixels, for a configured swipe to count. */
+#define GOWL_GESTURE_SWIPE_THRESHOLD (60.0)
+
 #define VISIBLEON(C, M)  ((M) && (C)->mon == (M) && \
 	((C)->isoverlay ? (C)->overlay_visible : \
-	 (((C)->tags & (M)->tagset[(M)->seltags]) != 0)))
+	 ((C)->issticky || ((C)->tags & (M)->tagset[(M)->seltags]) != 0)))
 #define TAGMASK          ((1u << 9) - 1)
 
 /* -----------------------------------------------------------
@@ -388,6 +400,10 @@ remove_compositor_listeners(GowlCompositor *self)
 	listener_remove(&self->output_mgr_apply);
 	listener_remove(&self->output_mgr_test);
 	listener_remove(&self->xdg_activation_request);
+	gowl_output_power_finish(self);
+	gowl_shortcuts_inhibit_finish(self);
+	gowl_text_input_finish(self);
+	gowl_input_config_finish(self);
 
 	/* The cursor. */
 	listener_remove(&self->cursor_motion);
@@ -454,6 +470,7 @@ gowl_compositor_dispose(GObject *object)
 		self->rec_stop_source = NULL;
 	}
 	g_clear_object(&self->input_recorder);
+	g_clear_pointer(&self->key_mode, g_free);
 
 	/* Release GObject sub-object wrappers */
 	g_clear_object(&self->seat);
@@ -650,6 +667,44 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	/* Emitted after a monitor's effective layout changes, including tag views. */
 	g_signal_new("layout-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
 	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_MONITOR, G_TYPE_STRING);
+
+	/**
+	 * GowlCompositor::output-power-changed:
+	 * @compositor: the compositor
+	 * @monitor: the output
+	 * @on: %TRUE if it was just powered on, %FALSE if off
+	 *
+	 * An output was powered off or on -- by the `output-power'
+	 * action, a wlr-output-power-management client, the dpms timeout
+	 * or the input that ended it.  Not emitted for the lid policy,
+	 * which disables rather than powers off.
+	 */
+	g_signal_new("output-power-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_MONITOR, G_TYPE_BOOLEAN);
+
+	/**
+	 * GowlCompositor::mode-changed:
+	 * @compositor: the compositor
+	 * @mode: the key mode now in force; "default" for none
+	 *
+	 * The `mode' action entered or left a key mode.  A bar shows it,
+	 * an embedder can mirror it.
+	 */
+	g_signal_new("mode-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_STRING);
+
+	/**
+	 * GowlCompositor::keyboard-layout-changed:
+	 * @compositor: the compositor
+	 * @name: the layout's name as the keymap gives it
+	 * @index: its index in the configured list
+	 *
+	 * The active XKB layout changed -- by the `switch-layout' action,
+	 * an xkb option such as grp:alt_shift_toggle, or a reload that
+	 * installed a new keymap.
+	 */
+	g_signal_new("keyboard-layout-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, G_TYPE_STRING, G_TYPE_UINT);
 
 	/**
 	 * GowlCompositor:prefix-key-policy:
@@ -3350,8 +3405,9 @@ gowl_compositor_start(
 	LISTEN(&self->backend->events.new_input,
 	       &self->new_input, on_new_input);
 
-	/* Virtual keyboard + pointer managers */
-	wlr_virtual_keyboard_manager_v1_create(self->wl_display);
+	/* Virtual pointer manager.  (The virtual KEYBOARD manager is
+	 * created with the input-method relay, which is what listens to
+	 * it -- see gowl-text-input.c.) */
 	wlr_virtual_pointer_manager_v1_create(self->wl_display);
 
 	/* Pointer lock/confinement and the relative motion stream that goes
@@ -3404,9 +3460,7 @@ gowl_compositor_start(
 
 	/* 17. Keyboard group (XKB context + keymap) */
 	{
-		struct xkb_context *xkb_ctx;
 		struct xkb_keymap  *keymap;
-		struct xkb_rule_names rules = { 0 };
 		gint repeat_rate  = 25;
 		gint repeat_delay = 600;
 
@@ -3417,19 +3471,15 @@ gowl_compositor_start(
 
 		self->wlr_kb_group = wlr_keyboard_group_create();
 
-		xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-		keymap = xkb_keymap_new_from_names(xkb_ctx, &rules,
-		                                   XKB_KEYMAP_COMPILE_NO_FLAGS);
+		keymap = build_keymap(self);
 		if (keymap == NULL) {
 			g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
 			                    "Failed to compile XKB keymap");
-			xkb_context_unref(xkb_ctx);
 			return FALSE;
 		}
 
 		wlr_keyboard_set_keymap(&self->wlr_kb_group->keyboard, keymap);
 		xkb_keymap_unref(keymap);
-		xkb_context_unref(xkb_ctx);
 
 		wlr_keyboard_set_repeat_info(&self->wlr_kb_group->keyboard,
 		                             repeat_rate, repeat_delay);
@@ -3459,7 +3509,44 @@ gowl_compositor_start(
 	self->kb_group_obj->wlr_group = self->wlr_kb_group;
 
 	self->idle_mgr = gowl_idle_manager_new();
-	self->idle_mgr->wlr_idle_notifier = self->idle_notifier;
+	/* idle-inhibit, the idle and dpms timers: the manager owns them
+	 * from here (gowl-idle-manager.c). */
+	gowl_idle_manager_attach(self->idle_mgr, self);
+
+	/* The rest of the "any app expects it" set.  Each is a global a
+	 * class of program probes for on connect and gives up without:
+	 * wlopm/swayidle (output power), a VM viewer or a game
+	 * (shortcuts inhibit, tearing), a taskbar (foreign toplevel), a
+	 * portal file chooser parenting itself to a sandboxed app
+	 * (xdg-foreign), a video player declaring what it shows
+	 * (content-type). */
+	gowl_output_power_init(self);
+	gowl_shortcuts_inhibit_init(self);
+	gowl_foreign_toplevel_init(self);
+	gowl_text_input_init(self);
+	self->tearing_control_mgr =
+		wlr_tearing_control_manager_v1_create(self->wl_display, 1);
+	self->content_type_mgr =
+		wlr_content_type_manager_v1_create(self->wl_display, 1);
+	{
+		struct wlr_xdg_foreign_registry *reg;
+
+		reg = wlr_xdg_foreign_registry_create(self->wl_display);
+		if (reg != NULL) {
+			wlr_xdg_foreign_v1_create(self->wl_display, reg);
+			wlr_xdg_foreign_v2_create(self->wl_display, reg);
+		}
+	}
+	/* Explicit sync (linux-drm-syncobj-v1), when the renderer can
+	 * wait on and signal timelines.  Vulkan clients and the NVIDIA
+	 * driver are the ones that flicker or stall without it. */
+	if (self->renderer != NULL && self->renderer->features.timeline) {
+		int drm_fd = wlr_renderer_get_drm_fd(self->renderer);
+
+		if (drm_fd >= 0)
+			wlr_linux_drm_syncobj_manager_v1_create(
+				self->wl_display, 1, drm_fd);
+	}
 
 	/* Wire cross-references */
 	self->seat->keyboard_group = self->kb_group_obj;
@@ -4163,6 +4250,7 @@ setfullscreen(
 	if (c->isoverlay)
 		return;
 	c->isfullscreen = fullscreen;
+	gowl_foreign_toplevel_client_fullscreen(c, fullscreen);
 
 	if (c->mon == NULL)
 		return;
@@ -4196,6 +4284,32 @@ setfullscreen(
 	gowl_compositor_arrange(self, c->mon);
 }
 
+void
+gowl_compositor_set_client_fullscreen(
+	GowlCompositor *self,
+	GowlClient     *c,
+	gboolean        fullscreen
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(c));
+
+	if (c->scene != NULL)
+		setfullscreen(self, c, fullscreen);
+}
+
+void
+gowl_compositor_set_client_floating(
+	GowlCompositor *self,
+	GowlClient     *c,
+	gboolean        floating
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(c));
+
+	if (c->scene != NULL && !c->isfullscreen)
+		setfloating(self, c, floating);
+}
+
 /**
  * setmon:
  *
@@ -4218,6 +4332,7 @@ setmon(
 
 	c->mon = m;
 	c->prev = c->geom;
+	gowl_foreign_toplevel_client_monitor(c, oldmon, m);
 
 	/* Arrange old monitor */
 	if (oldmon != NULL)
@@ -4496,6 +4611,11 @@ gowl_compositor_arrange(
 
 	/* Restore pointer focus */
 	gowl_compositor_motionnotify(self, 0);
+
+	/* An inhibitor only counts on a visible surface, and this is where
+	 * visibility changes. */
+	if (self->idle_mgr != NULL)
+		gowl_idle_manager_check_inhibitors(self->idle_mgr);
 }
 
 /**
@@ -5386,8 +5506,10 @@ gowl_compositor_focus_client(
 				GowlClient *old_c;
 
 				old_c = (GowlClient *)old_toplevel->base->data;
-				if (old_c != NULL)
+				if (old_c != NULL) {
 					client_set_border_color(self, old_c, self->unfocus_color);
+					gowl_foreign_toplevel_client_activated(old_c, FALSE);
+				}
 				wlr_xdg_toplevel_set_activated(old_toplevel, FALSE);
 			}
 		}
@@ -5404,9 +5526,11 @@ gowl_compositor_focus_client(
 			GowlClient *old_c;
 
 			old_c = (GowlClient *)old_xsurface->data;
-			if (old_c != NULL)
+			if (old_c != NULL) {
 				client_set_border_color(self, old_c,
 				                        self->unfocus_color);
+				gowl_foreign_toplevel_client_activated(old_c, FALSE);
+			}
 			wlr_xwayland_surface_activate(old_xsurface, FALSE);
 		}
 #endif
@@ -5415,6 +5539,7 @@ gowl_compositor_focus_client(
 	if (c == NULL) {
 		/* No client: clear focus */
 		wlr_seat_keyboard_notify_clear_focus(self->wlr_seat);
+		gowl_shortcuts_inhibit_sync(self);
 
 		if (self->seat != NULL)
 			gowl_seat_set_focused_client(self->seat, NULL);
@@ -5449,6 +5574,8 @@ gowl_compositor_focus_client(
 	else
 #endif
 		wlr_xdg_toplevel_set_activated(c->xdg_toplevel, TRUE);
+	gowl_foreign_toplevel_client_activated(c, TRUE);
+	gowl_shortcuts_inhibit_sync(self);
 
 	/* Sync GowlSeat focused client (emits seat "focus-changed" signal) */
 	if (self->seat != NULL)
@@ -5562,6 +5689,23 @@ apply_monitor_yaml_config(GowlCompositor *self, GowlMonitor *m)
 		gowl_monitor_set_position(m, mc->x, mc->y);
 	if (mc->enabled == 0 || mc->enabled == 1)
 		gowl_monitor_set_enabled(m, mc->enabled != 0);
+	/* Adaptive sync is applied from the frame handler, which knows
+	 * whether a game is up; a plain on/off takes effect on the next
+	 * frame.  A change of mode resets what the last commit did. */
+	if (mc->vrr != m->vrr_mode) {
+		m->vrr_mode = mc->vrr;
+		if (mc->vrr < 0 && m->vrr_enabled) {
+			struct wlr_output_state state;
+
+			wlr_output_state_init(&state);
+			wlr_output_state_set_adaptive_sync_enabled(&state, false);
+			wlr_output_commit_state(m->wlr_output, &state);
+			wlr_output_state_finish(&state);
+			m->vrr_enabled = FALSE;
+		}
+		if (m->wlr_output != NULL)
+			wlr_output_schedule_frame(m->wlr_output);
+	}
 }
 
 /**
@@ -5990,6 +6134,68 @@ on_new_output(struct wl_listener *listener, void *data)
 	        wlr_output->width, wlr_output->height);
 }
 
+/*
+ * How this frame is presented, beyond what is in it: whether it may
+ * tear, and whether adaptive sync is on.
+ *
+ * Both key off the fullscreen window on this output, when there is
+ * one.  Tearing needs `allow-tearing' in the config AND the window
+ * asking for it through tearing-control-v1 -- a game that knows what
+ * it wants -- and is only ever applied to a fullscreen window, since a
+ * torn desktop helps nobody.  Adaptive sync in `on-demand' mode
+ * follows the window's content-type: on for a game or a video, off
+ * otherwise, because VRR on an idle desktop makes the cursor stutter
+ * as the refresh rate hunts.  Only a CHANGE touches the output state:
+ * an adaptive-sync flip is a modeset on some drivers.
+ */
+static void
+monitor_frame_presentation(
+	GowlMonitor            *m,
+	struct wlr_output_state *state
+){
+	GowlCompositor *self = m->compositor;
+	GowlClient *fs = NULL;
+	GList *l;
+	gboolean want_vrr;
+
+	if (self == NULL)
+		return;
+
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if (c->isfullscreen && c->mon == m && VISIBLEON(c, m)
+		    && client_surface(c) != NULL) {
+			fs = c;
+			break;
+		}
+	}
+
+	if (fs != NULL && self->tearing_control_mgr != NULL
+	    && self->config != NULL
+	    && gowl_config_get_allow_tearing(self->config)
+	    && wlr_tearing_control_manager_v1_surface_hint_from_surface(
+	           self->tearing_control_mgr, client_surface(fs))
+	       == WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC)
+		state->tearing_page_flip = true;
+
+	if (m->vrr_mode < 0 || !m->wlr_output->adaptive_sync_supported)
+		return;
+	want_vrr = m->vrr_mode == 1;
+	if (m->vrr_mode == 2 && fs != NULL && self->content_type_mgr != NULL) {
+		enum wp_content_type_v1_type ct;
+
+		ct = wlr_surface_get_content_type_v1(self->content_type_mgr,
+		                                     client_surface(fs));
+		want_vrr = ct == WP_CONTENT_TYPE_V1_TYPE_GAME
+		           || ct == WP_CONTENT_TYPE_V1_TYPE_VIDEO;
+	}
+	if (want_vrr != m->vrr_enabled) {
+		wlr_output_state_set_adaptive_sync_enabled(state, want_vrr);
+		m->vrr_enabled = want_vrr;
+	}
+}
+
 /**
  * on_monitor_frame:
  *
@@ -6080,6 +6286,7 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 			wlr_output_state_finish(&state);
 			goto frame_done;
 		}
+		monitor_frame_presentation(m, &state);
 
 		if (m->gamma_dirty && m->compositor != NULL
 		    && m->compositor->gamma_control_mgr != NULL) {
@@ -6518,13 +6725,70 @@ on_xdg_activation_request(struct wl_listener *listener, void *data)
 	if (c == NULL || gowl_client_get_embedded(c))
 		return;
 
-	/* Focus if the client is visible on the selected monitor; mark
-	 * urgent otherwise so the user is made aware. */
-	if (c->mon != NULL && c->mon == self->selmon
-	    && (c->tags & c->mon->tagset[c->mon->seltags]) != 0)
-		gowl_compositor_focus_client(self, c, TRUE);
-	else
-		c->isurgent = TRUE;
+	gowl_compositor_activate_client(self, c);
+}
+
+/**
+ * gowl_compositor_activate_client:
+ * @self: the compositor
+ * @c: the client that asked, or was asked for, activation
+ *
+ * The `focus-on-activate' policy, shared by xdg-activation, an X11
+ * client's _NET_ACTIVE_WINDOW and a taskbar's foreign-toplevel
+ * request:
+ *
+ *   smart   focus it if it is visible on the selected monitor, mark
+ *           it urgent otherwise (the border colour, the bar)
+ *   urgent  only ever mark it
+ *   focus   view its tags on its monitor and focus it
+ *   none    do nothing
+ *
+ * "smart" is the default and what gowl always did.  "urgent" is for
+ * whoever has been pulled out of a terminal by a browser one time too
+ * many; "focus" is for a taskbar-driven workflow where a click means
+ * "take me there".
+ */
+void
+gowl_compositor_activate_client(
+	GowlCompositor *self,
+	GowlClient     *c
+){
+	const gchar *policy = "smart";
+	gboolean visible;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(c));
+
+	if (c->isembedded || c->mon == NULL)
+		return;
+	if (self->config != NULL)
+		policy = gowl_config_get_focus_on_activate(self->config);
+
+	if (g_strcmp0(policy, "none") == 0)
+		return;
+
+	visible = c->mon == self->selmon && VISIBLEON(c, c->mon);
+	if (g_strcmp0(policy, "urgent") == 0
+	    || (g_strcmp0(policy, "focus") != 0 && !visible)) {
+		if (focustop(self, self->selmon) != c) {
+			c->isurgent = TRUE;
+			client_set_border_color(self, c, self->urgent_color);
+			gowl_client_set_urgent(c, TRUE);
+		}
+		return;
+	}
+
+	if (!visible) {
+		/* "focus": go to it.  A hidden overlay cannot be viewed by
+		 * tag; its module shows it. */
+		if (c->isoverlay)
+			return;
+		if (c->tags != 0
+		    && (c->tags & c->mon->tagset[c->mon->seltags]) == 0)
+			gowl_monitor_set_tags(c->mon, c->tags);
+		self->selmon = c->mon;
+	}
+	gowl_compositor_focus_client(self, c, TRUE);
 }
 
 /**
@@ -6820,22 +7084,256 @@ create_keyboard(
 	GowlCompositor      *self,
 	struct wlr_keyboard  *keyboard
 ){
-	struct xkb_context *ctx;
 	struct xkb_keymap  *keymap;
-	struct xkb_rule_names rules = { 0 };
 
-	/* Set up XKB keymap for this keyboard */
-	ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-	keymap = xkb_keymap_new_from_names(ctx, &rules,
-	                                   XKB_KEYMAP_COMPILE_NO_FLAGS);
+	/* The configured keymap, the same one the group carries */
+	keymap = build_keymap(self);
 	if (keymap != NULL) {
 		wlr_keyboard_set_keymap(keyboard, keymap);
 		xkb_keymap_unref(keymap);
 	}
-	xkb_context_unref(ctx);
 
 	/* Add to the keyboard group (shared XKB state) */
 	wlr_keyboard_group_add_keyboard(self->wlr_kb_group, keyboard);
+	gowl_input_config_track_device(self, &keyboard->base);
+}
+
+/*
+ * The keymap the config asks for: a keymap file if it names one, else
+ * rules/model/layout/variant/options, each of which falls back to the
+ * XKB_DEFAULT_* environment and then to xkb's own defaults when unset
+ * -- which is what an empty struct did before these keys existed.
+ */
+static struct xkb_keymap *
+build_keymap(GowlCompositor *self)
+{
+	struct xkb_context *ctx;
+	struct xkb_keymap  *keymap = NULL;
+	struct xkb_rule_names rules = { 0 };
+	const gchar *file = NULL;
+
+	ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+	if (ctx == NULL)
+		return NULL;
+
+	if (self->config != NULL) {
+		rules.rules   = gowl_config_get_xkb_rules(self->config);
+		rules.model   = gowl_config_get_xkb_model(self->config);
+		rules.layout  = gowl_config_get_xkb_layout(self->config);
+		rules.variant = gowl_config_get_xkb_variant(self->config);
+		rules.options = gowl_config_get_xkb_options(self->config);
+		file          = gowl_config_get_xkb_file(self->config);
+	}
+
+	if (file != NULL && *file != '\0') {
+		FILE *fp = fopen(file, "r");
+
+		if (fp != NULL) {
+			keymap = xkb_keymap_new_from_file(ctx, fp,
+				XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+			fclose(fp);
+		}
+		if (keymap == NULL)
+			g_warning("xkb-file '%s' could not be loaded; using "
+			          "the rules set instead", file);
+	}
+	if (keymap == NULL)
+		keymap = xkb_keymap_new_from_names(ctx, &rules,
+		                                   XKB_KEYMAP_COMPILE_NO_FLAGS);
+	if (keymap == NULL && rules.layout != NULL) {
+		struct xkb_rule_names fallback = { 0 };
+
+		g_warning("XKB layout '%s' (variant '%s', options '%s') does "
+		          "not compile; using the default keymap",
+		          rules.layout, rules.variant != NULL ? rules.variant : "",
+		          rules.options != NULL ? rules.options : "");
+		keymap = xkb_keymap_new_from_names(ctx, &fallback,
+		                                   XKB_KEYMAP_COMPILE_NO_FLAGS);
+	}
+	xkb_context_unref(ctx);
+	return keymap;
+}
+
+static void
+apply_keymap_to(struct wlr_keyboard *kb, gpointer user_data)
+{
+	wlr_keyboard_set_keymap(kb, (struct xkb_keymap *)user_data);
+}
+
+/**
+ * gowl_compositor_apply_keymap:
+ * @self: a #GowlCompositor
+ *
+ * Rebuilds the keymap from the config's xkb-* keys and applies it to
+ * the keyboard group and every keyboard in it.  What a config reload
+ * calls.
+ */
+void
+gowl_compositor_apply_keymap(GowlCompositor *self)
+{
+	struct xkb_keymap *keymap;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_kb_group == NULL)
+		return;
+	keymap = build_keymap(self);
+	if (keymap == NULL)
+		return;
+	wlr_keyboard_set_keymap(&self->wlr_kb_group->keyboard, keymap);
+	gowl_input_config_foreach_keyboard(self, apply_keymap_to, keymap);
+	xkb_keymap_unref(keymap);
+	announce_keyboard_layout(self, TRUE);
+}
+
+/* Emits keyboard-layout-changed if the group changed, or when @force. */
+static void
+announce_keyboard_layout(GowlCompositor *self, gboolean force)
+{
+	struct wlr_keyboard *kb;
+	const gchar *name;
+	guint group;
+
+	if (self->wlr_kb_group == NULL)
+		return;
+	kb = &self->wlr_kb_group->keyboard;
+	if (kb->keymap == NULL)
+		return;
+	group = kb->modifiers.group;
+	if (!force && group == self->last_kb_group)
+		return;
+	self->last_kb_group = group;
+	name = xkb_keymap_layout_get_name(kb->keymap, group);
+	if (name == NULL)
+		name = "";
+	g_signal_emit_by_name(self, "keyboard-layout-changed", name, group);
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT keymap %u %s", group, name);
+}
+
+/**
+ * gowl_compositor_switch_keyboard_layout:
+ * @self: a #GowlCompositor
+ * @which: "next", "prev", or a layout index from 0
+ *
+ * Switches the active XKB layout group of every keyboard: the
+ * `switch-layout' action.  With a single layout configured this does
+ * nothing.
+ *
+ * Returns: %TRUE if the layout changed
+ */
+gboolean
+gowl_compositor_switch_keyboard_layout(
+	GowlCompositor *self,
+	const gchar    *which
+){
+	struct wlr_keyboard *kb;
+	xkb_layout_index_t n, cur, next;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	if (self->wlr_kb_group == NULL)
+		return FALSE;
+	kb = &self->wlr_kb_group->keyboard;
+	if (kb->keymap == NULL)
+		return FALSE;
+	n = xkb_keymap_num_layouts(kb->keymap);
+	if (n < 2)
+		return FALSE;
+	cur = kb->modifiers.group;
+	if (which == NULL || g_ascii_strcasecmp(which, "next") == 0)
+		next = (cur + 1) % n;
+	else if (g_ascii_strcasecmp(which, "prev") == 0
+	         || g_ascii_strcasecmp(which, "previous") == 0)
+		next = (cur + n - 1) % n;
+	else
+		next = (xkb_layout_index_t)CLAMP(atoi(which), 0, (gint)n - 1);
+	if (next == cur)
+		return FALSE;
+	wlr_keyboard_notify_modifiers(kb, kb->modifiers.depressed,
+	                              kb->modifiers.latched,
+	                              kb->modifiers.locked, next);
+	announce_keyboard_layout(self, FALSE);
+	return TRUE;
+}
+
+/**
+ * gowl_compositor_get_keyboard_layout:
+ * @self: a #GowlCompositor
+ * @index: (out) (optional): the active layout's index
+ *
+ * Returns: (transfer none) (nullable): the active layout's name as the
+ *   keymap gives it ("English (US)"), or %NULL before start
+ */
+const gchar *
+gowl_compositor_get_keyboard_layout(
+	GowlCompositor *self,
+	guint          *index
+){
+	struct wlr_keyboard *kb;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	if (self->wlr_kb_group == NULL)
+		return NULL;
+	kb = &self->wlr_kb_group->keyboard;
+	if (kb->keymap == NULL)
+		return NULL;
+	if (index != NULL)
+		*index = kb->modifiers.group;
+	return xkb_keymap_layout_get_name(kb->keymap, kb->modifiers.group);
+}
+
+/**
+ * gowl_compositor_set_key_mode:
+ * @self: a #GowlCompositor
+ * @mode: (nullable): the mode to enter; %NULL, "" or "default" for
+ *   the default mode
+ *
+ * The `mode' action.  Emits #GowlCompositor::mode-changed when the
+ * mode actually changes.
+ */
+void
+gowl_compositor_set_key_mode(
+	GowlCompositor *self,
+	const gchar    *mode
+){
+	gchar *next;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	next = (mode != NULL && *mode != '\0' && g_strcmp0(mode, "default") != 0)
+	       ? g_strdup(mode) : NULL;
+	if (g_strcmp0(next, self->key_mode) == 0) {
+		g_free(next);
+		return;
+	}
+	g_free(self->key_mode);
+	self->key_mode = next;
+	/* A mode change ends any repeat: the held key means something
+	 * else now, or nothing. */
+	self->kb_nsyms = 0;
+	if (self->key_repeat_source != NULL)
+		wl_event_source_timer_update(self->key_repeat_source, 0);
+	g_signal_emit_by_name(self, "mode-changed",
+	                      self->key_mode != NULL ? self->key_mode : "default");
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT mode %s",
+		                     self->key_mode != NULL ? self->key_mode : "default");
+}
+
+/**
+ * gowl_compositor_get_key_mode:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none): the key mode in force, "default" when none
+ */
+const gchar *
+gowl_compositor_get_key_mode(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), "default");
+
+	return self->key_mode != NULL ? self->key_mode : "default";
 }
 
 /**
@@ -6880,6 +7378,9 @@ create_pointer(
 
 	wlr_cursor_attach_input_device(self->wlr_cursor,
 	                               &pointer->base);
+	/* The `input:' section, on top of the defaults above; and the
+	 * device is remembered for a reload. */
+	gowl_input_config_track_device(self, &pointer->base);
 }
 
 /* -----------------------------------------------------------
@@ -6906,6 +7407,16 @@ on_cursor_swipe_begin(struct wl_listener *listener, void *data)
 	struct wlr_pointer_swipe_begin_event *ev = data;
 
 	self->gesture_claimant = NULL;
+	/* A configured gesture comes before the modules: the user bound
+	 * it, the cube merely offers.  Summed here, decided at the end. */
+	self->gesture_bound = gesture_bound_for(self, GOWL_GESTURE_SWIPE,
+	                                        ev->fingers);
+	if (self->gesture_bound) {
+		self->gesture_fingers = ev->fingers;
+		self->gesture_dx = 0;
+		self->gesture_dy = 0;
+		return;
+	}
 	if (self->module_mgr != NULL) {
 		GPtrArray *handlers =
 			gowl_module_manager_gesture_handlers(self->module_mgr);
@@ -6935,6 +7446,11 @@ on_cursor_swipe_update(struct wl_listener *listener, void *data)
 		wl_container_of(listener, self, cursor_swipe_update);
 	struct wlr_pointer_swipe_update_event *ev = data;
 
+	if (self->gesture_bound) {
+		self->gesture_dx += ev->dx;
+		self->gesture_dy += ev->dy;
+		return;
+	}
 	if (self->gesture_claimant != NULL) {
 		gowl_gesture_handler_swipe_update(self->gesture_claimant, self,
 		                                  ev->dx, ev->dy);
@@ -6951,6 +7467,19 @@ on_cursor_swipe_end(struct wl_listener *listener, void *data)
 		wl_container_of(listener, self, cursor_swipe_end);
 	struct wlr_pointer_swipe_end_event *ev = data;
 
+	if (self->gesture_bound) {
+		self->gesture_bound = FALSE;
+		if (!ev->cancelled) {
+			GowlGestureDirection dir = gowl_gesture_classify_swipe(
+				self->gesture_dx, self->gesture_dy,
+				GOWL_GESTURE_SWIPE_THRESHOLD);
+
+			if (dir != GOWL_GESTURE_NONE)
+				dispatch_gesture(self, GOWL_GESTURE_SWIPE, dir,
+				                 self->gesture_fingers);
+		}
+		return;
+	}
 	if (self->gesture_claimant != NULL) {
 		GowlGestureHandler *h = self->gesture_claimant;
 
@@ -6973,6 +7502,13 @@ on_cursor_pinch_begin(struct wl_listener *listener, void *data)
 	struct wlr_pointer_pinch_begin_event *ev = data;
 
 	self->pinch_claimant = NULL;
+	self->pinch_bound = gesture_bound_for(self, GOWL_GESTURE_PINCH,
+	                                      ev->fingers);
+	if (self->pinch_bound) {
+		self->pinch_fingers = ev->fingers;
+		self->pinch_scale = 1.0;
+		return;
+	}
 	if (self->module_mgr != NULL) {
 		GPtrArray *handlers =
 			gowl_module_manager_gesture_handlers(self->module_mgr);
@@ -7002,6 +7538,11 @@ on_cursor_pinch_update(struct wl_listener *listener, void *data)
 		wl_container_of(listener, self, cursor_pinch_update);
 	struct wlr_pointer_pinch_update_event *ev = data;
 
+	if (self->pinch_bound) {
+		/* libinput's scale is absolute since the pinch began. */
+		self->pinch_scale = ev->scale;
+		return;
+	}
 	if (self->pinch_claimant != NULL) {
 		gowl_gesture_handler_pinch_update(self->pinch_claimant, self,
 		                                  ev->dx, ev->dy, ev->scale,
@@ -7020,6 +7561,18 @@ on_cursor_pinch_end(struct wl_listener *listener, void *data)
 		wl_container_of(listener, self, cursor_pinch_end);
 	struct wlr_pointer_pinch_end_event *ev = data;
 
+	if (self->pinch_bound) {
+		self->pinch_bound = FALSE;
+		if (!ev->cancelled) {
+			GowlGestureDirection dir =
+				gowl_gesture_classify_pinch(self->pinch_scale);
+
+			if (dir != GOWL_GESTURE_NONE)
+				dispatch_gesture(self, GOWL_GESTURE_PINCH, dir,
+				                 self->pinch_fingers);
+		}
+		return;
+	}
 	if (self->pinch_claimant != NULL) {
 		GowlGestureHandler *h = self->pinch_claimant;
 
@@ -7055,6 +7608,1062 @@ on_cursor_hold_end(struct wl_listener *listener, void *data)
  * Keyboard callbacks
  * ----------------------------------------------------------- */
 
+/* -----------------------------------------------------------
+ * Focus by direction, by urgency, by history
+ *
+ * The choice of window is pure geometry and list order, in functions
+ * of their own so a test can ask without a seat; the actions focus
+ * what they return, viewing the window's tags first when it is on
+ * another.
+ * ----------------------------------------------------------- */
+
+static gboolean
+direction_from_string(const gchar *arg, GowlDirection *out)
+{
+	if (arg == NULL)
+		return FALSE;
+	if (g_ascii_strcasecmp(arg, "left") == 0)
+		*out = GOWL_DIRECTION_LEFT;
+	else if (g_ascii_strcasecmp(arg, "right") == 0)
+		*out = GOWL_DIRECTION_RIGHT;
+	else if (g_ascii_strcasecmp(arg, "up") == 0)
+		*out = GOWL_DIRECTION_UP;
+	else if (g_ascii_strcasecmp(arg, "down") == 0)
+		*out = GOWL_DIRECTION_DOWN;
+	else
+		return FALSE;
+	return TRUE;
+}
+
+/* Whether the ranges [a0,a1) and [b0,b1) share any length. */
+static gboolean
+ranges_overlap(gint a0, gint a1, gint b0, gint b1)
+{
+	return MAX(a0, b0) < MIN(a1, b1);
+}
+
+/**
+ * gowl_compositor_direction_neighbour:
+ * @self: a #GowlCompositor
+ * @from: the window to step from
+ * @direction: which way
+ *
+ * The visible window on @from's monitor nearest in a direction: its
+ * centre must lie that way, windows that overlap @from across the
+ * other axis come first (the one straight across beats one diagonal),
+ * then the closest.  Pure: nothing is focused.
+ *
+ * Returns: (transfer none) (nullable): the neighbour, or %NULL when
+ *   nothing lies that way on this monitor
+ */
+GowlClient *
+gowl_compositor_direction_neighbour(
+	GowlCompositor *self,
+	GowlClient     *from,
+	GowlDirection   direction
+){
+	GowlClient *best = NULL;
+	gdouble best_score = 0;
+	gint fx, fy;
+	GList *l;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	g_return_val_if_fail(GOWL_IS_CLIENT(from), NULL);
+
+	if (from->mon == NULL)
+		return NULL;
+	fx = from->geom.x + from->geom.width / 2;
+	fy = from->geom.y + from->geom.height / 2;
+
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+		gint cx, cy, primary, secondary;
+		gboolean across;
+		gdouble score;
+
+		if (c == from || c->isembedded || !VISIBLEON(c, from->mon))
+			continue;
+		cx = c->geom.x + c->geom.width / 2;
+		cy = c->geom.y + c->geom.height / 2;
+
+		switch (direction) {
+		case GOWL_DIRECTION_LEFT:
+			if (cx >= fx)
+				continue;
+			primary = fx - cx;
+			secondary = ABS(cy - fy);
+			across = ranges_overlap(c->geom.y, c->geom.y + c->geom.height,
+			                        from->geom.y, from->geom.y + from->geom.height);
+			break;
+		case GOWL_DIRECTION_RIGHT:
+			if (cx <= fx)
+				continue;
+			primary = cx - fx;
+			secondary = ABS(cy - fy);
+			across = ranges_overlap(c->geom.y, c->geom.y + c->geom.height,
+			                        from->geom.y, from->geom.y + from->geom.height);
+			break;
+		case GOWL_DIRECTION_UP:
+			if (cy >= fy)
+				continue;
+			primary = fy - cy;
+			secondary = ABS(cx - fx);
+			across = ranges_overlap(c->geom.x, c->geom.x + c->geom.width,
+			                        from->geom.x, from->geom.x + from->geom.width);
+			break;
+		case GOWL_DIRECTION_DOWN:
+		default:
+			if (cy <= fy)
+				continue;
+			primary = cy - fy;
+			secondary = ABS(cx - fx);
+			across = ranges_overlap(c->geom.x, c->geom.x + c->geom.width,
+			                        from->geom.x, from->geom.x + from->geom.width);
+			break;
+		}
+		/* Straight across first, then near; the secondary distance
+		 * only breaks ties among windows equally far along. */
+		score = (across ? 0.0 : 1e6) + primary * 4.0 + secondary;
+		if (best == NULL || score < best_score) {
+			best = c;
+			best_score = score;
+		}
+	}
+	return best;
+}
+
+/* The monitor next to @m in a direction, by output layout. */
+static GowlMonitor *
+monitor_in_direction(GowlCompositor *self, GowlMonitor *m, GowlDirection direction)
+{
+	struct wlr_output *out;
+	enum wlr_direction wd;
+	GList *l;
+
+	if (self->output_layout == NULL || m == NULL || m->wlr_output == NULL)
+		return NULL;
+	switch (direction) {
+	case GOWL_DIRECTION_LEFT:  wd = WLR_DIRECTION_LEFT;  break;
+	case GOWL_DIRECTION_RIGHT: wd = WLR_DIRECTION_RIGHT; break;
+	case GOWL_DIRECTION_UP:    wd = WLR_DIRECTION_UP;    break;
+	default:                   wd = WLR_DIRECTION_DOWN;  break;
+	}
+	out = wlr_output_layout_adjacent_output(self->output_layout, wd,
+		m->wlr_output, m->m.x + m->m.width / 2.0, m->m.y + m->m.height / 2.0);
+	if (out == NULL)
+		return NULL;
+	for (l = self->monitors; l != NULL; l = l->next)
+		if (((GowlMonitor *)l->data)->wlr_output == out)
+			return (GowlMonitor *)l->data;
+	return NULL;
+}
+
+/* Focus @c, viewing its tags first if it is on another, and tell the
+ * effects when the keyboard actually moved. */
+static void
+focus_and_view(GowlCompositor *self, GowlClient *c)
+{
+	if (c == NULL || c->mon == NULL)
+		return;
+	if (!c->isoverlay && !VISIBLEON(c, c->mon) && c->tags != 0)
+		gowl_monitor_set_tags(c->mon, c->tags);
+	self->selmon = c->mon;
+	gowl_compositor_focus_client(self, c, TRUE);
+	gowl_compositor_arrange(self, c->mon);
+	if (client_surface(c) != NULL && self->wlr_seat != NULL
+	    && self->wlr_seat->keyboard_state.focused_surface == client_surface(c))
+		gowl_effects_client_event(self, c,
+			GOWL_SCENE_EFFECT_KEYBOARD_FOCUS, NULL, FALSE);
+}
+
+/**
+ * gowl_compositor_focus_direction:
+ * @self: a #GowlCompositor
+ * @direction: which way
+ *
+ * The `focus-dir' action: focuses the nearest window that way on the
+ * focused monitor, or the top window of the next monitor that way
+ * when there is none.
+ *
+ * Returns: %TRUE if focus moved
+ */
+gboolean
+gowl_compositor_focus_direction(
+	GowlCompositor *self,
+	GowlDirection   direction
+){
+	GowlClient *sel, *to;
+	GowlMonitor *m;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	sel = focustop(self, self->selmon);
+	to = sel != NULL
+	     ? gowl_compositor_direction_neighbour(self, sel, direction) : NULL;
+	if (to != NULL) {
+		focus_and_view(self, to);
+		return TRUE;
+	}
+	m = monitor_in_direction(self, self->selmon, direction);
+	if (m == NULL || m == self->selmon)
+		return FALSE;
+	self->selmon = m;
+	to = focustop(self, m);
+	gowl_compositor_focus_client(self, to, TRUE);
+	return TRUE;
+}
+
+/**
+ * gowl_compositor_urgent_client:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the most recently mapped window
+ *   that is marked urgent, on any monitor or tag, or %NULL
+ */
+GowlClient *
+gowl_compositor_urgent_client(GowlCompositor *self)
+{
+	GList *l;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if (c->isurgent && !c->isembedded)
+			return c;
+	}
+	return NULL;
+}
+
+/**
+ * gowl_compositor_focus_urgent:
+ * @self: a #GowlCompositor
+ *
+ * The `focus-urgent' action.
+ *
+ * Returns: %TRUE if there was an urgent window and it was focused
+ */
+gboolean
+gowl_compositor_focus_urgent(GowlCompositor *self)
+{
+	GowlClient *c;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	c = gowl_compositor_urgent_client(self);
+	if (c == NULL)
+		return FALSE;
+	focus_and_view(self, c);
+	return TRUE;
+}
+
+/**
+ * gowl_compositor_last_focused:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the window that had the keyboard
+ *   before the current one, on any tag, or %NULL
+ */
+GowlClient *
+gowl_compositor_last_focused(GowlCompositor *self)
+{
+	GList *l;
+	gboolean skipped_current = FALSE;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	for (l = self->fstack; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if (c->isembedded || (c->isoverlay && !c->overlay_visible))
+			continue;
+		if (!skipped_current) {
+			skipped_current = TRUE;
+			continue;
+		}
+		return c;
+	}
+	return NULL;
+}
+
+/**
+ * gowl_compositor_focus_last:
+ * @self: a #GowlCompositor
+ *
+ * The `focus-last' action: back to the previous window, wherever it is.
+ *
+ * Returns: %TRUE if there was one and it was focused
+ */
+gboolean
+gowl_compositor_focus_last(GowlCompositor *self)
+{
+	GowlClient *c;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	c = gowl_compositor_last_focused(self);
+	if (c == NULL)
+		return FALSE;
+	focus_and_view(self, c);
+	return TRUE;
+}
+
+/*
+ * Which corner a resize grab takes: the one nearest the pointer, so
+ * the corner follows the hand (dwl behaviour) instead of always the
+ * bottom-right.
+ */
+static guint32
+resize_edges_at_cursor(GowlCompositor *self, GowlClient *c)
+{
+	guint32 edges = 0;
+	gint midx = c->geom.x + c->geom.width / 2;
+	gint midy = c->geom.y + c->geom.height / 2;
+
+	edges |= (self->wlr_cursor->x < midx) ? WLR_EDGE_LEFT : WLR_EDGE_RIGHT;
+	edges |= (self->wlr_cursor->y < midy) ? WLR_EDGE_TOP : WLR_EDGE_BOTTOM;
+	return edges;
+}
+
+/*
+ * The pointer bind for a button (or wheel step) under the modifiers
+ * held, run as a keybind entry.  Returns TRUE when one matched: the
+ * button is then the compositor's and never reaches a client.
+ */
+static gboolean
+dispatch_mousebind(
+	GowlCompositor *self,
+	guint           mods,
+	guint           button
+){
+	GArray *binds;
+	guint clean_mods;
+	guint i;
+
+	if (self->config == NULL || self->locked)
+		return FALSE;
+	binds = gowl_config_get_mousebinds(self->config);
+	if (binds == NULL)
+		return FALSE;
+
+	clean_mods = GOWL_CLEANMASK(mods);
+	for (i = 0; i < binds->len; i++) {
+		GowlMousebindEntry *mb = &g_array_index(binds, GowlMousebindEntry, i);
+		GowlKeybindEntry as_key;
+
+		if (GOWL_CLEANMASK(mb->modifiers) != clean_mods
+		    || mb->button != button)
+			continue;
+		memset(&as_key, 0, sizeof as_key);
+		as_key.modifiers = mb->modifiers;
+		as_key.action = mb->action;
+		as_key.arg = mb->arg;
+		as_key.desc = mb->desc;
+		return run_keybind_entry(self, &as_key);
+	}
+	return FALSE;
+}
+
+/*
+ * The gesture bind for a finished gesture, run as a keybind entry.
+ */
+static gboolean
+dispatch_gesture(
+	GowlCompositor       *self,
+	GowlGestureKind       kind,
+	GowlGestureDirection  direction,
+	guint                 fingers
+){
+	GArray *binds;
+	guint i;
+
+	if (self->config == NULL || self->locked)
+		return FALSE;
+	binds = gowl_config_get_gestures(self->config);
+	if (binds == NULL)
+		return FALSE;
+
+	for (i = 0; i < binds->len; i++) {
+		GowlGestureEntry *ge = &g_array_index(binds, GowlGestureEntry, i);
+		GowlKeybindEntry as_key;
+
+		if (ge->kind != (gint)kind || ge->direction != (gint)direction
+		    || ge->fingers != fingers)
+			continue;
+		memset(&as_key, 0, sizeof as_key);
+		as_key.action = ge->action;
+		as_key.arg = ge->arg;
+		as_key.desc = ge->desc;
+		return run_keybind_entry(self, &as_key);
+	}
+	return FALSE;
+}
+
+/* Whether any gesture of this kind is bound for this finger count:
+ * if so the whole gesture is the compositor's. */
+static gboolean
+gesture_bound_for(GowlCompositor *self, GowlGestureKind kind, guint fingers)
+{
+	GArray *binds;
+	guint i;
+
+	if (self->config == NULL || self->locked)
+		return FALSE;
+	binds = gowl_config_get_gestures(self->config);
+	for (i = 0; binds != NULL && i < binds->len; i++) {
+		GowlGestureEntry *ge = &g_array_index(binds, GowlGestureEntry, i);
+
+		if (ge->kind == (gint)kind && ge->fingers == fingers)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/*
+ * The action of one bind, whatever bound it: a key, a pointer button,
+ * a gesture, or a caller with an entry of its own.  Returns TRUE when
+ * the bind was consumed, which is always for a known action: a bind
+ * whose action has nothing to do still swallows the key.
+ */
+static gboolean
+run_keybind_entry(
+	GowlCompositor         *self,
+	const GowlKeybindEntry *kb
+){
+	switch (kb->action) {
+	case GOWL_ACTION_QUIT:
+		gowl_compositor_quit(self);
+		return TRUE;
+	case GOWL_ACTION_SPAWN:
+		if (kb->arg != NULL) {
+			GError *err = NULL;
+			if (!g_spawn_command_line_async(kb->arg,
+			                               &err)) {
+				g_warning("spawn '%s': %s",
+				          kb->arg, err->message);
+				g_error_free(err);
+			}
+		}
+		return TRUE;
+	case GOWL_ACTION_KILL_CLIENT: {
+		GowlClient *sel = focustop(self, self->selmon);
+		/* Must go through gowl_client_close(): the
+		 * focused window may be an X11 client, whose
+		 * xdg_toplevel is NULL.  Sending the XDG
+		 * close directly here used to SIGSEGV the
+		 * compositor -- and the whole session under
+		 * `emacs --gowl'. */
+		if (sel != NULL)
+			gowl_client_close(sel);
+		return TRUE;
+	}
+	case GOWL_ACTION_MOVE_STACK:
+		gowl_compositor_move_stack(self, kb->arg != NULL ? atoi(kb->arg) : 1);
+		return TRUE;
+	case GOWL_ACTION_FOCUS_STACK: {
+		GowlClient *sel, *found;
+
+		sel = focustop(self, self->selmon);
+		if (sel == NULL)
+			return TRUE;
+
+		/* Which neighbour is gowl_compositor_stack_neighbour()'s
+		 * call: it keeps a shown scratchpad's windows cycling
+		 * among themselves instead of stepping down onto the
+		 * tiles beneath it, which would roll it away. */
+		found = gowl_compositor_stack_neighbour(self, sel,
+			(kb->arg != NULL) ? atoi(kb->arg) : 1);
+		if (found == NULL)
+			return TRUE;
+		gowl_compositor_focus_client(self, found, TRUE);
+		/* Notify effects only after focus actually changes. Focus
+		 * guards and cycling a single window must stay quiet. */
+		if (found != sel && client_surface(found) != NULL
+		    && self->wlr_seat->keyboard_state.focused_surface == client_surface(found))
+			gowl_effects_client_event(self, found,
+				GOWL_SCENE_EFFECT_KEYBOARD_FOCUS, NULL, FALSE);
+		return TRUE;
+	}
+	case GOWL_ACTION_SET_MFACT: {
+		GowlClient *sel;
+		gdouble f;
+		if (self->selmon == NULL || kb->arg == NULL)
+			return TRUE;
+
+		/* A shown panel has no master area -- the tiles it
+		 * would resize are hidden behind it -- so Super+h /
+		 * Super+l step left and right across its columns. */
+		sel = focustop(self, self->selmon);
+		if (sel != NULL && sel->isoverlay
+		    && sel->overlay_group != 0) {
+			GowlClient *to;
+
+			f = g_ascii_strtod(kb->arg, NULL);
+			to = panel_step(self, sel, f < 0 ? -1 : 1, FALSE);
+			if (to != sel) {
+				gowl_compositor_focus_client(self, to, TRUE);
+				if (client_surface(to) != NULL
+				    && self->wlr_seat->keyboard_state.focused_surface
+				       == client_surface(to))
+					gowl_effects_client_event(self, to,
+						GOWL_SCENE_EFFECT_KEYBOARD_FOCUS,
+						NULL, FALSE);
+			}
+			return TRUE;
+		}
+		f = g_ascii_strtod(kb->arg, NULL) + self->selmon->mfact;
+		if (f < 0.1 || f > 0.9)
+			return TRUE;
+		self->selmon->mfact = f;
+		gowl_compositor_arrange(self, self->selmon);
+		return TRUE;
+	}
+	case GOWL_ACTION_INC_NMASTER: {
+		gint delta;
+		if (self->selmon == NULL || kb->arg == NULL)
+			return TRUE;
+		delta = atoi(kb->arg);
+		if (self->selmon->nmaster + delta >= 0)
+			self->selmon->nmaster += delta;
+		gowl_compositor_arrange(self, self->selmon);
+		return TRUE;
+	}
+	case GOWL_ACTION_TOGGLE_FLOAT: {
+		GowlClient *sel = focustop(self, self->selmon);
+		if (sel != NULL && !sel->isfullscreen)
+			setfloating(self, sel, !sel->isfloating);
+		return TRUE;
+	}
+	case GOWL_ACTION_TOGGLE_FULLSCREEN: {
+		GowlClient *sel = focustop(self, self->selmon);
+		if (sel != NULL)
+			setfullscreen(self, sel, !sel->isfullscreen);
+		return TRUE;
+	}
+	case GOWL_ACTION_TAG_VIEW: {
+		guint32 newtags;
+		guint32 occupied;
+		GList *cl;
+		if (self->selmon == NULL || kb->arg == NULL)
+			return TRUE;
+		newtags = (guint32)atoi(kb->arg) & TAGMASK;
+		if (newtags == 0)
+			return TRUE;
+		self->selmon->tagset[self->selmon->seltags] = newtags;
+		gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
+		gowl_compositor_arrange(self, self->selmon);
+
+		/* Push tag state to IPC subscribers */
+		if (self->ipc != NULL) {
+			occupied = 0;
+			for (cl = self->clients; cl != NULL; cl = cl->next) {
+				GowlClient *tc = (GowlClient *)cl->data;
+				if (tc->mon == self->selmon)
+					occupied |= tc->tags;
+			}
+			gowl_ipc_push_event(self->ipc,
+				"EVENT tags %s %u %u 0 %u",
+				self->selmon->wlr_output->name,
+				newtags, occupied, newtags);
+		}
+		return TRUE;
+	}
+	case GOWL_ACTION_TAG_SET: {
+		GowlClient *sel;
+		guint32 newtags;
+		guint32 occupied;
+		guint32 active;
+		GList *cl;
+		if (self->selmon == NULL || kb->arg == NULL)
+			return TRUE;
+		sel = focustop(self, self->selmon);
+		if (sel == NULL)
+			return TRUE;
+		newtags = (guint32)atoi(kb->arg) & TAGMASK;
+		if (newtags == 0)
+			return TRUE;
+		sel->tags = newtags;
+		gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
+		gowl_compositor_arrange(self, self->selmon);
+
+		/* Push tag state to IPC subscribers */
+		if (self->ipc != NULL) {
+			active = self->selmon->tagset[self->selmon->seltags];
+			occupied = 0;
+			for (cl = self->clients; cl != NULL; cl = cl->next) {
+				GowlClient *tc = (GowlClient *)cl->data;
+				if (tc->mon == self->selmon)
+					occupied |= tc->tags;
+			}
+			gowl_ipc_push_event(self->ipc,
+				"EVENT tags %s %u %u 0 %u",
+				self->selmon->wlr_output->name,
+				active, occupied, active);
+		}
+		return TRUE;
+	}
+	case GOWL_ACTION_SET_LAYOUT: {
+		if (self->selmon == NULL)
+			return TRUE;
+		/* By name, through the registry.  This used to
+		 * be "monocle or else tile", which is why
+		 * selecting `float' silently gave tile. */
+		gowl_layout_set(self, self->selmon, kb->arg);
+
+		if (self->ipc != NULL) {
+			gowl_ipc_push_event(self->ipc,
+				"EVENT layout %s %s",
+				self->selmon->wlr_output->name,
+				self->selmon->layout_symbol != NULL
+					? self->selmon->layout_symbol
+					: "tile");
+		}
+		return TRUE;
+	}
+	case GOWL_ACTION_SET_SPLIT: {
+		if (self->selmon == NULL)
+			return TRUE;
+		/* arg "vsplit" -> master row on top; anything else
+		 * (e.g. "normal") -> left/right split. */
+		self->selmon->vsplit =
+			(kb->arg != NULL &&
+			 g_strcmp0(kb->arg, "vsplit") == 0);
+		gowl_compositor_arrange(self, self->selmon);
+		return TRUE;
+	}
+	case GOWL_ACTION_ZOOM: {
+		gowl_compositor_zoom_client(self, NULL);
+		return TRUE;
+	}
+	case GOWL_ACTION_FOCUS_MONITOR: {
+		/*
+		 * Move keyboard focus to the next/previous monitor.
+		 * arg "+1" = next, "-1" = previous.
+		 * Ported from dwl's focusmon().
+		 */
+		GowlMonitor *target;
+		GList *cur, *next;
+		gint dir;
+
+		if (self->selmon == NULL || kb->arg == NULL)
+			return TRUE;
+
+		dir = atoi(kb->arg);
+		cur = g_list_find(self->monitors, self->selmon);
+		if (cur == NULL)
+			return TRUE;
+
+		if (dir > 0) {
+			next = cur->next;
+			if (next == NULL)
+				next = self->monitors;
+		} else {
+			next = cur->prev;
+			if (next == NULL)
+				next = g_list_last(self->monitors);
+		}
+
+		target = (GowlMonitor *)next->data;
+		if (target != self->selmon) {
+			self->selmon = target;
+			gowl_compositor_focus_client(self,
+				focustop(self, target), TRUE);
+		}
+		return TRUE;
+	}
+	case GOWL_ACTION_MOVE_TO_MONITOR: {
+		/*
+		 * Move the focused client to the next/previous
+		 * monitor.  arg "+1" = next, "-1" = previous.
+		 * Ported from dwl's tagmon().
+		 */
+		GowlClient *sel;
+		GowlMonitor *target;
+		GList *cur, *next;
+		gint dir;
+
+		sel = focustop(self, self->selmon);
+		if (sel == NULL || sel->isoverlay || self->selmon == NULL || kb->arg == NULL)
+			return TRUE;
+
+		dir = atoi(kb->arg);
+		cur = g_list_find(self->monitors, self->selmon);
+		if (cur == NULL)
+			return TRUE;
+
+		if (dir > 0) {
+			next = cur->next;
+			if (next == NULL)
+				next = self->monitors;
+		} else {
+			next = cur->prev;
+			if (next == NULL)
+				next = g_list_last(self->monitors);
+		}
+
+		target = (GowlMonitor *)next->data;
+		if (target != self->selmon)
+			setmon(self, sel, target, 0);
+		return TRUE;
+	}
+	case GOWL_ACTION_TAG_TOGGLE_VIEW: {
+		/*
+		 * Toggle the visibility of a specific tag on the
+		 * current monitor.  arg is the tag bitmask.
+		 * Ported from dwl's toggleview().
+		 */
+		guint32 newtags;
+		guint32 occupied;
+		GList *cl;
+
+		if (self->selmon == NULL || kb->arg == NULL)
+			return TRUE;
+
+		newtags = self->selmon->tagset[self->selmon->seltags] ^
+		          ((guint32)atoi(kb->arg) & TAGMASK);
+
+		/* Must have at least one tag visible */
+		if (newtags == 0)
+			return TRUE;
+
+		self->selmon->tagset[self->selmon->seltags] = newtags;
+		gowl_compositor_focus_client(self,
+			focustop(self, self->selmon), TRUE);
+		gowl_compositor_arrange(self, self->selmon);
+
+		/* Push tag state to IPC subscribers */
+		if (self->ipc != NULL) {
+			occupied = 0;
+			for (cl = self->clients; cl != NULL; cl = cl->next) {
+				GowlClient *tc = (GowlClient *)cl->data;
+				if (tc->mon == self->selmon)
+					occupied |= tc->tags;
+			}
+			gowl_ipc_push_event(self->ipc,
+				"EVENT tags %s %u %u 0 %u",
+				self->selmon->wlr_output->name,
+				newtags, occupied, newtags);
+		}
+		return TRUE;
+	}
+	case GOWL_ACTION_TAG_TOGGLE: {
+		/*
+		 * Toggle a specific tag on the focused client.
+		 * arg is the tag bitmask.
+		 * Ported from dwl's toggletag().
+		 */
+		GowlClient *sel;
+		guint32 newtags;
+		guint32 occupied;
+		guint32 active;
+		GList *cl;
+
+		if (self->selmon == NULL || kb->arg == NULL)
+			return TRUE;
+
+		sel = focustop(self, self->selmon);
+		if (sel == NULL)
+			return TRUE;
+
+		newtags = sel->tags ^ ((guint32)atoi(kb->arg) & TAGMASK);
+
+		/* Client must have at least one tag */
+		if (newtags == 0)
+			return TRUE;
+
+		sel->tags = newtags;
+		gowl_compositor_focus_client(self,
+			focustop(self, self->selmon), TRUE);
+		gowl_compositor_arrange(self, self->selmon);
+
+		/* Push tag state to IPC subscribers */
+		if (self->ipc != NULL) {
+			active = self->selmon->tagset[self->selmon->seltags];
+			occupied = 0;
+			for (cl = self->clients; cl != NULL; cl = cl->next) {
+				GowlClient *tc = (GowlClient *)cl->data;
+				if (tc->mon == self->selmon)
+					occupied |= tc->tags;
+			}
+			gowl_ipc_push_event(self->ipc,
+				"EVENT tags %s %u %u 0 %u",
+				self->selmon->wlr_output->name,
+				active, occupied, active);
+		}
+		return TRUE;
+	}
+	case GOWL_ACTION_CYCLE_LAYOUT: {
+		/*
+		 * Cycle through every registered layout, not
+		 * just the two the old `sellt' index could
+		 * hold.  An arg of "-1" goes backwards.
+		 */
+		if (self->selmon == NULL)
+			return TRUE;
+
+		gowl_layout_cycle(self, self->selmon,
+		                  (kb->arg != NULL
+		                   && g_strcmp0(kb->arg, "-1") == 0)
+		                  ? -1 : 1);
+
+		/* Push layout to IPC subscribers */
+		if (self->ipc != NULL) {
+			gowl_ipc_push_event(self->ipc,
+				"EVENT layout %s %s",
+				self->selmon->wlr_output->name,
+				self->selmon->layout_symbol != NULL
+					? self->selmon->layout_symbol
+					: "tile");
+		}
+		return TRUE;
+	}
+	case GOWL_ACTION_RELOAD_CONFIG: {
+		/*
+		 * Reload the YAML configuration from disk into a
+		 * fresh config, so that a setting the file no longer
+		 * names goes back to its default.  Keybinds and
+		 * appearance settings take effect immediately; a file
+		 * that does not parse leaves the running config alone.
+		 *
+		 * The compositor owns only the configs it makes here.
+		 * The one it was given belongs to whoever gave it --
+		 * main(), or an embedder such as cmacs -- which
+		 * releases it after the compositor.  Releasing that
+		 * one here freed it under its owner: set_config()
+		 * then disconnected a handler from the freed memory,
+		 * and the owner released it again later.  So the
+		 * config being replaced goes only if the compositor
+		 * made it, and only once set_config() has moved off
+		 * it; finalize releases the last one.
+		 */
+		GowlConfig *new_config;
+		GowlConfig *replaced;
+		GError *err = NULL;
+
+		new_config = gowl_config_new();
+		if (!gowl_config_load_yaml_from_search_path(new_config,
+		                                            &err)) {
+			g_warning("reload_config: %s", err->message);
+			g_error_free(err);
+			g_object_unref(new_config);
+			return TRUE;
+		}
+
+		replaced = (GowlConfig *)g_steal_pointer(
+			&self->owned_config);
+		gowl_compositor_set_config(self, new_config);
+		self->owned_config = new_config;
+		g_clear_object(&replaced);
+		g_info("Configuration reloaded");
+
+		if (self->idle_mgr != NULL) {
+			gowl_idle_manager_set_timeout(self->idle_mgr,
+				gowl_config_get_idle_timeout(new_config));
+			gowl_idle_manager_set_dpms_timeout(self->idle_mgr,
+				gowl_config_get_dpms_timeout(new_config));
+		}
+		gowl_compositor_apply_keymap(self);
+		gowl_input_config_apply_all(self);
+
+		/* Re-apply per-output YAML overrides first, then
+		 * re-arrange so any transform/scale/position
+		 * changes feed into the new layout. */
+		gowl_compositor_apply_monitor_configs(self);
+		{
+			GList *ml;
+			for (ml = self->monitors; ml != NULL; ml = ml->next) {
+				GowlMonitor *m = (GowlMonitor *)ml->data;
+				gowl_compositor_arrange(self, m);
+			}
+		}
+		return TRUE;
+	}
+	case GOWL_ACTION_IPC_COMMAND: {
+		/*
+		 * Run a command string.
+		 *
+		 * Modules get it first, which is what makes
+		 * `ipc_command' the config-driven way to reach
+		 * a plugin: a bind of
+		 *   { action: ipc_command, arg: "expo" }
+		 * opens the overview without gowl knowing that
+		 * the overview exists.  The event still goes to
+		 * the IPC socket either way, because a listener
+		 * there wants to see what happened.
+		 */
+		/* The reply is for a caller that asked.  A key has
+		 * nobody to hand it to, and dropping it on the floor
+		 * leaked it on every press. */
+		if (kb->arg != NULL)
+			g_free(gowl_compositor_run_command(self, kb->arg));
+		return TRUE;
+	}
+	case GOWL_ACTION_LOCK:
+		if (self->module_mgr != NULL && !self->locked)
+			gowl_module_manager_dispatch_lock(
+				self->module_mgr, (gpointer)self);
+		return TRUE;
+	case GOWL_ACTION_MODE:
+		gowl_compositor_set_key_mode(self, kb->arg);
+		return TRUE;
+	case GOWL_ACTION_SWITCH_LAYOUT:
+		gowl_compositor_switch_keyboard_layout(self,
+			kb->arg != NULL ? kb->arg : "next");
+		return TRUE;
+	case GOWL_ACTION_MOVE_WINDOW:
+	case GOWL_ACTION_RESIZE_WINDOW: {
+		/* From a pointer bind, the window under the pointer; from a
+		 * key, the focused one -- the grab follows the pointer either
+		 * way. */
+		GowlClient *c = NULL;
+		guint32 edges = 0;
+
+		if (self->wlr_cursor != NULL)
+			xytonode(self, self->wlr_cursor->x, self->wlr_cursor->y,
+			         NULL, &c, NULL, NULL);
+		if (c == NULL)
+			c = focustop(self, self->selmon);
+		if (c == NULL || gowl_client_get_embedded(c))
+			return TRUE;
+		if (kb->action == GOWL_ACTION_RESIZE_WINDOW)
+			edges = resize_edges_at_cursor(self, c);
+		begin_interactive(self, c,
+			kb->action == GOWL_ACTION_MOVE_WINDOW
+			? GOWL_CURSOR_MODE_MOVE : GOWL_CURSOR_MODE_RESIZE,
+			edges);
+		return TRUE;
+	}
+	case GOWL_ACTION_TOGGLE_STICKY: {
+		GowlClient *sel = focustop(self, self->selmon);
+
+		if (sel != NULL && !sel->isoverlay && !sel->isembedded)
+			gowl_client_set_sticky(sel, !sel->issticky);
+		return TRUE;
+	}
+	case GOWL_ACTION_FOCUS_DIR: {
+		GowlDirection dir;
+
+		if (!direction_from_string(kb->arg, &dir))
+			return TRUE;
+		gowl_compositor_focus_direction(self, dir);
+		return TRUE;
+	}
+	case GOWL_ACTION_FOCUS_URGENT:
+		gowl_compositor_focus_urgent(self);
+		return TRUE;
+	case GOWL_ACTION_FOCUS_LAST:
+		gowl_compositor_focus_last(self);
+		return TRUE;
+	case GOWL_ACTION_OUTPUT_POWER: {
+		/* "on", "off" or "toggle" (the default), every
+		 * output at once. */
+		gboolean on;
+
+		if (kb->arg != NULL && g_ascii_strcasecmp(kb->arg, "on") == 0)
+			on = TRUE;
+		else if (kb->arg != NULL && g_ascii_strcasecmp(kb->arg, "off") == 0)
+			on = FALSE;
+		else
+			on = gowl_compositor_any_output_powered_off(self);
+		gowl_compositor_set_outputs_powered(self, on);
+		return TRUE;
+	}
+	case GOWL_ACTION_CUSTOM:
+		/* Hand the bind's arg to the embedder.  The
+		 * key is consumed either way: it matched a
+		 * configured bind, so forwarding it to the
+		 * focused client would be surprising. */
+		if (self->custom_action_func != NULL)
+			self->custom_action_func(
+				self, kb->arg,
+				self->custom_action_data);
+		else
+			g_debug("custom keybind fired with no "
+			        "handler installed (arg '%s')",
+			        kb->arg ? kb->arg : "");
+		return TRUE;
+	case GOWL_ACTION_NONE:
+	default:
+		g_debug("Unhandled action %d for keybind",
+		        kb->action);
+		return TRUE;
+	}
+	return TRUE;
+}
+
+/*
+ * Every bind the key mode, the lock and the press/release side allow.
+ * Returns TRUE when one matched and ran.
+ */
+static gboolean
+dispatch_key(
+	GowlCompositor *self,
+	guint           mods,
+	guint           keysym,
+	gboolean        pressed,
+	gboolean        while_locked
+){
+	xkb_keysym_t sym = (xkb_keysym_t)keysym;
+	GArray *keybinds;
+	guint i;
+	guint clean_mods;
+
+	if (self->config == NULL)
+		return FALSE;
+	keybinds = gowl_config_get_keybinds(self->config);
+	if (keybinds == NULL)
+		return FALSE;
+
+	clean_mods = GOWL_CLEANMASK(mods);
+	for (i = 0; i < keybinds->len; i++) {
+		GowlKeybindEntry *kb = &g_array_index(keybinds, GowlKeybindEntry, i);
+
+		if (GOWL_CLEANMASK(kb->modifiers) != clean_mods
+		    || kb->keysym != (guint)sym)
+			continue;
+		if (g_strcmp0(kb->mode, self->key_mode) != 0)
+			continue;
+		if (while_locked && !(kb->flags & GOWL_KEYBIND_FLAG_LOCKED))
+			continue;
+		if (pressed == ((kb->flags & GOWL_KEYBIND_FLAG_RELEASE) != 0))
+			continue;
+		self->kb_repeat_ok = !pressed ? FALSE
+			: (kb->flags & GOWL_KEYBIND_FLAG_NO_REPEAT) == 0;
+		return run_keybind_entry(self, kb);
+	}
+	return FALSE;
+}
+
+/**
+ * gowl_compositor_dispatch_key:
+ * @self: a #GowlCompositor
+ * @mods: modifier bitmask (#GowlKeyMod flags); NumLock and CapsLock
+ *   are ignored
+ * @keysym: XKB keysym value
+ * @pressed: %TRUE for a press, %FALSE for a release
+ * @while_locked: %TRUE if the session is locked, in which case only
+ *   binds with the `locked' flag are considered
+ *
+ * gowl_compositor_dispatch_keybind() with the press/release side and
+ * the lock state spelled out.  Only binds in the current key mode
+ * (gowl_compositor_get_key_mode()) are consulted.
+ *
+ * Returns: %TRUE if a bind matched and its action ran.
+ */
+gboolean
+gowl_compositor_dispatch_key(
+	GowlCompositor *self,
+	guint           mods,
+	guint           keysym,
+	gboolean        pressed,
+	gboolean        while_locked
+){
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	return dispatch_key(self, mods, keysym, pressed, while_locked);
+}
+
 /**
  * gowl_compositor_dispatch_keybind:
  * @self: a #GowlCompositor
@@ -7080,521 +8689,9 @@ gowl_compositor_dispatch_keybind(
 	guint           mods,
 	guint           keysym
 ){
-	xkb_keysym_t sym = (xkb_keysym_t)keysym;
-
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
 
-	GArray *keybinds;
-	guint i;
-	guint clean_mods;
-
-	if (self->config == NULL)
-		return FALSE;
-
-	keybinds = gowl_config_get_keybinds(self->config);
-	if (keybinds == NULL)
-		return FALSE;
-
-	clean_mods = GOWL_CLEANMASK(mods);
-
-	g_debug("keybinding: sym=0x%04x mods=0x%x clean=0x%x",
-	        (guint)sym, mods, clean_mods);
-
-	for (i = 0; i < keybinds->len; i++) {
-		GowlKeybindEntry *kb;
-
-		kb = &g_array_index(keybinds, GowlKeybindEntry, i);
-		if (GOWL_CLEANMASK(kb->modifiers) == clean_mods &&
-		    kb->keysym == (guint)sym) {
-			/* Dispatch the action */
-			switch (kb->action) {
-			case GOWL_ACTION_QUIT:
-				gowl_compositor_quit(self);
-				return TRUE;
-			case GOWL_ACTION_SPAWN:
-				if (kb->arg != NULL) {
-					GError *err = NULL;
-					if (!g_spawn_command_line_async(kb->arg,
-					                               &err)) {
-						g_warning("spawn '%s': %s",
-						          kb->arg, err->message);
-						g_error_free(err);
-					}
-				}
-				return TRUE;
-			case GOWL_ACTION_KILL_CLIENT: {
-				GowlClient *sel = focustop(self, self->selmon);
-				/* Must go through gowl_client_close(): the
-				 * focused window may be an X11 client, whose
-				 * xdg_toplevel is NULL.  Sending the XDG
-				 * close directly here used to SIGSEGV the
-				 * compositor -- and the whole session under
-				 * `emacs --gowl'. */
-				if (sel != NULL)
-					gowl_client_close(sel);
-				return TRUE;
-			}
-			case GOWL_ACTION_MOVE_STACK:
-				gowl_compositor_move_stack(self, kb->arg != NULL ? atoi(kb->arg) : 1);
-				return TRUE;
-			case GOWL_ACTION_FOCUS_STACK: {
-				GowlClient *sel, *found;
-
-				sel = focustop(self, self->selmon);
-				if (sel == NULL)
-					return TRUE;
-
-				/* Which neighbour is gowl_compositor_stack_neighbour()'s
-				 * call: it keeps a shown scratchpad's windows cycling
-				 * among themselves instead of stepping down onto the
-				 * tiles beneath it, which would roll it away. */
-				found = gowl_compositor_stack_neighbour(self, sel,
-					(kb->arg != NULL) ? atoi(kb->arg) : 1);
-				if (found == NULL)
-					return TRUE;
-				gowl_compositor_focus_client(self, found, TRUE);
-				/* Notify effects only after focus actually changes. Focus
-				 * guards and cycling a single window must stay quiet. */
-				if (found != sel && client_surface(found) != NULL
-				    && self->wlr_seat->keyboard_state.focused_surface == client_surface(found))
-					gowl_effects_client_event(self, found,
-						GOWL_SCENE_EFFECT_KEYBOARD_FOCUS, NULL, FALSE);
-				return TRUE;
-			}
-			case GOWL_ACTION_SET_MFACT: {
-				GowlClient *sel;
-				gdouble f;
-				if (self->selmon == NULL || kb->arg == NULL)
-					return TRUE;
-
-				/* A shown panel has no master area -- the tiles it
-				 * would resize are hidden behind it -- so Super+h /
-				 * Super+l step left and right across its columns. */
-				sel = focustop(self, self->selmon);
-				if (sel != NULL && sel->isoverlay
-				    && sel->overlay_group != 0) {
-					GowlClient *to;
-
-					f = g_ascii_strtod(kb->arg, NULL);
-					to = panel_step(self, sel, f < 0 ? -1 : 1, FALSE);
-					if (to != sel) {
-						gowl_compositor_focus_client(self, to, TRUE);
-						if (client_surface(to) != NULL
-						    && self->wlr_seat->keyboard_state.focused_surface
-						       == client_surface(to))
-							gowl_effects_client_event(self, to,
-								GOWL_SCENE_EFFECT_KEYBOARD_FOCUS,
-								NULL, FALSE);
-					}
-					return TRUE;
-				}
-				f = g_ascii_strtod(kb->arg, NULL) + self->selmon->mfact;
-				if (f < 0.1 || f > 0.9)
-					return TRUE;
-				self->selmon->mfact = f;
-				gowl_compositor_arrange(self, self->selmon);
-				return TRUE;
-			}
-			case GOWL_ACTION_INC_NMASTER: {
-				gint delta;
-				if (self->selmon == NULL || kb->arg == NULL)
-					return TRUE;
-				delta = atoi(kb->arg);
-				if (self->selmon->nmaster + delta >= 0)
-					self->selmon->nmaster += delta;
-				gowl_compositor_arrange(self, self->selmon);
-				return TRUE;
-			}
-			case GOWL_ACTION_TOGGLE_FLOAT: {
-				GowlClient *sel = focustop(self, self->selmon);
-				if (sel != NULL && !sel->isfullscreen)
-					setfloating(self, sel, !sel->isfloating);
-				return TRUE;
-			}
-			case GOWL_ACTION_TOGGLE_FULLSCREEN: {
-				GowlClient *sel = focustop(self, self->selmon);
-				if (sel != NULL)
-					setfullscreen(self, sel, !sel->isfullscreen);
-				return TRUE;
-			}
-			case GOWL_ACTION_TAG_VIEW: {
-				guint32 newtags;
-				guint32 occupied;
-				GList *cl;
-				if (self->selmon == NULL || kb->arg == NULL)
-					return TRUE;
-				newtags = (guint32)atoi(kb->arg) & TAGMASK;
-				if (newtags == 0)
-					return TRUE;
-				self->selmon->tagset[self->selmon->seltags] = newtags;
-				gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
-				gowl_compositor_arrange(self, self->selmon);
-
-				/* Push tag state to IPC subscribers */
-				if (self->ipc != NULL) {
-					occupied = 0;
-					for (cl = self->clients; cl != NULL; cl = cl->next) {
-						GowlClient *tc = (GowlClient *)cl->data;
-						if (tc->mon == self->selmon)
-							occupied |= tc->tags;
-					}
-					gowl_ipc_push_event(self->ipc,
-						"EVENT tags %s %u %u 0 %u",
-						self->selmon->wlr_output->name,
-						newtags, occupied, newtags);
-				}
-				return TRUE;
-			}
-			case GOWL_ACTION_TAG_SET: {
-				GowlClient *sel;
-				guint32 newtags;
-				guint32 occupied;
-				guint32 active;
-				GList *cl;
-				if (self->selmon == NULL || kb->arg == NULL)
-					return TRUE;
-				sel = focustop(self, self->selmon);
-				if (sel == NULL)
-					return TRUE;
-				newtags = (guint32)atoi(kb->arg) & TAGMASK;
-				if (newtags == 0)
-					return TRUE;
-				sel->tags = newtags;
-				gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
-				gowl_compositor_arrange(self, self->selmon);
-
-				/* Push tag state to IPC subscribers */
-				if (self->ipc != NULL) {
-					active = self->selmon->tagset[self->selmon->seltags];
-					occupied = 0;
-					for (cl = self->clients; cl != NULL; cl = cl->next) {
-						GowlClient *tc = (GowlClient *)cl->data;
-						if (tc->mon == self->selmon)
-							occupied |= tc->tags;
-					}
-					gowl_ipc_push_event(self->ipc,
-						"EVENT tags %s %u %u 0 %u",
-						self->selmon->wlr_output->name,
-						active, occupied, active);
-				}
-				return TRUE;
-			}
-			case GOWL_ACTION_SET_LAYOUT: {
-				if (self->selmon == NULL)
-					return TRUE;
-				/* By name, through the registry.  This used to
-				 * be "monocle or else tile", which is why
-				 * selecting `float' silently gave tile. */
-				gowl_layout_set(self, self->selmon, kb->arg);
-
-				if (self->ipc != NULL) {
-					gowl_ipc_push_event(self->ipc,
-						"EVENT layout %s %s",
-						self->selmon->wlr_output->name,
-						self->selmon->layout_symbol != NULL
-							? self->selmon->layout_symbol
-							: "tile");
-				}
-				return TRUE;
-			}
-			case GOWL_ACTION_SET_SPLIT: {
-				if (self->selmon == NULL)
-					return TRUE;
-				/* arg "vsplit" -> master row on top; anything else
-				 * (e.g. "normal") -> left/right split. */
-				self->selmon->vsplit =
-					(kb->arg != NULL &&
-					 g_strcmp0(kb->arg, "vsplit") == 0);
-				gowl_compositor_arrange(self, self->selmon);
-				return TRUE;
-			}
-			case GOWL_ACTION_ZOOM: {
-				gowl_compositor_zoom_client(self, NULL);
-				return TRUE;
-			}
-			case GOWL_ACTION_FOCUS_MONITOR: {
-				/*
-				 * Move keyboard focus to the next/previous monitor.
-				 * arg "+1" = next, "-1" = previous.
-				 * Ported from dwl's focusmon().
-				 */
-				GowlMonitor *target;
-				GList *cur, *next;
-				gint dir;
-
-				if (self->selmon == NULL || kb->arg == NULL)
-					return TRUE;
-
-				dir = atoi(kb->arg);
-				cur = g_list_find(self->monitors, self->selmon);
-				if (cur == NULL)
-					return TRUE;
-
-				if (dir > 0) {
-					next = cur->next;
-					if (next == NULL)
-						next = self->monitors;
-				} else {
-					next = cur->prev;
-					if (next == NULL)
-						next = g_list_last(self->monitors);
-				}
-
-				target = (GowlMonitor *)next->data;
-				if (target != self->selmon) {
-					self->selmon = target;
-					gowl_compositor_focus_client(self,
-						focustop(self, target), TRUE);
-				}
-				return TRUE;
-			}
-			case GOWL_ACTION_MOVE_TO_MONITOR: {
-				/*
-				 * Move the focused client to the next/previous
-				 * monitor.  arg "+1" = next, "-1" = previous.
-				 * Ported from dwl's tagmon().
-				 */
-				GowlClient *sel;
-				GowlMonitor *target;
-				GList *cur, *next;
-				gint dir;
-
-				sel = focustop(self, self->selmon);
-				if (sel == NULL || sel->isoverlay || self->selmon == NULL || kb->arg == NULL)
-					return TRUE;
-
-				dir = atoi(kb->arg);
-				cur = g_list_find(self->monitors, self->selmon);
-				if (cur == NULL)
-					return TRUE;
-
-				if (dir > 0) {
-					next = cur->next;
-					if (next == NULL)
-						next = self->monitors;
-				} else {
-					next = cur->prev;
-					if (next == NULL)
-						next = g_list_last(self->monitors);
-				}
-
-				target = (GowlMonitor *)next->data;
-				if (target != self->selmon)
-					setmon(self, sel, target, 0);
-				return TRUE;
-			}
-			case GOWL_ACTION_TAG_TOGGLE_VIEW: {
-				/*
-				 * Toggle the visibility of a specific tag on the
-				 * current monitor.  arg is the tag bitmask.
-				 * Ported from dwl's toggleview().
-				 */
-				guint32 newtags;
-				guint32 occupied;
-				GList *cl;
-
-				if (self->selmon == NULL || kb->arg == NULL)
-					return TRUE;
-
-				newtags = self->selmon->tagset[self->selmon->seltags] ^
-				          ((guint32)atoi(kb->arg) & TAGMASK);
-
-				/* Must have at least one tag visible */
-				if (newtags == 0)
-					return TRUE;
-
-				self->selmon->tagset[self->selmon->seltags] = newtags;
-				gowl_compositor_focus_client(self,
-					focustop(self, self->selmon), TRUE);
-				gowl_compositor_arrange(self, self->selmon);
-
-				/* Push tag state to IPC subscribers */
-				if (self->ipc != NULL) {
-					occupied = 0;
-					for (cl = self->clients; cl != NULL; cl = cl->next) {
-						GowlClient *tc = (GowlClient *)cl->data;
-						if (tc->mon == self->selmon)
-							occupied |= tc->tags;
-					}
-					gowl_ipc_push_event(self->ipc,
-						"EVENT tags %s %u %u 0 %u",
-						self->selmon->wlr_output->name,
-						newtags, occupied, newtags);
-				}
-				return TRUE;
-			}
-			case GOWL_ACTION_TAG_TOGGLE: {
-				/*
-				 * Toggle a specific tag on the focused client.
-				 * arg is the tag bitmask.
-				 * Ported from dwl's toggletag().
-				 */
-				GowlClient *sel;
-				guint32 newtags;
-				guint32 occupied;
-				guint32 active;
-				GList *cl;
-
-				if (self->selmon == NULL || kb->arg == NULL)
-					return TRUE;
-
-				sel = focustop(self, self->selmon);
-				if (sel == NULL)
-					return TRUE;
-
-				newtags = sel->tags ^ ((guint32)atoi(kb->arg) & TAGMASK);
-
-				/* Client must have at least one tag */
-				if (newtags == 0)
-					return TRUE;
-
-				sel->tags = newtags;
-				gowl_compositor_focus_client(self,
-					focustop(self, self->selmon), TRUE);
-				gowl_compositor_arrange(self, self->selmon);
-
-				/* Push tag state to IPC subscribers */
-				if (self->ipc != NULL) {
-					active = self->selmon->tagset[self->selmon->seltags];
-					occupied = 0;
-					for (cl = self->clients; cl != NULL; cl = cl->next) {
-						GowlClient *tc = (GowlClient *)cl->data;
-						if (tc->mon == self->selmon)
-							occupied |= tc->tags;
-					}
-					gowl_ipc_push_event(self->ipc,
-						"EVENT tags %s %u %u 0 %u",
-						self->selmon->wlr_output->name,
-						active, occupied, active);
-				}
-				return TRUE;
-			}
-			case GOWL_ACTION_CYCLE_LAYOUT: {
-				/*
-				 * Cycle through every registered layout, not
-				 * just the two the old `sellt' index could
-				 * hold.  An arg of "-1" goes backwards.
-				 */
-				if (self->selmon == NULL)
-					return TRUE;
-
-				gowl_layout_cycle(self, self->selmon,
-				                  (kb->arg != NULL
-				                   && g_strcmp0(kb->arg, "-1") == 0)
-				                  ? -1 : 1);
-
-				/* Push layout to IPC subscribers */
-				if (self->ipc != NULL) {
-					gowl_ipc_push_event(self->ipc,
-						"EVENT layout %s %s",
-						self->selmon->wlr_output->name,
-						self->selmon->layout_symbol != NULL
-							? self->selmon->layout_symbol
-							: "tile");
-				}
-				return TRUE;
-			}
-			case GOWL_ACTION_RELOAD_CONFIG: {
-				/*
-				 * Reload the YAML configuration from disk into a
-				 * fresh config, so that a setting the file no longer
-				 * names goes back to its default.  Keybinds and
-				 * appearance settings take effect immediately; a file
-				 * that does not parse leaves the running config alone.
-				 *
-				 * The compositor owns only the configs it makes here.
-				 * The one it was given belongs to whoever gave it --
-				 * main(), or an embedder such as cmacs -- which
-				 * releases it after the compositor.  Releasing that
-				 * one here freed it under its owner: set_config()
-				 * then disconnected a handler from the freed memory,
-				 * and the owner released it again later.  So the
-				 * config being replaced goes only if the compositor
-				 * made it, and only once set_config() has moved off
-				 * it; finalize releases the last one.
-				 */
-				GowlConfig *new_config;
-				GowlConfig *replaced;
-				GError *err = NULL;
-
-				new_config = gowl_config_new();
-				if (!gowl_config_load_yaml_from_search_path(new_config,
-				                                            &err)) {
-					g_warning("reload_config: %s", err->message);
-					g_error_free(err);
-					g_object_unref(new_config);
-					return TRUE;
-				}
-
-				replaced = (GowlConfig *)g_steal_pointer(
-					&self->owned_config);
-				gowl_compositor_set_config(self, new_config);
-				self->owned_config = new_config;
-				g_clear_object(&replaced);
-				g_info("Configuration reloaded");
-
-				/* Re-apply per-output YAML overrides first, then
-				 * re-arrange so any transform/scale/position
-				 * changes feed into the new layout. */
-				gowl_compositor_apply_monitor_configs(self);
-				{
-					GList *ml;
-					for (ml = self->monitors; ml != NULL; ml = ml->next) {
-						GowlMonitor *m = (GowlMonitor *)ml->data;
-						gowl_compositor_arrange(self, m);
-					}
-				}
-				return TRUE;
-			}
-			case GOWL_ACTION_IPC_COMMAND: {
-				/*
-				 * Run a command string.
-				 *
-				 * Modules get it first, which is what makes
-				 * `ipc_command' the config-driven way to reach
-				 * a plugin: a bind of
-				 *   { action: ipc_command, arg: "expo" }
-				 * opens the overview without gowl knowing that
-				 * the overview exists.  The event still goes to
-				 * the IPC socket either way, because a listener
-				 * there wants to see what happened.
-				 */
-				/* The reply is for a caller that asked.  A key has
-				 * nobody to hand it to, and dropping it on the floor
-				 * leaked it on every press. */
-				if (kb->arg != NULL)
-					g_free(gowl_compositor_run_command(self, kb->arg));
-				return TRUE;
-			}
-			case GOWL_ACTION_LOCK:
-				if (self->module_mgr != NULL && !self->locked)
-					gowl_module_manager_dispatch_lock(
-						self->module_mgr, (gpointer)self);
-				return TRUE;
-			case GOWL_ACTION_CUSTOM:
-				/* Hand the bind's arg to the embedder.  The
-				 * key is consumed either way: it matched a
-				 * configured bind, so forwarding it to the
-				 * focused client would be surprising. */
-				if (self->custom_action_func != NULL)
-					self->custom_action_func(
-						self, kb->arg,
-						self->custom_action_data);
-				else
-					g_debug("custom keybind fired with no "
-					        "handler installed (arg '%s')",
-					        kb->arg ? kb->arg : "");
-				return TRUE;
-			case GOWL_ACTION_NONE:
-			default:
-				g_debug("Unhandled action %d for keybind",
-				        kb->action);
-				return TRUE;
-			}
-		}
-	}
-
-	return FALSE;
+	return dispatch_key(self, mods, keysym, TRUE, FALSE);
 }
 
 /*
@@ -7627,6 +8724,7 @@ compositor_handle_key(
 	guint32 mods;
 	gint nsyms, i;
 	gboolean handled;
+	gboolean inhibited;
 	xkb_keycode_t keycode;
 
 	if (self->wlr_kb_group == NULL)
@@ -7665,14 +8763,24 @@ compositor_handle_key(
 	}
 
 	/* Notify idle system of activity */
-	wlr_idle_notifier_v1_notify_activity(self->idle_notifier,
-	                                     self->wlr_seat);
+	if (self->idle_mgr != NULL)
+		gowl_idle_manager_note_activity(self->idle_mgr);
 
 	/* When session is locked, route all key events exclusively to
 	 * the lock handler module.  No compositor keybinds fire and no
 	 * events are forwarded to clients.
 	 */
 	if (self->locked) {
+		/* A bind marked `locked' -- a media key, brightness -- runs
+		 * with the screen locked.  Nothing else does. */
+		for (i = 0; i < nsyms; i++) {
+			if (dispatch_key(self, mods, (guint)syms[i],
+			                 state == WL_KEYBOARD_KEY_STATE_PRESSED,
+			                 TRUE)) {
+				wl_event_source_timer_update(self->key_repeat_source, 0);
+				return;
+			}
+		}
 		if (state == WL_KEYBOARD_KEY_STATE_PRESSED &&
 		    self->module_mgr != NULL) {
 			guint32 codepoint;
@@ -7696,14 +8804,23 @@ compositor_handle_key(
 
 	handled = FALSE;
 
-	/* Only check keybinds on press events */
-	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+	/* keyboard-shortcuts-inhibit: the focused surface asked for every
+	 * key.  No configured bind, module bind or embedder intercept runs;
+	 * the escape hatches further down still do (see
+	 * gowl-shortcuts-inhibit.c). */
+	inhibited = gowl_shortcuts_inhibited(self);
+
+	/* Configured binds: on press, and -- for a bind marked
+	 * `release' -- on release. */
+	if (!inhibited) {
+		gboolean pressed = state == WL_KEYBOARD_KEY_STATE_PRESSED;
+
 		/* First try the state-resolved keysyms (handles things
 		 * like XKB_KEY_Return that don't change with Shift).
 		 */
 		for (i = 0; i < nsyms; i++) {
-			if (gowl_compositor_dispatch_keybind(self, mods,
-						     (guint)syms[i])) {
+			if (dispatch_key(self, mods, (guint)syms[i], pressed,
+			                 FALSE)) {
 				handled = TRUE;
 				break;
 			}
@@ -7733,8 +8850,8 @@ compositor_handle_key(
 			}
 
 			for (i = 0; i < n_raw; i++) {
-				if (gowl_compositor_dispatch_keybind(
-					    self, mods, (guint)raw_syms[i])) {
+				if (dispatch_key(self, mods, (guint)raw_syms[i],
+				                 pressed, FALSE)) {
 					handled = TRUE;
 					break;
 				}
@@ -7767,7 +8884,7 @@ compositor_handle_key(
 	 * Configured keybinds are still consulted first and still only on
 	 * press, so this cannot shadow anything the user has bound.
 	 */
-	if (!handled && self->module_mgr != NULL) {
+	if (!handled && !inhibited && self->module_mgr != NULL) {
 		guint clean_mods;
 		gboolean down =
 			state == WL_KEYBOARD_KEY_STATE_PRESSED;
@@ -7802,7 +8919,7 @@ compositor_handle_key(
 		}
 	}
 
-	if (!handled && self->key_intercept_func != NULL) {
+	if (!handled && !inhibited && self->key_intercept_func != NULL) {
 		for (i = 0; i < nsyms; i++) {
 			if (self->key_intercept_func(
 				    self, mods, (guint)syms[i],
@@ -7874,7 +8991,9 @@ compositor_handle_key(
 		handled = TRUE;
 	}
 
-	if (!handled) {
+	if (!handled
+	    && !gowl_text_input_grab_key(self, kb, time_msec, raw_keycode,
+	                                 state)) {
 		/* Forward to the focused client */
 		wlr_seat_set_keyboard(self->wlr_seat, kb);
 		wlr_seat_keyboard_notify_key(self->wlr_seat,
@@ -7886,7 +9005,8 @@ compositor_handle_key(
 	/* Set up key repeat state.  Not for injected keys: the sender is
 	 * already repeating, and adding ours on top double-fires the
 	 * keybind for as long as the remote holds the key down. */
-	if (!synthetic && state == WL_KEYBOARD_KEY_STATE_PRESSED && handled) {
+	if (!synthetic && state == WL_KEYBOARD_KEY_STATE_PRESSED && handled
+	    && self->kb_repeat_ok) {
 		self->kb_nsyms   = nsyms;
 		self->kb_keysyms = syms;
 		self->kb_mods    = mods;
@@ -7972,6 +9092,11 @@ on_kb_modifiers(struct wl_listener *listener, void *data)
 	                      &self->wlr_kb_group->keyboard);
 	wlr_seat_keyboard_notify_modifiers(self->wlr_seat,
 	                                   &self->wlr_kb_group->keyboard.modifiers);
+	/* An input method holding the keyboard grab sees the modifiers
+	 * too, or it cannot tell Shift+a from a. */
+	gowl_text_input_grab_modifiers(self, &self->wlr_kb_group->keyboard);
+	/* A layout switched by an xkb option lands here. */
+	announce_keyboard_layout(self, FALSE);
 }
 
 /**
@@ -8573,8 +9698,8 @@ compositor_handle_button(
 ){
 	GowlClient *c;
 
-	wlr_idle_notifier_v1_notify_activity(self->idle_notifier,
-	                                     self->wlr_seat);
+	if (self->idle_mgr != NULL)
+		gowl_idle_manager_note_activity(self->idle_mgr);
 
 	if (self->input_recorder != NULL && !synthetic) {
 		GowlRecordedEvent    rec;
@@ -8716,41 +9841,17 @@ compositor_handle_button(
 		if (c != NULL && !gowl_client_get_embedded(c))
 			gowl_compositor_focus_client(self, c, TRUE);
 
-		/* Super+LMB starts an interactive move grab, Super+RMB
-		 * starts an interactive resize grab.  Tiled clients are
-		 * auto-promoted to floating so dragging doesn't fight
-		 * the tile layout.  Embedded clients are skipped —
-		 * those are managed by the embedder. */
-		if (c == NULL || gowl_client_get_embedded(c))
+		/* Pointer binds (the `mousebinds:' section).  The shipped
+		 * two are Super+Button1 move-window and Super+Button3
+		 * resize-window, the grabs that used to be wired here; any
+		 * action can be bound.  An embedded client is the
+		 * embedder's to move. */
+		if (c != NULL && gowl_client_get_embedded(c))
 			break;
-
 		kbd = wlr_seat_get_keyboard(self->wlr_seat);
 		kmods = kbd != NULL ? wlr_keyboard_get_modifiers(kbd) : 0;
-		if (!(kmods & WLR_MODIFIER_LOGO))
-			break;
-
-		if (button == BTN_LEFT) {
-			begin_interactive(self, c, GOWL_CURSOR_MODE_MOVE, 0);
+		if (dispatch_mousebind(self, kmods, button))
 			return;
-		}
-
-		if (button == BTN_RIGHT) {
-			/* Super+RMB resizes from whichever quadrant of the
-			 * window the cursor is in, so the nearest corner
-			 * follows the pointer (dwl behaviour) instead of always
-			 * the bottom-right. */
-			guint32 edges = 0;
-			gint midx = c->geom.x + c->geom.width / 2;
-			gint midy = c->geom.y + c->geom.height / 2;
-
-			edges |= (self->wlr_cursor->x < midx)
-				? WLR_EDGE_LEFT : WLR_EDGE_RIGHT;
-			edges |= (self->wlr_cursor->y < midy)
-				? WLR_EDGE_TOP : WLR_EDGE_BOTTOM;
-			begin_interactive(self, c, GOWL_CURSOR_MODE_RESIZE,
-			                  edges);
-			return;
-		}
 		break;
 	}
 
@@ -8841,8 +9942,8 @@ on_cursor_axis(struct wl_listener *listener, void *data)
 	self = wl_container_of(listener, self, cursor_axis);
 	event = (struct wlr_pointer_axis_event *)data;
 
-	wlr_idle_notifier_v1_notify_activity(self->idle_notifier,
-	                                     self->wlr_seat);
+	if (self->idle_mgr != NULL)
+		gowl_idle_manager_note_activity(self->idle_mgr);
 
 	if (self->input_recorder != NULL) {
 		GowlRecordedEvent rec;
@@ -8887,6 +9988,21 @@ on_cursor_axis(struct wl_listener *listener, void *data)
 	{
 		struct wlr_keyboard *kbd = wlr_seat_get_keyboard(self->wlr_seat);
 		guint32 kmods = kbd != NULL ? wlr_keyboard_get_modifiers(kbd) : 0;
+
+		/* A wheel step bound in `mousebinds:' (Super+WheelUp, say)
+		 * is the compositor's; the client never sees it. */
+		if (event->delta != 0 || event->delta_discrete != 0) {
+			guint wheel;
+
+			if (event->orientation == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+				wheel = (event->delta < 0 || event->delta_discrete < 0)
+				        ? GOWL_BUTTON_WHEEL_LEFT : GOWL_BUTTON_WHEEL_RIGHT;
+			else
+				wheel = (event->delta < 0 || event->delta_discrete < 0)
+				        ? GOWL_BUTTON_WHEEL_UP : GOWL_BUTTON_WHEEL_DOWN;
+			if (dispatch_mousebind(self, kmods, wheel))
+				return;
+		}
 
 		/* CMACS: a scroll over the bar or an open bar dropdown is
 		 * the bar's -- that is how the volume widget takes the
@@ -9601,6 +10717,11 @@ on_client_map(struct wl_listener *listener, void *data)
 
 	g_signal_emit(self, compositor_signals[SIGNAL_CLIENT_ADDED], 0, c);
 
+	/* List it for taskbars.  After the rules, the hints and the
+	 * embedder: each of those can make it a window no taskbar should
+	 * show (gowl-foreign-toplevel.c). */
+	gowl_foreign_toplevel_client_map(self, c);
+
 	/* Register as a screencast-capturable window (no-op on monitor-only
 	 * wlroots).  Embedded clients are Emacs-managed and not shareable as
 	 * standalone windows; unmanaged override-redirect popups already
@@ -9673,6 +10794,7 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	if (self->capture_provider != NULL)
 		gowl_capture_provider_remove_window(
 			(GowlCaptureProvider *)self->capture_provider, c);
+	gowl_foreign_toplevel_client_unmap(c);
 
 	/* Cancel any interactive grab */
 	if (c == self->grabbed_client) {
@@ -9873,6 +10995,7 @@ on_client_set_title(struct wl_listener *listener, void *data)
 	if (self->ipc != NULL && focused == c)
 		gowl_ipc_push_event(self->ipc, "EVENT title %s",
 		                     c->title != NULL ? c->title : "");
+	gowl_foreign_toplevel_client_title(c);
 
 	/* Refresh the screencast window list's title/app_id (no-op on
 	 * monitor-only wlroots or for untracked clients). */
@@ -9968,7 +11091,9 @@ on_xwayland_request_activate(struct wl_listener *listener, void *data)
 	c = wl_container_of(listener, c, activate);
 	(void)data;
 
-	if (c->scene != NULL && c->compositor != NULL)
+	if (c->scene != NULL && c->compositor != NULL && c->mon != NULL)
+		gowl_compositor_activate_client(c->compositor, c);
+	else if (c->scene != NULL && c->compositor != NULL)
 		gowl_compositor_focus_client(c->compositor, c, TRUE);
 }
 

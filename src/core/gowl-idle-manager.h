@@ -34,6 +34,48 @@ gint              gowl_idle_manager_get_timeout   (GowlIdleManager *self);
 void              gowl_idle_manager_set_timeout   (GowlIdleManager *self,
                                                    gint             timeout_secs);
 
+/**
+ * gowl_idle_manager_get_dpms_timeout:
+ * @self: a #GowlIdleManager
+ *
+ * Returns: seconds of no input before every output is powered off, or
+ *   0 for never
+ */
+gint              gowl_idle_manager_get_dpms_timeout (GowlIdleManager *self);
+
+/**
+ * gowl_idle_manager_set_dpms_timeout:
+ * @self: a #GowlIdleManager
+ * @timeout_secs: seconds, or 0 for never
+ *
+ * Sets how long the outputs stay on with nobody at the keyboard.  Any
+ * input powers them back on.  Held off by an idle inhibitor.
+ */
+void              gowl_idle_manager_set_dpms_timeout (GowlIdleManager *self,
+                                                      gint             timeout_secs);
+
+/**
+ * gowl_idle_manager_is_inhibited:
+ * @self: a #GowlIdleManager
+ *
+ * Returns: %TRUE while a visible surface holds an idle inhibitor
+ *   (idle-inhibit-v1) -- a video player, a presentation.  Neither the
+ *   idle nor the dpms timer runs, and a lock module's own auto-lock
+ *   should hold off too.
+ */
+gboolean          gowl_idle_manager_is_inhibited    (GowlIdleManager *self);
+
+/**
+ * gowl_idle_manager_note_activity:
+ * @self: a #GowlIdleManager
+ *
+ * Marks the session active: restarts both timers, emits
+ * #GowlIdleManager::resume if it was idle, and tells ext-idle-notify
+ * clients.  The compositor calls this for every real and injected
+ * input event; an embedder may call it for activity of its own.
+ */
+void              gowl_idle_manager_note_activity   (GowlIdleManager *self);
+
 G_END_DECLS
 
 #endif /* GOWL_IDLE_MANAGER_H */

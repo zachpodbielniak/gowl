@@ -450,6 +450,37 @@ per build).  What gowl provides instead is a clean *capability* seam:
 This keeps Fedora 42/43 (0.19) and Fedora 44+/Ubuntu-from-source (0.20)
 on one codebase, with capabilities adapting to whatever is compiled in.
 
+** Protocols served
+:PROPERTIES:
+:CUSTOM_ID: protocols-served
+:END:
+What a client finds in the registry, and where each global is created.
+=tests/test-protocols.c= connects a real client to a headless compositor
+and checks the ones applications give up silently without.
+
+| Protocol | Where | Notes |
+|----------+-------+-------|
+| wl_compositor, wl_subcompositor, xdg-shell, wlr-layer-shell, xdg-decoration (SSD forced), kde-server-decoration | gowl-compositor.c | |
+| xdg-activation, xdg-output, wlr-output-management, fractional-scale, viewporter, presentation-time, wlr-gamma-control | gowl-compositor.c | |
+| linux-dmabuf, wl_drm, export-dmabuf, single-pixel-buffer, linux-drm-syncobj (explicit sync, when the renderer has timelines) | gowl-compositor.c | |
+| wlr-screencopy, ext-image-capture-source (outputs and toplevels), ext-image-copy-capture, ext-foreign-toplevel-list | gowl-capture-wlroots.c | |
+| wlr-foreign-toplevel-management | gowl-foreign-toplevel.c | one handle per managed window; activate obeys =focus-on-activate= |
+| cursor-shape, pointer-constraints, relative-pointer, pointer-gestures, virtual-pointer, tablet-v2 | gowl-compositor.c, gowl-tablet.c | |
+| text-input-v3, input-method-v2, virtual-keyboard | gowl-text-input.c | the relay, the keyboard grab, popups; virtual keyboards from the input method go straight to the focused surface, any other goes through the synthetic key path |
+| keyboard-shortcuts-inhibit | gowl-shortcuts-inhibit.c | active only for the focused surface; the escape hatches stay |
+| idle-inhibit, ext-idle-notify | gowl-idle-manager.c | an inhibitor counts on a visible surface only; both timers and the screenlock's auto-lock hold off |
+| wlr-output-power-management | gowl-output-power.c | powered-off outputs keep their layout place and windows |
+| tearing-control, content-type | gowl-compositor.c (frame handler) | tearing for a fullscreen window that asks, with =allow-tearing=; content-type drives =vrr: on-demand= |
+| xdg-foreign v1/v2 | gowl-compositor.c | a portal dialog parents itself to a sandboxed app's window |
+| wlr-data-control, primary-selection, ext-session-lock | gowl-compositor.c, gowl-session-lock.c | |
+| ext-workspace-v1 | protocols/gowl-ext-workspace.c | with a workspace provider installed |
+| gowl-input-capture (private) | gowl-input-capture.c | the InputCapture / RemoteDesktop portal backend |
+
+Not served: security-context, drm-lease, wp-color-management, alpha-modifier, xdg-toplevel-icon / -tag / -drag, xdg-dialog, fifo, commit-timing, pointer-warp.
+
+*** Input, as configured
+The keymap is built by =build_keymap()= from the =xkb-*= keys (a keymap file, else rules/model/layout/variant/options, else the environment) and applied to the keyboard group and every keyboard =gowl-input-config.c= tracks. Per-device libinput settings from the =input:= section are applied by the same file when a device appears and again on reload. Key modes, bind flags, pointer binds and gestures all end in =run_keybind_entry()=: one function runs an action whatever bound it, so =dispatch_key()= (mode, lock and press/release filtering), =dispatch_mousebind()= and =dispatch_gesture()= only decide whether a bind matched. A finger count with a configured gesture is claimed before the module gesture handlers, like a module claimant, and summed until the gesture ends.
+
 ** Screen Sharing (xdg-desktop-portal-wlr)
 
 Screen capture is abstracted behind the =GowlCaptureProvider= GObject

@@ -697,6 +697,21 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	             0, NULL, NULL, NULL, G_TYPE_NONE, 1, GOWL_TYPE_CLIENT);
 
 	/**
+	 * GowlCompositor::monitor-hdr-changed:
+	 * @compositor: the compositor
+	 * @monitor: the output
+	 * @on: %TRUE if it is now in HDR
+	 *
+	 * An output was switched between HDR and SDR.  The bar's display
+	 * panel and anything else showing the state follows this rather
+	 * than polling, since the switch can come from a keybind, the
+	 * socket, Lisp or a config reload.
+	 */
+	g_signal_new("monitor-hdr-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_MONITOR,
+	             G_TYPE_BOOLEAN);
+
+	/**
 	 * GowlCompositor::monitor-added:
 	 * @compositor: the compositor
 	 * @monitor: the output that appeared
@@ -3452,6 +3467,60 @@ gowl_compositor_start(
 	self->capture_provider = gowl_capture_wlroots_new(self);
 	gowl_capture_provider_create_globals(
 		(GowlCaptureProvider *)self->capture_provider, self->wl_display);
+	/*
+	 * Colour management.  wp-color-management-v1 is how a client says
+	 * what colour space its surface is in -- a video player declaring
+	 * PQ/BT.2020 content -- and how it learns what the output it is on
+	 * prefers.  Without it an HDR output shows HDR content as if it
+	 * were sRGB, which is the washed-out picture people mean when they
+	 * say HDR "does not work".
+	 *
+	 * The advertised set is deliberately small: the parametric
+	 * descriptions wlroots can actually honour.  Claiming ICC support
+	 * we do not implement would have clients hand us profiles we then
+	 * ignore.
+	 */
+	{
+		static const enum wp_color_manager_v1_render_intent intents[] = {
+			WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL,
+		};
+		/* sRGB is NOT in either list, and wlroots asserts on it: the
+		 * protocol takes sRGB primaries and the sRGB transfer
+		 * function as always supported, so advertising them is a
+		 * duplicate rather than an extra. */
+		static const enum wp_color_manager_v1_transfer_function tfs[] = {
+			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ,
+			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR,
+			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22,
+			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886,
+		};
+		static const enum wp_color_manager_v1_primaries prims[] = {
+			WP_COLOR_MANAGER_V1_PRIMARIES_BT2020,
+		};
+		struct wlr_color_manager_v1_options opts;
+
+		memset(&opts, 0, sizeof opts);
+		opts.features.parametric = true;
+		opts.features.set_mastering_display_primaries = true;
+		/* set_luminances is deliberately off: wlroots asserts on it,
+		 * because it does not yet honour a client-supplied luminance
+		 * range.  Advertising it would have players hand us numbers
+		 * we then ignore, which is worse than not offering. */
+		opts.render_intents = intents;
+		opts.render_intents_len = G_N_ELEMENTS(intents);
+		opts.transfer_functions = tfs;
+		opts.transfer_functions_len = G_N_ELEMENTS(tfs);
+		opts.primaries = prims;
+		opts.primaries_len = G_N_ELEMENTS(prims);
+
+		self->color_manager = wlr_color_manager_v1_create(self->wl_display,
+		                                                  1, &opts);
+		/* The scene graph does the per-surface colour conversion; it
+		 * needs the manager to know what each surface declared. */
+		if (self->color_manager != NULL)
+			wlr_scene_set_color_manager_v1(self->scene, self->color_manager);
+	}
+
 	wlr_data_control_manager_v1_create(self->wl_display);
 	wlr_primary_selection_v1_device_manager_create(self->wl_display);
 	wlr_viewporter_create(self->wl_display);
@@ -5859,6 +5928,17 @@ apply_monitor_yaml_config(GowlCompositor *self, GowlMonitor *m)
 		gowl_monitor_set_position(m, mc->x, mc->y);
 	if (mc->enabled == 0 || mc->enabled == 1)
 		gowl_monitor_set_enabled(m, mc->enabled != 0);
+	/* HDR before adaptive sync: both end in an output commit, and a
+	 * colour-space change is the one that has to be settled before the
+	 * first frame is drawn in it. */
+	if (mc->hdr == 0 || mc->hdr == 1) {
+		if (mc->hdr == 1 && !gowl_monitor_supports_hdr(m))
+			g_message("%s: the config asks for HDR, but the output "
+			          "advertises no BT.2020 + PQ", name);
+		else
+			gowl_monitor_set_hdr(m, mc->hdr != 0);
+	}
+
 	/* Adaptive sync is applied from the frame handler, which knows
 	 * whether a game is up; a plain on/off takes effect on the next
 	 * frame.  A change of mode resets what the last commit did. */
@@ -8752,6 +8832,41 @@ run_keybind_entry(
 	case GOWL_ACTION_FOCUS_LAST:
 		gowl_compositor_focus_last(self);
 		return TRUE;
+	case GOWL_ACTION_TOGGLE_HDR: {
+		/* "on", "off" or toggle (the default), on the output named
+		 * by the argument or the selected one. */
+		GowlMonitor *m = NULL;
+		gboolean on;
+
+		if (kb->arg != NULL && *kb->arg != '\0'
+		    && g_ascii_strcasecmp(kb->arg, "on") != 0
+		    && g_ascii_strcasecmp(kb->arg, "off") != 0
+		    && g_ascii_strcasecmp(kb->arg, "toggle") != 0) {
+			GList *l;
+
+			for (l = self->monitors; l != NULL; l = l->next) {
+				GowlMonitor *cand = (GowlMonitor *)l->data;
+
+				if (g_strcmp0(gowl_monitor_get_name(cand),
+				              kb->arg) == 0) {
+					m = cand;
+					break;
+				}
+			}
+		}
+		if (m == NULL)
+			m = self->selmon;
+		if (m == NULL)
+			return TRUE;
+		if (kb->arg != NULL && g_ascii_strcasecmp(kb->arg, "on") == 0)
+			on = TRUE;
+		else if (kb->arg != NULL && g_ascii_strcasecmp(kb->arg, "off") == 0)
+			on = FALSE;
+		else
+			on = !gowl_monitor_get_hdr(m);
+		gowl_monitor_set_hdr(m, on);
+		return TRUE;
+	}
 	case GOWL_ACTION_OUTPUT_POWER: {
 		/* "on", "off" or "toggle" (the default), every
 		 * output at once. */

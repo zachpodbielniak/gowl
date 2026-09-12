@@ -253,6 +253,9 @@ typedef struct {
  * @enabled: tri-state -1=unset, 0=disabled, 1=enabled.
  * @vrr: adaptive sync: -1 unset, 0 off, 1 on, 2 on demand (only
  *       while a fullscreen window declares game or video content).
+ * @hdr: -1 unset, 0 SDR, 1 HDR (BT.2020 + PQ at 10 bits).  Only
+ *       applied to an output that advertises both; one that does not
+ *       is left in SDR and says so.
  *
  * A per-output configuration parsed from the YAML `monitors:`
  * mapping.  Every field is independently optional so callers may
@@ -271,6 +274,7 @@ typedef struct {
 	gint     transform;
 	gint     enabled;
 	gint     vrr;
+	gint     hdr;
 } GowlMonitorConfig;
 
 /**

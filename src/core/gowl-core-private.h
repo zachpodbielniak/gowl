@@ -67,6 +67,7 @@
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_scene.h>
+#include <wlr/types/wlr_color_management_v1.h>
 
 /* wlroots - input */
 #include <wlr/types/wlr_cursor.h>
@@ -261,6 +262,11 @@ struct _GowlCompositor {
 	GowlConfig                   *owned_config; /* the last one a reload made */
 	GowlModuleManager            *module_mgr;   /* borrowed ref */
 	GowlIpc                      *ipc;          /* borrowed ref (may be NULL) */
+
+	/* wp-color-management-v1: how a client declares its surface's
+	 * colour space and learns what its output prefers.  NULL when the
+	 * compositor could not create the global. */
+	struct wlr_color_manager_v1  *color_manager;
 
 	/* The `profiles:` entry whose outputs are all connected, chosen
 	 * again on every hotplug and reload; borrowed from the config. */
@@ -616,6 +622,12 @@ struct _GowlMonitor {
 	 * so on-demand only touches the output state on a change. */
 	gint     vrr_mode;
 	gboolean vrr_enabled;
+
+	/* HDR: whether the output is currently driven in BT.2020 + PQ at
+	 * 10 bits, and what its render format was before, so turning it
+	 * off restores the format rather than guessing at 8-bit. */
+	gboolean hdr_enabled;
+	guint32  hdr_prev_render_format;
 
 	struct wlr_box m;   /* monitor area, layout-relative */
 	struct wlr_box w;   /* window area (minus bar / layer-shell) */

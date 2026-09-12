@@ -28,7 +28,7 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 |-------------------------------+----------------------------------------------------|
 | =clients=                     | JSON array: id, app_id, title, pid, tags, monitor, floating, fullscreen, urgent, sticky, xwayland, x, y, width, height |
 | =focused=                     | The focused window as above, or =null=            |
-| =monitors=                    | JSON array: name, make, model, serial, focused, enabled, powered_off, x, y, width, height, tags, occupied, urgent, layout, mfact, nmaster |
+| =monitors=                    | JSON array: name, make, model, serial, focused, enabled, powered_off, hdr, hdr_capable, x, y, width, height, tags, occupied, urgent, layout, mfact, nmaster |
 | =profile=                     | ={"active": NAME or null, "profiles": [{"name", "outputs"}]}= -- the output profile in force |
 | =tags [OUTPUT]=               | ={"active", "occupied", "urgent"}= bitmasks for an output (the focused one by default) |
 | =layouts=                     | JSON array of layout names                        |
@@ -42,6 +42,7 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =dispatch KEY=                | Runs what =KEY= (="Super+Return"=) is bound to     |
 | =action NAME [ARG]=           | Runs a keybind action by nick with an argument     |
 | =power on\vert{}off\vert{}toggle= | Powers every output                             |
+| =hdr [on\vert{}off\vert{}toggle] [OUTPUT]= | Switches an output between HDR and SDR (the focused one by default); =ERROR= when it cannot do HDR |
 | =reload=                      | Reloads the config; =OK with problems= when the validator found any |
 | =ping=, =version=, =help=     |                                                    |
 | =subscribe=                   | =OK subscribed=; events follow on this connection  |

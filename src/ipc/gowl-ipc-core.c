@@ -142,6 +142,10 @@ add_monitor(GowlCompositor *self, JsonBuilder *b, GowlMonitor *m)
 		m->wlr_output != NULL && m->wlr_output->enabled);
 	json_builder_set_member_name(b, "powered_off");
 	json_builder_add_boolean_value(b, m->powered_off);
+	json_builder_set_member_name(b, "hdr");
+	json_builder_add_boolean_value(b, gowl_monitor_get_hdr(m));
+	json_builder_set_member_name(b, "hdr_capable");
+	json_builder_add_boolean_value(b, gowl_monitor_supports_hdr(m));
 	json_builder_set_member_name(b, "x");
 	json_builder_add_int_value(b, m->m.x);
 	json_builder_set_member_name(b, "y");
@@ -485,6 +489,36 @@ gowl_compositor_ipc_command(
 			on = gowl_compositor_any_output_powered_off(self);
 		gowl_compositor_set_outputs_powered(self, on);
 		return g_strdup(on ? "OK on" : "OK off");
+	}
+	if (g_strcmp0(word, "hdr") == 0) {
+		/* `hdr [on|off|toggle] [OUTPUT]' -- the selected output when
+		 * no name is given, which is what a keybind or a bar toggle
+		 * means by it. */
+		g_auto(GStrv) parts = args != NULL && *args != '\0'
+			? g_strsplit(args, " ", 2) : NULL;
+		const gchar *want = parts != NULL ? parts[0] : NULL;
+		const gchar *out = parts != NULL && parts[1] != NULL
+			? g_strstrip(parts[1]) : NULL;
+		GowlMonitor *m;
+		gboolean on;
+
+		m = out != NULL ? monitor_by_name(self, out) : self->selmon;
+		if (m == NULL)
+			return g_strdup("ERROR no such output");
+		if (want == NULL || g_ascii_strcasecmp(want, "toggle") == 0)
+			on = !gowl_monitor_get_hdr(m);
+		else if (g_ascii_strcasecmp(want, "on") == 0)
+			on = TRUE;
+		else if (g_ascii_strcasecmp(want, "off") == 0)
+			on = FALSE;
+		else
+			return g_strdup("ERROR expected on, off or toggle");
+
+		if (on && !gowl_monitor_supports_hdr(m))
+			return g_strdup("ERROR the output cannot do HDR");
+		if (!gowl_monitor_set_hdr(m, on))
+			return g_strdup("ERROR the output refused the change");
+		return g_strdup(gowl_monitor_get_hdr(m) ? "OK on" : "OK off");
 	}
 	if (g_strcmp0(word, "reload") == 0
 	    || g_strcmp0(word, "reload_config") == 0

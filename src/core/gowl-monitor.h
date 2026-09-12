@@ -78,6 +78,50 @@ gowl_monitor_emit_usable_area_changed(GowlMonitor *self,
 guint32        gowl_monitor_get_tags          (GowlMonitor *self);
 
 /**
+ * gowl_monitor_supports_hdr:
+ * @self: a #GowlMonitor
+ *
+ * Whether the output can be driven as HDR: it has to advertise both
+ * BT.2020 primaries and the ST.2084 PQ transfer function.  A display
+ * that claims one without the other is not usable for HDR, and the
+ * backend says so before anything is committed.
+ *
+ * Headless and nested outputs report %FALSE: there is no panel behind
+ * them to show it.
+ *
+ * Returns: %TRUE if HDR can be turned on
+ */
+gboolean       gowl_monitor_supports_hdr      (GowlMonitor *self);
+
+/**
+ * gowl_monitor_get_hdr:
+ * @self: a #GowlMonitor
+ *
+ * Returns: %TRUE if the output is currently in HDR
+ */
+gboolean       gowl_monitor_get_hdr           (GowlMonitor *self);
+
+/**
+ * gowl_monitor_set_hdr:
+ * @self: a #GowlMonitor
+ * @enable: %TRUE for BT.2020 + PQ at 10 bits, %FALSE for sRGB
+ *
+ * Turns HDR on or off, in one atomic commit with the render format:
+ * a PQ image description at 8 bits per channel bands visibly in dark
+ * gradients, so the two belong together.  A commit the backend refuses
+ * leaves the output exactly as it was.
+ *
+ * What this does NOT do is tone-map: SDR content is passed through,
+ * which on most panels looks flat until the application says its
+ * surface is HDR through wp-color-management-v1.  That is why it is a
+ * toggle rather than a setting that defaults on.
+ *
+ * Returns: %TRUE if the output is now in the requested state
+ */
+gboolean       gowl_monitor_set_hdr           (GowlMonitor *self,
+                                               gboolean     enable);
+
+/**
  * gowl_monitor_set_tags:
  * @self: a #GowlMonitor
  * @tags: the new tag bitmask

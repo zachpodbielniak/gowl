@@ -225,6 +225,10 @@ test_globals_advertised(Fixture *f, gconstpointer data)
 		"zxdg_exporter_v1",
 		"zwp_text_input_manager_v3",
 		"zwp_input_method_manager_v2",
+		/* HDR is not just an output mode: without this a client has
+		 * no way to say its surface is PQ/BT.2020, and HDR content
+		 * is shown as if it were sRGB. */
+		"wp_color_manager_v1",
 	};
 	Registry r;
 	GThread *thread;
@@ -344,6 +348,45 @@ test_reload_reapplies_timeouts(Fixture *f, gconstpointer data)
 	pump(f, 1200);
 	g_assert_false(f->monitor->powered_off);
 	g_assert_cmpint(gowl_idle_manager_get_state(idle), ==, 0);
+}
+
+/* --- HDR --- */
+
+/*
+ * A headless output advertises no BT.2020 and no PQ, so the interesting
+ * assertions here are the refusals: HDR must not be reported as
+ * available, must not be turned on, and asking for it must leave the
+ * output exactly as it was rather than half-committed.  That is the
+ * path every machine without an HDR display takes, and the one a bad
+ * implementation would get wrong by committing a 10-bit render format
+ * and then failing on the image description.
+ *
+ * The colour-management global is asserted separately, because an HDR
+ * output with no way for a client to say "this surface is PQ" shows
+ * HDR content as if it were sRGB -- the washed-out picture people mean
+ * when they say HDR does not work.
+ */
+static void
+test_hdr_refused_without_support(Fixture *f, gconstpointer data)
+{
+	gboolean before;
+	(void)data;
+
+	g_assert_false(gowl_monitor_supports_hdr(f->monitor));
+	g_assert_false(gowl_monitor_get_hdr(f->monitor));
+
+	before = f->monitor->wlr_output->enabled;
+	/* Refused, and says so rather than committing something. */
+	g_assert_false(gowl_monitor_set_hdr(f->monitor, TRUE));
+	g_assert_false(gowl_monitor_get_hdr(f->monitor));
+	g_assert_cmpint(f->monitor->wlr_output->enabled, ==, before);
+
+	/* Turning off what is already off is not a failure: it is the
+	 * state the caller asked for. */
+	g_assert_true(gowl_monitor_set_hdr(f->monitor, FALSE));
+
+	pump(f, 50);
+	g_assert_false(gowl_monitor_get_hdr(f->monitor));
 }
 
 /* --- output profiles --- */
@@ -499,6 +542,9 @@ main(int argc, char *argv[])
 	           fixture_setup, test_output_power_action, fixture_teardown);
 	g_test_add("/protocols/keyboard/layouts", Fixture, NULL,
 	           fixture_setup, test_keyboard_layouts, fixture_teardown);
+	g_test_add("/protocols/hdr/refused-without-support", Fixture, NULL,
+	           fixture_setup, test_hdr_refused_without_support,
+	           fixture_teardown);
 	g_test_add("/protocols/output-profiles", Fixture, NULL,
 	           fixture_setup, test_output_profiles, fixture_teardown);
 	g_test_add("/protocols/idle/timeouts-parked", Fixture, NULL,

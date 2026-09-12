@@ -259,6 +259,7 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  * @GOWL_ACTION_LOCK: Lock the session via the lock handler module.
  * @GOWL_ACTION_MOVE_STACK: Reorder the focused tiled client.
  * @GOWL_ACTION_CUSTOM: Custom action handled by a module callback.
+ * @GOWL_ACTION_TOGGLE_HDR: Switch the focused output between HDR and SDR
  * @GOWL_ACTION_OUTPUT_POWER: Power every output on, off or toggle
  *   (arg "on", "off", anything else toggles).
  * @GOWL_ACTION_MODE: Enter a key mode (arg: the mode's name; "default",
@@ -314,7 +315,8 @@ typedef enum {
 	GOWL_ACTION_TOGGLE_STICKY,
 	GOWL_ACTION_FOCUS_DIR,
 	GOWL_ACTION_FOCUS_URGENT,
-	GOWL_ACTION_FOCUS_LAST
+	GOWL_ACTION_FOCUS_LAST,
+	GOWL_ACTION_TOGGLE_HDR
 } GowlAction;
 
 #define GOWL_TYPE_ACTION (gowl_action_get_type())

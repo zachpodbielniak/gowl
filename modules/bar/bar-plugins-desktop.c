@@ -1658,6 +1658,38 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 		}
 	}
 
+	/*
+	 * HDR, but only on an output that advertises BT.2020 and PQ.  A
+	 * toggle that cannot work is worse than no toggle: it invites the
+	 * one question -- "why did nothing happen?" -- that the panel
+	 * cannot answer.  A capable output that is currently SDR gets the
+	 * switch; an incapable one gets a line saying so, because "my
+	 * monitor is HDR and this says it is not" is a fact worth
+	 * surfacing (it is usually the cable, or a mode the display only
+	 * offers at a lower refresh rate).
+	 */
+	if (env != NULL && env->compositor != NULL) {
+		GowlMonitor *mon;
+
+		mon = gowl_compositor_get_selected_monitor(
+			GOWL_COMPOSITOR(env->compositor));
+		if (mon != NULL) {
+			gowl_bar_panel_add_separator(panel);
+			gowl_bar_panel_add_section(panel, "Colour");
+			if (gowl_monitor_supports_hdr(mon)) {
+				item = gowl_bar_panel_add_toggle(panel, "hdr",
+					"HDR (BT.2020, PQ)",
+					gowl_monitor_get_hdr(mon));
+				gowl_bar_panel_item_set_color(item,
+					GOWL_BAR_COLOR_MAUVE);
+			} else {
+				gowl_bar_panel_add_field_pair(panel, "HDR",
+					"Not offered", "Output",
+					gowl_monitor_get_name(mon));
+			}
+		}
+	}
+
 	gowl_bar_panel_add_separator(panel);
 	item = gowl_bar_panel_add_buttons(panel, "tool");
 	gowl_bar_panel_add_button(item, "Night light", FALSE);
@@ -1729,6 +1761,42 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
 				"Bar text size",
 				"This host does not allow changing it.");
+		}
+		return;
+	}
+
+	if (g_strcmp0(item_id, "hdr") == 0) {
+		const BarEnv *e = bar_env();
+		GowlMonitor  *mon;
+		gboolean      want;
+
+		if (e == NULL || e->compositor == NULL)
+			return;
+		mon = gowl_compositor_get_selected_monitor(
+			GOWL_COMPOSITOR(e->compositor));
+		if (mon == NULL)
+			return;
+		/* The toggle reports the state it was clicked into; fall back
+		 * to inverting what the output is doing when the host sends
+		 * no value. */
+		want = value > 0.5 ? TRUE : FALSE;
+		if (value < 0.0)
+			want = !gowl_monitor_get_hdr(mon);
+
+		if (want && !gowl_monitor_supports_hdr(mon)) {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+				"HDR", "This output does not offer BT.2020 and PQ.");
+			return;
+		}
+		if (gowl_monitor_set_hdr(mon, want)) {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW, "HDR",
+				want ? "On: BT.2020, PQ, 10-bit. SDR content is "
+				       "passed through, not tone-mapped."
+				     : "Off: back to sRGB.");
+			gowl_bar_plugin_request_redraw(plugin);
+		} else {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+				"HDR", "The output refused the change.");
 		}
 		return;
 	}

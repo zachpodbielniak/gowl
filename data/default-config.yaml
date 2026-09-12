@@ -222,6 +222,9 @@ keybinds:
   "Super+f": { action: set_layout, arg: "float", desc: "Float layout" }
   "Super+m": { action: set_layout, arg: "monocle", desc: "Monocle layout" }
   "Super+Shift+m": { action: set_layout, arg: "tabbed", desc: "Tabbed layout" }
+  # HDR on this output, where it is offered.  Not tone mapping: SDR
+  # content is passed through, so this is a toggle, not a default.
+  "Super+Shift+h": { action: toggle_hdr, desc: "HDR on this output" }
   "Super+Tab": { action: cycle_layout, desc: "Next layout" }
   "Super+Shift+Tab":
     { action: cycle_layout, arg: "-1", desc: "Previous layout" }

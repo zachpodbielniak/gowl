@@ -290,6 +290,7 @@ gowl_action_get_type(void)
 			{ GOWL_ACTION_FOCUS_DIR,         "GOWL_ACTION_FOCUS_DIR",         "focus-dir" },
 			{ GOWL_ACTION_FOCUS_URGENT,      "GOWL_ACTION_FOCUS_URGENT",      "focus-urgent" },
 			{ GOWL_ACTION_FOCUS_LAST,        "GOWL_ACTION_FOCUS_LAST",        "focus-last" },
+			{ GOWL_ACTION_TOGGLE_HDR,        "GOWL_ACTION_TOGGLE_HDR",        "toggle-hdr" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlAction", values);

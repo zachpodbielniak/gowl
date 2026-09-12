@@ -1348,6 +1348,13 @@ parse_monitor_config(YamlMapping *mon_cfg_map)
 			mc->vrr = yaml_mapping_get_boolean_member(
 				mon_cfg_map, "vrr") ? 1 : 0;
 	}
+	/* HDR is a plain bool: an output either is driven in BT.2020 + PQ
+	 * or it is not.  Asking for it on a display that cannot do it is
+	 * reported when it is applied, not here -- the config is read
+	 * before any output exists. */
+	if (yaml_mapping_has_member(mon_cfg_map, "hdr"))
+		mc->hdr = yaml_mapping_get_boolean_member(mon_cfg_map, "hdr")
+		          ? 1 : 0;
 	return mc;
 }
 
@@ -1546,7 +1553,7 @@ static const gchar *const bind_keys[] = {
 
 static const gchar *const monitor_keys[] = {
 	"width", "height", "refresh", "x", "y", "scale", "enabled",
-	"transform", "vrr", NULL
+	"transform", "vrr", "hdr", NULL
 };
 
 static const gchar *const input_keys[] = {
@@ -4578,6 +4585,7 @@ gowl_monitor_config_init(GowlMonitorConfig *mc)
 	mc->transform = -1;
 	mc->enabled = -1;
 	mc->vrr = -1;
+	mc->hdr = -1;
 }
 
 /**

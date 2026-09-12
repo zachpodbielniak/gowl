@@ -19,6 +19,9 @@
 #include "gowl-core-private.h"
 #include "boxed/gowl-output-mode.h"
 #include "boxed/gowl-geometry.h"
+#include <wlr/render/color.h>
+#include <drm_fourcc.h>
+#include <string.h>
 
 /**
  * GowlMonitor:
@@ -810,6 +813,139 @@ gowl_monitor_get_scale(GowlMonitor *self)
 	g_return_val_if_fail(self->wlr_output != NULL, 1.0);
 
 	return (gdouble)self->wlr_output->scale;
+}
+
+/* ── HDR ─────────────────────────────────────────────────────────────
+ *
+ * An HDR output is three things at once: BT.2020 primaries, the ST.2084
+ * PQ transfer function, and ten bits per channel.  The first two are
+ * the image description the backend hands to KMS (the Colorspace and
+ * HDR_OUTPUT_METADATA properties); the third is the format the
+ * compositor renders into.  Committing the description without the
+ * format gives a picture that is technically HDR and visibly banded in
+ * every dark gradient, so they go in one atomic commit and fail
+ * together.
+ *
+ * The luminance numbers below are the defaults a display uses when the
+ * metadata says nothing useful: 0.005 to 1000 cd/m² is the range a
+ * mid-range HDR10 panel actually reaches.  A player that knows its
+ * content's mastering display describes it through
+ * wp-color-management-v1 and that wins for its own surface.
+ */
+
+/* Rec. ITU-R BT.2020 primaries and the D65 white point. */
+static const struct wlr_color_primaries gowl_bt2020_primaries = {
+	.red   = { .x = 0.708f, .y = 0.292f },
+	.green = { .x = 0.170f, .y = 0.797f },
+	.blue  = { .x = 0.131f, .y = 0.046f },
+	.white = { .x = 0.3127f, .y = 0.3290f },
+};
+
+/**
+ * gowl_monitor_supports_hdr:
+ * @self: a #GowlMonitor
+ *
+ * Returns: %TRUE if the output advertises BT.2020 and PQ
+ */
+gboolean
+gowl_monitor_supports_hdr(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+
+	if (self->wlr_output == NULL)
+		return FALSE;
+	return (self->wlr_output->supported_primaries
+	        & WLR_COLOR_NAMED_PRIMARIES_BT2020) != 0
+	    && (self->wlr_output->supported_transfer_functions
+	        & WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ) != 0;
+}
+
+/**
+ * gowl_monitor_get_hdr:
+ * @self: a #GowlMonitor
+ *
+ * Returns: %TRUE if the output is in HDR
+ */
+gboolean
+gowl_monitor_get_hdr(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+	return self->hdr_enabled;
+}
+
+/**
+ * gowl_monitor_set_hdr:
+ * @self: a #GowlMonitor
+ * @enable: %TRUE for BT.2020 + PQ at 10 bits
+ *
+ * Returns: %TRUE if the output is now in the requested state
+ */
+gboolean
+gowl_monitor_set_hdr(
+	GowlMonitor *self,
+	gboolean     enable
+){
+	struct wlr_output_state state;
+	struct wlr_output_image_description desc;
+	gboolean ok;
+
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+	g_return_val_if_fail(self->wlr_output != NULL, FALSE);
+
+	enable = enable ? TRUE : FALSE;
+	if (self->hdr_enabled == enable)
+		return TRUE;
+	if (enable && !gowl_monitor_supports_hdr(self)) {
+		g_message("%s cannot do HDR: the output advertises no "
+		          "BT.2020 + PQ", gowl_monitor_get_name(self));
+		return FALSE;
+	}
+
+	wlr_output_state_init(&state);
+	if (enable) {
+		memset(&desc, 0, sizeof desc);
+		desc.primaries = WLR_COLOR_NAMED_PRIMARIES_BT2020;
+		desc.transfer_function = WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ;
+		desc.mastering_display_primaries = gowl_bt2020_primaries;
+		desc.mastering_luminance.min = 0.005;
+		desc.mastering_luminance.max = 1000.0;
+		desc.max_cll = 1000.0;
+		desc.max_fall = 400.0;
+		if (!wlr_output_state_set_image_description(&state, &desc)) {
+			g_warning("%s refused the HDR image description",
+			          gowl_monitor_get_name(self));
+			wlr_output_state_finish(&state);
+			return FALSE;
+		}
+		/* Remember what it was rendering at, so turning HDR off does
+		 * not leave a 10-bit format behind on a display that only
+		 * wanted it for HDR. */
+		self->hdr_prev_render_format = self->wlr_output->render_format;
+		wlr_output_state_set_render_format(&state, DRM_FORMAT_XRGB2101010);
+	} else {
+		wlr_output_state_set_image_description(&state, NULL);
+		wlr_output_state_set_render_format(&state,
+			self->hdr_prev_render_format != 0
+			? self->hdr_prev_render_format : DRM_FORMAT_XRGB8888);
+	}
+
+	ok = wlr_output_commit_state(self->wlr_output, &state);
+	wlr_output_state_finish(&state);
+	if (!ok) {
+		g_warning("%s refused to switch HDR %s",
+		          gowl_monitor_get_name(self), enable ? "on" : "off");
+		return FALSE;
+	}
+
+	self->hdr_enabled = enable;
+	g_message("%s: HDR %s", gowl_monitor_get_name(self),
+	          enable ? "on (BT.2020, PQ, 10-bit)" : "off");
+	if (self->compositor != NULL)
+		g_signal_emit_by_name(self->compositor, "monitor-hdr-changed",
+		                      self, enable);
+	/* The whole output has to be redrawn in the new colour space. */
+	wlr_output_schedule_frame(self->wlr_output);
+	return TRUE;
 }
 
 /**

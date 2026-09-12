@@ -725,6 +725,7 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =move_window=       | --                               | Drag the window under the pointer (a mouse bind) |
 | =resize_window=     | --                               | Resize the window under the pointer from its nearest corner |
 | =toggle_sticky=     | --                               | Pin the focused window to every tag of its monitor, or unpin it |
+| =toggle_hdr=        | --, ="on"=, ="off"=, or an output name | Switch an output between HDR and SDR (the focused one by default) |
 | =focus_dir=         | ="left"=, ="right"=, ="up"=, ="down"= | Focus the nearest window that way, crossing to the next monitor when there is none |
 | =focus_urgent=      | --                               | Focus the window marked urgent, viewing its tags if need be |
 | =focus_last=        | --                               | Focus the window that had focus before this one |
@@ -1033,6 +1034,7 @@ monitors:
 | =scale=     | float             | HiDPI scale factor (e.g. =1.0=, =1.5=, =2.0=).                           |
 | =enabled=   | bool              | =true= to power on, =false= to disable.                                  |
 | =transform= | int 0--7 / string | =wl_output_transform= code, or one of the canonical names below.         |
+| =hdr=       | bool   | unset | Drive the output in BT.2020 with the ST.2084 PQ transfer function at 10 bits.  Only where the output advertises both; one that does not is left in SDR and says so in the log.  See below --- this is not tone mapping. |
 | =vrr=       | bool / =on-demand= | Adaptive sync. =true= always, =false= never, =on-demand= only while a fullscreen window declares game or video content (content-type-v1) -- the mode that does not make the desktop cursor stutter. Unset leaves the output alone. |
 
 An output's key is its connector name (=eDP-1=, =DP-3=), or -- since connector names change with the port and the dock -- its description: =Make Model Serial= or =Make Model=, matched case-insensitively (=gowl-msg monitors= prints all three fields). =*= matches any output. A connector name or a full description beats a =Make Model= key, which beats =*=.
@@ -1059,6 +1061,34 @@ profiles:
 An embedder builds the same thing from code: =gowl_config_add_output_profile()= returns a named profile (creating it at the end of the list, or returning the one already there so a second call refines it), =gowl_output_profile_set_output()= adds one output, and =gowl_config_set_monitor_config()= writes a =monitors:= entry. Start every #GowlMonitorConfig with =gowl_monitor_config_init()=, which writes the out-of-band "unset" sentinels --- a zeroed struct would read as "position 0,0, disabled". =cmacs --gowl= loads no YAML at all, so this is the only door it has; see =gowl-add-output-profile= in the cmacs manual.
 
 Profiles are tried in file order on every hotplug and reload; the first whose outputs are all connected is in force, and its per-output entries take precedence over =monitors:=. Outputs a profile does not mention, and every output when no profile matches, get their =monitors:= entry. A change of profile re-applies every output, fires the compositor's =output-profile-changed= signal (=cmacs-gowl-output-profile-changed-hook= in cmacs, =EVENT profile NAME= on the socket) and =gowl-msg profile= shows which is active.
+
+**** HDR
+:PROPERTIES:
+:CUSTOM_ID: hdr
+:END:
+=hdr: true= commits three things together: BT.2020 primaries, the ST.2084 PQ transfer function, and a 10-bit render format.  They go in one atomic commit because a PQ signal at 8 bits per channel bands visibly in every dark gradient, and a commit the backend refuses leaves the output exactly as it was.
+
+An output qualifies only when it advertises *both* BT.2020 and PQ.  That is a property of the whole chain rather than the panel: an HDR monitor on a cable or a port that cannot carry 10 bits at the current refresh rate reports neither, and =gowl-msg monitors= shows =hdr_capable= per output.
+
+*What this does not do is tone-map.*  SDR content is passed through, so on most panels an HDR output looks flat until an application says its surface is HDR.  That is what =wp-color-management-v1= is for: gowl advertises it (BT.2020 primaries; the PQ, linear, gamma 2.2 and BT.1886 transfer functions; parametric descriptions and a mastering display volume), so a player can describe its content and the scene graph converts it.  sRGB is not advertised because the protocol takes it as always supported.
+
+Because of that, HDR is a toggle rather than something to leave on:
+
+#+begin_src sh
+gowl-msg hdr                 # toggle the focused output
+gowl-msg hdr on DP-1         # or name one
+gowl-msg monitors | jq '.[] | {name, hdr, hdr_capable}'
+#+end_src
+
+#+begin_src yaml
+keybinds:
+  "Super+Shift+h": { action: toggle_hdr, desc: "HDR on this output" }
+monitors:
+  DP-1:
+    hdr: true                # applied when the output appears and on reload
+#+end_src
+
+Under =cmacs --gowl= the same toggle is in the bar's *display* panel, and =M-x cmacs-gowl-toggle-hdr= does it from the editor.
 
 **** =transform= values
 :PROPERTIES:

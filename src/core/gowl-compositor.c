@@ -685,6 +685,18 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_MONITOR, G_TYPE_BOOLEAN);
 
 	/**
+	 * GowlCompositor::client-title-changed:
+	 * @compositor: the compositor
+	 * @client: the window
+	 *
+	 * A window's title or app id changed.  Anything that draws titles
+	 * -- the tabbed layout's strip, a bar -- redraws from here rather
+	 * than polling.
+	 */
+	g_signal_new("client-title-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 1, GOWL_TYPE_CLIENT);
+
+	/**
 	 * GowlCompositor::output-profile-changed:
 	 * @compositor: the compositor
 	 * @name: the profile now in force, or "" for none
@@ -11171,6 +11183,7 @@ on_client_set_title(struct wl_listener *listener, void *data)
 		gowl_ipc_push_event(self->ipc, "EVENT title %s",
 		                     c->title != NULL ? c->title : "");
 	gowl_foreign_toplevel_client_title(c);
+	g_signal_emit_by_name(self, "client-title-changed", c);
 
 	/* Refresh the screencast window list's title/app_id (no-op on
 	 * monitor-only wlroots or for untracked clients). */

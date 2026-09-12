@@ -176,7 +176,7 @@ Layout engine settings.
 
 | Property  | Type   | Default  | Description                                      |
 |-----------+--------+----------+--------------------------------------------------|
-| =default= | string | ="tile"= | Default layout: ="tile"=, ="float"=, ="monocle"=, ="scrolling"= |
+| =default= | string | ="tile"= | Default layout: ="tile"=, ="float"=, ="monocle"=, ="scrolling"=, ="tabbed"= |
 | =mfact=   | float  | =0.55=   | Master area factor (0.05 - 0.95)                 |
 | =nmaster= | int    | =1=      | Number of windows in the master area             |
 | =scroll-column-width= | float | =0.5= | Window size as a fraction of usable width (landscape/square) or height (portrait).  0.5 shows two columns or rows, 1.0 shows one.  Matches Hyprland's =scrolling.column_width= |
@@ -192,8 +192,10 @@ still fills the usable area; floating windows retain their positions.
 An explicitly enabled =vsplit= continues to select top/bottom tiling
 on landscape and square monitors too.
 
-Layouts are plugins. The standalone defaults enable =tile=, =monocle=
-and =float=; enable scrolling and the optional layout toast in the
+=tabbed= is monocle with a strip of tabs across the top of the area, one per window, the focused one in the focus colour and an urgent one in orange; a click on a tab focuses its window. The tag is the group -- there is no container tree to manage -- and the strip is compositor chrome, so every client gets it. =modules: tabbed: height:= (default 26) and =font:= size and set the strip.
+
+Layouts are plugins. The standalone defaults enable =tile=, =monocle=,
+=tabbed= and =float=; enable scrolling and the optional layout toast in the
 existing module mapping:
 
 #+begin_src yaml
@@ -706,7 +708,7 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =move_to_monitor=   | ="+1"= or ="-1"=                 | Move focused client to next/prev monitor    |
 | =set_mfact=         | ="+0.05"= or ="-0.05"=           | Adjust the master area factor               |
 | =inc_nmaster=       | ="+1"= or ="-1"=                 | Increment/decrement the master count        |
-| =set_layout=        | ="tile"=, ="float"=, ="monocle"= | Set the layout                              |
+| =set_layout=        | ="tile"=, ="float"=, ="monocle"=, ="tabbed"= | Set the layout                    |
 | =set_split=         | ="vsplit"= or ="normal"=         | Set tile split orientation (vsplit on/off) |
 | =cycle_layout=      | --                               | Cycle through available layouts             |
 | =zoom=              | --                               | Promote focused client to master            |

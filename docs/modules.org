@@ -623,6 +623,7 @@ Gowl ships with several modules in the =modules/= directory:
 |------------------+-------------------------------------------------------|
 | =tile=           | Master/stack tiling, including vertical split          |
 | =monocle=        | Full-area stacked windows                             |
+| =tabbed=         | Monocle under a strip of clickable tabs               |
 | =float=          | Free window placement                                 |
 | =scrolling=      | Horizontal scrolling columns                          |
 | =layout-indicator= | Brief, click-through layout-change toast            |

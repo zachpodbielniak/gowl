@@ -221,6 +221,7 @@ keybinds:
   "Super+t": { action: set_layout, arg: "tile", desc: "Tile layout" }
   "Super+f": { action: set_layout, arg: "float", desc: "Float layout" }
   "Super+m": { action: set_layout, arg: "monocle", desc: "Monocle layout" }
+  "Super+Shift+m": { action: set_layout, arg: "tabbed", desc: "Tabbed layout" }
   "Super+Tab": { action: cycle_layout, desc: "Next layout" }
   "Super+Shift+Tab":
     { action: cycle_layout, arg: "-1", desc: "Previous layout" }
@@ -538,6 +539,10 @@ modules:
     enabled: true
   monocle:
     enabled: true
+  tabbed:
+    enabled: true
+    height: 26             # the tab strip, in logical pixels
+    font: sans
   float:
     enabled: true
   scrolling:

@@ -921,17 +921,17 @@ test_backdrop_style_picks_the_module(void)
 
 	/*
 	 * And the order the key actually steps through, which is written out
-	 * in the compositor rather than derived from the enum: the two that
-	 * DRAW something come first, so one press from the default lands on
-	 * the other look and it takes two to turn the backdrop off.  Derived
-	 * from the enum it would be glass, nothing, blur -- which is what it
-	 * was until this case was written, and which nobody would notice was
-	 * wrong except by pressing the key.
+	 * in the compositor rather than derived from the enum: the three that
+	 * DRAW something come first, so one press from either shipped default
+	 * lands on another look and turning the backdrop off takes the full
+	 * way round.  Derived from the enum it would be none, blur, glass,
+	 * water -- which nobody would notice was wrong except by pressing the
+	 * key.
 	 */
-	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_GLASS);
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_WATER);
 	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-	                ==, GOWL_BACKDROP_WATER);
+	                ==, GOWL_BACKDROP_GLASS);
 	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
 	                ==, GOWL_BACKDROP_BLUR);
@@ -940,7 +940,7 @@ test_backdrop_style_picks_the_module(void)
 	                ==, GOWL_BACKDROP_NONE);
 	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-	                ==, GOWL_BACKDROP_GLASS);
+	                ==, GOWL_BACKDROP_WATER);
 	/* And back the other way. */
 	gowl_compositor_cycle_backdrop_style(r.compositor, -1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),

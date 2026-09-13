@@ -562,9 +562,10 @@ the same place in the same window's tree, so two of them drawing means
 one is hidden behind the other while both still cost a capture and a blur
 on every tag switch. Loading all of them is normal and intended: the
 setting picks which one draws, and =Super+Shift+"= (=cycle_backdrop=)
-steps through them --- glass, water, blur, nothing, round again ---
-without loading anything. The ones that draw something come first, so one
-press from the default lands on another look rather than on nothing.
+steps through them --- water, glass, blur, nothing, round again ---
+without loading anything. The three that draw something come first, so one press
+from either shipped default --- water under CMacs, glass standalone ---
+lands on another look rather than on nothing.
 
 Scripts reach the same setting with =gowl-msg backdrop glass= or
 =gowl-msg backdrop next=, and a change is announced as =EVENT backdrop=

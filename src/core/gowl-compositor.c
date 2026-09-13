@@ -2672,13 +2672,16 @@ gowl_compositor_cycle_backdrop_style(GowlCompositor *self, gint direction)
 {
 	/*
 	 * The order the key steps through, written out rather than derived
-	 * from the enum -- because it is NOT the enum's order.  The two that
-	 * draw something come first, so one press from the default lands on
-	 * the other look rather than on nothing at all, and it takes two
-	 * presses to turn the backdrop off rather than one.
+	 * from the enum -- because it is NOT the enum's order.
+	 *
+	 * The three that draw something come first and the liveliest first of
+	 * all, so from either shipped default (water under cmacs, glass
+	 * standalone) one press lands on another LOOK rather than on nothing,
+	 * and turning the backdrop off takes the full way round rather than a
+	 * single press somebody did not mean.
 	 */
 	static const GowlBackdropStyle order[] = {
-		GOWL_BACKDROP_GLASS, GOWL_BACKDROP_WATER,
+		GOWL_BACKDROP_WATER, GOWL_BACKDROP_GLASS,
 		GOWL_BACKDROP_BLUR,  GOWL_BACKDROP_NONE
 	};
 	GowlBackdropStyle now;

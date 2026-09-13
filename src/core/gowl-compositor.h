@@ -610,10 +610,11 @@ void gowl_compositor_set_backdrop_style (GowlCompositor    *self,
  * @self: a #GowlCompositor
  * @direction: 1 forwards, -1 backwards
  *
- * Steps to the next style: glass, blur, nothing, glass again.  That is
- * not the enum's order --- the two that draw something come first, so one
- * press from the default lands on the other look rather than on nothing,
- * and turning the backdrop off takes two.
+ * Steps to the next style: water, glass, blur, nothing, round again.
+ * That is not the enum's order --- the three that draw something come
+ * first, so one press from either shipped default lands on another look
+ * rather than on nothing, and turning the backdrop off takes the full way
+ * round.
  */
 void gowl_compositor_cycle_backdrop_style (GowlCompositor *self,
                                            gint            direction);

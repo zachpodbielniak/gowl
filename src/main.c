@@ -300,7 +300,7 @@ static const gchar *default_yaml_config =
 	"  \"Super+v\": { action: set_split, arg: \"vsplit\" }\n"
 	"  \"Super+Shift+v\": { action: set_split, arg: \"normal\" }\n"
 	"\n"
-	"  # What shows through a translucent window: glass, water, blur,\n"
+	"  # What shows through a translucent window: water, glass, blur,\n"
 	"  # nothing.\n"
 	"  # Every backdrop module reads `window-backdrop', so this is\n"
 	"  # instant and needs none of them loaded to be bound.\n"

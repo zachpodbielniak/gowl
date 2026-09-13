@@ -368,9 +368,46 @@ its =Requisite=graphical-session.target= and stays dead, so flatpak and
 other graphical apps get no =org.freedesktop.portal.Settings= and fall
 back to a light theme / no file portal / no screencast.
 
-gowl bridges this from =gowl_compositor_start= (=src/util/gowl-systemd.c=):
-on startup it runs =systemctl --user import-environment= for the live
-=compositor env (=WAYLAND_DISPLAY=, =XDG_CURRENT_DESKTOP=, ...) and starts
+That is the bootstrap half.  There is a second half, independent of it
+and with exactly the same visible symptom: the portal can be running
+perfectly and still not be *routed*.  =xdg-desktop-portal= is only a
+frontend; every interface it publishes is served by some backend named
+in =portals.conf= -- =data/gowl-portals.conf= here, installed under the
+session's own name as =<desktop>-portals.conf=.  The values in that file
+are lists of *backends*, not of interfaces, and x-d-p searches a list
+for a backend whose =Interfaces== actually declares the interface being
+asked for.  Nothing validates the pairing.  A list naming no such
+backend leaves the interface with no implementation at all, which is a
+worse failure than the portal being dead: a dead portal produces a D-Bus
+error the application can report, while an unrouted interface is never
+asked and never answers, and nothing is logged on either side.
+
+=default== is where this bites, because it is not a single fallback
+backend -- it is the list that *every* interface without a line of its
+own resolves through.  =data/gowl-portals.conf= used to say =default=wlr=,
+and =wlr.portal= declares exactly two interfaces, =Screenshot= and
+=ScreenCast=.  Everything else -- =FileChooser=, =Notification=, =Print=,
+=Settings= and a dozen more -- had no backend whatsoever, on every
+machine that used the shipped file rather than a hand-pinned local one.
+The symptom is the light theme described above, reached by a completely
+different route: =org.freedesktop.impl.portal.Settings= is what serves
+=org.freedesktop.appearance= =color-scheme= (0 no preference, 1 prefer
+dark, 2 prefer light), so with it unrouted every application set to
+"match system" concludes the system is light.  So a portal that is
+running, a =graphical-session.target= that is up, and a session that
+still comes up light-themed points at the routing, not the bootstrap --
+and the routing has to be checked against what each backend declares,
+since a line pointing at a backend that does not implement the interface
+looks exactly as correct as one that does.  The file now reads
+=default=wlr;gtk;gnome= and pins =Settings=gtk;gnome= explicitly, and
+=tests/test-portal-routing.sh= checks every line in it against the
+=Interfaces== of each backend it names, so an edit cannot quietly reopen
+the hole.
+
+gowl bridges the bootstrap half from =gowl_compositor_start=
+(=src/util/gowl-systemd.c=): on startup it runs
+=systemctl --user import-environment= for the live compositor env
+(=WAYLAND_DISPLAY=, =XDG_CURRENT_DESKTOP=, ...) and starts
 the shipped =gowl-session.target= (which =Wants==graphical-session.target=);
 on quit it stops the target.  Everything is best-effort -- a host
 without =systemctl= is a silent no-op, and =GOWL_DISABLE_SYSTEMD=1= opts

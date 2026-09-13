@@ -41,6 +41,7 @@
 #include "core/gowl-keyboard-group.h"
 #include "core/gowl-cursor.h"
 #include "core/gowl-idle-manager.h"
+#include "core/gowl-logind.h"
 #include "core/gowl-input-capture.h"
 #include "core/gowl-input-recorder.h"
 #include "core/gowl-bar.h"
@@ -170,6 +171,32 @@
 #ifdef GOWL_HAVE_LIBDECOR
 typedef struct _GowlDecor GowlDecor;
 #endif
+
+/* A lock client that dies without unlocking is respawned, because the
+ * alternative is a sealed session with no password prompt on it.  At
+ * most this many attempts inside GOWL_LOCK_RESPAWN_WINDOW_US, so a lock
+ * binary that crashes on startup gives up instead of spinning. */
+#define GOWL_LOCK_RESPAWN_MAX       (5)
+#define GOWL_LOCK_RESPAWN_WINDOW_US (G_USEC_PER_SEC * 60)
+
+/**
+ * GowlLockSurface:
+ * @compositor: the compositor that owns the scene tree
+ * @surface: the client's lock surface
+ * @tree: where it was placed in the BLOCK layer
+ *
+ * One output's lock surface while a session-lock client holds the
+ * session.  Tracked so the layout can move and re-configure them when a
+ * display is plugged in, unplugged or rearranged mid-lock; the entry
+ * removes itself when the surface goes.
+ */
+typedef struct {
+	GowlCompositor                     *compositor;
+	struct wlr_session_lock_surface_v1 *surface;
+	struct wlr_scene_tree              *tree;
+	struct wl_listener                  destroy;
+	struct wl_list                      link;
+} GowlLockSurface;
 
 /**
  * struct _GowlCompositor:
@@ -446,6 +473,24 @@ struct _GowlCompositor {
 	struct wl_listener lock_new_surface;
 	struct wl_listener lock_destroy;
 	struct wl_listener lock_unlock;
+	/* Every surface the lock client has put up, so the layout can move
+	 * and re-configure them when a display is plugged in, unplugged or
+	 * rearranged while the screen is locked.  Element type
+	 * #GowlLockSurface; each removes itself on destroy. */
+	struct wl_list     lock_surfaces;
+	/* How the lock is respawned when its client dies without
+	 * unlocking, and a monotonic clock of the last few attempts so a
+	 * lock that crashes on startup is not restarted forever. */
+	gint64             lock_respawns[GOWL_LOCK_RESPAWN_MAX];
+	gint               lock_respawn_next;
+	/* Set while gowl_compositor_unlock_session() is taking a lock
+	 * client down on purpose, so its ::destroy is read as "asked to go"
+	 * rather than "died, put it back". */
+	gboolean           lock_override;
+	/* logind: lock before suspend, honour loginctl lock-session,
+	 * report the locked hint.  NULL when the session integration is
+	 * switched off or could not start. */
+	GowlLogind        *logind;
 	struct wl_listener output_mgr_apply;
 	struct wl_listener output_mgr_test;
 	struct wl_listener xdg_activation_request;
@@ -631,6 +676,18 @@ struct _GowlMonitor {
 
 	struct wlr_box m;   /* monitor area, layout-relative */
 	struct wlr_box w;   /* window area (minus bar / layer-shell) */
+
+	/*
+	 * Whether the output currently has a box in the output layout.
+	 *
+	 * FALSE while it is disabled by the lid policy or on its way out.
+	 * `m' then still holds the geometry it had before it left, which is
+	 * useful (it is what it will probably come back as) and dangerous:
+	 * anything that DRAWS from `m' -- the wallpaper, the bar -- must
+	 * skip an output that is not in the layout, or it renders a
+	 * screen-sized picture at coordinates that describe nothing.
+	 */
+	gboolean in_layout;
 
 	guint32  tagset[2];
 	guint    seltags;    /* index into tagset[] (0 or 1) */

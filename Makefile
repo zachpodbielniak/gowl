@@ -122,6 +122,7 @@ LIB_SRCS := \
 	src/core/gowl-bar.c \
 	src/core/gowl-session-lock.c \
 	src/core/gowl-idle-manager.c \
+	src/core/gowl-logind.c \
 	src/core/gowl-output-power.c \
 	src/core/gowl-shortcuts-inhibit.c \
 	src/core/gowl-foreign-toplevel.c \
@@ -217,6 +218,7 @@ LIB_HDRS := \
 	src/core/gowl-bar.h \
 	src/core/gowl-session-lock.h \
 	src/core/gowl-idle-manager.h \
+	src/core/gowl-logind.h \
 	src/core/gowl-decor.h \
 	src/core/gowl-static-prefix-key-policy.h \
 	src/core/gowl-session-default.h \
@@ -321,6 +323,28 @@ ifeq ($(MCP_AVAILABLE),1)
 all: gowl-mcp
 endif
 all: gowl-msg
+all: gowl-lock
+
+# gowl-lock: the screen lock, as a program of its own -- what i3lock is
+# to i3.  Links no libgowl: a Wayland client holding the session through
+# ext-session-lock-v1, so the desktop stays hidden even if it crashes.
+# Built only where PAM's headers are, since a lock that cannot
+# authenticate is not one.
+.PHONY: gowl-lock
+gowl-lock: $(OUTDIR)/gowl-lock
+
+$(OUTDIR)/gowl-lock: tools/gowl-lock/main.c \
+                     tools/gowl-lock/lock-wayland.c \
+                     tools/gowl-lock/lock-render.c \
+                     tools/gowl-lock/lock-pam.c \
+                     src/util/gowl-wallpaper-scale.c \
+                     | $(OUTDIR)
+	@if [ -f /usr/include/security/pam_appl.h ]; then \
+		$(MAKE) -C tools/gowl-lock OUTDIR=$(abspath $(OUTDIR)) \
+			SRCDIR=$(abspath src); \
+	else \
+		echo "skipping gowl-lock: pam-devel is not installed"; \
+	fi
 
 # gowl-msg: the socket's command-line client.  GLib only; links no
 # libgowl, so it can be installed on a machine that only drives gowl
@@ -438,6 +462,13 @@ $(OBJDIR)/tests/test-ipc.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags gio-un
 # client-side protocol code as well.
 $(OUTDIR)/test-protocols: $(OBJDIR)/bar/xdg-shell-protocol.o
 $(OBJDIR)/tests/test-protocols.o: xdg-shell-client-protocol.h
+
+# test-lock-input is a real ext-session-lock-v1 client in a headless
+# compositor: it takes the lock and has to receive an injected key.
+$(OUTDIR)/test-lock-input: $(OBJDIR)/tests/ext-session-lock-v1-protocol.o
+$(OBJDIR)/tests/test-lock-input.o: ext-session-lock-v1-client-protocol.h
+$(OUTDIR)/test-lock-input: TEST_LDFLAGS += $(OBJDIR)/tests/ext-session-lock-v1-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
+$(OBJDIR)/tests/test-lock-input.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 $(OUTDIR)/test-protocols: TEST_LDFLAGS += $(OBJDIR)/bar/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 
@@ -645,6 +676,11 @@ $(OUTDIR)/test-compositor-teardown: $(patsubst %,$(OUTDIR)/modules/%.so,$(TEARDO
 $(OBJDIR)/tests/test-compositor-teardown.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
+# The wallpaper against the real .so in a headless compositor, with
+# outputs plugged and unplugged underneath it.
+$(OUTDIR)/test-wallpaper-hotplug: $(OUTDIR)/modules/wallpaper.so
+$(OBJDIR)/tests/test-wallpaper-hotplug.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 $(OUTDIR)/test-notifyd: $(OUTDIR)/modules/notifyd.so
 $(OUTDIR)/test-tabbed: $(addprefix $(OUTDIR)/modules/,tabbed.so bstack.so deck.so grid.so mirrortile.so columns.so)

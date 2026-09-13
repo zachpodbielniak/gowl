@@ -1677,6 +1677,73 @@ test_config_wallpaper_tags(void)
 	g_object_unref(config);
 }
 
+/*
+ * Per-output wallpapers.  Keyed like `monitors:` -- connector name,
+ * "Make Model", "Make Model Serial", "*" -- with the same precedence, so
+ * the ultrawide on the desk can name itself and everything else falls
+ * through to the wildcard.  The value is a path, or a mapping that also
+ * carries a scaling mode for that screen alone: `fill' on an ultrawide
+ * and `fit' on a laptop lid is exactly the pair that has no single
+ * right answer.
+ */
+static void
+test_config_wallpaper_outputs(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+	const GowlWallpaperOutput *wo;
+	const gchar *yaml =
+		"wallpaper-outputs:\n"
+		"  \"DP-1\": \"/tmp/wide.png\"\n"
+		"  \"eDP-1\": { path: \"/tmp/lid.png\", mode: fit }\n"
+		"  \"Dell U2724D\": \"/tmp/dell.png\"\n"
+		"  \"*\": \"/tmp/any.png\"\n";
+
+	g_assert_false(gowl_config_has_output_wallpapers(config));
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	g_assert_true(gowl_config_has_output_wallpapers(config));
+
+	/* A bare path leaves the mode to the module. */
+	wo = gowl_config_lookup_wallpaper_output(config, "DP-1", NULL, NULL,
+	                                         NULL);
+	g_assert_nonnull(wo);
+	g_assert_cmpstr(wo->path, ==, "/tmp/wide.png");
+	g_assert_null(wo->mode);
+
+	/* A mapping may name one. */
+	wo = gowl_config_lookup_wallpaper_output(config, "eDP-1", NULL, NULL,
+	                                         NULL);
+	g_assert_nonnull(wo);
+	g_assert_cmpstr(wo->path, ==, "/tmp/lid.png");
+	g_assert_cmpstr(wo->mode, ==, "fit");
+
+	/* Make and model name an output that may come back on a different
+	 * connector -- which is the whole reason a desk monitor is worth
+	 * naming that way. */
+	wo = gowl_config_lookup_wallpaper_output(config, "DP-7", "Dell",
+	                                         "U2724D", "ABC123");
+	g_assert_nonnull(wo);
+	g_assert_cmpstr(wo->path, ==, "/tmp/dell.png");
+
+	/* Anything unnamed lands on the wildcard, and never on one of the
+	 * specific entries. */
+	wo = gowl_config_lookup_wallpaper_output(config, "HDMI-A-2", NULL,
+	                                         NULL, NULL);
+	g_assert_nonnull(wo);
+	g_assert_cmpstr(wo->path, ==, "/tmp/any.png");
+
+	/* Setting a path to nothing drops the entry rather than blanking
+	 * the screen. */
+	gowl_config_set_wallpaper_output(config, "DP-1", NULL, NULL);
+	wo = gowl_config_lookup_wallpaper_output(config, "DP-1", NULL, NULL,
+	                                         NULL);
+	g_assert_nonnull(wo);
+	g_assert_cmpstr(wo->path, ==, "/tmp/any.png");
+
+	g_object_unref(config);
+}
+
 /* A tag number outside 1..9 is a typo; it must not silently land on
  * tag 1. */
 static void
@@ -1726,6 +1793,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/config/effect-defaults", test_config_effect_defaults);
 	g_test_add_func("/config/effect-clamps", test_config_effect_clamps);
 	g_test_add_func("/config/wallpaper-tags", test_config_wallpaper_tags);
+	g_test_add_func("/config/wallpaper-outputs",
+	                test_config_wallpaper_outputs);
 	g_test_add_func("/config/wallpaper-tags-bad-keys",
 	                test_config_wallpaper_tags_rejects_bad_keys);
 	g_test_add_func("/config/defaults", test_config_defaults);

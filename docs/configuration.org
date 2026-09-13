@@ -611,6 +611,130 @@ setting exists precisely so that it is not one. Every wallpaper the
 config mentions is decoded once and kept, so switching back to a tag does
 not re-read its file.
 
+**** Per-output wallpaper
+:PROPERTIES:
+:CUSTOM_ID: wallpaper-outputs
+:END:
+
+=wallpaper-outputs= gives one screen a picture of its own, and beats both
+of the above. A 21:9 desk monitor and a 16:9 laptop lid cannot honestly
+share one image: =fill= centre-crops a third off the 16:9 picture to
+cover the ultrawide, and =fit= letterboxes it the other way round. Unlike
+the tag, the shape of a panel does not change, which is why an output
+entry is the most specific of the three.
+
+#+begin_src yaml
+wallpaper-outputs:
+  "DP-1": "~/Pictures/ultrawide.png"
+  "eDP-1": { path: "~/Pictures/laptop.png", mode: fit }
+  "Dell U2724D": "~/Pictures/desk.png"
+  "*": "~/Pictures/anything-else.png"
+#+end_src
+
+Keys are the same output keys [[#monitor-configuration][=monitors:=]] takes --- a connector name, ~"Make
+Model"~, ~"Make Model Serial"~, or =*= --- with the same precedence: a
+connector name or a serial beats make/model, which beats the wildcard. A
+value is either a path or a mapping that also names a =mode= for that
+screen alone, so one display can fill while another fits.
+
+Precedence when more than one applies: output, then tag, then the plain
+=wallpaper=.
+
+**** Wallpapers and hotplug
+
+Each monitor's picture is rendered at that output's *device* resolution
+--- its logical size times its scale --- and the scene node is given the
+logical size as its destination. A HiDPI panel therefore gets a sharp
+wallpaper rather than an upscaled one.
+
+Everything the picture was built for is remembered: size, position,
+scale and mode. That last-but-one matters more than it sounds.
+Unplugging a display moves every display to the right of it, and a
+monitor that only MOVED keeps its size --- so a size-only check decided
+there was nothing to do and left the picture at coordinates that were off
+the edge of the layout. The screen showed the root colour, or a slice of
+a picture cropped for a panel of a different shape. A move now re-places
+the node and nothing else: no decode, no rescale.
+
+A monitor that leaves the output layout --- disabled by the lid policy,
+or on its way out --- drops its wallpaper rather than keeping one at
+coordinates that no longer describe anything, and gets a fresh one when
+it comes back and the layout has settled.
+
+**** Locking
+:PROPERTIES:
+:CUSTOM_ID: locking
+:END:
+
+#+begin_src yaml
+lock-command: "gowl-lock"   # "" uses the in-process screenlock module
+lock-on-suspend: true       # lock BEFORE the machine sleeps
+#+end_src
+
+| Key                | Type   | Default       | Meaning |
+|--------------------+--------+---------------+---------|
+| =lock-command=     | string | ="gowl-lock"= | The program that draws the lock screen and takes the password. =""= falls back to the =screenlock= module. |
+| =lock-on-suspend=  | bool   | =true=        | Take a logind delay inhibitor and lock before a suspend. |
+
+***** Why the lock is a separate program
+
+gowl ships =gowl-lock=, and it is a program rather than a module for the
+same reasons =i3lock= and =swaylock= are: it holds your password, and it
+dlopens whatever your PAM stack names into its own address space. Under
+=cmacs --gowl= the compositor *is* the editor --- with an Elisp
+evaluator, an MCP server and a D-Bus interface beside it --- and a PAM
+module that crashes there takes the desktop and every unsaved buffer with
+it.
+
+It speaks =ext-session-lock-v1=, which is what makes the split safe
+rather than merely tidy: the *compositor* owns the locked state, not the
+lock program. If =gowl-lock= dies the screen stays sealed behind gowl's
+own opaque backdrop, and gowl starts a new lock screen (at most five
+attempts a minute, so a lock binary that crashes on startup gives up
+instead of spinning). There is no window in which a dead lock screen is
+an open desktop. Any =ext-session-lock-v1= client works here; =swaylock=
+is a drop-in.
+
+Everything that locks goes through =lock-command=: the =lock= keybind
+action (=Super+Shift+l= by default), =gowl-msg lock=, the =screenlock=
+module's idle timer, and a suspend. Because it is a *compositor* bind it
+works on any tag and whatever window has the keyboard --- which an editor
+command cannot, since it needs the editor focused.
+
+The way out without a password is =gowl-msg unlock=, reachable only from
+inside the session (the socket lives in your runtime directory). It is
+the escape hatch for a broken lock program, not a second door.
+
+If no =gowl-lock= can be started, gowl falls back to the =screenlock=
+module rather than leaving the desktop open --- a lock that quietly does
+nothing is the one failure a lock must not have.
+
+***** Locking before a suspend
+
+=lock-on-suspend= is not merely a listener. logind announces a suspend
+with =PrepareForSleep(true)= and then suspends; a session that only
+listens is racing the kernel and loses. gowl takes a *delay* inhibitor at
+startup and holds it, so logind will not suspend while it is open: the
+lock is up before the screen goes dark, and a wake-up lands on the
+password prompt. The inhibitor is released as soon as the lock is up, or
+after four seconds, so a broken lock program cannot stop the machine from
+sleeping.
+
+The same integration honours =loginctl lock-session= and
+=unlock-session=, and reports the state back with =SetLockedHint= so
+=loginctl show-session= agrees with the screen. Set
+=GOWL_DISABLE_LOGIND=1= (or =GOWL_DISABLE_SYSTEMD=1=) in the environment
+to skip all of it; every test in the tree does.
+
+***** PAM
+
+The lock authenticates against the first PAM service that exists out of
+=gowl=, =cmacs=, =swaylock=, =system-auth=, =login= --- or the one
+=gowl-lock --pam-service NAME= names. =sudo make install-pam= installs a
+=/etc/pam.d/gowl= that delegates to the system stack, and never
+overwrites one you have already tuned. =gowl-lock= refuses to start when
+there is none, rather than putting up a screen nothing could open.
+
 **** tags
 :PROPERTIES:
 :CUSTOM_ID: tags

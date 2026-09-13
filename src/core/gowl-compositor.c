@@ -241,6 +241,7 @@ static void on_layer_destroy      (struct wl_listener *listener, void *data);
 /* session lock callbacks */
 static void on_new_session_lock   (struct wl_listener *listener, void *data);
 static void on_session_lock_destroy(struct wl_listener *listener, void *data);
+static void gowl_compositor_arrange_lock_surfaces(GowlCompositor *self);
 static void on_session_unlock     (struct wl_listener *listener, void *data);
 static void on_lock_surface_create(struct wl_listener *listener, void *data);
 
@@ -471,6 +472,12 @@ gowl_compositor_dispose(GObject *object)
 		self->rec_stop_source = NULL;
 	}
 	g_clear_object(&self->input_recorder);
+	/* Its bus thread writes an eventfd on the loop that is about to go;
+	 * stopping it here joins that thread first. */
+	if (self->logind != NULL) {
+		gowl_logind_stop(self->logind);
+		g_clear_object(&self->logind);
+	}
 	g_clear_pointer(&self->key_mode, g_free);
 	g_clear_pointer(&self->active_profile_name, g_free);
 
@@ -710,6 +717,21 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	g_signal_new("monitor-hdr-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
 	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_MONITOR,
 	             G_TYPE_BOOLEAN);
+
+	/**
+	 * GowlCompositor::lock-changed:
+	 * @compositor: the compositor
+	 * @locked: %TRUE if the session is now locked
+	 *
+	 * The session was locked or unlocked, by any route: a keybind, the
+	 * idle timer, `loginctl lock-session', a suspend, a lock client
+	 * starting or finishing.  One signal for every route, because the
+	 * things that care -- logind's locked hint, the bar, Emacs putting
+	 * its secrets away -- care about the state and not about who asked
+	 * for it.
+	 */
+	g_signal_new("lock-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
 
 	/**
 	 * GowlCompositor::monitor-added:
@@ -1072,6 +1094,8 @@ gowl_compositor_init(GowlCompositor *self)
 	self->rec_changed_id = g_signal_connect(
 		self->input_recorder, "changed",
 		G_CALLBACK(on_recording_changed), self);
+
+	wl_list_init(&self->lock_surfaces);
 
 	self->prefloat_pids = g_array_new(FALSE, FALSE, sizeof(pid_t));
 	self->prefloat_hints = g_array_new(FALSE, FALSE,
@@ -1464,6 +1488,53 @@ recording_indicator_sync(GowlCompositor *self)
 	for (i = 0; i < 4; i++) {
 		wlr_scene_node_set_enabled(&self->rec_indicator[i]->node, TRUE);
 		wlr_scene_node_raise_to_top(&self->rec_indicator[i]->node);
+	}
+}
+
+/**
+ * backdrops_sync:
+ *
+ * Stretch the two full-screen rectangles over the whole output layout:
+ * the desktop background, and the opaque sheet the session lock hides
+ * behind.
+ *
+ * The lock backdrop is the one that matters.  It is created 0x0 and was
+ * never resized, so it covered nothing at all -- and it is what stands
+ * between a viewer and the desktop in the two cases the lock protocol
+ * exists for: the gap before a lock client has drawn its first frame,
+ * and a lock client that DIES without unlocking, where the session is
+ * supposed to stay sealed with no surface left to seal it.  Both showed
+ * the desktop instead.
+ *
+ * Positioned as well as sized: a layout whose leftmost output sits at a
+ * negative x (a monitor placed to the left of the primary) starts before
+ * the origin, and a rectangle anchored at 0,0 would leave that screen
+ * uncovered.
+ *
+ * Called wherever the layout changes, alongside the recording frame.
+ */
+static void
+backdrops_sync(GowlCompositor *self)
+{
+	struct wlr_box full;
+
+	if (self == NULL || self->output_layout == NULL)
+		return;
+
+	wlr_output_layout_get_box(self->output_layout, NULL, &full);
+	if (wlr_box_empty(&full))
+		return;
+
+	if (self->root_bg != NULL) {
+		wlr_scene_rect_set_size(self->root_bg, full.width, full.height);
+		wlr_scene_node_set_position(&self->root_bg->node,
+		                            full.x, full.y);
+	}
+	if (self->locked_bg != NULL) {
+		wlr_scene_rect_set_size(self->locked_bg, full.width,
+		                        full.height);
+		wlr_scene_node_set_position(&self->locked_bg->node,
+		                            full.x, full.y);
 	}
 }
 
@@ -2431,6 +2502,10 @@ gowl_compositor_set_locked(
 		self->exclusive_layer = NULL;
 		/* Unfocus all clients */
 		gowl_compositor_focus_client(self, NULL, FALSE);
+		/* The backdrop is what hides the desktop behind the module's
+		 * per-monitor surfaces, and what covers an output that has no
+		 * surface yet -- one plugged in mid-lock. */
+		backdrops_sync(self);
 		g_debug("Session locked (built-in)");
 	} else {
 		/* Disable locked background */
@@ -2441,6 +2516,209 @@ gowl_compositor_set_locked(
 		gowl_compositor_motionnotify(self, 0);
 		g_debug("Session unlocked (built-in)");
 	}
+	gowl_compositor_notify_lock_state(self, locked);
+}
+
+/**
+ * gowl_compositor_notify_lock_state:
+ * @self: a #GowlCompositor
+ * @locked: the state it is in now
+ *
+ * Announce a lock-state change once, on every channel: the GObject
+ * signal, the IPC event stream, and logind's locked hint.  Called from
+ * each of the four places the state can turn over -- the built-in
+ * module's lock and unlock, and a lock client arriving and leaving --
+ * so that nothing has to know which of them it was.
+ */
+void
+gowl_compositor_notify_lock_state(GowlCompositor *self, gboolean locked)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	g_signal_emit_by_name(self, "lock-changed", locked);
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT lock %s",
+		                    locked ? "locked" : "unlocked");
+	if (self->logind != NULL)
+		gowl_logind_set_locked(self->logind, locked);
+}
+
+/*
+ * Whether another lock client may be started right now.
+ *
+ * A lock program that dies without unlocking leaves a sealed session
+ * with no password prompt on it, which is worse than either a locked
+ * screen or an unlocked one: the only way out is a VT switch.  So it is
+ * restarted -- but a lock binary that crashes on startup would then be
+ * restarted forever, so at most GOWL_LOCK_RESPAWN_MAX attempts in a
+ * minute, after which the session stays sealed and says so.
+ */
+static gboolean
+lock_respawn_allowed(GowlCompositor *self)
+{
+	gint64 now = g_get_monotonic_time();
+	gint   i, recent = 0;
+
+	for (i = 0; i < GOWL_LOCK_RESPAWN_MAX; i++) {
+		if (self->lock_respawns[i] != 0
+		    && now - self->lock_respawns[i] < GOWL_LOCK_RESPAWN_WINDOW_US)
+			recent++;
+	}
+	if (recent >= GOWL_LOCK_RESPAWN_MAX)
+		return FALSE;
+
+	self->lock_respawns[self->lock_respawn_next] = now;
+	self->lock_respawn_next =
+		(self->lock_respawn_next + 1) % GOWL_LOCK_RESPAWN_MAX;
+	return TRUE;
+}
+
+/*
+ * Start the configured lock program.  Returns FALSE when there is none
+ * configured or it could not be started, which is the caller's cue to
+ * fall back to the in-process module rather than leave the screen open.
+ */
+static gboolean
+lock_spawn_command(GowlCompositor *self)
+{
+	const gchar *cmd;
+	GError *err = NULL;
+
+	if (self->config == NULL)
+		return FALSE;
+	cmd = gowl_config_get_lock_command(self->config);
+	if (cmd == NULL || cmd[0] == '\0')
+		return FALSE;
+
+	if (!g_spawn_command_line_async(cmd, &err)) {
+		g_warning("lock-command '%s' did not start: %s -- falling back "
+		          "to the built-in lock", cmd, err->message);
+		g_error_free(err);
+		return FALSE;
+	}
+	g_debug("lock: started '%s'", cmd);
+	return TRUE;
+}
+
+/**
+ * gowl_compositor_lock_session:
+ * @self: a #GowlCompositor
+ *
+ * Lock the screen.
+ *
+ * Runs `lock-command' when one is configured -- a separate program
+ * speaking ext-session-lock-v1, which is where the password and the PAM
+ * modules belong -- and otherwise dispatches to a lock-handler module.
+ * A failure to start the program falls back to the module rather than
+ * leaving the desktop open, because a lock that silently does nothing is
+ * the one failure mode a lock must not have.
+ *
+ * Idempotent: locking a locked session does nothing.
+ */
+void
+gowl_compositor_lock_session(GowlCompositor *self)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->locked)
+		return;
+
+	/* Counted like a respawn, so a lock binary that dies on startup
+	 * cannot be re-launched without limit by a keybind held down
+	 * either. */
+	if (lock_respawn_allowed(self) && lock_spawn_command(self))
+		return;
+
+	if (self->module_mgr != NULL)
+		gowl_module_manager_dispatch_lock(self->module_mgr,
+		                                  (gpointer)self);
+	else
+		g_warning("nothing to lock the session with: no lock-command "
+		          "and no lock handler");
+}
+
+/**
+ * gowl_compositor_apply_lock_config:
+ * @self: a #GowlCompositor
+ *
+ * Re-read `lock-on-suspend' and reconfigure the logind client.
+ *
+ * The sleep inhibitor is taken when the compositor starts, so turning
+ * the setting off afterwards -- from Lisp, from a reload -- would
+ * otherwise leave the inhibitor held and the machine still locking
+ * before a suspend.  Restarting the client is heavier than flipping a
+ * flag, but this is a setting somebody changes once, and it keeps the
+ * inhibitor's lifetime tied to one place.
+ */
+void
+gowl_compositor_apply_lock_config(GowlCompositor *self)
+{
+	gboolean inhibit;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->logind == NULL)
+		return;
+	inhibit = self->config == NULL
+		|| gowl_config_get_lock_on_suspend(self->config);
+	gowl_logind_stop(self->logind);
+	gowl_logind_start(self->logind, inhibit);
+}
+
+/**
+ * gowl_compositor_unlock_session:
+ * @self: a #GowlCompositor
+ *
+ * Unlock the screen administratively -- the override behind
+ * `M-x gowl-unlock' and `gowl-msg unlock', not the password path.
+ *
+ * A lock CLIENT is told to go away and the session is opened behind it;
+ * the client's own exit is then just tidying up.  This deliberately
+ * bypasses PAM, which is why it is reachable only from inside the
+ * session that is already locked (a keybind marked `locked', the IPC
+ * socket, Emacs) and never from the lock screen itself.
+ */
+void
+gowl_compositor_unlock_session(GowlCompositor *self)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (!self->locked)
+		return;
+
+	if (self->cur_lock != NULL) {
+		/* Destroying the lock makes wlroots take its surfaces down and
+		 * fires ::destroy, which normally means "the client died,
+		 * restart it".  The flag says otherwise. */
+		self->lock_override = TRUE;
+		wlr_session_lock_v1_destroy(self->cur_lock);
+		self->cur_lock = NULL;
+		self->lock_override = FALSE;
+	} else if (self->module_mgr != NULL) {
+		/* A lock-handler module may own this one; its unlock clears
+		 * `locked' through gowl_compositor_set_locked(). */
+		gowl_module_manager_dispatch_unlock(self->module_mgr,
+		                                    (gpointer)self);
+	}
+
+	if (!self->locked)
+		return;
+
+	/*
+	 * Still locked with nobody holding it.
+	 *
+	 * This is the state a lock client that died leaves behind, and it is
+	 * the RIGHT state -- the screen must not open because a program
+	 * crashed.  But it is also the state an administrative unlock has to
+	 * be able to clear, or a session whose lock program is broken can
+	 * only be recovered from another VT.
+	 */
+	self->locked = FALSE;
+	if (self->locked_bg != NULL)
+		wlr_scene_node_set_enabled(&self->locked_bg->node, FALSE);
+	gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
+	gowl_compositor_motionnotify(self, 0);
+	gowl_compositor_notify_lock_state(self, FALSE);
 }
 
 /**
@@ -3972,6 +4250,18 @@ gowl_compositor_start(
 	gowl_systemd_start(self->nested_wl_backend == NULL
 	                   && !self->inside_foreign_session);
 
+	/* The seat side of locking: lock before a suspend, honour
+	 * `loginctl lock-session', report the locked hint.  Started after
+	 * gowl_systemd_start() because that is what decides whether this is
+	 * our session to report on.  Best-effort -- a machine without
+	 * logind logs a line and carries on. */
+	if (self->logind == NULL)
+		self->logind = gowl_logind_new(self);
+	if (self->logind != NULL)
+		gowl_logind_start(self->logind,
+			self->config == NULL
+			|| gowl_config_get_lock_on_suspend(self->config));
+
 	return TRUE;
 }
 
@@ -4003,6 +4293,11 @@ gowl_compositor_quit(GowlCompositor *self)
 
 	g_signal_emit(self, compositor_signals[SIGNAL_SHUTDOWN], 0);
 	self->running = FALSE;
+
+	/* Let go of the sleep inhibitor and join the bus thread before the
+	 * event loop it wakes goes away. */
+	if (self->logind != NULL)
+		gowl_logind_stop(self->logind);
 
 	/* Tear down the session target we pulled in at start; best-effort
 	 * and non-blocking so a wedged user manager can't hang quit. */
@@ -6122,6 +6417,7 @@ gowl_compositor_update_lid_outputs(GowlCompositor *self)
 			gowl_monitor_set_enabled(m, FALSE);
 			wlr_output_layout_remove(self->output_layout,
 			                         m->wlr_output);
+			m->in_layout = FALSE;
 
 			if (self->selmon == m) {
 				GList *k;
@@ -6169,6 +6465,7 @@ gowl_compositor_update_lid_outputs(GowlCompositor *self)
 			gowl_monitor_set_enabled(m, TRUE);
 			wlr_output_layout_add_auto(self->output_layout,
 			                           m->wlr_output);
+			m->in_layout = TRUE;
 			/* The disable branch's wlr_output_layout_remove() freed
 			 * the old layout_output and dropped the scene_output
 			 * association.  add_auto above made a fresh one; re-link
@@ -6392,6 +6689,7 @@ on_new_output(struct wl_listener *listener, void *data)
 	/* Create scene output and add to layout */
 	m->scene_output = wlr_scene_output_create(self->scene, wlr_output);
 	wlr_output_layout_add_auto(self->output_layout, wlr_output);
+	m->in_layout = TRUE;
 
 	/* Link the scene_output to its (just-added) layout_output so wlroots
 	 * positions it at the layout's coords instead of the (0,0) default.
@@ -6689,6 +6987,7 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 
 	/* Remove from output layout */
 	wlr_output_layout_remove(self->output_layout, m->wlr_output);
+	m->in_layout = FALSE;
 	/* May already be NULL if this panel was lid-disabled first. */
 	if (m->scene_output != NULL) {
 		wlr_scene_output_destroy(m->scene_output);
@@ -6760,10 +7059,23 @@ gowl_compositor_notify_output_resized(GowlCompositor    *self,
 	if (m == NULL)
 		return;
 
-	new_box.x      = m->m.x;
-	new_box.y      = m->m.y;
-	new_box.width  = output->width;
-	new_box.height = output->height;
+	/* The layout's box is authoritative: it is in LOGICAL coordinates,
+	 * with the output's scale and transform already applied.  The raw
+	 * output->width/height are device pixels in the mode's own
+	 * orientation, so using those on a scaled or rotated output wrote a
+	 * geometry the rest of the compositor does not use -- and the
+	 * wallpaper, sized from it, came out at the wrong resolution.  The
+	 * raw size is the fallback for an output that is not in the layout
+	 * (nothing else describes it then). */
+	wlr_output_layout_get_box(self->output_layout, output, &new_box);
+	if (wlr_box_empty(&new_box)) {
+		new_box.x      = m->m.x;
+		new_box.y      = m->m.y;
+		new_box.width  = output->width;
+		new_box.height = output->height;
+	} else {
+		m->in_layout = TRUE;
+	}
 
 	/* Heavy work (geometry, root bg, wallpaper rescale, bar render) only
 	 * when the size actually changed. */
@@ -6774,10 +7086,7 @@ gowl_compositor_notify_output_resized(GowlCompositor    *self,
 		m->m = new_box;
 		m->w = m->m;
 
-		if (self->root_bg != NULL)
-			wlr_scene_rect_set_size(self->root_bg,
-			                        new_box.width, new_box.height);
-
+		backdrops_sync(self);
 		recording_indicator_sync(self);
 
 		if (self->module_mgr != NULL) {
@@ -7128,7 +7437,11 @@ on_layout_change(struct wl_listener *listener, void *data)
 
 		wlr_output_layout_get_box(self->output_layout,
 		                          m->wlr_output, &box);
-		if (wlr_box_empty(&box))
+		/* Out of the layout: lid-disabled, or on its way out.  Its m->m
+		 * still describes where it used to be, which is why nothing
+		 * below is told to draw on it -- see the dispatch loop. */
+		m->in_layout = !wlr_box_empty(&box);
+		if (!m->in_layout)
 			continue;
 
 		m->m = box;
@@ -7138,24 +7451,31 @@ on_layout_change(struct wl_listener *listener, void *data)
 		 * resize/rotation when no bar or layer reserves space. */
 	}
 
-	/* Resize root background to cover all outputs */
-	if (self->root_bg != NULL) {
-		struct wlr_box full;
-		wlr_output_layout_get_box(self->output_layout, NULL, &full);
-		wlr_scene_rect_set_size(self->root_bg, full.width, full.height);
-	}
+	/* Resize the desktop background and the lock backdrop to cover
+	 * every output ... */
+	backdrops_sync(self);
 
 	/* ... and the recording frame with it, so plugging a monitor in
 	 * mid-recording does not leave part of the screen unmarked. */
 	recording_indicator_sync(self);
 
-	/* Notify wallpaper and bar providers so they can resize */
+	/* Notify wallpaper and bar providers so they can resize.
+	 *
+	 * Monitors that are not in the layout are skipped: their m->m is the
+	 * geometry they had before they left it, and handing that to a
+	 * provider makes it draw a screen-sized picture at coordinates that
+	 * describe nothing.  They are told again, with a real box, when they
+	 * come back. */
 	if (self->module_mgr != NULL) {
 		for (l = self->monitors; l != NULL; l = l->next) {
+			GowlMonitor *m = (GowlMonitor *)l->data;
+
+			if (!m->in_layout)
+				continue;
 			gowl_module_manager_dispatch_wallpaper_output(
-				self->module_mgr, self, l->data);
+				self->module_mgr, self, m);
 			gowl_module_manager_dispatch_bar_render(
-				self->module_mgr, self, l->data);
+				self->module_mgr, self, m);
 		}
 	}
 
@@ -7164,6 +7484,9 @@ on_layout_change(struct wl_listener *listener, void *data)
 	 * arrangelayers calls arrange() internally if m->w changed. */
 	for (l = self->monitors; l != NULL; l = l->next)
 		gowl_compositor_arrangelayers(self, (GowlMonitor *)l->data);
+
+	/* A lock client's surfaces move with the outputs they are on. */
+	gowl_compositor_arrange_lock_surfaces(self);
 
 	/* Re-publish the output-management configuration so portal
 	 * backends (xdg-desktop-portal-wlr) and wlr-randr see the new
@@ -8830,9 +9153,9 @@ run_keybind_entry(
 		return TRUE;
 	}
 	case GOWL_ACTION_LOCK:
-		if (self->module_mgr != NULL && !self->locked)
-			gowl_module_manager_dispatch_lock(
-				self->module_mgr, (gpointer)self);
+		/* Whichever route is configured: the separate lock program,
+		 * else a lock-handler module. */
+		gowl_compositor_lock_session(self);
 		return TRUE;
 	case GOWL_ACTION_MODE:
 		gowl_compositor_set_key_mode(self, kb->arg);
@@ -9148,9 +9471,22 @@ compositor_handle_key(
 	if (self->idle_mgr != NULL)
 		gowl_idle_manager_note_activity(self->idle_mgr);
 
-	/* When session is locked, route all key events exclusively to
-	 * the lock handler module.  No compositor keybinds fire and no
-	 * events are forwarded to clients.
+	/* When the session is locked, nothing that could reach a desktop
+	 * window may run: no compositor keybinds beyond the ones marked
+	 * `locked', no module binds, no embedder intercept.
+	 *
+	 * Where the key goes instead depends on WHO holds the lock.  A
+	 * lock CLIENT -- gowl-lock, swaylock, anything speaking
+	 * ext-session-lock-v1 -- owns a real surface with real keyboard
+	 * focus, and the key must be forwarded to it through the seat like
+	 * any other key.  Swallowing it here (which is what used to happen,
+	 * because the built-in module was the only lock there was) left an
+	 * external lock screen that could not be typed into at all: the
+	 * password field never saw a character and the only way out was a
+	 * VT switch.
+	 *
+	 * A built-in lock MODULE has no surface, so its keys are handed to
+	 * it directly and consumed.
 	 */
 	if (self->locked) {
 		/* A bind marked `locked' -- a media key, brightness -- runs
@@ -9162,6 +9498,15 @@ compositor_handle_key(
 				wl_event_source_timer_update(self->key_repeat_source, 0);
 				return;
 			}
+		}
+		if (self->cur_lock != NULL) {
+			/* A lock client is up: the seat is focused on its
+			 * surface, so this is the whole path. */
+			wlr_seat_set_keyboard(self->wlr_seat, kb);
+			wlr_seat_keyboard_notify_key(self->wlr_seat, time_msec,
+			                             raw_keycode, state);
+			wl_event_source_timer_update(self->key_repeat_source, 0);
+			return;
 		}
 		if (state == WL_KEYBOARD_KEY_STATE_PRESSED &&
 		    self->module_mgr != NULL) {
@@ -12230,10 +12575,66 @@ on_new_session_lock(struct wl_listener *listener, void *data)
 	LISTEN(&session_lock->events.unlock,
 	       &self->lock_unlock, on_session_unlock);
 
+	/* The backdrop is the only thing covering the desktop until the
+	 * client's first frame arrives, so make sure it covers all of it. */
+	backdrops_sync(self);
+
 	/* Confirm lock to the client */
 	wlr_session_lock_v1_send_locked(session_lock);
 
+	gowl_compositor_notify_lock_state(self, TRUE);
 	g_debug("Session locked");
+}
+
+/*
+ * A tracked lock surface has gone (the client dropped it, or the output
+ * it belonged to was unplugged).  wlroots destroys its scene tree with
+ * the surface, so there is nothing here but the bookkeeping.
+ */
+static void
+on_lock_surface_destroy(struct wl_listener *listener, void *data)
+{
+	GowlLockSurface *ls;
+
+	(void)data;
+	ls = wl_container_of(listener, ls, destroy);
+	wl_list_remove(&ls->destroy.link);
+	wl_list_remove(&ls->link);
+	g_free(ls);
+}
+
+/**
+ * gowl_compositor_arrange_lock_surfaces:
+ *
+ * Move every lock surface onto its output's current box and tell the
+ * client the size it should be drawing.
+ *
+ * Called from the layout change, because a display unplugged while the
+ * screen is locked moves the ones beside it -- and a lock surface left
+ * at the old coordinates is a hole in the lock exactly where the desktop
+ * used to be.  A display plugged IN gets no surface until its client
+ * makes one, which is what the opaque backdrop underneath is for.
+ */
+static void
+gowl_compositor_arrange_lock_surfaces(GowlCompositor *self)
+{
+	GowlLockSurface *ls;
+
+	if (self == NULL || self->cur_lock == NULL)
+		return;
+
+	wl_list_for_each(ls, &self->lock_surfaces, link) {
+		GowlMonitor *m;
+
+		if (ls->surface->output == NULL)
+			continue;
+		m = (GowlMonitor *)ls->surface->output->data;
+		if (m == NULL || !m->in_layout)
+			continue;
+		wlr_scene_node_set_position(&ls->tree->node, m->m.x, m->m.y);
+		wlr_session_lock_surface_v1_configure(ls->surface,
+			(guint32)m->m.width, (guint32)m->m.height);
+	}
 }
 
 /**
@@ -12248,6 +12649,7 @@ on_lock_surface_create(struct wl_listener *listener, void *data)
 	GowlCompositor *self;
 	struct wlr_session_lock_surface_v1 *lock_surface;
 	struct wlr_scene_tree *tree;
+	GowlLockSurface *ls;
 	GowlMonitor *m;
 
 	self = wl_container_of(listener, self, lock_new_surface);
@@ -12257,6 +12659,18 @@ on_lock_surface_create(struct wl_listener *listener, void *data)
 	tree = wlr_scene_subsurface_tree_create(
 		self->layers[GOWL_SCENE_LAYER_BLOCK],
 		lock_surface->surface);
+	if (tree == NULL)
+		return;
+
+	/* Remembered, so a later layout change can move it: see
+	 * gowl_compositor_arrange_lock_surfaces(). */
+	ls = g_new0(GowlLockSurface, 1);
+	ls->compositor = self;
+	ls->surface    = lock_surface;
+	ls->tree       = tree;
+	LISTEN(&lock_surface->events.destroy, &ls->destroy,
+	       on_lock_surface_destroy);
+	wl_list_insert(&self->lock_surfaces, &ls->link);
 
 	/* Position on the correct output */
 	m = (GowlMonitor *)lock_surface->output->data;
@@ -12291,8 +12705,32 @@ on_session_lock_destroy(struct wl_listener *listener, void *data)
 
 	self->cur_lock = NULL;
 
-	/* Session remains locked; locked_bg stays enabled */
-	g_debug("Lock client destroyed (session still locked)");
+	/*
+	 * The session stays locked.  That is the protocol's central
+	 * promise -- a lock program that crashes must not open the screen
+	 * -- and the opaque backdrop underneath is what keeps it, which is
+	 * why it is sized to the whole layout rather than left at 0x0.
+	 *
+	 * But a sealed screen with no password prompt on it has no way out
+	 * short of a VT switch, so the lock program is started again.  The
+	 * budget in lock_respawn_allowed() is what stops a lock binary that
+	 * dies on startup from being restarted forever; when it runs out
+	 * the session stays sealed and says so, which is the safe end of
+	 * the trade.
+	 */
+	if (self->lock_override) {
+		g_debug("Lock client destroyed (unlocking on purpose)");
+		return;
+	}
+	g_warning("the lock client exited without unlocking; the session "
+	          "stays locked");
+	if (self->locked) {
+		if (lock_respawn_allowed(self) && lock_spawn_command(self))
+			g_message("restarted the lock program");
+		else
+			g_warning("could not put a lock screen back up -- unlock "
+			          "from another VT with `loginctl unlock-session'");
+	}
 }
 
 /**
@@ -12323,6 +12761,7 @@ on_session_unlock(struct wl_listener *listener, void *data)
 		focustop(self, self->selmon), TRUE);
 	gowl_compositor_motionnotify(self, 0);
 
+	gowl_compositor_notify_lock_state(self, FALSE);
 	g_debug("Session unlocked");
 }
 

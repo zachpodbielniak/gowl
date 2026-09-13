@@ -87,6 +87,21 @@ xdg-shell-client-protocol.h:
 	$(WAYLAND_SCANNER) client-header \
 		$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell/xdg-shell.xml $@
 
+# ext-session-lock, client side: for test-lock-input, which takes the
+# session lock the way gowl-lock does in order to prove a lock client
+# can be typed into.
+ext-session-lock-v1-client-protocol.h:
+	$(WAYLAND_SCANNER) client-header \
+		$(WAYLAND_PROTOCOLS_DIR)/staging/ext-session-lock/ext-session-lock-v1.xml $@
+
+ext-session-lock-v1-protocol.c:
+	$(WAYLAND_SCANNER) private-code \
+		$(WAYLAND_PROTOCOLS_DIR)/staging/ext-session-lock/ext-session-lock-v1.xml $@
+
+$(OBJDIR)/tests/ext-session-lock-v1-protocol.o: ext-session-lock-v1-protocol.c ext-session-lock-v1-client-protocol.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(TEST_CFLAGS) -Wno-unused-parameter -c $< -o $@
+
 xdg-shell-protocol.c:
 	$(WAYLAND_SCANNER) private-code \
 		$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell/xdg-shell.xml $@
@@ -352,9 +367,9 @@ clean-all:
 	rm -f xdg-shell-protocol.c
 
 # Installation rules
-.PHONY: install install-lib install-bin install-bar install-bar-configs install-headers install-pc install-gir install-modules install-mcp install-portal install-desktop install-systemd
+.PHONY: install install-lib install-bin install-bar install-bar-configs install-headers install-pc install-gir install-modules install-mcp install-portal install-desktop install-systemd install-pam uninstall-pam
 
-install: install-lib install-bin install-bar install-bar-configs install-headers install-pc install-desktop install-systemd
+install: install-lib install-bin install-bar install-bar-configs install-headers install-pc install-desktop install-systemd install-pam
 ifeq ($(BUILD_GIR),1)
 install: install-gir
 endif
@@ -375,6 +390,34 @@ install-bin: $(OBJDIR)/main.o $(OUTDIR)/$(LIB_SHARED_FULL)
 		-Wl,-rpath,$(LIBDIR)
 	chmod 755 $(DESTDIR)$(BINDIR)/gowl
 	$(INSTALL_PROGRAM) $(OUTDIR)/gowl-msg $(DESTDIR)$(BINDIR)/gowl-msg
+	@# The lock, when there was PAM to build it against.  Its absence is
+	@# not an error: the compositor falls back to the built-in module.
+	@if [ -x "$(OUTDIR)/gowl-lock" ]; then \
+		$(INSTALL_PROGRAM) $(OUTDIR)/gowl-lock \
+			$(DESTDIR)$(BINDIR)/gowl-lock; \
+		echo "  Installed gowl-lock"; \
+	fi
+
+# The PAM service the lock authenticates against.  Without it PAM falls
+# back to "other", which on most systems denies everything -- so the
+# password would never be accepted and the screen could not be unlocked
+# at all.  Never overwrites an existing file: a user who has tuned their
+# own stack (a fingerprint reader, a hardware key) must keep it.
+install-pam:
+	@src=data/gowl-screenlock.pam; dst="$(DESTDIR)$(SYSCONFDIR)/pam.d/gowl"; \
+	if [ -e "$$dst" ]; then \
+		echo "  PAM profile $$dst already present, leaving it"; \
+	elif [ -n "$(DESTDIR)" ] || [ "`id -u`" = 0 ] \
+	     || [ -w "$(SYSCONFDIR)/pam.d" ]; then \
+		$(MKDIR_P) "$(DESTDIR)$(SYSCONFDIR)/pam.d" && \
+		$(INSTALL_DATA) "$$src" "$$dst" && \
+		echo "  Installed the gowl PAM profile -> $$dst"; \
+	else \
+		echo "  Skipped $$dst (need root); run: sudo make install-pam"; \
+	fi
+
+uninstall-pam:
+	rm -f $(DESTDIR)$(SYSCONFDIR)/pam.d/gowl
 
 install-lib: $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(MKDIR_P) $(DESTDIR)$(LIBDIR)
@@ -490,6 +533,8 @@ uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/gowl
 	rm -f $(DESTDIR)$(BINDIR)/gowlbar
 	rm -f $(DESTDIR)$(BINDIR)/gowl-mcp
+	rm -f $(DESTDIR)$(BINDIR)/gowl-msg
+	rm -f $(DESTDIR)$(BINDIR)/gowl-lock
 	rm -f $(DESTDIR)$(BINDIR)/xdg-desktop-portal-gowl
 	rm -f $(DESTDIR)$(DATADIR)/xdg-desktop-portal/portals/gowl.portal
 	rm -f $(DESTDIR)$(DATADIR)/xdg-desktop-portal/gowl-portals.conf

@@ -14,6 +14,7 @@ gowl-msg dispatch Super+Return   # run what a key is bound to
 gowl-msg action tag-view 2       # run an action by name
 gowl-msg mode resize             # enter a key mode; `mode' alone reads it
 gowl-msg power off
+gowl-msg lock                    # what Super+Shift+l runs
 gowl-msg expo                    # a module's command, by name
 gowl-msg -s                      # subscribe; print events until killed
 #+end_src
@@ -43,6 +44,9 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =action NAME [ARG]=           | Runs a keybind action by nick with an argument     |
 | =power on\vert{}off\vert{}toggle= | Powers every output                             |
 | =hdr [on\vert{}off\vert{}toggle] [OUTPUT]= | Switches an output between HDR and SDR (the focused one by default); =ERROR= when it cannot do HDR |
+| =lock=                        | Locks the screen, by whichever route =lock-command= names |
+| =unlock=                      | Opens the session with no password: the administrative override, for a lock program that is broken |
+| =locked=                      | =locked= or =unlocked=                             |
 | =reload=                      | Reloads the config; =OK with problems= when the validator found any |
 | =ping=, =version=, =help=     |                                                    |
 | =subscribe=                   | =OK subscribed=; events follow on this connection  |
@@ -68,6 +72,7 @@ A subscriber receives one line per event, =EVENT <name> <args>=:
 | =profile NAME=                     | a different output profile matches (empty NAME = none) |
 | =monitor-added OUTPUT=             | an output was plugged in                       |
 | =monitor-removed OUTPUT=           | an output was unplugged                        |
+| =lock locked\vert{}unlocked=       | the session locked or unlocked, from any route |
 | =command LINE=                     | a module command ran, from any source          |
 
 Events are pushed from the compositor's own code paths, so a change made from a keybind, from Elisp, from MCP or from this socket is announced the same way.

@@ -20,6 +20,7 @@ src/protocols/*-protocol.h
 # by each tool's Makefile (the binary is named after its directory).
 /tools/xdg-desktop-portal-gowl/xdg-desktop-portal-gowl
 /tools/gowl-mcp/gowl-mcp
+/tools/gowl-lock/gowl-lock
 .mcp.json
 .cache/
 compile_commands.json

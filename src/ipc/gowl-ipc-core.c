@@ -236,6 +236,7 @@ static const gchar *const help_text =
 	"mode [NAME] | keybinds | keyboard-layout [next|prev|N] | "
 	"focus ID | close ID | view TAGMASK [OUTPUT] | "
 	"dispatch KEY | action NAME [ARG] | power on|off|toggle | "
+	"hdr [on|off|toggle] [OUTPUT] | lock | unlock | locked | "
 	"reload | version | ping | subscribe | help";
 
 /**
@@ -279,6 +280,12 @@ gowl_compositor_ipc_command(
 		return g_strdup("pong");
 	if (g_strcmp0(word, "version") == 0)
 		return g_strdup("gowl " GOWL_VERSION);
+	/* Asked with no argument this is the state; `lock' and `unlock' are
+	 * the commands further down.  A bar, a test, or a script that wants
+	 * to know whether the screen is covered reads this. */
+	if (g_strcmp0(word, "locked") == 0)
+		return g_strdup(gowl_compositor_is_locked(self)
+		                ? "locked" : "unlocked");
 
 	if (g_strcmp0(word, "clients") == 0) {
 		b = json_builder_new();
@@ -519,6 +526,22 @@ gowl_compositor_ipc_command(
 		if (!gowl_monitor_set_hdr(m, on))
 			return g_strdup("ERROR the output refused the change");
 		return g_strdup(gowl_monitor_get_hdr(m) ? "OK on" : "OK off");
+	}
+	if (g_strcmp0(word, "lock") == 0) {
+		/* The same call the keybind makes, so `gowl-msg lock' and
+		 * Super+Shift+l are the same lock -- and a script can reach it
+		 * without knowing whether the lock is a separate program or
+		 * the built-in module. */
+		gowl_compositor_lock_session(self);
+		return g_strdup("OK");
+	}
+	if (g_strcmp0(word, "unlock") == 0) {
+		/* The administrative override: no password.  It is reachable
+		 * only through a socket in the user's own runtime directory,
+		 * which is to say only from inside the session that is already
+		 * unlocked enough to run this. */
+		gowl_compositor_unlock_session(self);
+		return g_strdup("OK");
 	}
 	if (g_strcmp0(word, "reload") == 0
 	    || g_strcmp0(word, "reload_config") == 0

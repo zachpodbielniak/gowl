@@ -358,6 +358,75 @@ silently fails.  Restarting the frontend makes it re-read the live
 seat-only guard is =nested_wl_backend == NULL=; a nested gowl never
 touches the host session's portal.
 
+** Locking, and the seat side of it
+
+The screen lock is a separate program, =gowl-lock= (=tools/gowl-lock/=),
+not a module inside the compositor. It links no libgowl: it is a Wayland
+client that holds the session through =ext-session-lock-v1=, draws the
+prompt with cairo, and runs PAM in its own address space.
+
+The split is about who owns the locked state. A lock built into the
+compositor is only as safe as the process it runs in --- and under
+=cmacs --gowl= that process is the editor, with an Elisp evaluator, an
+MCP server and a D-Bus interface in the same memory as the password and
+whatever PAM modules the system's stack dlopens. With the protocol, the
+*compositor* owns the state: when the lock client goes away without
+unlocking, =on_session_lock_destroy= keeps =locked= set and the session
+stays sealed behind =locked_bg=. Then =lock_spawn_command= puts a new
+lock screen up, bounded by =lock_respawn_allowed= so a lock binary that
+dies on startup stops rather than spins.
+
+Three things this needs from the compositor, each of which was missing:
+
+- *=locked_bg= has to cover something.* It is created 0x0 and was never
+  resized, so the opaque sheet that hides the desktop hid nothing. It
+  covers the whole output layout now (=backdrops_sync=), which is what
+  the two gaps the protocol exists for depend on: before the client's
+  first frame, and after a client dies with no surface left.
+- *Keys have to reach the lock client.* The locked branch of
+  =compositor_handle_key= handed every key to the built-in lock module
+  and returned, because that module was the only lock there had ever
+  been. An external lock screen therefore received nothing at all. With
+  =cur_lock= set the key now goes to the seat, where the lock surface has
+  focus. Guarded by =tests/test-lock-input.c=, which is a real
+  =ext-session-lock-v1= client in a headless compositor.
+- *Lock surfaces have to follow their outputs.* Unplugging a display
+  mid-lock moves the ones beside it;
+  =gowl_compositor_arrange_lock_surfaces= re-places and re-configures
+  each from the layout change, and a display plugged in is covered by the
+  backdrop until its client makes a surface for it.
+
+=gowl_compositor_lock_session= is the single entry point --- the =lock=
+keybind action, =gowl-msg lock=, the idle timer and the suspend path all
+call it --- and falls back to a lock-handler module when no
+=lock-command= is configured or it will not start, because a lock that
+quietly does nothing is the one failure a lock must not have.
+
+*** logind
+
+=src/core/gowl-logind.c= is the seat side: the three things
+systemd-logind expects of a graphical session, and which gowl did none
+of.
+
+1. *Lock before sleep.* logind announces a suspend and then suspends, so
+   a session that merely listens is racing the kernel. gowl takes a
+   =delay= inhibitor at startup and holds it; on =PrepareForSleep(true)=
+   it locks, waits (bounded, four seconds) for the lock to actually be
+   up, and only then releases the fd. On resume it takes it again.
+2. *=loginctl lock-session= / =unlock-session=*, which arrive as
+   Lock/Unlock signals on this process's own session object.
+3. *=SetLockedHint=*, so =loginctl show-session= agrees with the screen
+   --- only when gowl owns the seat session, since a nested gowl shares
+   the host desktop's session object.
+
+Threading mirrors the notification daemon: GDBus wants a GMainContext
+and the compositor's loop is a =wl_event_loop=, so the bus lives on its
+own thread and wakes the compositor thread through an eventfd on the
+Wayland loop. That makes it work identically under standalone gowl and
+under =cmacs --gowl=, where the compositor thread is the one holding the
+dispatch lock. =GOWL_DISABLE_LOGIND=1= --- or =GOWL_DISABLE_SYSTEMD=1=,
+which every test sets --- skips it.
+
 ** The Wayland socket outlives the compositor
 
 =wl_display_add_socket_auto= creates =$XDG_RUNTIME_DIR/wayland-N=, and

@@ -35,6 +35,29 @@ manage_lid: true
 # holding an idle inhibitor -- a video player -- holds both off.
 idle-timeout: 300
 dpms-timeout: 0
+
+# Locking.
+#
+# `lock-command' is the program that draws the lock screen and takes the
+# password.  It is a separate program on purpose, the way i3lock and
+# swaylock are: it holds the password and it dlopens PAM modules, and
+# under `cmacs --gowl' the compositor is the editor, with an Elisp
+# evaluator and a D-Bus interface in the same address space.
+#
+# It speaks ext-session-lock-v1, which is what makes the split safe
+# rather than merely tidy: gowl owns the locked state, so a lock program
+# that crashes leaves the screen sealed -- and gowl starts a new one.
+# Set it to "" to use the in-process `screenlock' module instead.
+#
+# Everything that locks goes through it: Super+Shift+l, `gowl-msg lock',
+# the screenlock module's idle timer, and the suspend below.
+lock-command: "gowl-lock"
+
+# Take a logind delay inhibitor and lock the screen BEFORE the machine
+# sleeps.  Without it, closing the lid or `systemctl suspend' leaves an
+# unlocked desktop to wake up to -- listening for the suspend without
+# holding an inhibitor is a race with the kernel that the session loses.
+lock-on-suspend: true
 # Let a fullscreen window that asks for it (tearing-control-v1: a game)
 # be presented without vsync.  Never applied to anything else.
 allow-tearing: false
@@ -169,6 +192,17 @@ wallpaper-fade: 320       # ms to cross-fade between them; 0 cuts
 # wallpaper-tags:
 #   1: "~/Pictures/code.jpg"
 #   4: "~/Pictures/mail.png"
+
+# ... and wallpaper-outputs overrides it per SCREEN, which beats both of
+# the above.  A 21:9 desk monitor and a 16:9 laptop lid cannot share one
+# picture without cropping a third off one of them, and unlike the tag,
+# the shape of a panel does not change.  Keys are the same output keys
+# `monitors:' takes -- a connector name, "Make Model", "Make Model
+# Serial", or "*" -- and the value is a path, or a mapping that also
+# names a scaling mode for that screen alone.
+# wallpaper-outputs:
+#   "DP-1": "~/Pictures/ultrawide.png"
+#   "eDP-1": { path: "~/Pictures/laptop.png", mode: fit }
 
 # Scrolling layout: column width as a fraction of the usable width.
 # 0.5 shows two columns at a time, 1.0 shows one.  Matches Hyprland's

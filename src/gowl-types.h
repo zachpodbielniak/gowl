@@ -34,6 +34,7 @@ typedef struct _GowlLayerSurface    GowlLayerSurface;
 typedef struct _GowlBar             GowlBar;
 typedef struct _GowlSessionLock     GowlSessionLock;
 typedef struct _GowlIdleManager     GowlIdleManager;
+typedef struct _GowlLogind          GowlLogind;
 typedef struct _GowlFrameSink       GowlFrameSink;
 typedef struct _GowlInputCapture    GowlInputCapture;
 typedef struct _GowlInputRecorder   GowlInputRecorder;

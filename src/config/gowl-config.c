@@ -231,6 +231,13 @@ struct _GowlConfig {
 	 * wallpaper", which is what every entry is until a config says
 	 * otherwise. */
 	gchar   *wallpaper_tags[GOWL_CONFIG_MAX_TAGS];
+	/* Per-output wallpaper overrides: an output key (the same keys
+	 * `monitors:' takes -- connector name, "Make Model", "Make Model
+	 * Serial" or "*") mapped to a #GowlWallpaperOutput.  This is what
+	 * makes a 21:9 desk monitor and a 16:9 laptop panel each show a
+	 * picture drawn for their own shape instead of one of them showing
+	 * a centre-crop of the other's.  NULL until a config declares any. */
+	GHashTable *wallpaper_outputs;
 	gint     wallpaper_fade;
 	gint     nmaster;
 	gint     tag_count;
@@ -240,6 +247,10 @@ struct _GowlConfig {
 	gint     repeat_delay;
 	gboolean sloppyfocus;
 	gboolean manage_lid;
+	/* What locks the screen, and whether suspending does it.  See the
+	 * header. */
+	gchar   *lock_command;
+	gboolean lock_on_suspend;
 	gchar   *xkb_layout;
 	gchar   *xkb_variant;
 	gchar   *xkb_model;
@@ -791,6 +802,8 @@ gowl_config_finalize(GObject *object)
 		for (ti = 0; ti < GOWL_CONFIG_MAX_TAGS; ti++)
 			g_free(self->wallpaper_tags[ti]);
 	}
+	g_clear_pointer(&self->wallpaper_outputs, g_hash_table_unref);
+	g_free(self->lock_command);
 
 	if (self->keybinds != NULL)
 		g_array_unref(self->keybinds);
@@ -1185,6 +1198,9 @@ gowl_config_init(GowlConfig *self)
 	self->shadow_color     = g_strdup(GOWL_CONFIG_DEFAULT_SHADOW_COLOR);
 
 	self->wallpaper_fade   = GOWL_CONFIG_DEFAULT_WALLPAPER_FADE;
+
+	self->lock_command     = g_strdup(GOWL_CONFIG_DEFAULT_LOCK_COMMAND);
+	self->lock_on_suspend  = GOWL_CONFIG_DEFAULT_LOCK_ON_SUSPEND;
 	self->nmaster             = GOWL_CONFIG_DEFAULT_NMASTER;
 	self->tag_count           = GOWL_CONFIG_DEFAULT_TAG_COUNT;
 	self->repeat_rate         = GOWL_CONFIG_DEFAULT_REPEAT_RATE;
@@ -1533,7 +1549,8 @@ static const gchar *const top_level_keys[] = {
 	"switcher-reflection", "switcher-all-tags", "switcher-backdrop-color",
 	"blur", "blur-downscale", "blur-passes", "blur-brightness", "shadow",
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
-	"shadow-color", "wallpaper-fade", "wallpaper-tags", "keybinds", "modes",
+	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
+	"lock-command", "lock-on-suspend", "keybinds", "modes",
 	"mousebinds", "gestures", "input", "rules", "dropdowns", "autostart",
 	"monitors", "modules", "profiles",
 	NULL
@@ -2208,6 +2225,75 @@ gowl_config_apply_mapping(
 				}
 				g_free(self->wallpaper_tags[tag - 1]);
 				self->wallpaper_tags[tag - 1] = g_strdup(path);
+			}
+		}
+	}
+
+	/* Per-output wallpapers.
+	 *
+	 * Two displays of different shapes cannot honestly share one
+	 * picture: `fill' centre-crops a 16:9 image on a 21:9 panel and
+	 * throws away a third of it, and `fit' letterboxes the other way
+	 * round.  A key here names an output the way `monitors:' does and
+	 * gives it a picture of its own -- and optionally its own mode, so
+	 * one screen can fill while another fits.
+	 *
+	 * The value is either a bare path or a mapping with `path' and
+	 * `mode'. */
+	/* Locking.
+	 *
+	 * `lock-command' is a separate program, the way i3lock and swaylock
+	 * are separate programs, and for the same reason: it takes the
+	 * password, so it should not be running inside the compositor --
+	 * which under cmacs --gowl is the editor, with an Elisp evaluator
+	 * and a D-Bus interface attached to it.  A lock client that crashes
+	 * leaves the session locked, which is the safe way round; the
+	 * compositor restarts it.  Set it to "" to use the built-in
+	 * screenlock module instead. */
+	if (yaml_mapping_has_member(mapping, "lock-command")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "lock-command");
+		if (v != NULL) {
+			g_free(self->lock_command);
+			self->lock_command = g_strdup(v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "lock-on-suspend"))
+		self->lock_on_suspend = yaml_mapping_get_boolean_member(
+			mapping, "lock-on-suspend");
+
+	if (yaml_mapping_has_member(mapping, "wallpaper-outputs")) {
+		YamlMapping *out_map =
+			yaml_mapping_get_mapping_member(mapping, "wallpaper-outputs");
+
+		if (out_map != NULL) {
+			guint n = yaml_mapping_get_size(out_map);
+			guint oi;
+
+			for (oi = 0; oi < n; oi++) {
+				const gchar *key = yaml_mapping_get_key(out_map, oi);
+				YamlNode *val = yaml_mapping_get_value(out_map, oi);
+				const gchar *path = NULL;
+				const gchar *mode = NULL;
+
+				if (key == NULL || val == NULL)
+					continue;
+
+				path = yaml_node_get_scalar(val);
+				if (path == NULL) {
+					YamlMapping *m = yaml_node_get_mapping(val);
+
+					if (m != NULL) {
+						path = yaml_mapping_get_string_member(m, "path");
+						mode = yaml_mapping_get_string_member(m, "mode");
+					}
+				}
+				if (path == NULL) {
+					g_warning("gowl_config: wallpaper-outputs '%s' has "
+					          "no path", key);
+					continue;
+				}
+				gowl_config_set_wallpaper_output(self, key, path, mode);
 			}
 		}
 	}
@@ -4757,14 +4843,19 @@ gowl_config_output_key_matches(
 }
 
 /**
- * lookup_by_key:
- * @table: output key -> #GowlMonitorConfig
+ * lookup_key_in:
+ * @table: output key -> anything
  *
- * The entry whose key matches the output.  A connector name or a full
+ * The value whose key matches the output.  A connector name or a full
  * description wins over a "Make Model" key, which wins over "*".
+ *
+ * Untyped because two tables are keyed this way -- `monitors:` by
+ * #GowlMonitorConfig and `wallpaper-outputs:` by #GowlWallpaperOutput --
+ * and the precedence between an exact connector name, a serial, a
+ * make/model and the wildcard is the same rule for both.
  */
-static const GowlMonitorConfig *
-lookup_by_key(
+static gpointer
+lookup_key_in(
 	GHashTable  *table,
 	const gchar *name,
 	const gchar *make,
@@ -4774,8 +4865,8 @@ lookup_by_key(
 	GHashTableIter iter;
 	gpointer k;
 	gpointer v;
-	const GowlMonitorConfig *wildcard = NULL;
-	const GowlMonitorConfig *by_mm = NULL;
+	gpointer wildcard = NULL;
+	gpointer by_mm = NULL;
 
 	if (table == NULL)
 		return NULL;
@@ -4786,15 +4877,27 @@ lookup_by_key(
 		if (!gowl_config_output_key_matches(key, name, make, model, serial))
 			continue;
 		if (g_strcmp0(key, "*") == 0)
-			wildcard = (const GowlMonitorConfig *)v;
+			wildcard = v;
 		else if (name != NULL && g_ascii_strcasecmp(key, name) == 0)
-			return (const GowlMonitorConfig *)v;
+			return v;
 		else if (serial != NULL && g_str_has_suffix(key, serial))
-			return (const GowlMonitorConfig *)v;
+			return v;
 		else
-			by_mm = (const GowlMonitorConfig *)v;
+			by_mm = v;
 	}
 	return by_mm != NULL ? by_mm : wildcard;
+}
+
+static const GowlMonitorConfig *
+lookup_by_key(
+	GHashTable  *table,
+	const gchar *name,
+	const gchar *make,
+	const gchar *model,
+	const gchar *serial
+){
+	return (const GowlMonitorConfig *)lookup_key_in(table, name, make,
+	                                                model, serial);
 }
 
 /**
@@ -5418,4 +5521,121 @@ gowl_config_get_wallpaper_fade(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_WALLPAPER_FADE);
 	return self->wallpaper_fade;
+}
+
+/* --- Locking --- */
+
+const gchar *
+gowl_config_get_lock_command(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->lock_command;
+}
+
+void
+gowl_config_set_lock_command(GowlConfig *self, const gchar *command)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	g_free(self->lock_command);
+	self->lock_command = g_strdup(command != NULL ? command : "");
+}
+
+gboolean
+gowl_config_get_lock_on_suspend(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LOCK_ON_SUSPEND);
+	return self->lock_on_suspend;
+}
+
+void
+gowl_config_set_lock_on_suspend(GowlConfig *self, gboolean enable)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->lock_on_suspend = enable != FALSE;
+}
+
+/* --- Per-output wallpaper --- */
+
+static void
+wallpaper_output_free(gpointer data)
+{
+	GowlWallpaperOutput *wo = (GowlWallpaperOutput *)data;
+
+	if (wo == NULL)
+		return;
+	g_free(wo->path);
+	g_free(wo->mode);
+	g_free(wo);
+}
+
+/**
+ * gowl_config_set_wallpaper_output:
+ * @self: a #GowlConfig
+ * @key: an output key, as `monitors:` takes them
+ * @path: (nullable): the picture for that output, or %NULL to drop the entry
+ * @mode: (nullable): a scaling mode for that output, or %NULL for the default
+ *
+ * Declares the wallpaper one output shows.  See the header.
+ */
+void
+gowl_config_set_wallpaper_output(
+	GowlConfig  *self,
+	const gchar *key,
+	const gchar *path,
+	const gchar *mode
+){
+	GowlWallpaperOutput *wo;
+
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_return_if_fail(key != NULL && key[0] != '\0');
+
+	if (path == NULL || path[0] == '\0') {
+		if (self->wallpaper_outputs != NULL)
+			g_hash_table_remove(self->wallpaper_outputs, key);
+		return;
+	}
+
+	if (self->wallpaper_outputs == NULL)
+		self->wallpaper_outputs = g_hash_table_new_full(
+			g_str_hash, g_str_equal, g_free, wallpaper_output_free);
+
+	wo = g_new0(GowlWallpaperOutput, 1);
+	wo->path = g_strdup(path);
+	wo->mode = (mode != NULL && mode[0] != '\0') ? g_strdup(mode) : NULL;
+	g_hash_table_replace(self->wallpaper_outputs, g_strdup(key), wo);
+}
+
+/**
+ * gowl_config_lookup_wallpaper_output:
+ * @self: a #GowlConfig
+ * @name: the connector name of an output
+ * @make: (nullable): its make
+ * @model: (nullable): its model
+ * @serial: (nullable): its serial
+ *
+ * Returns: (transfer none) (nullable): the entry for this output
+ */
+const GowlWallpaperOutput *
+gowl_config_lookup_wallpaper_output(
+	GowlConfig  *self,
+	const gchar *name,
+	const gchar *make,
+	const gchar *model,
+	const gchar *serial
+){
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+
+	return (const GowlWallpaperOutput *)lookup_key_in(
+		self->wallpaper_outputs, name, make, model, serial);
+}
+
+gboolean
+gowl_config_has_output_wallpapers(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+
+	return self->wallpaper_outputs != NULL
+		&& g_hash_table_size(self->wallpaper_outputs) > 0;
 }

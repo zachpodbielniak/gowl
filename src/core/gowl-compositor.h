@@ -662,6 +662,72 @@ void     gowl_compositor_set_locked   (GowlCompositor *self,
                                         gboolean        locked);
 
 /**
+ * gowl_compositor_lock_session:
+ * @self: a #GowlCompositor
+ *
+ * Locks the screen, by whichever route is configured.
+ *
+ * With a `lock-command' set (the default, `gowl-lock') this starts that
+ * program, which draws the lock screen and takes the password in its own
+ * process and holds the session through ext-session-lock-v1.  That is
+ * the same arrangement i3lock and swaylock have, and for the same
+ * reasons: PAM modules are arbitrary code, the password should not be in
+ * the compositor's heap -- which under `cmacs --gowl' is the editor's --
+ * and a lock program that crashes leaves the session locked rather than
+ * open.
+ *
+ * With no `lock-command', or when the program will not start, this falls
+ * back to a lock-handler module, because a lock that quietly does
+ * nothing is the one failure a lock must not have.
+ *
+ * This is what the `lock' keybind action, the IPC `lock' command and
+ * logind's suspend and lock-session signals all call, so the screen
+ * locks the same way whatever asked -- and, being a compositor
+ * keybind, regardless of which tag is in view or which window has the
+ * keyboard.
+ *
+ * Idempotent: locking a locked session does nothing.
+ */
+void     gowl_compositor_lock_session (GowlCompositor *self);
+
+/**
+ * gowl_compositor_unlock_session:
+ * @self: a #GowlCompositor
+ *
+ * Unlocks the screen administratively, without a password: the override
+ * behind `gowl-msg unlock' and `M-x gowl-unlock'.  A lock client is
+ * taken down and the session opened behind it.
+ *
+ * Reachable only from inside the already-running session -- a keybind, a
+ * socket that lives in the user's runtime directory, Emacs -- and never
+ * from the lock screen itself.
+ */
+void     gowl_compositor_unlock_session (GowlCompositor *self);
+
+/**
+ * gowl_compositor_apply_lock_config:
+ * @self: a #GowlCompositor
+ *
+ * Re-reads `lock-on-suspend' from the config and reconfigures the
+ * logind client accordingly.  Call after changing that key at runtime;
+ * the compositor does it itself at startup.
+ */
+void     gowl_compositor_apply_lock_config (GowlCompositor *self);
+
+/**
+ * gowl_compositor_notify_lock_state:
+ * @self: a #GowlCompositor
+ * @locked: the state the session is in now
+ *
+ * Announces a lock-state change on every channel at once: the
+ * ::lock-changed signal, the IPC event stream, and logind's locked
+ * hint.  Called by the lock paths themselves; callers outside the
+ * compositor want gowl_compositor_lock_session() instead.
+ */
+void     gowl_compositor_notify_lock_state (GowlCompositor *self,
+                                            gboolean        locked);
+
+/**
  * gowl_compositor_find_client_by_app_id:
  * @self: a #GowlCompositor
  * @pattern: a glob pattern to match against client app_id values

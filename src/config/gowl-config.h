@@ -1599,6 +1599,85 @@ gboolean     gowl_config_has_tag_wallpapers (GowlConfig *self);
 /* Milliseconds to cross-fade between wallpapers; 0 cuts. */
 gint         gowl_config_get_wallpaper_fade (GowlConfig *self);
 
+/* --- Locking ---
+ *
+ * `lock-command' is the program that draws the lock screen and takes
+ * the password.  It is a separate program on purpose, exactly as i3lock
+ * and swaylock are: it holds the password and it dlopens PAM modules,
+ * neither of which belongs inside a compositor -- and under
+ * `cmacs --gowl' the compositor is the editor, with an Elisp evaluator,
+ * an MCP server and a D-Bus interface in the same address space.
+ *
+ * It speaks ext-session-lock-v1, which is what makes the arrangement
+ * safe rather than merely tidy: the session stays locked if the lock
+ * program dies, and the compositor restarts it.  Setting it to the
+ * empty string falls back to the in-process `screenlock' module.
+ *
+ * `lock-on-suspend' takes a logind delay inhibitor and locks the screen
+ * before the machine sleeps, so the lid closing or `systemctl suspend'
+ * never leaves an unlocked desktop to wake up to.
+ *
+ * YAML:
+ *   lock-command: "gowl-lock"
+ *   lock-on-suspend: true
+ */
+#define GOWL_CONFIG_DEFAULT_LOCK_COMMAND    "gowl-lock"
+#define GOWL_CONFIG_DEFAULT_LOCK_ON_SUSPEND TRUE
+
+const gchar *gowl_config_get_lock_command     (GowlConfig  *self);
+void         gowl_config_set_lock_command     (GowlConfig  *self,
+                                               const gchar *command);
+gboolean     gowl_config_get_lock_on_suspend  (GowlConfig  *self);
+void         gowl_config_set_lock_on_suspend  (GowlConfig  *self,
+                                               gboolean     enable);
+
+/* --- Per-output wallpaper (modules/wallpaper) ---
+ *
+ * A 21:9 desk monitor and a 16:9 laptop panel cannot honestly share one
+ * picture: `fill' centre-crops a third off the 16:9 image to cover the
+ * ultrawide, and `fit' letterboxes it the other way round.  An entry
+ * here gives one output a picture of its own, and optionally a scaling
+ * mode of its own, so each screen shows something drawn for its shape.
+ *
+ * Keys are the same output keys `monitors:` takes: a connector name
+ * ("DP-1"), "Make Model", "Make Model Serial", or "*".  Precedence is
+ * likewise the same -- connector name or serial beats make/model, which
+ * beats the wildcard.
+ *
+ * YAML:
+ *   wallpaper-outputs:
+ *     "DP-1": "~/Pictures/ultrawide.png"
+ *     "eDP-1": { path: "~/Pictures/laptop.png", mode: fit }
+ *
+ * Precedence in the module is output, then tag, then the global
+ * `wallpaper'.  An output entry is about the SHAPE of a screen, which
+ * does not change when the tag does. */
+
+/**
+ * GowlWallpaperOutput:
+ * @path: the picture this output shows
+ * @mode: (nullable): its scaling mode, or %NULL for the module's
+ *
+ * One `wallpaper-outputs:` entry.
+ */
+typedef struct {
+	gchar *path;
+	gchar *mode;
+} GowlWallpaperOutput;
+
+void         gowl_config_set_wallpaper_output    (GowlConfig  *self,
+                                                  const gchar *key,
+                                                  const gchar *path,
+                                                  const gchar *mode);
+const GowlWallpaperOutput *
+             gowl_config_lookup_wallpaper_output (GowlConfig  *self,
+                                                  const gchar *name,
+                                                  const gchar *make,
+                                                  const gchar *model,
+                                                  const gchar *serial);
+/* Whether any per-output wallpaper is configured at all. */
+gboolean     gowl_config_has_output_wallpapers   (GowlConfig *self);
+
 /* --- Palette --- */
 
 GowlPalette * gowl_config_get_palette       (GowlConfig  *self);

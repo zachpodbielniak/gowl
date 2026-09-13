@@ -37,6 +37,26 @@
  *       enabled: true
  *       path: "/path/to/image.png"
  *       mode: fill
+ *
+ * Three top-level keys override that per screen and per tag:
+ *
+ *   wallpaper-tags:     { 2: "~/Pictures/work.png" }
+ *   wallpaper-outputs:  { "DP-1": { path: "~/wide.png", mode: fill } }
+ *   wallpaper-fade:     400
+ *
+ * An output entry wins over a tag entry, which wins over `path'.  The
+ * output is the most specific because it is about the SHAPE of a panel:
+ * a 21:9 desk monitor and a 16:9 laptop lid cannot share one picture
+ * without one of them being cropped or letterboxed, and that does not
+ * change when the tag does.
+ *
+ * Each monitor's picture is rendered at the output's DEVICE resolution
+ * (logical size times its scale) and the node is given the logical size
+ * as its destination, so a HiDPI panel gets a sharp wallpaper rather
+ * than an upscaled one.  Everything the picture was built for -- size,
+ * position, scale and mode -- is remembered, because a monitor that only
+ * MOVED (which is what unplugging the display next to it does) needs its
+ * node re-placed and nothing else.
  */
 
 #undef G_LOG_DOMAIN
@@ -133,8 +153,22 @@ static const struct wlr_buffer_impl pixbuf_buffer_impl = {
  */
 typedef struct {
 	struct wlr_scene_buffer *scene_buf;
+	/*
+	 * Everything the picture in scene_buf was built for.
+	 *
+	 * All of it, not just the size: a monitor that KEEPS its size but
+	 * moves in the output layout -- which is precisely what unplugging
+	 * the display next to it does -- used to pass a size-only check and
+	 * keep its node at the old coordinates, off the screen it belongs
+	 * to.  Scale is here for the same reason: the pixels are rendered
+	 * at the output's scale, so a change of scale is a change of
+	 * picture even when the logical size is identical.
+	 */
+	gint     x;
+	gint     y;
 	gint width;
 	gint height;
+	gdouble  scale;
 
 	/*
 	 * Per-tag wallpaper.
@@ -146,6 +180,7 @@ typedef struct {
 	 * declaring the other eight.
 	 */
 	gchar   *shown_path;      /* what scene_buf is currently showing */
+	gchar   *shown_mode;      /* and in which scaling mode */
 	guint32  shown_tags;      /* the tag set it was chosen for */
 
 	/*
@@ -156,6 +191,7 @@ typedef struct {
 	 */
 	struct wlr_scene_buffer *fading_buf;
 	gchar   *fading_path;
+	gchar   *fading_mode;
 	gint64   fade_start_us;
 	gint64   fade_dur_us;
 } WallpaperState;
@@ -491,11 +527,17 @@ wallpaper_decode(GowlModuleWallpaper *self, const gchar *path)
 	if (path == NULL || path[0] == '\0')
 		return NULL;
 
-	pixbuf = g_hash_table_lookup(self->decoded, path);
-	if (pixbuf != NULL)
-		return pixbuf;
+	if (g_hash_table_contains(self->decoded, path))
+		return (GdkPixbuf *)g_hash_table_lookup(self->decoded, path);
 
-	pixbuf = gdk_pixbuf_new_from_file(path, &err);
+	/* Expanded here rather than at configure time: `wallpaper-tags' and
+	 * `wallpaper-outputs' hand over paths straight from the YAML, and a
+	 * leading ~ in either of those used to reach gdk-pixbuf verbatim and
+	 * fail to open. */
+	{
+		g_autofree gchar *real = expand_path(path);
+		pixbuf = gdk_pixbuf_new_from_file(real, &err);
+	}
 	if (pixbuf == NULL) {
 		/* Cache the failure as a NULL so a broken path in the config is
 		 * not re-opened on every tag switch for the rest of the
@@ -510,24 +552,54 @@ wallpaper_decode(GowlModuleWallpaper *self, const gchar *path)
 }
 
 /*
- * The wallpaper a monitor should be showing right now.
+ * The wallpaper a monitor should be showing right now, and in what mode.
  *
- * The lowest set tag decides, the same rule the cube uses to pick a face:
- * a combined tag view has no single honest answer, and taking the lowest
- * means adding a tag to a view does not change the wallpaper while
- * replacing one does.
+ * Three sources, most specific first:
  *
- * Returns: (transfer none) (nullable): a path, or %NULL for none at all.
+ *   1. `wallpaper-outputs': a picture chosen for THIS screen.  It wins
+ *      because it is about the shape of the panel -- an ultrawide and a
+ *      laptop lid cannot share one image without one of them being
+ *      cropped or letterboxed -- and the shape does not change when the
+ *      tag does.  An entry may carry a mode of its own, so one screen
+ *      can fill while another fits.
+ *   2. `wallpaper-tags': the picture for the tag being viewed.  The
+ *      lowest set tag decides, the same rule the cube uses to pick a
+ *      face: a combined view has no single honest answer, and taking the
+ *      lowest means ADDING a tag to a view does not change the wallpaper
+ *      while replacing one does.
+ *   3. the module's own `path', the picture every screen and every tag
+ *      shares until something above overrides it.
+ *
+ * @mode is set to the module's mode unless an output entry names one.
  */
 static const gchar *
-wallpaper_path_for(GowlModuleWallpaper *self, GowlCompositor *comp,
-                    GowlMonitor *monitor)
+wallpaper_settings_for(GowlModuleWallpaper *self, GowlCompositor *comp,
+                        GowlMonitor *monitor, const gchar **mode)
 {
 	guint32 tags;
 	gint    i;
 
+	if (mode != NULL)
+		*mode = self->mode;
+
 	if (comp == NULL || comp->config == NULL || monitor == NULL)
 		return self->path;
+
+	if (monitor->wlr_output != NULL
+	    && gowl_config_has_output_wallpapers(comp->config)) {
+		const GowlWallpaperOutput *wo =
+			gowl_config_lookup_wallpaper_output(comp->config,
+				monitor->wlr_output->name,
+				monitor->wlr_output->make,
+				monitor->wlr_output->model,
+				monitor->wlr_output->serial);
+
+		if (wo != NULL && wo->path != NULL && wo->path[0] != '\0') {
+			if (mode != NULL && wo->mode != NULL)
+				*mode = wo->mode;
+			return wo->path;
+		}
+	}
 
 	tags = monitor->tagset[monitor->seltags];
 	for (i = 0; i < GOWL_CONFIG_MAX_TAGS; i++) {
@@ -557,11 +629,19 @@ wallpaper_path_for(GowlModuleWallpaper *self, GowlCompositor *comp,
  * hardware, which is the sort of bug that only appears on somebody else's
  * machine.
  *
+ * The buffer is built at the output's DEVICE resolution -- logical size
+ * times its scale -- and the node is then given the logical size as its
+ * destination.  Rendering at the logical size instead would hand a
+ * 1920x1080 picture to a 3840x2160 panel and let the compositor upscale
+ * it, which is a wallpaper that looks soft on exactly the screens that
+ * are supposed to look sharp.
+ *
  * Returns: (transfer none) (nullable): the new node.
  */
 static struct wlr_scene_buffer *
 wallpaper_make_node(GowlModuleWallpaper *self, struct wlr_scene_tree *bg_layer,
-                     const gchar *path, gint x, gint y, gint width, gint height)
+                     const gchar *path, const gchar *mode,
+                     gint x, gint y, gint width, gint height, gdouble scale)
 {
 	GdkPixbuf *source = wallpaper_decode(self, path);
 	GdkPixbuf *scaled;
@@ -570,32 +650,66 @@ wallpaper_make_node(GowlModuleWallpaper *self, struct wlr_scene_tree *bg_layer,
 	guchar *dst_pixels;
 	gint dst_stride;
 	gsize dst_size;
+	gint px_w, px_h;
 
 	if (source == NULL || bg_layer == NULL || width <= 0 || height <= 0)
 		return NULL;
 
-	scaled = scale_pixbuf(source, self->mode, width, height);
+	if (scale <= 0.0)
+		scale = 1.0;
+	px_w = (gint)(width * scale + 0.5);
+	px_h = (gint)(height * scale + 0.5);
+	if (px_w <= 0)
+		px_w = width;
+	if (px_h <= 0)
+		px_h = height;
+
+	scaled = scale_pixbuf(source, mode, px_w, px_h);
 	if (scaled == NULL)
 		return NULL;
 
-	dst_stride = width * 4;
-	dst_size   = (gsize)height * dst_stride;
+	dst_stride = px_w * 4;
+	dst_size   = (gsize)px_h * dst_stride;
 	dst_pixels = (guchar *)g_malloc(dst_size);
-	convert_pixbuf_to_argb8888(scaled, dst_pixels, width, height, dst_stride);
+	convert_pixbuf_to_argb8888(scaled, dst_pixels, px_w, px_h, dst_stride);
 	g_object_unref(scaled);
 
 	wlr_buf = (GowlPixbufBuffer *)g_new0(GowlPixbufBuffer, 1);
 	wlr_buf->pixels = dst_pixels;
 	wlr_buf->size   = dst_size;
 	wlr_buf->stride = dst_stride;
-	wlr_buffer_init(&wlr_buf->base, &pixbuf_buffer_impl, width, height);
+	wlr_buffer_init(&wlr_buf->base, &pixbuf_buffer_impl, px_w, px_h);
 
 	node = wlr_scene_buffer_create(bg_layer, &wlr_buf->base);
 	/* The scene now holds the only reference to this buffer. */
 	wlr_buffer_drop(&wlr_buf->base);
-	if (node != NULL)
+	if (node != NULL) {
+		/* Layout coordinates are logical, the buffer is in device
+		 * pixels: say so, or a scaled output would show the picture at
+		 * a fraction of the screen. */
+		wlr_scene_buffer_set_dest_size(node, width, height);
 		wlr_scene_node_set_position(&node->node, x, y);
+	}
 	return node;
+}
+
+/* Everything one monitor's wallpaper holds.  The scene nodes go first:
+ * dropping a node releases the consumer reference on its wlr_buffer,
+ * which is what frees the pixels. */
+static void
+wallpaper_state_free(WallpaperState *state)
+{
+	if (state == NULL)
+		return;
+	if (state->fading_buf != NULL)
+		wlr_scene_node_destroy(&state->fading_buf->node);
+	if (state->scene_buf != NULL)
+		wlr_scene_node_destroy(&state->scene_buf->node);
+	g_free(state->shown_path);
+	g_free(state->shown_mode);
+	g_free(state->fading_path);
+	g_free(state->fading_mode);
+	g_free(state);
 }
 
 /* Finish a cross-fade: the incoming picture becomes the wallpaper and the
@@ -615,6 +729,9 @@ wallpaper_settle(WallpaperState *state)
 	g_free(state->shown_path);
 	state->shown_path  = state->fading_path;
 	state->fading_path = NULL;
+	g_free(state->shown_mode);
+	state->shown_mode  = state->fading_mode;
+	state->fading_mode = NULL;
 }
 
 static void
@@ -630,7 +747,9 @@ wallpaper_on_output(
 	WallpaperState *state;
 	const gchar *mon_name;
 	const gchar *path;
+	const gchar *mode = NULL;
 	gint mon_x, mon_y, mon_w, mon_h;
+	gdouble mon_scale;
 
 	self = GOWL_MODULE_WALLPAPER(provider);
 	compositor = GOWL_COMPOSITOR(compositor_ptr);
@@ -639,36 +758,62 @@ wallpaper_on_output(
 	self->compositor = compositor;
 
 	mon_name = gowl_monitor_get_name(monitor);
-	gowl_monitor_get_geometry(monitor, &mon_x, &mon_y, &mon_w, &mon_h);
-
-	/* Skip monitors with zero dimensions (not yet configured) */
-	if (mon_w <= 0 || mon_h <= 0)
+	if (mon_name == NULL)
 		return;
+	gowl_monitor_get_geometry(monitor, &mon_x, &mon_y, &mon_w, &mon_h);
+	mon_scale = gowl_monitor_get_scale(monitor);
+
+	state = (WallpaperState *)g_hash_table_lookup(self->per_monitor,
+	                                              mon_name);
+
+	/* A monitor that is switched off, or has no geometry yet, holds no
+	 * wallpaper.  Dropping it here is what makes a lid-disabled panel
+	 * (or an output on its way out) stop carrying a node at coordinates
+	 * that no longer describe anything -- the state is rebuilt from
+	 * scratch when the output comes back and the layout has settled. */
+	if (mon_w <= 0 || mon_h <= 0 || !gowl_monitor_get_enabled(monitor)) {
+		if (state != NULL)
+			g_hash_table_remove(self->per_monitor, mon_name);
+		return;
+	}
 
 	bg_layer = gowl_compositor_get_scene_layer(compositor,
 	                                           GOWL_SCENE_LAYER_BG);
 	if (bg_layer == NULL)
 		return;
 
-	path = wallpaper_path_for(self, compositor, monitor);
+	path = wallpaper_settings_for(self, compositor, monitor, &mode);
 
-	state = (WallpaperState *)g_hash_table_lookup(self->per_monitor,
-	                                              mon_name);
-	/* Already correct at this size and showing this picture: the common
-	 * case during the run, and it must stay free. */
+	/* Already showing this picture, at this size, at this scale, in this
+	 * mode: the common case during the run, and it must stay free. */
 	if (state != NULL && state->width == mon_w && state->height == mon_h
+	    && state->scale == mon_scale
 	    && g_strcmp0(state->shown_path, path) == 0
-	    && state->fading_buf == NULL)
+	    && g_strcmp0(state->shown_mode, mode) == 0
+	    && state->fading_buf == NULL) {
+		/* ... but it may have MOVED.  Unplugging one display shifts
+		 * every display to its right, and the picture is the same
+		 * picture: re-place the node rather than re-decoding and
+		 * re-scaling an identical one.  Skipping this is what used to
+		 * leave the surviving screen showing the root colour, with its
+		 * wallpaper sitting at coordinates that were off the edge of
+		 * the layout. */
+		if (state->x != mon_x || state->y != mon_y) {
+			if (state->scene_buf != NULL)
+				wlr_scene_node_set_position(&state->scene_buf->node,
+				                            mon_x, mon_y);
+			state->x = mon_x;
+			state->y = mon_y;
+			g_debug("wallpaper: monitor %s moved to +%d+%d",
+			        mon_name, mon_x, mon_y);
+		}
 		return;
+	}
 
-	/* Geometry changed (or first time): tear down the old node. */
+	/* Anything else changed (or this is the first time): tear the old
+	 * node down.  Removing it from the table runs wallpaper_state_free,
+	 * which is what frees the pixels. */
 	if (state != NULL) {
-		if (state->fading_buf != NULL)
-			wlr_scene_node_destroy(&state->fading_buf->node);
-		if (state->scene_buf != NULL)
-			wlr_scene_node_destroy(&state->scene_buf->node);
-		g_free(state->shown_path);
-		g_free(state->fading_path);
 		g_hash_table_remove(self->per_monitor, mon_name);
 		state = NULL;
 	}
@@ -678,22 +823,28 @@ wallpaper_on_output(
 		return;
 
 	state = g_new0(WallpaperState, 1);
+	state->x      = mon_x;
+	state->y      = mon_y;
 	state->width  = mon_w;
 	state->height = mon_h;
-	state->scene_buf = wallpaper_make_node(self, bg_layer, path,
-	                                       mon_x, mon_y, mon_w, mon_h);
+	state->scale  = mon_scale;
+	state->scene_buf = wallpaper_make_node(self, bg_layer, path, mode,
+	                                       mon_x, mon_y, mon_w, mon_h,
+	                                       mon_scale);
 	if (state->scene_buf == NULL) {
 		g_free(state);
 		return;
 	}
 	state->shown_path = g_strdup(path);
+	state->shown_mode = g_strdup(mode);
 	state->shown_tags = monitor->tagset[monitor->seltags];
 
 	g_hash_table_insert(self->per_monitor,
 	                    g_strdup(mon_name), (gpointer)state);
 
-	g_debug("wallpaper: set for monitor %s (%dx%d+%d+%d, mode=%s, path=%s)",
-	        mon_name, mon_w, mon_h, mon_x, mon_y, self->mode, path);
+	g_debug("wallpaper: set for monitor %s (%dx%d+%d+%d @%.2f, mode=%s, "
+	        "path=%s)", mon_name, mon_w, mon_h, mon_x, mon_y, mon_scale,
+	        mode != NULL ? mode : "fill", path);
 }
 
 /*
@@ -715,6 +866,7 @@ wallpaper_frame(GowlSceneEffect *effect, GowlCompositor *comp,
 	struct wlr_scene_tree *bg_layer;
 	const gchar *mon_name;
 	const gchar *path;
+	const gchar *mode = NULL;
 	gint mon_x, mon_y, mon_w, mon_h;
 	gint fade_ms;
 
@@ -752,7 +904,7 @@ wallpaper_frame(GowlSceneEffect *effect, GowlCompositor *comp,
 		return FALSE;
 	state->shown_tags = monitor->tagset[monitor->seltags];
 
-	path = wallpaper_path_for(self, comp, monitor);
+	path = wallpaper_settings_for(self, comp, monitor, &mode);
 	if (path == NULL || g_strcmp0(path, state->shown_path) == 0)
 		return FALSE;
 
@@ -761,13 +913,16 @@ wallpaper_frame(GowlSceneEffect *effect, GowlCompositor *comp,
 	if (bg_layer == NULL || mon_w <= 0 || mon_h <= 0)
 		return FALSE;
 
-	state->fading_buf = wallpaper_make_node(self, bg_layer, path,
-	                                        mon_x, mon_y, mon_w, mon_h);
+	state->fading_buf = wallpaper_make_node(self, bg_layer, path, mode,
+	                                        mon_x, mon_y, mon_w, mon_h,
+	                                        gowl_monitor_get_scale(monitor));
 	if (state->fading_buf == NULL)
 		return FALSE;
 
 	g_free(state->fading_path);
 	state->fading_path = g_strdup(path);
+	g_free(state->fading_mode);
+	state->fading_mode = g_strdup(mode);
 
 	/* Above the outgoing picture, so fading it up reveals it rather than
 	 * revealing whatever is under the wallpaper. */
@@ -822,30 +977,15 @@ wallpaper_on_output_destroy(
 ){
 	GowlModuleWallpaper *self;
 	GowlMonitor *monitor;
-	WallpaperState *state;
 	const gchar *mon_name;
 
 	self = GOWL_MODULE_WALLPAPER(provider);
 	monitor = GOWL_MONITOR(monitor_ptr);
 	mon_name = gowl_monitor_get_name(monitor);
 
-	state = (WallpaperState *)g_hash_table_lookup(self->per_monitor,
-	                                              mon_name);
-	if (state == NULL)
+	if (mon_name == NULL
+	    || !g_hash_table_remove(self->per_monitor, mon_name))
 		return;
-
-	/* Destroy the scene nodes (releases the wlr_buffer consumer ref,
-	 * which triggers pixel data cleanup).  A cross-fade caught in flight
-	 * has two of them. */
-	if (state->fading_buf != NULL)
-		wlr_scene_node_destroy(&state->fading_buf->node);
-	if (state->scene_buf != NULL)
-		wlr_scene_node_destroy(&state->scene_buf->node);
-
-	g_hash_table_remove(self->per_monitor, mon_name);
-	g_free(state->shown_path);
-	g_free(state->fading_path);
-	g_free(state);
 
 	g_debug("wallpaper: removed for monitor %s", mon_name);
 }
@@ -996,28 +1136,11 @@ static void
 gowl_module_wallpaper_finalize(GObject *object)
 {
 	GowlModuleWallpaper *self;
-	GHashTableIter iter;
-	gpointer key, value;
 
 	self = GOWL_MODULE_WALLPAPER(object);
 
-	/* Destroy remaining scene nodes */
-	if (self->per_monitor != NULL) {
-		g_hash_table_iter_init(&iter, self->per_monitor);
-		while (g_hash_table_iter_next(&iter, &key, &value)) {
-			WallpaperState *state;
-
-			state = (WallpaperState *)value;
-			if (state->fading_buf != NULL)
-				wlr_scene_node_destroy(&state->fading_buf->node);
-			if (state->scene_buf != NULL)
-				wlr_scene_node_destroy(&state->scene_buf->node);
-			g_free(state->shown_path);
-			g_free(state->fading_path);
-			g_free(state);
-		}
-		g_hash_table_destroy(self->per_monitor);
-	}
+	/* Destroys every remaining scene node: the table owns the states. */
+	g_clear_pointer(&self->per_monitor, g_hash_table_destroy);
 
 	g_clear_pointer(&self->decoded, g_hash_table_unref);
 
@@ -1052,8 +1175,13 @@ gowl_module_wallpaper_init(GowlModuleWallpaper *self)
 	self->path         = g_strdup("");
 	self->mode         = g_strdup("fill");
 	self->compositor   = NULL;
+	/* The table OWNS each monitor's state: a plain g_hash_table_remove
+	 * is then the whole teardown, scene nodes and pixels included, and
+	 * cannot leak a WallpaperState by forgetting to free it. */
 	self->per_monitor  = g_hash_table_new_full(g_str_hash, g_str_equal,
-	                                           g_free, NULL);
+	                                           g_free,
+	                                           (GDestroyNotify)
+	                                           wallpaper_state_free);
 	/* A path that failed to decode is cached as a NULL value so it is not
 	 * re-opened on every tag switch, and GHashTable calls the value
 	 * destructor even for those -- hence the wrapper, because

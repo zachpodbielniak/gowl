@@ -1776,12 +1776,17 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 			GOWL_COMPOSITOR(e->compositor));
 		if (mon == NULL)
 			return;
-		/* The toggle reports the state it was clicked into; fall back
-		 * to inverting what the output is doing when the host sends
-		 * no value. */
-		want = value > 0.5 ? TRUE : FALSE;
+		/* The switch carries the state it was flipped INTO.  A host
+		 * that sends no value (or an older bar) gets the live state
+		 * inverted instead, which is the same answer for a panel that
+		 * was just built -- and is what kept this working at all
+		 * while the bar was sending a flat 0.0 for every toggle,
+		 * except that a flat 0.0 is not "no value", so the fallback
+		 * never ran and HDR could only ever be turned off. */
 		if (value < 0.0)
 			want = !gowl_monitor_get_hdr(mon);
+		else
+			want = value > 0.5 ? TRUE : FALSE;
 
 		if (want && !gowl_monitor_supports_hdr(mon)) {
 			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,

@@ -3753,29 +3753,64 @@ gowl_compositor_start(
 	 * were sRGB, which is the washed-out picture people mean when they
 	 * say HDR "does not work".
 	 *
-	 * The advertised set is deliberately small: the parametric
-	 * descriptions wlroots can actually honour.  Claiming ICC support
-	 * we do not implement would have clients hand us profiles we then
-	 * ignore.
+	 * What is advertised comes from the RENDERER, not from a list
+	 * written here.  The protocol says a compositor must send one
+	 * supported_primaries_named / supported_tf_named event for every
+	 * name it supports, and a client is entitled to read an absent
+	 * name as unsupported -- there is no "sRGB is implied" in the
+	 * spec.  A hand-written list of BT.2020 alone therefore told every
+	 * client that gowl could not handle ORDINARY colour: Chromium's
+	 * "Unable to set image primaries / Failed to populate image
+	 * description for {primaries:BT709, transfer:SRGB}" is an
+	 * application being refused plain sRGB, and a video player is
+	 * refused in the same way for anything the list left out.
+	 *
+	 * ICC is still not offered, because we do not implement it, and
+	 * claiming it would have clients hand us profiles we then ignore.
 	 */
 	{
 		static const enum wp_color_manager_v1_render_intent intents[] = {
 			WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL,
 		};
-		/* sRGB is NOT in either list, and wlroots asserts on it: the
-		 * protocol takes sRGB primaries and the sRGB transfer
-		 * function as always supported, so advertising them is a
-		 * duplicate rather than an extra. */
-		static const enum wp_color_manager_v1_transfer_function tfs[] = {
+		/* The minimum worth serving, used when the renderer will not
+		 * answer: enough for an HDR video player, which is the case
+		 * this protocol exists for. */
+		static const enum wp_color_manager_v1_transfer_function fallback_tfs[] = {
 			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ,
 			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR,
 			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22,
 			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886,
 		};
-		static const enum wp_color_manager_v1_primaries prims[] = {
+		static const enum wp_color_manager_v1_primaries fallback_prims[] = {
+			WP_COLOR_MANAGER_V1_PRIMARIES_SRGB,
 			WP_COLOR_MANAGER_V1_PRIMARIES_BT2020,
 		};
+		enum wp_color_manager_v1_transfer_function *tfs = NULL;
+		enum wp_color_manager_v1_primaries *prims = NULL;
+		size_t n_tfs = 0;
+		size_t n_prims = 0;
 		struct wlr_color_manager_v1_options opts;
+
+		if (self->renderer != NULL) {
+			size_t i, keep;
+
+			tfs = wlr_color_manager_v1_transfer_function_list_from_renderer(
+				self->renderer, &n_tfs);
+			prims = wlr_color_manager_v1_primaries_list_from_renderer(
+				self->renderer, &n_prims);
+
+			/* wlroots adds the sRGB transfer function itself and
+			 * ASSERTS if it is also handed one -- so the list the
+			 * renderer hands back cannot be passed through as it
+			 * stands.  Dropping it here is not under-advertising:
+			 * the manager still sends the event for it. */
+			for (i = 0, keep = 0; i < n_tfs; i++) {
+				if (tfs[i] == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB)
+					continue;
+				tfs[keep++] = tfs[i];
+			}
+			n_tfs = keep;
+		}
 
 		memset(&opts, 0, sizeof opts);
 		opts.features.parametric = true;
@@ -3786,17 +3821,38 @@ gowl_compositor_start(
 		 * we then ignore, which is worse than not offering. */
 		opts.render_intents = intents;
 		opts.render_intents_len = G_N_ELEMENTS(intents);
-		opts.transfer_functions = tfs;
-		opts.transfer_functions_len = G_N_ELEMENTS(tfs);
-		opts.primaries = prims;
-		opts.primaries_len = G_N_ELEMENTS(prims);
+		opts.transfer_functions = (tfs != NULL && n_tfs > 0)
+			? (const enum wp_color_manager_v1_transfer_function *)tfs
+			: fallback_tfs;
+		opts.transfer_functions_len = (tfs != NULL && n_tfs > 0)
+			? n_tfs : G_N_ELEMENTS(fallback_tfs);
+		opts.primaries = (prims != NULL && n_prims > 0)
+			? (const enum wp_color_manager_v1_primaries *)prims
+			: fallback_prims;
+		opts.primaries_len = (prims != NULL && n_prims > 0)
+			? n_prims : G_N_ELEMENTS(fallback_prims);
 
 		self->color_manager = wlr_color_manager_v1_create(self->wl_display,
 		                                                  1, &opts);
+		/* The manager copies what it was given. */
+		free(tfs);
+		free(prims);
 		/* The scene graph does the per-surface colour conversion; it
 		 * needs the manager to know what each surface declared. */
-		if (self->color_manager != NULL)
-			wlr_scene_set_color_manager_v1(self->scene, self->color_manager);
+		if (self->color_manager != NULL) {
+			wlr_scene_set_color_manager_v1(self->scene,
+			                               self->color_manager);
+			/* Logged because "the player will not play HDR" and
+			 * "the browser cannot declare sRGB" are the same
+			 * question -- what did we tell clients we can do --
+			 * and it is otherwise only visible from inside a
+			 * client. */
+			g_debug("colour management: %zu primaries, %zu transfer "
+			        "functions advertised%s",
+			        opts.primaries_len, opts.transfer_functions_len,
+			        (tfs != NULL && n_tfs > 0)
+			        ? " (from the renderer)" : " (built-in list)");
+		}
 	}
 
 	wlr_data_control_manager_v1_create(self->wl_display);

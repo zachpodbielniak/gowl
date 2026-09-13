@@ -1770,6 +1770,40 @@ bar_guard_call_key(GowlModuleBar *self, GowlBarPlugin *plugin, guint keysym,
 	return TRUE;
 }
 
+/*
+ * The `value' a click carries to the plugin.
+ *
+ * A slider has a drag path of its own; everything else used to be
+ * handed a flat 0.0, which is a lie for a TOGGLE: the parameter looks
+ * like the state the switch was flipped into, and a plugin that read it
+ * saw "off" on every click.  The desktop plugin's HDR switch did read
+ * it, so HDR could never be turned ON -- each click asked the
+ * compositor to turn off an output that was already off, which
+ * succeeds, and reported "back to sRGB".  Every other toggle in the
+ * tree happened to ignore the parameter and invert its own remembered
+ * state, which is why nothing else showed it.
+ *
+ * A toggle now carries the state it is being flipped INTO.  Anything
+ * else still carries 0.0.
+ */
+static gdouble
+bar_panel_hit_value(GowlModuleBar *self, const GowlBarHitRect *rect)
+{
+	GowlBarPanelItem *item;
+
+	if (rect->kind != GOWL_BAR_ITEM_TOGGLE || self->panel.panel == NULL)
+		return 0.0;
+	if (rect->item_index < 0
+	    || (guint)rect->item_index
+	       >= gowl_bar_panel_n_items(self->panel.panel))
+		return 0.0;
+	item = gowl_bar_panel_get_item(self->panel.panel,
+	                               (guint)rect->item_index);
+	if (item == NULL)
+		return 0.0;
+	return gowl_bar_panel_item_get_active(item) ? 0.0 : 1.0;
+}
+
 static void
 bar_panel_deliver(GowlModuleBar *self, const gchar *item_id, gint index,
                   gdouble value, guint button)
@@ -3344,7 +3378,8 @@ bar_handle_button(GowlBarProvider *provider, gpointer monitor, gint x, gint y,
 					return TRUE;
 				}
 				bar_panel_deliver(self, rect->id,
-				                  rect->child_index, 0.0,
+				                  rect->child_index,
+				                  bar_panel_hit_value(self, rect),
 				                  button);
 			}
 			return TRUE;

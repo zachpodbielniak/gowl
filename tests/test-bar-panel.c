@@ -300,6 +300,68 @@ test_only_interactive_items_are_hit_testable(void)
 	fixture_clear(&f);
 }
 
+/*
+ * A toggle's hit rect has to say WHICH toggle it is.
+ *
+ * The bar hands a plugin a `value' with every panel click, and for a
+ * toggle that value is meant to be the state the switch was flipped
+ * into.  It was a flat 0.0 for everything that was not a slider, so a
+ * plugin reading it saw "off" on every click -- the desktop plugin's
+ * HDR switch could never be turned ON, and reported "back to sRGB"
+ * each time, because it kept asking the compositor to turn off an
+ * output that was already off.
+ *
+ * The state is taken from the panel item the hit rect names, so what
+ * this guards is that a toggle's rect names it: an item_index that
+ * resolves back to the toggle, with its `active' readable.
+ */
+static void
+test_toggle_hit_names_its_item(void)
+{
+	Fixture f;
+	GowlBarPanel *panel;
+	GowlBarPanelRenderCtx ctx;
+	guint i;
+	gboolean saw_toggle = FALSE;
+
+	fixture_init(&f);
+	panel = gowl_bar_panel_new();
+	gowl_bar_panel_add_toggle(panel, "on", "Already on", TRUE);
+	gowl_bar_panel_add_toggle(panel, "off", "Currently off", FALSE);
+
+	gowl_bar_panel_render_ctx_init(&ctx, PANEL_W);
+	ctx.hits = g_array_new(FALSE, FALSE, sizeof(GowlBarHitRect));
+	gowl_bar_panel_render(panel, f.cr, f.layout, f.theme, &ctx);
+
+	for (i = 0; i < ctx.hits->len; i++) {
+		GowlBarHitRect   *r;
+		GowlBarPanelItem *item;
+
+		r = &g_array_index(ctx.hits, GowlBarHitRect, i);
+		if (r->kind != GOWL_BAR_ITEM_TOGGLE)
+			continue;
+		saw_toggle = TRUE;
+
+		g_assert_cmpint(r->item_index, >=, 0);
+		g_assert_cmpuint((guint)r->item_index, <,
+		                 gowl_bar_panel_n_items(panel));
+		item = gowl_bar_panel_get_item(panel, (guint)r->item_index);
+		g_assert_nonnull(item);
+		/* The rect names the item it was drawn for, not some other
+		 * one: the id and the switch state have to agree. */
+		g_assert_cmpstr(gowl_bar_panel_item_get_id(item), ==, r->id);
+		if (g_strcmp0(r->id, "on") == 0)
+			g_assert_true(gowl_bar_panel_item_get_active(item));
+		if (g_strcmp0(r->id, "off") == 0)
+			g_assert_false(gowl_bar_panel_item_get_active(item));
+	}
+	g_assert_true(saw_toggle);
+
+	g_array_unref(ctx.hits);
+	g_object_unref(panel);
+	fixture_clear(&f);
+}
+
 static void
 test_hit_find_prefers_the_topmost(void)
 {
@@ -489,6 +551,8 @@ main(int argc, char *argv[])
 	                test_render_leaves_the_model_untouched);
 	g_test_add_func("/bar-panel/hits-are-interactive",
 	                test_only_interactive_items_are_hit_testable);
+	g_test_add_func("/bar-panel/toggle-hit-names-its-item",
+	                test_toggle_hit_names_its_item);
 	g_test_add_func("/bar-panel/hit-find-topmost",
 	                test_hit_find_prefers_the_topmost);
 	g_test_add_func("/bar-panel/scroll-offsets-hits",

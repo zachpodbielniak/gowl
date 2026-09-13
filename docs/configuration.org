@@ -1194,7 +1194,11 @@ Profiles are tried in file order on every hotplug and reload; the first whose ou
 
 An output qualifies only when it advertises *both* BT.2020 and PQ.  That is a property of the whole chain rather than the panel: an HDR monitor on a cable or a port that cannot carry 10 bits at the current refresh rate reports neither, and =gowl-msg monitors= shows =hdr_capable= per output.
 
-*What this does not do is tone-map.*  SDR content is passed through, so on most panels an HDR output looks flat until an application says its surface is HDR.  That is what =wp-color-management-v1= is for: gowl advertises it (BT.2020 primaries; the PQ, linear, gamma 2.2 and BT.1886 transfer functions; parametric descriptions and a mastering display volume), so a player can describe its content and the scene graph converts it.  sRGB is not advertised because the protocol takes it as always supported.
+*What this does not do is tone-map.*  SDR content is passed through, so on most panels an HDR output looks flat until an application says its surface is HDR.  That is what =wp-color-management-v1= is for: gowl advertises it, so a player can describe its content and the scene graph converts it.
+
+What gowl advertises comes from the renderer where it will answer, and otherwise from a built-in list: the sRGB and BT.2020 primaries, and the PQ, linear, gamma 2.2 and BT.1886 transfer functions, with parametric descriptions and a mastering display volume.  ICC profiles are not offered, because gowl does not implement them.
+
+The sRGB primaries are in that list on purpose.  The protocol requires a compositor to name every set it supports, and a client is entitled to read an absent name as unsupported -- so a list of BT.2020 alone told applications that gowl could not handle ORDINARY colour, and Chromium-based ones logged =Unable to set image primaries= and gave up on colour management entirely.  The sRGB *transfer function* is the one exception: wlroots adds that itself and refuses to be handed it, so it is filtered out of the list and advertised by wlroots.  =G_MESSAGES_DEBUG=gowl= logs how many of each were advertised and where they came from.
 
 Because of that, HDR is a toggle rather than something to leave on:
 

@@ -21,9 +21,12 @@
 
 #include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"
@@ -1461,7 +1464,36 @@ typedef struct {
 	gint     brightness;    /* 0--100, or -1 when there is no backlight */
 	gchar   *backlight;     /* the sysfs device name */
 	gint     max_brightness;
+	/*
+	 * Software dimming, for an output whose panel ignores the backlight.
+	 *
+	 * On an eDP panel in HDR the luminance comes from the PQ signal, not
+	 * from the backlight: the write still lands, the kernel still takes
+	 * it, actual_brightness still tracks -- and nothing on screen
+	 * changes.  The only lever left is the gamma ramp, and the only way
+	 * to reach one is as a wlr-gamma-control-v1 client, because wlroots
+	 * 0.20 exposes no way for the compositor to set an output's LUT
+	 * itself (and its scene colour transform is explicitly unusable once
+	 * an image description is set, which is exactly what HDR sets).
+	 *
+	 * Brightness and the night light are therefore THE SAME RAMP, which
+	 * is why they are kept together here and always applied together.
+	 * Before this they were two commands that each clobbered the other.
+	 */
+	gdouble  gamma_brightness;  /* 0.1 .. 1.0; gammastep's own floor */
+	gint     gamma_temp;        /* kelvin; 6500 is neutral */
+	GPid     gamma_pid;         /* the gammastep this plugin started */
+	GSList  *gamma_reap;        /* ones asked to quit, not yet waited on */
 } DisplayData;
+
+/* gammastep will not go below this, and says so. */
+#define DISPLAY_GAMMA_MIN_BRIGHTNESS (0.1)
+#define DISPLAY_NEUTRAL_TEMP         (6500)
+
+static gboolean display_backlight_governs (void);
+static void     display_apply_gamma (GowlBarPlugin *plugin, DisplayData *dd);
+static void     display_gamma_stop (DisplayData *dd);
+static void     display_gamma_reap (DisplayData *dd);
 
 static gpointer
 display_create(GowlBarPlugin *plugin)
@@ -1471,6 +1503,8 @@ display_create(GowlBarPlugin *plugin)
 	(void)plugin;
 	dd = g_new0(DisplayData, 1);
 	dd->brightness = -1;
+	dd->gamma_brightness = 1.0;
+	dd->gamma_temp = DISPLAY_NEUTRAL_TEMP;
 	return dd;
 }
 
@@ -1482,6 +1516,12 @@ display_destroy(GowlBarPlugin *plugin, gpointer data)
 	(void)plugin;
 	if (dd == NULL)
 		return;
+	/* The ramp is the child's, and it puts back what it found when it
+	   is asked to go -- so the screen returns to normal on unload
+	   rather than staying dim with nothing left to undo it. */
+	display_gamma_stop(dd);
+	display_gamma_reap(dd);
+	g_slist_free(dd->gamma_reap);
 	g_free(dd->backlight);
 	g_free(dd);
 }
@@ -1523,6 +1563,8 @@ display_poll(GowlBarPlugin *plugin, gpointer data)
 	g_autofree gchar *max_path = NULL;
 	g_autofree gchar *value = NULL;
 	g_autofree gchar *max_value = NULL;
+
+	display_gamma_reap(dd);
 
 	display_find_backlight(dd);
 	if (dd->backlight == NULL) {
@@ -1597,10 +1639,37 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_set_width(panel, 420);
 
 	gowl_bar_panel_add_hero(panel, "\xef\x84\x88", "Display",
-		(dd->brightness >= 0) ? "Adjustable brightness"
-		                      : "Fixed brightness");
+		!display_backlight_governs() ? "HDR: dimmed in software"
+		: (dd->brightness >= 0) ? "Adjustable brightness"
+		                        : "Fixed brightness");
 
-	if (dd->brightness >= 0) {
+	/*
+	 * WHICH SLIDER THIS IS depends on the output.
+	 *
+	 * With the backlight in charge it is the backlight, in percent of
+	 * the panel's own range.  In HDR it cannot be: the panel takes its
+	 * luminance from the PQ signal and the backlight write, which still
+	 * succeeds, changes nothing anybody can see.  A slider that moves,
+	 * updates its reading and does nothing is the exact failure this
+	 * file already refuses to ship for the HDR toggle below -- so in HDR
+	 * it drives the gamma ramp instead, and says so.
+	 */
+	if (!display_backlight_governs()) {
+		if (bar_have_command("gammastep")) {
+			g_snprintf(buf, sizeof(buf), "%d%%",
+			           (gint)(dd->gamma_brightness * 100.0 + 0.5));
+			item = gowl_bar_panel_add_slider(panel, "brightness",
+				"Brightness (software)", dd->gamma_brightness);
+			gowl_bar_panel_item_set_value(item, buf);
+			gowl_bar_panel_item_set_step(item, 0.05);
+			gowl_bar_panel_item_set_color(item,
+				GOWL_BAR_COLOR_YELLOW);
+		} else {
+			gowl_bar_panel_add_field_pair(panel, "Brightness",
+				"Needs gammastep", "Why",
+				"HDR panel ignores the backlight");
+		}
+	} else if (dd->brightness >= 0) {
 		g_snprintf(buf, sizeof(buf), "%d%%", dd->brightness);
 		item = gowl_bar_panel_add_slider(panel, "brightness",
 			"Brightness", (gdouble)dd->brightness / 100.0);
@@ -1698,6 +1767,158 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 	return panel;
 }
 
+/*
+ * Whether the backlight actually governs what the eye sees.
+ *
+ * It does not on an output in HDR: the panel is being driven in PQ,
+ * which carries absolute luminance, and the SDR backlight no longer
+ * decides anything.  Nothing reports this -- the write succeeds -- so it
+ * has to be inferred from the output's state.
+ */
+static gboolean
+display_backlight_governs(void)
+{
+	const BarEnv *env = bar_env();
+	GowlMonitor  *mon;
+
+	if (env == NULL || env->compositor == NULL)
+		return TRUE;
+	mon = gowl_compositor_get_selected_monitor(
+		GOWL_COMPOSITOR(env->compositor));
+	if (mon == NULL)
+		return TRUE;
+	return !gowl_monitor_get_hdr(mon);
+}
+
+/*
+ * Ask the gammastep this plugin started to put the ramp back and go.
+ *
+ * By pid, and only ever the pid we spawned.  A pattern kill would also
+ * take a gammastep of the user's own -- a service, or one they left
+ * running by hand -- and a supervised one would simply come back and
+ * fight whatever we set next.  The pid cannot be recycled underneath
+ * us because the child is spawned G_SPAWN_DO_NOT_REAP_CHILD: it stays
+ * a zombie, holding its number, until display_gamma_reap() waits on it.
+ */
+static void
+display_gamma_stop(DisplayData *dd)
+{
+	if (dd->gamma_pid == 0)
+		return;
+
+	kill((pid_t)dd->gamma_pid, SIGTERM);
+	dd->gamma_reap = g_slist_prepend(dd->gamma_reap,
+		GINT_TO_POINTER((gint)dd->gamma_pid));
+	dd->gamma_pid = 0;
+}
+
+/*
+ * Wait on the ones that have gone, once per poll.
+ *
+ * Nothing else will: Emacs's SIGCHLD handler only looks at processes it
+ * knows about, and GLib only at children it is watching, so a child
+ * spawned with G_SPAWN_DO_NOT_REAP_CHILD from here is ours to collect.
+ * ECHILD is treated as gone as well, for the case where something did
+ * reap it first.
+ */
+static void
+display_gamma_reap(DisplayData *dd)
+{
+	GSList *kept = NULL;
+	GSList *l;
+
+	for (l = dd->gamma_reap; l != NULL; l = l->next) {
+		GPid   pid = (GPid)GPOINTER_TO_INT(l->data);
+		pid_t  done;
+
+		done = waitpid((pid_t)pid, NULL, WNOHANG);
+		if (done > 0 || (done < 0 && errno == ECHILD)) {
+			g_spawn_close_pid(pid);
+			continue;
+		}
+		kept = g_slist_prepend(kept, l->data);
+	}
+	g_slist_free(dd->gamma_reap);
+	dd->gamma_reap = kept;
+
+	/* The live one can die on its own -- the compositor may refuse the
+	   gamma control, or the user may stop it -- and leaving a stale pid
+	   behind would mean signalling a number that is no longer it. */
+	if (dd->gamma_pid != 0) {
+		pid_t done = waitpid((pid_t)dd->gamma_pid, NULL, WNOHANG);
+
+		if (done > 0 || (done < 0 && errno == ECHILD)) {
+			g_spawn_close_pid(dd->gamma_pid);
+			dd->gamma_pid = 0;
+		}
+	}
+}
+
+/*
+ * Put the ramp where the two settings say it should be.
+ *
+ * One client for both, because they are one ramp: a night light set
+ * without the brightness would drop the dimming, and vice versa.  When
+ * both are neutral no client is left holding an identity ramp -- the
+ * old one is stopped and the hardware's own gamma comes back.
+ *
+ * The new client is started BEFORE the old one is told to quit.  The
+ * compositor hands the gamma control to whoever asked last, so the
+ * replacement is already driving the output by the time the old process
+ * goes; stopping first would put the screen back to full brightness for
+ * as long as the next gammastep takes to start, which across a slider
+ * drag is a strobe.
+ */
+static void
+display_apply_gamma(GowlBarPlugin *plugin, DisplayData *dd)
+{
+	gchar  temp[16];
+	gchar  bright[16];
+	gchar *argv[7];
+	g_autoptr(GError) error = NULL;
+	GPid   pid = 0;
+
+	if (!bar_have_command("gammastep")) {
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+			"Brightness",
+			"Needs gammastep: in HDR the panel takes its luminance "
+			"from the signal, not the backlight.");
+		return;
+	}
+
+	if (dd->gamma_temp == DISPLAY_NEUTRAL_TEMP
+	    && dd->gamma_brightness >= 0.999) {
+		display_gamma_stop(dd);
+		return;
+	}
+
+	/* -P resets whatever was on the ramp before applying, so a
+	   replacement never compounds with what it replaced. */
+	g_snprintf(temp, sizeof(temp), "%d", dd->gamma_temp);
+	g_snprintf(bright, sizeof(bright), "%.2f", dd->gamma_brightness);
+	argv[0] = (gchar *)"gammastep";
+	argv[1] = (gchar *)"-P";
+	argv[2] = (gchar *)"-O";
+	argv[3] = temp;
+	argv[4] = (gchar *)"-b";
+	argv[5] = bright;
+	argv[6] = NULL;
+
+	if (!g_spawn_async(NULL, argv, NULL,
+	                   G_SPAWN_SEARCH_PATH |
+	                   G_SPAWN_DO_NOT_REAP_CHILD |
+	                   G_SPAWN_STDOUT_TO_DEV_NULL |
+	                   G_SPAWN_STDERR_TO_DEV_NULL,
+	                   NULL, NULL, &pid, &error)) {
+		g_warning("gowl-bar: cannot start gammastep: %s",
+		          error->message);
+		return;
+	}
+
+	display_gamma_stop(dd);
+	dd->gamma_pid = pid;
+}
+
 static void
 display_set_brightness(DisplayData *dd, gdouble fraction)
 {
@@ -1728,7 +1949,28 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	(void)theme;
 
 	if (g_strcmp0(item_id, "brightness") == 0) {
-		display_set_brightness(dd, value);
+		if (display_backlight_governs()) {
+			display_set_brightness(dd, value);
+		} else {
+			/*
+			 * HDR: the backlight is not what the eye sees.  Dim the
+			 * ramp instead, and keep the night light with it.
+			 *
+			 * Quantised to the slider's own step, and applied only
+			 * when the step actually changes.  A drag delivers a
+			 * value per pointer motion and each one here is a
+			 * process launch -- the backlight branch above is a
+			 * write to a sysfs file and does not care.
+			 */
+			gdouble want = CLAMP(value,
+				DISPLAY_GAMMA_MIN_BRIGHTNESS, 1.0);
+
+			want = ((gint)(want * 20.0 + 0.5)) / 20.0;
+			if (ABS(want - dd->gamma_brightness) < 0.001)
+				return;
+			dd->gamma_brightness = want;
+			display_apply_gamma(plugin, dd);
+		}
 		return;
 	}
 
@@ -1798,6 +2040,18 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 				want ? "On: BT.2020, PQ, 10-bit. SDR content is "
 				       "passed through, not tone-mapped."
 				     : "Off: back to sRGB.");
+			/*
+			 * Leaving HDR gives the backlight back, so the software
+			 * dimming that stood in for it while there goes -- or
+			 * the screen would be dim twice over, with a slider
+			 * reading the backlight and no sign of the other half.
+			 * The night light is a setting rather than a stand-in
+			 * and stays.
+			 */
+			if (!want && dd->gamma_brightness < 0.999) {
+				dd->gamma_brightness = 1.0;
+				display_apply_gamma(plugin, dd);
+			}
 			gowl_bar_plugin_request_redraw(plugin);
 		} else {
 			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
@@ -1836,10 +2090,22 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 
 			cmd = gowl_bar_plugin_get_setting(plugin,
 			                                  "nightlight-command");
-			gowl_bar_plugin_spawn(plugin,
-				(cmd != NULL) ? cmd
-				              : "sh -c 'pkill gammastep || "
-				                "gammastep -O 4000'");
+			if (cmd != NULL) {
+				gowl_bar_plugin_spawn(plugin, cmd);
+			} else {
+				/*
+				 * Through the shared ramp, not a command of its
+				 * own.  The two used to be separate: turning the
+				 * night light on threw away any software dimming
+				 * and dimming threw away the night light, because
+				 * both are the same ramp and each rewrote it from
+				 * scratch.
+				 */
+				dd->gamma_temp =
+					(dd->gamma_temp == DISPLAY_NEUTRAL_TEMP)
+					? 4000 : DISPLAY_NEUTRAL_TEMP;
+				display_apply_gamma(plugin, dd);
+			}
 		} else if (index == 1) {
 			const gchar *cmd;
 
@@ -1858,13 +2124,31 @@ display_scroll(GowlBarPlugin *plugin, gpointer data, gdouble delta,
 	DisplayData *dd = data;
 	gint steps;
 
-	(void)plugin;
 	(void)modifiers;
+
+	steps = (discrete != 0) ? -discrete : ((delta > 0.0) ? -1 : 1);
+
+	/*
+	 * The same split as the panel's slider.  The wheel over this widget
+	 * means "brightness", not "backlight", and on an HDR output those
+	 * are no longer the same thing -- so it moves the ramp instead,
+	 * rather than turning a knob that is not connected to anything.
+	 */
+	if (!display_backlight_governs()) {
+		gdouble want;
+
+		want = CLAMP(dd->gamma_brightness + steps * 0.05,
+		             DISPLAY_GAMMA_MIN_BRIGHTNESS, 1.0);
+		if (ABS(want - dd->gamma_brightness) >= 0.001) {
+			dd->gamma_brightness = want;
+			display_apply_gamma(plugin, dd);
+		}
+		return TRUE;
+	}
 
 	if (dd->brightness < 0)
 		return FALSE;
 
-	steps = (discrete != 0) ? -discrete : ((delta > 0.0) ? -1 : 1);
 	display_set_brightness(dd,
 		CLAMP((gdouble)(dd->brightness + steps * 5) / 100.0, 0.0, 1.0));
 	return TRUE;

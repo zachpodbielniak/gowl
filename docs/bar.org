@@ -310,19 +310,56 @@ The widget keeps polling while hidden, so installing Tailscale makes it appear w
 Membership is read from =HaveNodeKey= in =tailscale status --json=, which stays true across a =tailscale down= and goes false only on a host that never joined or was logged out. The whole reply is read once per refresh and every field pulled out of it, rather than shelling out per value.
 
 *** Desktop
-| Widget     | Shows                        | Panel                                 |
-|------------+------------------------------+---------------------------------------|
-| =audio=    | Volume, muted state          | Output and input sliders, devices     |
-| =media=    | What is playing              | Track, player, transport              |
-| =podman=   | Running containers           | Container list, start/stop, logs      |
-| =weather=  | Conditions and temperature   | Feels-like, wind, three-day forecast  |
-| =git=      | The focused window's branch  | ---                                   |
-| =keymap=   | Keyboard layout              | ---                                   |
-| =display=  | Brightness                   | Brightness, text size, night light    |
-| =notifications= | Unread count, or DND     | Do not disturb, last, history, clear  |
-| =clipboard= | Entries held             | The history: pick, yank, delete       |
-| =screenshot= | A camera; lit while selecting | Screen / Window / Selection        |
-| =recorder= | Elapsed time while recording | Screen / Window / Region, and Stop    |
+| Widget     | Shows                        | Panel                                   |
+|------------+------------------------------+-----------------------------------------|
+| =audio=    | Volume, muted state          | Output and input sliders, devices       |
+| =media=    | What is playing              | Track, player, transport                |
+| =podman=   | Running containers           | Container list, start/stop, logs        |
+| =weather=  | Conditions and temperature   | Feels-like, wind, three-day forecast    |
+| =git=      | The focused window's branch  | ---                                     |
+| =keymap=   | Keyboard layout              | ---                                     |
+| =display=  | Brightness                   | Brightness, text size, night light, HDR |
+| =notifications= | Unread count, or DND     | Do not disturb, last, history, clear    |
+| =clipboard= | Entries held             | The history: pick, yank, delete         |
+| =screenshot= | A camera; lit while selecting | Screen / Window / Selection          |
+| =recorder= | Elapsed time while recording | Screen / Window / Region, and Stop      |
+
+**** Display
+
+The brightness slider is not always the backlight, and the panel says
+which one it is.
+
+On an output in HDR it cannot be.  The panel takes its luminance from
+the PQ signal, so the backlight write still succeeds, =actual_brightness=
+still follows it, and the screen does not change --- a slider that moves,
+updates its reading and does nothing.  The only lever left is the gamma
+ramp, and the only way to reach one is as a =wlr-gamma-control-v1=
+client: wlroots 0.20 offers the compositor no output LUT setter, and its
+scene colour transform is unusable once an image description is set,
+which is what HDR sets.  See [[file:configuration.org::#hdr][Brightness in HDR]].
+
+So in HDR the slider is labelled *Brightness (software)*, the hero line
+reads =HDR: dimmed in software=, and the value drives =gammastep=.  Its
+floor is 10%, which is gammastep's own.  With gammastep not installed the
+panel offers a *Needs gammastep* field instead of a slider.
+
+Brightness and the night light are *one ramp*, and are therefore one
+client, applied together.  They used to be two commands that each
+rewrote the ramp from scratch, so setting either threw the other away.
+
+Turning HDR off in the same panel drops the software dimming with it.
+The backlight is the control again, and a screen dimmed twice over ---
+once by a slider that now reads the backlight, once by a ramp with
+nothing left pointing at it --- is the confusing half of the handover.
+The night light is a setting rather than a stand-in, and stays.
+
+The child is tracked by pid and stopped by pid --- never by name.  A
+pattern kill would also take a gammastep of the user's own, and a
+supervised one would come straight back and fight the next setting.  The
+replacement is started *before* the old one is asked to quit, because
+the compositor hands the gamma control to whoever asked last; stopping
+first would flash the screen to full brightness for as long as the next
+gammastep takes to start, which across a drag is a strobe.
 
 **** Clipboard history
 
@@ -419,7 +456,7 @@ The same three captures are on the keyboard by default, reaching the module by n
 
 =Escape= cancels a selection in progress, and so does =screenshot-cancel=. The other names are =screenshot-area= (=screenshot-select=), =screenshot-window=, =screenshot-screen= (=screenshot=) and =screenshot-all= for every monitor stitched together; all of them work from =gowl <command>= too.
 
-The wheel over =audio= changes the volume and over =display= changes the brightness. A bar widget may claim the wheel without a modifier only because the pointer is over it --- there is no ambiguity about what it means.
+The wheel over =audio= changes the volume and over =display= changes the brightness --- whichever brightness that output actually has, the backlight or the software ramp. A bar widget may claim the wheel without a modifier only because the pointer is over it --- there is no ambiguity about what it means.
 
 *** Generic
 These are how you add something the shipped set does not cover, without writing any C:

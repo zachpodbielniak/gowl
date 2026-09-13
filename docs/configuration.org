@@ -1571,6 +1571,51 @@ monitors:
 
 Under =cmacs --gowl= the same toggle is in the bar's *display* panel, and =M-x cmacs-gowl-toggle-hdr= does it from the editor.
 
+***** Brightness in HDR
+
+The backlight stops being the brightness control.  A panel driven in PQ
+takes its luminance from the signal, so the write to
+=/sys/class/backlight= still succeeds, =actual_brightness= still tracks
+it, and nothing on screen changes.  Every brightness key and every
+=brightnessctl= bind behaves this way on such an output; it is the
+display, not the compositor.
+
+What is left is the gamma ramp, and reaching one means being a
+*=wlr-gamma-control-v1= client*.  wlroots 0.20 gives the compositor no
+way to set an output's LUT itself, and its scene colour transform is
+documented as unusable once an image description is set -- which is
+exactly what HDR sets.  So this cannot be done inside gowl.
+
+The bar's *display* panel does it with =gammastep=: in HDR its slider is
+labelled *Brightness (software)* and drives the ramp instead of the
+backlight, and the panel says =HDR: dimmed in software= so a slider that
+is not the backlight never silently pretends to be one.  Without
+gammastep installed the panel says so rather than offering the slider.
+
+Two consequences worth knowing:
+
+- *The floor is 10%.*  =gammastep -b= will not go below 0.1, so the
+  slider cannot either.
+- *Brightness and the night light are one ramp*, and the panel now drives
+  them through a single client.  They used to be separate commands that
+  each threw the other away.
+
+Outside the bar, any gamma-control client does the same job:
+
+#+begin_src sh
+gammastep -P -O 6500 -b 0.55     # 55%, no colour shift
+gammastep -P -O 4000 -b 0.55     # ... and a night light with it
+#+end_src
+
+A dedicated =brightness= bind can call the same thing, since the binds
+that ship call =brightnessctl= and that is the part HDR takes away:
+
+#+begin_src yaml
+keybinds:
+  "XF86MonBrightnessDown":
+    { action: spawn, desc: "Dim (HDR)", arg: "gammastep -P -O 6500 -b 0.50" }
+#+end_src
+
 **** =transform= values
 :PROPERTIES:
 :CUSTOM_ID: transform-values

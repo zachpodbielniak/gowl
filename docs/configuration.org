@@ -1622,11 +1622,74 @@ Profiles are tried in file order on every hotplug and reload; the first whose ou
 
 An output qualifies only when it advertises *both* BT.2020 and PQ.  That is a property of the whole chain rather than the panel: an HDR monitor on a cable or a port that cannot carry 10 bits at the current refresh rate reports neither, and =gowl-msg monitors= shows =hdr_capable= per output.
 
-*What this does not do is tone-map.*  SDR content is passed through, so on most panels an HDR output looks flat until an application says its surface is HDR.  That is what =wp-color-management-v1= is for: gowl advertises it, so a player can describe its content and the scene graph converts it.
+*What this does not do is tone-map.*  SDR content is passed through, so on most panels an HDR output looks flat until an application says its surface is HDR.  That is what =wp-color-management-v1= is for: gowl advertises it, so a player can describe its content --- and the scene graph converts it *if the renderer can*, which is the subject of the next subsection and is not a footnote.
 
-What gowl advertises comes from the renderer where it will answer, and otherwise from a built-in list: the sRGB and BT.2020 primaries, and the PQ, linear, gamma 2.2 and BT.1886 transfer functions, with parametric descriptions and a mastering display volume.  ICC profiles are not offered, because gowl does not implement them.
+What gowl advertises comes from the renderer where it can answer.  Where it cannot --- see below --- gowl advertises what a pass-through compositor honestly takes: the sRGB primaries and the gamma 2.2 transfer function, and nothing else.  =hdr-unmanaged= restores the old list (BT.2020 and PQ as well), because on that setting pass-through is the point.  ICC profiles are not offered, because gowl does not implement them.
 
 The sRGB primaries are in that list on purpose.  The protocol requires a compositor to name every set it supports, and a client is entitled to read an absent name as unsupported -- so a list of BT.2020 alone told applications that gowl could not handle ORDINARY colour, and Chromium-based ones logged =Unable to set image primaries= and gave up on colour management entirely.  The sRGB *transfer function* is the one exception: wlroots adds that itself and refuses to be handed it, so it is filtered out of the list and advertised by wlroots.  =G_MESSAGES_DEBUG=gowl= logs how many of each were advertised and where they came from.
+
+***** It needs a renderer that can convert colour
+
+*This is the one that matters, and it is why HDR is refused by default on
+the renderer gowl uses.*
+
+PQ carries *absolute* luminance. A PQ code value is a number of candelas
+per square metre, not a fraction of whatever the display happens to be
+doing --- so an SDR window on an HDR output is not merely passed along,
+it has to be *re-encoded*, with sRGB's diffuse white placed at the
+reference white an HDR signal uses (BT.2408 says 203 cd/m²).
+
+wlroots does that re-encoding in the renderer, and gates it on two
+renderer flags: =input_color_transform= and =output_color_transform=. Its
+*Vulkan* renderer sets both. Its GLES2 and pixman renderers set neither,
+and their scene render path then silently drops the transfer function,
+the primaries and the luminance multiplier. gowl uses GLES2, because that
+is the context its whole visual effect layer borrows --- the blur, the
+glass, the water, the rain, the cube, the overview, the switcher and the
+magnifier all require it.
+
+So on the default renderer, "HDR" meant this: sRGB code values written
+unchanged into a PQ signal. sRGB 1.0 became PQ 1.0, which is a request
+for *ten thousand* candelas. Everything on the desktop was asking the
+panel for its physical peak, all the time. Three separate-looking
+complaints come out of that one fact:
+
+- *Electron applications go dim.* Chromium honours
+  =wp-color-management-v1=: it reads the output's HDR image description,
+  re-encodes its interface into PQ at the protocol's 203 cd/m² reference
+  white, and is then the only correctly scaled thing on the screen.
+  Nothing is dimming it --- everything else is far too bright.
+- *The battery goes.* An edge-lit laptop panel driven at its HDR peak
+  with no local dimming is watts, continuously, whatever is on screen.
+- *"Match system" applications come up light.* A dark interface composited
+  through an unconverted PQ signal has raised blacks and washed-out
+  midtones, which is what a light theme looks like at a glance. (A
+  genuinely unrouted Settings portal does this too and is a separate bug;
+  see [[file:building.org][building]].)
+
+gowl therefore reports =hdr_capable: false= on an output whose display
+can do HDR when the renderer cannot convert colour for it, logs why once,
+and refuses =hdr: true=, =toggle_hdr= and =gowl-msg hdr on=.
+
+| Property         | Type | Default | Description |
+|------------------+------+---------+-------------|
+| =hdr-unmanaged=  | bool | =false= | Allow HDR where the compositor cannot convert colour for it |
+
+Two ways out, and they are a real choice rather than a fix:
+
+#+begin_src sh
+WLR_RENDERER=vulkan gowl      # converts colour correctly; every visual
+                              # effect declines to run under it
+#+end_src
+
+#+begin_src yaml
+hdr-unmanaged: true           # HDR as it was: wider gamut, uncorrected
+                              # luminance, and the three symptoms above
+#+end_src
+
+Under =cmacs --gowl= the effects are most of the point, so the honest
+summary is: on this renderer, HDR is a thing to turn on for a film and
+off afterwards, and =hdr-unmanaged= is how.
 
 ***** The mastering display
 

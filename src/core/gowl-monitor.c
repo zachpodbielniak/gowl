@@ -845,19 +845,62 @@ static const struct wlr_color_primaries gowl_bt2020_primaries = {
  * gowl_monitor_supports_hdr:
  * @self: a #GowlMonitor
  *
- * Returns: %TRUE if the output advertises BT.2020 and PQ
+ * Whether HDR can be driven on this output correctly.
+ *
+ * Two questions, and the second is the one that surprises people.  The
+ * DISPLAY has to advertise BT.2020 and PQ -- that is a property of the
+ * whole chain, and a cable or a refresh rate that cannot carry ten bits
+ * reports neither.  And the RENDERER has to be able to convert colour,
+ * because a PQ signal carries absolute luminance and every SDR surface
+ * on the screen has to be re-encoded into it.
+ *
+ * wlroots implements that conversion in its Vulkan renderer and nowhere
+ * else.  Under the GLES2 renderer gowl uses for its visual effects, the
+ * scene passes sRGB code values straight into the PQ signal: ordinary
+ * white becomes a request for 10,000 cd/m2, the panel runs at its peak
+ * -- which is most of what HDR costs in battery -- and a client that
+ * DOES honour wp-color-management-v1 encodes itself correctly at the
+ * 203 cd/m2 reference white and so appears dim beside everything that
+ * did not.  All three of those read as separate bugs and are one.
+ *
+ * `hdr-unmanaged: true' says "give it to me anyway".
+ *
+ * Returns: %TRUE if HDR can be switched on for this output
  */
 gboolean
 gowl_monitor_supports_hdr(GowlMonitor *self)
 {
+	GowlConfig *config;
+
 	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
 
 	if (self->wlr_output == NULL)
 		return FALSE;
-	return (self->wlr_output->supported_primaries
-	        & WLR_COLOR_NAMED_PRIMARIES_BT2020) != 0
-	    && (self->wlr_output->supported_transfer_functions
-	        & WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ) != 0;
+	if ((self->wlr_output->supported_primaries
+	     & WLR_COLOR_NAMED_PRIMARIES_BT2020) == 0
+	    || (self->wlr_output->supported_transfer_functions
+	        & WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ) == 0)
+		return FALSE;
+
+	if (self->compositor == NULL)
+		return TRUE;
+	config = gowl_compositor_get_config(self->compositor);
+	if (config != NULL && gowl_config_get_hdr_unmanaged(config))
+		return TRUE;
+	if (gowl_renderer_can_color_manage(self->compositor->renderer))
+		return TRUE;
+
+	if (!self->hdr_renderer_warned) {
+		self->hdr_renderer_warned = TRUE;
+		g_message("%s advertises BT.2020 and PQ, but this renderer "
+		          "cannot convert colour -- HDR is not offered, because "
+		          "SDR windows would reach the panel unconverted inside "
+		          "a PQ signal.  WLR_RENDERER=vulkan can convert it (and "
+		          "turns off every visual effect); `hdr-unmanaged: true' "
+		          "takes it uncorrected.",
+		          gowl_monitor_get_name(self));
+	}
+	return FALSE;
 }
 
 /**

@@ -2600,6 +2600,15 @@ lock_spawn_command(GowlCompositor *self)
 	return TRUE;
 }
 
+gboolean
+gowl_renderer_can_color_manage(struct wlr_renderer *renderer)
+{
+	if (renderer == NULL)
+		return FALSE;
+	return renderer->features.input_color_transform
+	    && renderer->features.output_color_transform;
+}
+
 /* ── What shows through translucent windows ──────────────────────── */
 
 GowlBackdropStyle
@@ -3876,26 +3885,70 @@ gowl_compositor_start(
 		static const enum wp_color_manager_v1_render_intent intents[] = {
 			WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL,
 		};
-		/* The minimum worth serving, used when the renderer will not
-		 * answer: enough for an HDR video player, which is the case
-		 * this protocol exists for. */
-		static const enum wp_color_manager_v1_transfer_function fallback_tfs[] = {
+		/* What a compositor that converts NOTHING can honestly say it
+		 * takes: ordinary colour, and no more. */
+		static const enum wp_color_manager_v1_transfer_function passthrough_tfs[] = {
+			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22,
+		};
+		static const enum wp_color_manager_v1_primaries passthrough_prims[] = {
+			WP_COLOR_MANAGER_V1_PRIMARIES_SRGB,
+		};
+		/* And what it says on `hdr-unmanaged', where the user has
+		 * accepted that everything is passed through as it is: enough
+		 * for an HDR video player, which is the case this protocol
+		 * exists for. */
+		static const enum wp_color_manager_v1_transfer_function unmanaged_tfs[] = {
 			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ,
 			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR,
 			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22,
 			WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886,
 		};
-		static const enum wp_color_manager_v1_primaries fallback_prims[] = {
+		static const enum wp_color_manager_v1_primaries unmanaged_prims[] = {
 			WP_COLOR_MANAGER_V1_PRIMARIES_SRGB,
 			WP_COLOR_MANAGER_V1_PRIMARIES_BT2020,
 		};
+		const enum wp_color_manager_v1_transfer_function *fallback_tfs;
+		const enum wp_color_manager_v1_primaries *fallback_prims;
+		size_t n_fallback_tfs, n_fallback_prims;
+		gboolean unmanaged;
 		enum wp_color_manager_v1_transfer_function *tfs = NULL;
 		enum wp_color_manager_v1_primaries *prims = NULL;
 		size_t n_tfs = 0;
 		size_t n_prims = 0;
 		struct wlr_color_manager_v1_options opts;
 
-		if (self->renderer != NULL) {
+		unmanaged = self->config != NULL
+			&& gowl_config_get_hdr_unmanaged(self->config);
+		fallback_tfs   = unmanaged ? unmanaged_tfs : passthrough_tfs;
+		fallback_prims = unmanaged ? unmanaged_prims : passthrough_prims;
+		n_fallback_tfs = unmanaged ? G_N_ELEMENTS(unmanaged_tfs)
+		                           : G_N_ELEMENTS(passthrough_tfs);
+		n_fallback_prims = unmanaged ? G_N_ELEMENTS(unmanaged_prims)
+		                             : G_N_ELEMENTS(passthrough_prims);
+
+		/*
+		 * AND WHAT IS ADVERTISED HAS TO BE WHAT IS IMPLEMENTED.
+		 *
+		 * The two lists above are asked of the renderer, and a
+		 * renderer that cannot convert colour at all answers with
+		 * nothing -- at which point the built-in list was substituted,
+		 * and gowl told every client it could take PQ and BT.2020 on a
+		 * renderer that would pass both through untouched.  Chromium
+		 * believes that, re-encodes its interface into PQ at the
+		 * protocol's 203 cd/m2 reference white, and is then the only
+		 * correctly scaled thing on a screen where everything else is
+		 * being emitted at the panel's peak -- which is what "Element
+		 * goes dim in HDR" actually is.
+		 *
+		 * So the built-in list is now what a PASS-THROUGH compositor
+		 * can honestly offer: sRGB primaries and gamma 2.2.  (The sRGB
+		 * transfer function is left out of every list here because
+		 * wlroots adds it itself and asserts if handed it.)  A user who
+		 * has asked for HDR anyway with `hdr-unmanaged' gets the old
+		 * list, because on that setting pass-through is the point.
+		 */
+		if (self->renderer != NULL
+		    && gowl_renderer_can_color_manage(self->renderer)) {
 			size_t i, keep;
 
 			tfs = wlr_color_manager_v1_transfer_function_list_from_renderer(
@@ -3929,12 +3982,12 @@ gowl_compositor_start(
 			? (const enum wp_color_manager_v1_transfer_function *)tfs
 			: fallback_tfs;
 		opts.transfer_functions_len = (tfs != NULL && n_tfs > 0)
-			? n_tfs : G_N_ELEMENTS(fallback_tfs);
+			? n_tfs : n_fallback_tfs;
 		opts.primaries = (prims != NULL && n_prims > 0)
 			? (const enum wp_color_manager_v1_primaries *)prims
 			: fallback_prims;
 		opts.primaries_len = (prims != NULL && n_prims > 0)
-			? n_prims : G_N_ELEMENTS(fallback_prims);
+			? n_prims : n_fallback_prims;
 
 		self->color_manager = wlr_color_manager_v1_create(self->wl_display,
 		                                                  1, &opts);
@@ -3955,7 +4008,11 @@ gowl_compositor_start(
 			        "functions advertised%s",
 			        opts.primaries_len, opts.transfer_functions_len,
 			        (tfs != NULL && n_tfs > 0)
-			        ? " (from the renderer)" : " (built-in list)");
+			        ? " (from the renderer, which converts colour)"
+			        : unmanaged
+			        ? " (pass-through, hdr-unmanaged)"
+			        : " (pass-through: this renderer converts no "
+			          "colour, so PQ and BT.2020 are not offered)");
 		}
 	}
 
@@ -6990,6 +7047,63 @@ on_gamma_control_set_gamma(struct wl_listener *listener, void *data)
 	wlr_output_schedule_frame(event->output);
 }
 
+/* Refused commits in a row before frames go on a timer rather than on
+ * the idle loop. */
+#define GOWL_FRAME_FAILURES_BEFORE_BACKOFF (3)
+/* How often an output that is backing off asks again, in milliseconds. */
+#define GOWL_FRAME_BACKOFF_MS              (50)
+
+static gboolean monitor_frame_retry(gpointer data);
+
+/*
+ * One frame did not reach the screen.
+ *
+ * COUNTED rather than merely logged, because the count is what stops the
+ * output being asked for its next frame on the idle loop -- and logged at
+ * all, which it was not: the return of wlr_output_commit_state() was
+ * thrown away here, so an output that had stopped accepting frames
+ * re-rendered the entire scene once per event-loop iteration, forever,
+ * without a word anywhere.  That is minutes of battery an hour and it
+ * looks exactly like nothing.
+ */
+static void
+monitor_frame_failed(GowlMonitor *m, const gchar *why)
+{
+	m->commit_failures++;
+	/* The first one, and then rarely: a spinning output produces one of
+	 * these per iteration and a log full of them helps nobody. */
+	if (m->commit_failures == 1 || m->commit_failures % 600 == 0) {
+		g_warning("%s: %s (%u in a row)", gowl_monitor_get_name(m), why,
+		          m->commit_failures);
+	}
+}
+
+/*
+ * Ask for the next frame on a timer instead of immediately.
+ *
+ * Armed at most once -- the id is the guard -- and dropped by
+ * on_monitor_destroy().
+ */
+static void
+monitor_frame_retry_later(GowlMonitor *m)
+{
+	if (m->frame_retry_id != 0)
+		return;
+	m->frame_retry_id = g_timeout_add(GOWL_FRAME_BACKOFF_MS,
+	                                  monitor_frame_retry, m);
+}
+
+static gboolean
+monitor_frame_retry(gpointer data)
+{
+	GowlMonitor *m = (GowlMonitor *)data;
+
+	m->frame_retry_id = 0;
+	if (m->wlr_output != NULL)
+		wlr_output_schedule_frame(m->wlr_output);
+	return G_SOURCE_REMOVE;
+}
+
 static void
 on_monitor_frame(struct wl_listener *listener, void *data)
 {
@@ -7043,6 +7157,13 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 		if (!wlr_scene_output_build_state(m->scene_output, &state,
 		                                   NULL)) {
 			wlr_output_state_finish(&state);
+			/* Nothing was rendered, so `frame-rendered' must not
+			 * fire: the recording module re-arms a frame from that
+			 * signal, which together with the re-arm below is half
+			 * of what made a failing output spin. */
+			skipped = TRUE;
+			monitor_frame_failed(m,
+				"the scene would not build a frame");
 			goto frame_done;
 		}
 		monitor_frame_presentation(m, &state);
@@ -7066,7 +7187,10 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 			m->gamma_dirty = FALSE;
 		}
 
-		wlr_output_commit_state(m->wlr_output, &state);
+		if (!wlr_output_commit_state(m->wlr_output, &state))
+			monitor_frame_failed(m, "the output refused the frame");
+		else
+			m->commit_failures = 0;
 		wlr_output_state_finish(&state);
 	}
 
@@ -7076,8 +7200,17 @@ frame_done:
 	 * moving: an idle output stops redrawing, which would freeze an
 	 * animation halfway.  Per-output, so a window animating on one
 	 * monitor no longer holds every other monitor at full refresh. */
-	if (m->effect_live)
-		wlr_output_schedule_frame(m->wlr_output);
+	if (m->effect_live) {
+		/* On a timer once the output has refused a few in a row.  A
+		 * failed commit leaves no page flip in flight, and
+		 * wlr_output_schedule_frame() then arms an idle source rather
+		 * than waiting for a vblank -- so asking again straight away
+		 * is a busy loop that renders the scene every time round. */
+		if (m->commit_failures < GOWL_FRAME_FAILURES_BEFORE_BACKOFF)
+			wlr_output_schedule_frame(m->wlr_output);
+		else
+			monitor_frame_retry_later(m);
+	}
 
 	/* Notify clients that a frame has been rendered -- or would have
 	 * been: a client waiting on a frame callback gets it either way. */
@@ -7125,6 +7258,9 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 	wl_list_remove(&m->frame.link);
 	wl_list_remove(&m->destroy.link);
 	wl_list_remove(&m->request_state.link);
+
+	/* And the backoff timer, which holds a pointer to this monitor. */
+	g_clear_handle_id(&m->frame_retry_id, g_source_remove);
 
 	/* Remove from compositor's monitor list */
 	self->monitors = g_list_remove(self->monitors, m);

@@ -673,6 +673,19 @@ struct _GowlMonitor {
 	 * 10 bits, and what its render format was before, so turning it
 	 * off restores the format rather than guessing at 8-bit. */
 	gboolean hdr_enabled;
+	/* Said once per output, because "the display can do HDR but this
+	 * compositor cannot colour-manage it" is the only actionable form
+	 * of that refusal and repeating it per poll is noise. */
+	gboolean hdr_renderer_warned;
+	/* Frames that did not reach the screen, in a row, and the timer
+	 * that asks for the next one once there have been a few.
+	 * wlr_output_schedule_frame() falls back to an IDLE source when no
+	 * page flip is in flight, so an output whose commits are failing
+	 * must never be asked for its next frame immediately: it would spin
+	 * at the speed of the event loop, rendering the whole scene each
+	 * time, with nothing in any log. */
+	guint    commit_failures;
+	guint    frame_retry_id;
 	guint32  hdr_prev_render_format;
 	/* The DRM fourcc HDR is actually being driven at, 0 for "whatever
 	 * the output was already using" -- which means 8 bits per channel,
@@ -1050,6 +1063,28 @@ void     gowl_output_power_finish          (GowlCompositor *self);
 void     gowl_compositor_set_monitor_powered(GowlCompositor *self, GowlMonitor *m,
                                              gboolean on);
 gboolean gowl_compositor_wake_outputs      (GowlCompositor *self);
+
+/**
+ * gowl_renderer_can_color_manage:
+ * @renderer: (nullable): the renderer the compositor draws with
+ *
+ * Whether the renderer can convert a surface between colour spaces and
+ * encode the result for the output.
+ *
+ * wlroots gates every colour conversion on two renderer feature flags,
+ * and its GLES2 and pixman renderers set neither: their scene render
+ * path silently drops the transfer function, the primaries and the
+ * luminance multiplier.  Only the Vulkan renderer implements them.
+ *
+ * This is the difference between HDR and a picture that merely says it
+ * is HDR.  Without it SDR content reaches the panel as raw code values
+ * inside a PQ signal, so ordinary white is emitted as a request for
+ * 10,000 cd/m2 while any client that honestly encodes PQ lands at its
+ * 203 cd/m2 reference white and looks dim beside everything else.
+ *
+ * Returns: %TRUE when both the input and output colour transforms work
+ */
+gboolean gowl_renderer_can_color_manage   (struct wlr_renderer *renderer);
 
 /* keyboard-shortcuts-inhibit: gowl-shortcuts-inhibit.c */
 void     gowl_shortcuts_inhibit_init       (GowlCompositor *self);

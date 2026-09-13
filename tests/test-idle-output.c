@@ -352,6 +352,63 @@ keeps_drawing_when_asked(void)
 
 /* ── Each case in a subprocess of its own ────────────────────────── */
 
+/*
+ * An output that refuses every frame does not spin.
+ *
+ * The failure this guards is the worst-behaved kind there is: silent,
+ * expensive, and self-sustaining.  wlr_output_schedule_frame() waits for
+ * a vblank only when a page flip is in flight, and a refused commit
+ * leaves none -- so it arms an IDLE source instead, and the next
+ * iteration of the event loop renders the whole scene again, and again,
+ * at the speed of the loop rather than of the screen.  Nothing logged it,
+ * because the return of wlr_output_commit_state() was thrown away.
+ *
+ * Made to happen by copying the backend's own vtable and replacing
+ * .commit with a refusal, which is the only way to reach the path
+ * without a broken driver.
+ */
+static const struct wlr_output_impl *idle_real_impl;
+static struct wlr_output_impl        idle_refusing_impl;
+
+static bool
+refuse_commit(struct wlr_output *output, const struct wlr_output_state *state)
+{
+	return false;
+}
+
+static void
+failed_commit_backs_off(void)
+{
+	Idle t;
+	gint frames;
+
+	idle_start(&t);
+
+	idle_real_impl = t.output->impl;
+	idle_refusing_impl = *idle_real_impl;
+	idle_refusing_impl.commit = refuse_commit;
+	t.output->impl = &idle_refusing_impl;
+
+	/* Something still animating, which is what asks for the next frame
+	 * -- and is exactly the case that used to spin. */
+	t.effect->live = TRUE;
+	frames = t.effect->frame;
+	wlr_output_schedule_frame(t.output);
+	run_for(&t, 250);
+
+	/*
+	 * A quarter of a second at a 50 ms backoff is five or so, plus the
+	 * few before the backoff arms.  Before it, this was thousands: the
+	 * idle source fires once per loop iteration, and the loop iterates
+	 * as fast as it can be asked to.
+	 */
+	g_assert_cmpint(t.effect->frame - frames, <, 60);
+	g_assert_cmpint(t.effect->frame - frames, >, 0);
+
+	t.output->impl = idle_real_impl;
+	idle_stop(&t);
+}
+
 static void
 in_subprocess(void (*body)(void))
 {
@@ -374,6 +431,10 @@ static void test_keeps_drawing(void)
 {
 	in_subprocess(keeps_drawing_when_asked);
 }
+static void test_failed_commit(void)
+{
+	in_subprocess(failed_commit_backs_off);
+}
 
 int
 main(int argc, char **argv)
@@ -386,6 +447,8 @@ main(int argc, char **argv)
 	g_test_add_func("/idle-output/draws-on-demand", test_draws_on_demand);
 	g_test_add_func("/idle-output/keeps-drawing-when-asked",
 	                test_keeps_drawing);
+	g_test_add_func("/idle-output/failed-commit-backs-off",
+	                test_failed_commit);
 
 	return g_test_run();
 }

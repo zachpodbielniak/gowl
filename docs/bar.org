@@ -332,7 +332,10 @@ which one it is.
 On an output in HDR it cannot be.  The panel takes its luminance from
 the PQ signal, so the backlight write still succeeds, =actual_brightness=
 still follows it, and the screen does not change --- a slider that moves,
-updates its reading and does nothing.  The only lever left is the gamma
+updates its reading and does nothing.  (Since gowl now refuses HDR on a
+renderer that cannot convert colour, this is reached under
+=WLR_RENDERER=vulkan= or =hdr-unmanaged=; see
+[[file:configuration.org::#hdr][the HDR notes]].)  The only lever left is the gamma
 ramp, and the only way to reach one is as a =wlr-gamma-control-v1=
 client: wlroots 0.20 offers the compositor no output LUT setter, and its
 scene colour transform is unusable once an image description is set,

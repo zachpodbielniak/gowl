@@ -1826,6 +1826,24 @@ gdouble      gowl_config_get_rain_light (GowlConfig *self);
 gint         gowl_config_get_rain_frost (GowlConfig *self);
 gint         gowl_config_get_rain_frost_passes (GowlConfig *self);
 
+/* --- HDR ---
+ *
+ * Whether HDR may be switched on where the compositor cannot convert
+ * colour for it.  FALSE by default, because the result is not HDR.
+ *
+ * A PQ signal carries ABSOLUTE luminance, so SDR content has to be
+ * re-encoded into it -- wlroots does that in the renderer, and only its
+ * Vulkan renderer implements it.  Under the GLES2 renderer gowl uses,
+ * sRGB code values reach the panel unconverted inside a PQ signal: every
+ * white pixel becomes a request for ten thousand candelas, the panel
+ * runs at its peak, and any client that DOES honour the colour-management
+ * protocol encodes itself correctly at 203 cd/m2 and so looks dim beside
+ * everything that did not.
+ *
+ * Setting it true restores the old behaviour for anyone who wants the
+ * wider gamut and will accept the luminance. */
+gboolean     gowl_config_get_hdr_unmanaged (GowlConfig *self);
+
 /* Drop shadows under windows. */
 gboolean     gowl_config_get_shadow (GowlConfig *self);
 /* Shadow softness in pixels, 0 to 128. */

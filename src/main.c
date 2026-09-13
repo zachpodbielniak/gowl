@@ -100,6 +100,13 @@ static const GowlBuiltinModule builtin_modules[] = {
 		" *   - blur: frosted glass and drop shadows\n"
 	},
 	{
+		"liquidglass",
+		"Refracts the wallpaper through translucent windows",
+		"  liquidglass:\n"
+		"    enabled: true\n",
+		" *   - liquidglass: the wallpaper, refracted through the window\n"
+	},
+	{
 		"autostart",
 		"Spawn configured commands on compositor startup",
 		"  autostart:\n"
@@ -285,6 +292,11 @@ static const gchar *default_yaml_config =
 	"  \"Super+Tab\": { action: cycle_layout }\n"
 	"  \"Super+v\": { action: set_split, arg: \"vsplit\" }\n"
 	"  \"Super+Shift+v\": { action: set_split, arg: \"normal\" }\n"
+	"\n"
+	"  # What shows through a translucent window: glass, blur, nothing.\n"
+	"  # Both modules read `window-backdrop', so this is instant and\n"
+	"  # needs neither of them loaded to be bound.\n"
+	"  \"Super+Shift+apostrophe\": { action: cycle_backdrop, desc: \"Cycle the window backdrop\" }\n"
 	"\n"
 	"  # Locking.  A compositor bind, so it works whatever has the\n"
 	"  # keyboard and whichever tag is in view.\n"

@@ -64,6 +64,40 @@ typedef struct {
 	GLint  a_uv;
 } GowlFxQuadProg;
 
+/*
+ * The liquid-glass program (gowl-fx-glass.c).
+ *
+ * Kept out of gowl_fx_gl_new() and built on first use: a driver that
+ * cannot compile it must cost the desktop the glass alone, not the cube,
+ * the overview, the switcher, the magnifier and the blur along with it.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_soft;
+	GLint  u_sharp;
+	GLint  u_src_origin;
+	GLint  u_src_size;
+	GLint  u_size;
+	GLint  u_radius;
+	GLint  u_bevel;
+	GLint  u_thickness;
+	GLint  u_slope;
+	GLint  u_maxd;
+	GLint  u_shape;
+	GLint  u_dispersion;
+	GLint  u_rim;
+	GLint  u_shade;
+	GLint  u_edge_w;
+	GLint  u_light;
+	GLint  u_sat;
+	GLint  u_clarity;
+	GLint  u_tint;
+	GLint  u_brightness;
+	GLint  u_alpha;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxGlassProg;
+
 struct _GowlFxGl {
 	struct wlr_renderer *renderer;   /* borrowed */
 	EGLDisplay           display;
@@ -74,6 +108,8 @@ struct _GowlFxGl {
 	GowlFxSamplerProg    copy_2d;
 	GowlFxSamplerProg    copy_ext;   /* program 0 without the extension */
 	GowlFxSamplerProg    blur;
+	GowlFxGlassProg      glass;      /* built on first use, see above */
+	gboolean             glass_tried;
 
 	GLuint               scratch_fbo;
 	GowlFxTexture        scratch_a;

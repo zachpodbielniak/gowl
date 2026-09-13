@@ -259,6 +259,9 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  * @GOWL_ACTION_LOCK: Lock the session via the lock handler module.
  * @GOWL_ACTION_MOVE_STACK: Reorder the focused tiled client.
  * @GOWL_ACTION_CUSTOM: Custom action handled by a module callback.
+ * @GOWL_ACTION_CYCLE_BACKDROP: Cycle what shows through translucent
+ *   windows --- glass, blur, nothing --- or set it outright when @arg
+ *   names one of them.
  * @GOWL_ACTION_TOGGLE_HDR: Switch the focused output between HDR and SDR
  * @GOWL_ACTION_OUTPUT_POWER: Power every output on, off or toggle
  *   (arg "on", "off", anything else toggles).
@@ -316,11 +319,39 @@ typedef enum {
 	GOWL_ACTION_FOCUS_DIR,
 	GOWL_ACTION_FOCUS_URGENT,
 	GOWL_ACTION_FOCUS_LAST,
-	GOWL_ACTION_TOGGLE_HDR
+	GOWL_ACTION_TOGGLE_HDR,
+	GOWL_ACTION_CYCLE_BACKDROP
 } GowlAction;
 
 #define GOWL_TYPE_ACTION (gowl_action_get_type())
 GType gowl_action_get_type(void) G_GNUC_CONST;
+
+/* --- GowlBackdropStyle --- */
+
+/**
+ * GowlBackdropStyle:
+ * @GOWL_BACKDROP_NONE: nothing behind a translucent window but the
+ *   desktop itself, seen straight through
+ * @GOWL_BACKDROP_BLUR: the wallpaper, blurred (modules/blur)
+ * @GOWL_BACKDROP_GLASS: the wallpaper refracted through a bevelled slab
+ *   of glass (modules/liquidglass)
+ *
+ * What shows through a translucent window.
+ *
+ * The compositor owns this rather than either module because the two are
+ * alternatives: both draw a node into the same place in the same window's
+ * scene tree, and both being switched on means the second one's is simply
+ * hidden behind the first.  One setting both of them read is what makes
+ * `cycle-backdrop' a single key rather than a pair of module loads.
+ */
+typedef enum {
+	GOWL_BACKDROP_NONE,
+	GOWL_BACKDROP_BLUR,
+	GOWL_BACKDROP_GLASS
+} GowlBackdropStyle;
+
+#define GOWL_TYPE_BACKDROP_STYLE (gowl_backdrop_style_get_type())
+GType gowl_backdrop_style_get_type(void) G_GNUC_CONST;
 
 /* --- GowlConfigSource --- */
 

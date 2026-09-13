@@ -22,6 +22,8 @@
 #include <glib-object.h>
 
 #include "boxed/gowl-palette.h"
+/* For GowlBackdropStyle, which `window-backdrop' resolves to. */
+#include "gowl-enums.h"
 
 G_BEGIN_DECLS
 
@@ -1571,6 +1573,72 @@ gint         gowl_config_get_blur_downscale (GowlConfig *self);
 gint         gowl_config_get_blur_passes (GowlConfig *self);
 /* Brightness applied to the blurred backdrop, 0.2 to 2.0. */
 gdouble      gowl_config_get_blur_brightness (GowlConfig *self);
+/* --- What shows through a translucent window (modules/blur,
+ *     modules/liquidglass) ---
+ *
+ * The two modules draw into the same place in the same window's scene
+ * tree, so they are alternatives rather than layers: one setting both of
+ * them read is what makes `cycle-backdrop' a single key.  The older
+ * boolean `blur' key is a different setting -- it switches the blur
+ * module's backdrop off entirely, whatever style is selected. */
+
+GowlBackdropStyle gowl_config_get_backdrop_style (GowlConfig *self);
+void              gowl_config_set_backdrop_style (GowlConfig        *self,
+                                                  GowlBackdropStyle  style);
+/* (transfer none): the config spelling of @style, as `window-backdrop'
+ * takes it and IPC reports it.  Static; do not free. */
+const gchar *gowl_config_backdrop_style_name (GowlBackdropStyle style);
+/* Parse a config spelling, case- and underscore-insensitively. */
+gboolean     gowl_config_backdrop_style_from_name (const gchar       *name,
+                                                   GowlBackdropStyle *out);
+
+/* --- Liquid glass (modules/liquidglass) ---
+ *
+ * Lengths are LOGICAL pixels; the module scales them by the output's
+ * scale.  See #GowlFxGlassParams in fx/gowl-fx.h, which each of these
+ * feeds, for what they do optically. */
+
+/* Width of the bent zone along the edge, 1 to 400.  Clamped to half the
+ * short side at render time: past that the direction field the corners
+ * are steered by turns inside out. */
+gdouble      gowl_config_get_glass_bevel (GowlConfig *self);
+/* Slab depth, 0 to 400.  This is what decides how far the edge pulls the
+ * wallpaper, not the bevel. */
+gdouble      gowl_config_get_glass_thickness (GowlConfig *self);
+/* Cap on how fast the displacement decays, 0.2 to 4 px/px.  ABOVE 1 the
+ * field folds and the wallpaper shows up twice along the rim, which is
+ * where the liquid look comes from. */
+gdouble      gowl_config_get_glass_slope (GowlConfig *self);
+/* Bevel cross-section: "circle", "squircle" or "lip". */
+const gchar *gowl_config_get_glass_shape (GowlConfig *self);
+/* Chromatic aberration in PIXELS of channel separation, 0 to 8.  A
+ * material constant, unrelated to how strong the lens is. */
+gdouble      gowl_config_get_glass_dispersion (GowlConfig *self);
+/* How much light the edge sends back, 0 to 4. */
+gdouble      gowl_config_get_glass_rim (GowlConfig *self);
+/* How much the edge darkens, 0 to 2. */
+gdouble      gowl_config_get_glass_shade (GowlConfig *self);
+/* How far the shading and the sheen reach, 0.5 to 64 px.  Absolute on
+ * purpose; scaling it with the bevel turns a wide rim into a grey band. */
+gdouble      gowl_config_get_glass_edge_width (GowlConfig *self);
+/* Saturation inside the bevel ring, 0 to 3.  The centre is never
+ * touched; below 1 cleans up the colour folding and dispersion muddy. */
+gdouble      gowl_config_get_glass_saturation (GowlConfig *self);
+/* How much of the UNFROSTED wallpaper the ring shows, 0 to 1.  Thick
+ * glass diffuses and a lens does not, and the ring is the lens. */
+gdouble      gowl_config_get_glass_clarity (GowlConfig *self);
+/* Light direction in degrees: 0 straight above, positive clockwise. */
+gdouble      gowl_config_get_glass_light (GowlConfig *self);
+const gchar *gowl_config_get_glass_tint (GowlConfig *self);
+/* Brightness applied to the glass, 0.2 to 2.0. */
+gdouble      gowl_config_get_glass_brightness (GowlConfig *self);
+/* Opacity of the glass itself, 0.0 to 1.0. */
+gdouble      gowl_config_get_glass_opacity (GowlConfig *self);
+/* How much smaller the frost is computed, 1 to 8, and how many box
+ * passes, 1 to 6.  The frost is what the flat centre of the slab shows. */
+gint         gowl_config_get_glass_frost (GowlConfig *self);
+gint         gowl_config_get_glass_frost_passes (GowlConfig *self);
+
 /* Drop shadows under windows. */
 gboolean     gowl_config_get_shadow (GowlConfig *self);
 /* Shadow softness in pixels, 0 to 128. */

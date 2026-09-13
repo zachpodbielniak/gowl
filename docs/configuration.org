@@ -531,6 +531,41 @@ nothing. It also sits above the bar, since a magnifier that magnified
 everything except the panel would be useless to somebody who needs it to
 read the panel.
 
+**** What shows through a translucent window
+:PROPERTIES:
+:CUSTOM_ID: window-backdrop
+:END:
+
+Two modules can fill the space behind a translucent window, and
+=window-backdrop= says which one does.
+
+| Property           | Type   | Default   | Description |
+|--------------------+--------+-----------+-------------|
+| =window-backdrop=  | enum   | =glass=   | =glass=, =blur= or =none= |
+
+- =glass= --- the wallpaper refracted through the window, as though the
+  window were a slab of glass with a bevelled edge ([[#liquidglass][Liquid glass]]).
+- =blur= --- the wallpaper, blurred ([[#blur][Frosted glass and shadows]]).
+- =none= --- the desktop, seen straight through.
+
+*They are alternatives, not layers.* Both modules put one scene node in
+the same place in the same window's tree, so both drawing means one is
+hidden behind the other while still costing a capture and a blur on every
+tag switch. Loading both is normal and intended: the setting picks which
+one draws, and =Super+Shift+"= (=cycle_backdrop=) steps through them ---
+glass, blur, nothing, glass again --- without loading anything. The two
+that draw something come first, so one press from the default lands on
+the other look rather than on nothing.
+
+Scripts reach the same setting with =gowl-msg backdrop glass= or
+=gowl-msg backdrop next=, and a change is announced as =EVENT backdrop=
+to every IPC subscriber.
+
+*How much of it you see is not this setting.* It is how transparent the
+window is --- the =alpha= module, a window rule, or the client's own
+background alpha. An opaque window shows no backdrop of any kind, and
+that is not a bug in either module.
+
 **** Frosted glass and shadows
 :PROPERTIES:
 :CUSTOM_ID: blur
@@ -540,6 +575,11 @@ Blurred backdrops behind translucent windows, and soft drop shadows under
 all of them. Opt in with =modules.blur.enabled: true=; CMacs loads it by
 default. Windows become translucent through the =alpha= module or a
 window rule; this module supplies what shows through them.
+
+The backdrop half of this module draws only when
+[[#window-backdrop][=window-backdrop=]] is =blur=. The SHADOWS are not part of that choice:
+they are this module's alone, they have their own =shadow= key, and they
+stay whichever backdrop is selected --- including =none=.
 
 | Property            | Type   | Default     | Description |
 |---------------------+--------+-------------+-------------|
@@ -575,6 +615,105 @@ and size never, and the shadow is not redrawn for any of it.
 Neither decoration claims any event: they follow the window rather than
 placing it, so loading this module changes nothing about how windows
 move.
+
+**** Liquid glass
+:PROPERTIES:
+:CUSTOM_ID: liquidglass
+:END:
+
+The wallpaper refracted through the window rather than merely blurred
+behind it. Opt in with =modules.liquidglass.enabled: true=; CMacs loads
+it by default, and [[#window-backdrop][=window-backdrop=]] is =glass= out of the box.
+
+The window is treated as a slab of glass =glass-thickness= deep whose
+edge is rounded off over =glass-bevel= pixels. A viewer's ray comes
+straight down, meets that rounded edge at an angle, refracts towards the
+surface normal (n = 1.5) and travels through the glass still under it
+before it reaches the wallpaper. Where it lands is not where it started,
+and that offset --- inward, because the surface leans outward --- is the
+whole effect. The flat centre of the slab passes light straight through,
+so nothing behind the middle of a window moves.
+
+Every feature of the rim falls out of that one ray: how far the picture
+is pulled, where it darkens, where the light sits, how wide the colour
+fringe is. Nothing is painted on. That is why it holds together at any
+size and around the corners, where a painted rim does not.
+
+| Property             | Type   | Default     | Description |
+|----------------------+--------+-------------+-------------|
+| =glass-bevel=        | float  | =56=        | Width of the bent zone along the edge, =1= to =400= |
+| =glass-thickness=    | float  | =110=       | Slab depth, =0= to =400=; this is what decides how far the edge pulls |
+| =glass-slope=        | float  | =3.0=       | Cap on how fast the displacement decays, =0.2= to =4= |
+| =glass-shape=        | string | ="squircle"= | Bevel cross-section: =circle=, =squircle= or =lip= |
+| =glass-dispersion=   | float  | =1.6=       | Chromatic aberration in PIXELS of channel separation, =0= to =8= |
+| =glass-rim=          | float  | =1.76=      | How much light the edge sends back, =0= to =4= |
+| =glass-shade=        | float  | =0.46=      | How much the edge darkens, =0= to =2= |
+| =glass-edge-width=   | float  | =8=         | How far the shading and the sheen reach, =0.5= to =64= px |
+| =glass-saturation=   | float  | =0.86=      | Saturation inside the bevel ring, =0= to =3=; the centre is never touched |
+| =glass-clarity=      | float  | =0.85=      | How much of the UNFROSTED wallpaper the ring shows, =0= to =1= |
+| =glass-light=        | float  | =-140=      | Light direction in degrees: =0= straight above, positive clockwise |
+| =glass-tint=         | string | ="#ffffff"= | Palette names resolve |
+| =glass-brightness=   | float  | =1.0=       | =0.2= to =2.0= |
+| =glass-opacity=      | float  | =1.0=       | Opacity of the glass itself |
+| =glass-frost=        | int    | =3=         | How much smaller the frost is computed, =1= to =8= |
+| =glass-frost-passes= | int    | =2=         | Box passes for the frost, =1= to =6= |
+
+Lengths are LOGICAL pixels and are scaled by the output's scale, so the
+same config looks the same on a HiDPI screen.
+
+***** Three things worth knowing before you tune it
+:PROPERTIES:
+:CUSTOM_ID: liquidglass-tuning
+:END:
+
+*Geometry scales; optics does not.* =glass-bevel= and =glass-thickness=
+are proportions of a window --- doubling them on a bigger window keeps
+the look. =glass-dispersion=, =glass-edge-width= and the specular line
+are fixed pixel counts, because a colour fringe and the hairline under it
+are one or two pixels of real glass whatever the window's size. Scaling
+those with the bevel is what turns a wide rim into grey mud.
+
+*Above a slope of 1 the field FOLDS.* The same wallpaper shows up twice
+along the rim, which is where the liquid look comes from --- the default
+of =3.0= folds deliberately. It is still a cliff: the folded zone has
+unbounded stretch, so it wants a bevel narrow enough to keep the mess
+contained and a frosted source to cover for it. Below =1= the rim is a
+plain, well-behaved lens.
+
+*The bevel is clamped to half the short side.* Not a taste clamp: past it
+the rounded-rect distance field the corners are steered by has a negative
+half-extent, its gradient flips sign across the axes, and a window
+narrower than two bevels grows a cross-shaped seam down the middle. A
+small window gets a proportionally smaller lens rather than a broken one.
+
+***** What it costs
+:PROPERTIES:
+:CUSTOM_ID: liquidglass-cost
+:END:
+
+Per output, once per tag switch: one capture of the desktop with every
+window hidden, and one blur of it. Exactly what the blur module pays, for
+exactly the same reason.
+
+Per window, when it MOVES OR RESIZES: one fragment-shader pass over the
+window. That is the real difference between the two modules --- a blur
+backdrop is a crop of one shared picture and is correct wherever the
+window goes, while glass bends the wallpaper behind THIS window, so a
+window that moved is refracting somewhere else. Three things keep it
+affordable: a window at rest is drawn at full device resolution and one
+still moving at half, a move of less than one texture pixel is not a
+move, and each window has its own small swapchain so a frame is never
+drawn into the buffer the scene is still reading.
+
+A window whose glass cannot be rendered keeps the last picture rather
+than blinking. It follows [[#wallpaper-tags][per-tag wallpapers]], like the blur, and it
+takes its corner radius from whichever =roundcorners= radius is in force,
+so the glass ends exactly where the window does.
+
+Under a renderer whose GL context it cannot borrow --- Vulkan, pixman ---
+it sits the session out, and so does a driver that will not compile the
+refraction shader. Neither is an error, and neither takes the other
+effect modules down with it.
 
 **** Per-tag wallpaper
 :PROPERTIES:
@@ -855,6 +994,7 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =resize_window=     | --                               | Resize the window under the pointer from its nearest corner |
 | =toggle_sticky=     | --                               | Pin the focused window to every tag of its monitor, or unpin it |
 | =toggle_hdr=        | --, ="on"=, ="off"=, or an output name | Switch an output between HDR and SDR (the focused one by default) |
+| =cycle_backdrop=    | --, ="next"=, ="prev"=, or a style name | Cycle what shows through translucent windows: =glass=, =blur=, =none= |
 | =focus_dir=         | ="left"=, ="right"=, ="up"=, ="down"= | Focus the nearest window that way, crossing to the next monitor when there is none |
 | =focus_urgent=      | --                               | Focus the window marked urgent, viewing its tags if need be |
 | =focus_last=        | --                               | Focus the window that had focus before this one |

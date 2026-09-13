@@ -583,6 +583,42 @@ void gowl_compositor_set_outputs_powered (GowlCompositor *self, gboolean on);
 gboolean gowl_compositor_any_output_powered_off (GowlCompositor *self);
 
 /**
+ * gowl_compositor_get_backdrop_style:
+ * @self: a #GowlCompositor
+ *
+ * Returns: what currently shows through translucent windows.
+ */
+GowlBackdropStyle gowl_compositor_get_backdrop_style (GowlCompositor *self);
+
+/**
+ * gowl_compositor_set_backdrop_style:
+ * @self: a #GowlCompositor
+ * @style: the style to show
+ *
+ * Chooses what shows through translucent windows and tells the modules.
+ *
+ * The setting lives in the config, which is where both modules read it;
+ * this also re-places every window, because a module only adds or drops
+ * its node when it hears about the window.  Without that the change
+ * would not appear until each window was next moved.
+ */
+void gowl_compositor_set_backdrop_style (GowlCompositor    *self,
+                                         GowlBackdropStyle  style);
+
+/**
+ * gowl_compositor_cycle_backdrop_style:
+ * @self: a #GowlCompositor
+ * @direction: 1 forwards, -1 backwards
+ *
+ * Steps to the next style: glass, blur, nothing, glass again.  That is
+ * not the enum's order --- the two that draw something come first, so one
+ * press from the default lands on the other look rather than on nothing,
+ * and turning the backdrop off takes two.
+ */
+void gowl_compositor_cycle_backdrop_style (GowlCompositor *self,
+                                           gint            direction);
+
+/**
  * gowl_compositor_get_bar:
  * @self: a #GowlCompositor
  *

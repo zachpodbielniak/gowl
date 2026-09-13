@@ -260,7 +260,8 @@ static const gchar *const help_text =
 	"mode [NAME] | keybinds | keyboard-layout [next|prev|N] | "
 	"focus ID | close ID | view TAGMASK [OUTPUT] | "
 	"dispatch KEY | action NAME [ARG] | power on|off|toggle | "
-	"hdr [on|off|toggle] [OUTPUT] | lock | unlock | locked | "
+	"hdr [on|off|toggle] [OUTPUT] | backdrop [none|blur|glass|next|prev] | "
+	"lock | unlock | locked | "
 	"reload | version | ping | subscribe | help";
 
 /**
@@ -550,6 +551,33 @@ gowl_compositor_ipc_command(
 		if (!gowl_monitor_set_hdr(m, on))
 			return g_strdup("ERROR the output refused the change");
 		return g_strdup(gowl_monitor_get_hdr(m) ? "OK on" : "OK off");
+	}
+	if (g_strcmp0(word, "backdrop") == 0) {
+		/*
+		 * What shows through a translucent window.  No argument reports
+		 * it; "next" or "prev" cycles; a style name sets it.  The same
+		 * call Super+Shift+" makes, so a script and the key cannot
+		 * disagree about what is on.
+		 */
+		const gchar      *want = args != NULL && *args != '\0' ? args : NULL;
+		GowlBackdropStyle style;
+
+		if (want == NULL) {
+			return g_strdup_printf("OK %s",
+				gowl_config_backdrop_style_name(
+					gowl_compositor_get_backdrop_style(self)));
+		}
+		if (g_ascii_strcasecmp(want, "next") == 0)
+			gowl_compositor_cycle_backdrop_style(self, 1);
+		else if (g_ascii_strcasecmp(want, "prev") == 0)
+			gowl_compositor_cycle_backdrop_style(self, -1);
+		else if (gowl_config_backdrop_style_from_name(want, &style))
+			gowl_compositor_set_backdrop_style(self, style);
+		else
+			return g_strdup("ERROR expected none, blur, glass, next or prev");
+		return g_strdup_printf("OK %s",
+			gowl_config_backdrop_style_name(
+				gowl_compositor_get_backdrop_style(self)));
 	}
 	if (g_strcmp0(word, "lock") == 0) {
 		/* The same call the keybind makes, so `gowl-msg lock' and

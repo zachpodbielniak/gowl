@@ -970,11 +970,12 @@ wants to ask what is below it without receiving the call.
 
 =src/fx/= is the toolkit the effect modules are built on:
 =gowl_fx_gl_*= (borrowing the renderer's EGL context, textures, a styled
-quad pass, a separable blur), =gowl_fx_vis_*= and =gowl_fx_capture()=
-(rendering an output as it WOULD look under a different set of visible
-windows, and putting the scene back), and =GowlFxSheet= (one opaque
-monitor-sized buffer parked in the scene for as long as an effect owns
-that output).
+quad pass, a separable blur), =gowl_fx_pass_glass()= (one ray traced
+through a bevelled slab of glass, per pixel), =gowl_fx_vis_*= and
+=gowl_fx_capture()= (rendering an output as it WOULD look under a
+different set of visible windows, and putting the scene back), and
+=GowlFxSheet= (one opaque monitor-sized buffer parked in the scene for as
+long as an effect owns that output).
 
 It adds no renderer. =libgowl= must stay free of one
 (=tests/test-no-libregnum.sh=), and this stays inside that rule by
@@ -985,7 +986,7 @@ make-current and restore because that context is process state shared
 with wlroots. Under any other renderer =gowl_fx_gl_new()= returns =NULL=
 and every module declines to run.
 
-Three invariants hold across all five callers:
+Three invariants hold across all six callers:
 
 - *Y is negated in the projections.* wlroots hands out a buffer whose
   first row is the top of the picture while GL's first framebuffer row is
@@ -1003,7 +1004,20 @@ Three invariants hold across all five callers:
 
 =tests/test-fx-render.c= checks the orientations, the blur and the corner
 rounding against a real GLES2 renderer, and skips when there is no DRM
-render node.
+render node. =tests/test-glass-render.c= does the same for the
+refraction: that it builds at all, that the flat centre of a slab passes
+a ray straight through, that the rim samples INWARD, that the corners are
+cut out, and that a tilted surface catches light. Every one of those can
+be wrong in a way that still looks plausible --- a lens that bends
+nothing is indistinguishable from a frosted backdrop, and one that bends
+the wrong way is indistinguishable in a screenshot and wrong over text.
+
+The glass program is the one thing =gowl_fx_gl_new()= does NOT build up
+front. It is compiled on first use and its failure is survivable
+(=gowl_fx_pass_glass()= returns =FALSE= and the module shows no glass),
+because building it eagerly would let a driver that chokes on one =atan=
+take the cube, the overview, the switcher, the magnifier and the blur
+down with it.
 
 *** Injected input takes the same path as real input
 :PROPERTIES:
@@ -1196,6 +1210,16 @@ take relative to a monitor.  Scale each axis from its own extent: a
 width-derived vertical scale is only correct while the output's pixels
 are square.
 
+=modules/liquidglass/gowl-glass-geom.c= is the same calculation one layer
+up, split out for the same reason and one more: the glass works in THREE
+coordinate systems at once --- layout for where the window is, the
+output's device pixels for the wallpaper it bends, and the render
+buffer's own pixels, which are the device ones divided by however far the
+render was scaled down while the window was moving. Getting one of those
+conversions wrong does not abort; it refracts the top-left quarter of the
+wallpaper, which is the kind of mistake that survives review.
+=tests/test-glass-geom.c= asserts each conversion separately.
+
 The other place a source box crosses a boundary is
 =modules/animation/gowl-scene-snapshot.c=, which copies one verbatim ---
 and may be copying the *surface's* current buffer rather than the scene
@@ -1297,6 +1321,56 @@ Embedded and fullscreen clients do not jiggle.
 
 Curves are cubic Béziers. Bisection solves the parameter for a given
 elapsed-time fraction before evaluating the curve's progress.
+
+*** Liquid glass
+:PROPERTIES:
+:CUSTOM_ID: liquidglass-architecture
+:END:
+
+=modules/liquidglass/= shows a translucent window the wallpaper as it
+would look through a slab of glass shaped like the window: flat in the
+middle, rounded off over a bevel at the edge. The optics are in
+=src/fx/gowl-fx-glass.c=; the module is bookkeeping.
+
+*It is not a blur with a highlight painted on.* One ray is traced per
+pixel through one surface, and every feature of the rim falls out of it
+--- how far the picture is pulled, where it darkens, where the light
+sits, how wide the colour fringe is. That is why it holds together at any
+size and around the corners, where a painted rim does not. The
+arithmetic follows [[https://github.com/VII-Cae/hyalite--liquid-glass][hyalite]] (MIT), which worked it out for the web out of
+SVG displacement maps; three of its findings are repeated in the source
+because each is invisible there and obvious on screen (the direction
+field comes from a WIDER rounded rect, geometry scales while optics does
+not, and a decay slope above 1 folds the field on purpose).
+
+*It and the blur are alternatives, not layers.* Both put one scene node
+in the same place in the same window's tree, so both drawing means one is
+hidden behind the other while both still pay for a capture and a blur on
+every tag switch. =window-backdrop= in the config picks one, both modules
+read it, and =GOWL_ACTION_CYCLE_BACKDROP= --- =Super+Shift+"= --- moves
+it and re-places every window so each module hears to add or drop its
+node. That re-placement is the whole mechanism by which the key is
+instant; without it the change would not appear until each window was
+next moved.
+
+*The cost model differs from the blur's in one way that shapes the
+module.* A blur backdrop is a crop of one shared picture, so a window
+that merely moved re-points its crop and is correct. Glass bends the
+wallpaper behind THAT window, so a window that moved is refracting
+somewhere else and must be drawn again --- one fragment-shader pass over
+the window. Three things keep that affordable: a window at rest is drawn
+at full device resolution and one still moving at half
+(=GOWL_GLASS_MOVING_DIVISOR=), a move of less than one texture pixel is
+not a move (=gowl_glass_render_stale()=), and each window owns a small
+=wlr_swapchain= so a frame is never drawn into the buffer the scene is
+still reading from. A render that fails leaves the last picture up: a
+missed frame is invisible, a window that goes clear for one frame is not.
+
+*The look is compared with memcmp, not field by field.* =reload_config=
+can change any of a dozen settings, every window's render depends on all
+of them, and a comparison that forgot one would leave untouched windows
+showing the old look until they next moved --- a bug that appears only
+after a reload and only on the windows nobody is looking at.
 
 *** Graphics tablets
 

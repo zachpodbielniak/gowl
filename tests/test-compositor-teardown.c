@@ -55,7 +55,7 @@
 static const gchar *const cmacs_modules[] = {
 	"wallpaper",
 	"tile", "monocle", "float", "scrolling", "animation", "cube",
-	"expo", "switcher", "magnifier", "blur", "layout-indicator",
+	"expo", "switcher", "magnifier", "blur", "liquidglass", "layout-indicator",
 	"alpha", "vanitygaps", "roundcorners", "windowrules", "dropdown",
 	"scratchpad", "screenshot", "osd", "clipboard"
 };

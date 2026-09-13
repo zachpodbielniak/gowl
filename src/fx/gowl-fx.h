@@ -29,14 +29,15 @@
  *     with wlroots and every entry point below respects it;
  *   - textures the effect layer owns, and a copy-in that also settles the
  *     external-image case a dma-buf capture arrives as;
- *   - a pass that draws styled quads into a wlr_buffer;
+ *   - a pass that draws styled quads into a wlr_buffer, and one that
+ *     traces a ray through a bevelled slab of glass into one;
  *   - a way to capture what an output would look like under a different
  *     set of visible windows, and put the scene back exactly;
  *   - a "sheet": one opaque monitor-sized buffer parked in the scene for
  *     as long as an effect owns that output.
  *
- * FIVE MODULES USE THIS (cube, expo, switcher, magnifier, blur) and none
- * of them contains any of it.  That is the point: the plumbing is where a
+ * SIX MODULES USE THIS (cube, expo, switcher, magnifier, blur,
+ * liquidglass) and none of them contains any of it.  That is the point: the plumbing is where a
  * mistake is expensive and hard to see -- a context left current, a scene
  * node left hidden, a buffer freed after its renderer -- so it lives in
  * one place with one set of tests rather than in five modules with five.
@@ -272,6 +273,109 @@ void gowl_fx_pass_quad (GowlFxPass *pass, const GowlFxQuad *quad);
  * Returns: %TRUE when the pass completed.
  */
 gboolean gowl_fx_pass_end (GowlFxPass *pass);
+
+/* ── Liquid glass ────────────────────────────────────────────────── */
+
+/**
+ * GowlFxGlassParams:
+ * @width: the rect's width in pixels
+ * @height: the rect's height in pixels
+ * @radius: corner radius in pixels
+ * @bevel: width of the bent zone along the edge, in pixels; clamped to
+ *   half the short side, since past that the direction field the corners
+ *   are steered by turns inside out
+ * @thickness: how deep the slab is, in pixels.  This is what decides how
+ *   far the edge pulls the wallpaper, not @bevel
+ * @slope: cap on how fast the displacement decays, px/px.  At 1 the
+ *   sampling point stands still; ABOVE it the field folds and the same
+ *   wallpaper shows up twice, which is where the liquid look comes from
+ * @shape: bevel cross-section --- 0 a quarter circle, 1 a squircle,
+ *   2 a raised lip over a shallow dip
+ * @dispersion: chromatic aberration, in PIXELS of channel separation.  A
+ *   material constant of the glass, unrelated to how strong the lens is
+ * @rim: how much light the edge sends back, 0 to 4
+ * @shade: how much the edge darkens, 0 to 2
+ * @edge_width: how far the shading and the sheen reach, in pixels.
+ *   Absolute on purpose: the bright line and the dark hairline under it
+ *   are a pixel or two of real glass whatever the bevel is, and scaling
+ *   them with it turns a wide rim into a grey band
+ * @light: light direction, already as a vector
+ * @saturation: saturation inside the bevel ring; the centre is never
+ *   touched.  Below 1 cleans up the colour folding and dispersion muddy
+ * @clarity: how much the ring shows the UNBLURRED wallpaper, 0 to 1.
+ *   Thick glass diffuses and a lens does not, and the ring is the lens
+ * @tint: multiplied into the result
+ * @brightness: multiplied into the result
+ * @alpha: overall opacity
+ * @src_origin: where this rect's top-left sits in the source textures,
+ *   in pixels
+ *
+ * One slab of glass.  gowl_fx_glass_params_init() fills in the tuned
+ * defaults; a caller only assigns what it means to change.
+ */
+typedef struct {
+	gint   width, height;
+	gfloat radius;
+	gfloat bevel;
+	gfloat thickness;
+	gfloat slope;
+	gfloat shape;
+	gfloat dispersion;
+	gfloat rim;
+	gfloat shade;
+	gfloat edge_width;
+	gfloat light[2];
+	gfloat saturation;
+	gfloat clarity;
+	gfloat tint[3];
+	gfloat brightness;
+	gfloat alpha;
+	gfloat src_origin[2];
+} GowlFxGlassParams;
+
+/**
+ * gowl_fx_glass_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_glass_params_init (GowlFxGlassParams *params);
+
+/**
+ * gowl_fx_glass_max_displacement:
+ * @params: the glass
+ *
+ * How far the most-displaced pixel of this glass is pulled, in pixels.
+ *
+ * Exposed because it is the reference the colour fringe and the bevel
+ * ring are measured against, and because it is pure arithmetic that can
+ * therefore be tested without a GPU.
+ *
+ * Returns: the maximum displacement, never below a small positive value.
+ */
+gdouble gowl_fx_glass_max_displacement (const GowlFxGlassParams *params);
+
+/**
+ * gowl_fx_pass_glass:
+ * @pass: a pass, begun on the buffer the glass is drawn into
+ * @soft: the frosted wallpaper, covering the whole output
+ * @sharp: (nullable): the same wallpaper unblurred, for the ring; @soft
+ *   is used for both when this is %NULL or empty
+ * @params: the glass to draw
+ *
+ * Traces one ray per pixel through a bevelled slab and writes what it
+ * finds --- refracted, dispersed, shaded and lit --- over the whole of
+ * @pass's buffer, with premultiplied alpha and rounded corners.
+ *
+ * @soft and @sharp are the WHOLE output's wallpaper, not a crop of it:
+ * the rim samples inward from the window's edge, and handing it a crop
+ * that starts at the edge leaves it nothing to bend.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller shows no glass and the desktop is as it was.
+ */
+gboolean gowl_fx_pass_glass (GowlFxPass              *pass,
+                             const GowlFxTexture     *soft,
+                             const GowlFxTexture     *sharp,
+                             const GowlFxGlassParams *params);
 
 /* ── Scene visibility scratchpad ─────────────────────────────────── */
 

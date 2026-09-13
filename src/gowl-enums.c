@@ -291,9 +291,38 @@ gowl_action_get_type(void)
 			{ GOWL_ACTION_FOCUS_URGENT,      "GOWL_ACTION_FOCUS_URGENT",      "focus-urgent" },
 			{ GOWL_ACTION_FOCUS_LAST,        "GOWL_ACTION_FOCUS_LAST",        "focus-last" },
 			{ GOWL_ACTION_TOGGLE_HDR,        "GOWL_ACTION_TOGGLE_HDR",        "toggle-hdr" },
+			{ GOWL_ACTION_CYCLE_BACKDROP,    "GOWL_ACTION_CYCLE_BACKDROP",    "cycle-backdrop" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlAction", values);
+		g_once_init_leave(&g_type_id, type_id);
+	}
+
+	return (GType)g_type_id;
+}
+
+/* --- GowlBackdropStyle GType registration --- */
+
+/**
+ * gowl_backdrop_style_get_type:
+ *
+ * Retrieves the #GType for #GowlBackdropStyle.
+ *
+ * Returns: the #GType for #GowlBackdropStyle
+ */
+GType
+gowl_backdrop_style_get_type(void)
+{
+	static volatile gsize g_type_id = 0;
+
+	if (g_once_init_enter(&g_type_id)) {
+		static const GEnumValue values[] = {
+			{ GOWL_BACKDROP_NONE,  "GOWL_BACKDROP_NONE",  "none" },
+			{ GOWL_BACKDROP_BLUR,  "GOWL_BACKDROP_BLUR",  "blur" },
+			{ GOWL_BACKDROP_GLASS, "GOWL_BACKDROP_GLASS", "glass" },
+			{ 0, NULL, NULL }
+		};
+		GType type_id = g_enum_register_static("GowlBackdropStyle", values);
 		g_once_init_leave(&g_type_id, type_id);
 	}
 

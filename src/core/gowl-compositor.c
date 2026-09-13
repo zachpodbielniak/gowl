@@ -2600,6 +2600,78 @@ lock_spawn_command(GowlCompositor *self)
 	return TRUE;
 }
 
+/* ── What shows through translucent windows ──────────────────────── */
+
+GowlBackdropStyle
+gowl_compositor_get_backdrop_style(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), GOWL_BACKDROP_GLASS);
+
+	if (self->config == NULL)
+		return GOWL_BACKDROP_GLASS;
+	return gowl_config_get_backdrop_style(self->config);
+}
+
+void
+gowl_compositor_set_backdrop_style(GowlCompositor *self,
+                                   GowlBackdropStyle style)
+{
+	GList *l;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->config == NULL)
+		return;
+	gowl_config_set_backdrop_style(self->config, style);
+
+	/*
+	 * Both modules add and drop their node from client_placed, and
+	 * nothing else here is going to place these windows -- they have not
+	 * moved.  So say so for each of them, which is the whole mechanism
+	 * by which the change appears at once rather than the next time
+	 * somebody drags something.
+	 *
+	 * BROADCAST, so it reaches every provider whatever its priority:
+	 * the blur module has to hear it too, to take its backdrop down when
+	 * the glass takes over.
+	 */
+	for (l = self->clients; l != NULL; l = l->next)
+		gowl_effects_client_placed(self, (GowlClient *)l->data);
+
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT backdrop %s",
+		                    gowl_config_backdrop_style_name(style));
+	g_info("window backdrop: %s", gowl_config_backdrop_style_name(style));
+}
+
+void
+gowl_compositor_cycle_backdrop_style(GowlCompositor *self, gint direction)
+{
+	/*
+	 * The order the key steps through, written out rather than derived
+	 * from the enum -- because it is NOT the enum's order.  The two that
+	 * draw something come first, so one press from the default lands on
+	 * the other look rather than on nothing at all, and it takes two
+	 * presses to turn the backdrop off rather than one.
+	 */
+	static const GowlBackdropStyle order[] = {
+		GOWL_BACKDROP_GLASS, GOWL_BACKDROP_BLUR, GOWL_BACKDROP_NONE
+	};
+	GowlBackdropStyle now;
+	gint i, at = 0;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	now = gowl_compositor_get_backdrop_style(self);
+	for (i = 0; i < (gint)G_N_ELEMENTS(order); i++) {
+		if (order[i] == now)
+			at = i;
+	}
+	/* +2 rather than -1 keeps the modulus positive without a branch. */
+	at = (at + (direction < 0 ? 2 : 1)) % (gint)G_N_ELEMENTS(order);
+	gowl_compositor_set_backdrop_style(self, order[at]);
+}
+
 /**
  * gowl_compositor_lock_session:
  * @self: a #GowlCompositor
@@ -9264,6 +9336,28 @@ run_keybind_entry(
 	case GOWL_ACTION_FOCUS_LAST:
 		gowl_compositor_focus_last(self);
 		return TRUE;
+	case GOWL_ACTION_CYCLE_BACKDROP: {
+		/*
+		 * No argument cycles.  An argument that names a style sets it
+		 * outright, so a config can bind one key per look rather than
+		 * pressing the same key until the right one comes round; "prev"
+		 * cycles the other way.
+		 */
+		GowlBackdropStyle style;
+
+		if (kb->arg == NULL || *kb->arg == '\0'
+		    || g_ascii_strcasecmp(kb->arg, "next") == 0) {
+			gowl_compositor_cycle_backdrop_style(self, 1);
+		} else if (g_ascii_strcasecmp(kb->arg, "prev") == 0) {
+			gowl_compositor_cycle_backdrop_style(self, -1);
+		} else if (gowl_config_backdrop_style_from_name(kb->arg, &style)) {
+			gowl_compositor_set_backdrop_style(self, style);
+		} else {
+			g_warning("cycle_backdrop: unknown style '%s'; expected "
+			          "none, blur, glass, next or prev", kb->arg);
+		}
+		return TRUE;
+	}
 	case GOWL_ACTION_TOGGLE_HDR: {
 		/* "on", "off" or toggle (the default), on the output named
 		 * by the argument or the selected one. */

@@ -19,6 +19,13 @@
 /*
  * Frosted glass and drop shadows.
  *
+ * SINCE `window-backdrop', THE FROSTED PART IS ONE OF TWO.  The
+ * liquid-glass module draws its node into the same place in the same
+ * window's tree, so the two are alternatives rather than layers and that
+ * setting picks which one draws.  The shadows are not part of that
+ * choice: they are this module's alone, they have their own `shadow'
+ * key, and they stay whichever backdrop is selected -- including none.
+ *
  * Neither of these takes over the output the way the cube or the overview
  * do.  They add two nodes per window INSIDE that window's own scene tree
  * -- a blurred backdrop and a shadow, both below everything else the
@@ -638,7 +645,16 @@ blur_apply_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 	struct wlr_fbox   src;
 	struct wlr_box    vis;
 
-	if (!gowl_config_get_blur(self->config)
+	/*
+	 * `window-backdrop' picks between this and the liquid-glass module,
+	 * which draws its node into the same place in the same tree.  Both
+	 * being switched on does not layer them -- it hides one behind the
+	 * other while still paying for both -- so this stands down unless
+	 * the blur is what was asked for.  The older boolean `blur' key
+	 * still switches this off outright whatever the style is.
+	 */
+	if (gowl_config_get_backdrop_style(self->config) != GOWL_BACKDROP_BLUR
+	    || !gowl_config_get_blur(self->config)
 	    || (c->rule_flags & GOWL_CLIENT_RULE_NO_BLUR)
 	    || c->alpha >= GOWL_BLUR_MIN_TRANSPARENCY
 	    || c->mon == NULL) {

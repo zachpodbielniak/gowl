@@ -369,6 +369,8 @@ gowl_fx_gl_free(GowlFxGl *self)
 			glDeleteProgram(self->copy_ext.program);
 		if (self->blur.program != 0)
 			glDeleteProgram(self->blur.program);
+		if (self->glass.program != 0)
+			glDeleteProgram(self->glass.program);
 		gowl_fx_egl_leave(&save);
 	}
 	g_free(self);

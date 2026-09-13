@@ -104,6 +104,46 @@
 #define GOWL_CONFIG_DEFAULT_SHADOW_OFFSET_Y      (10)
 #define GOWL_CONFIG_DEFAULT_SHADOW_COLOR         "#000000"
 
+/*
+ * The liquid-glass defaults: a narrow bevel over a very thick slab with a
+ * FOLDING slope (above 1), so the flat centre stays clear while the rim
+ * concentrates the wallpaper into a band that shows it twice.  They are
+ * proportions of a window, in logical pixels, and the module scales them
+ * by the output's scale.
+ *
+ * The optical ratios are hyalite's, tuned by eye by its author.  The
+ * three geometric ones are not: hyalite tunes for web elements a few
+ * hundred pixels across, and its 37-pixel bevel over a 59-pixel slab is a
+ * proportion of a button, not of a window.  On a window it draws a hairline
+ * nobody would call glass.  Scaled up to a bevel of 56 over a slab of 110
+ * the bevel is the same SHARE of the thing it edges, which is what rule 3
+ * of hyalite's own list asks for -- geometry scales, optics does not, and
+ * dispersion, the rim window and the specular line below stay exactly
+ * where they were tuned.
+ *
+ * The three that are NOT proportions -- dispersion, the edge window and
+ * the rim -- are fixed pixel counts on purpose.  A colour fringe and the
+ * hairline under it are one or two pixels of real glass whatever size the
+ * window is; scaling them with the bevel is what turns a wide rim into
+ * grey mud.
+ */
+#define GOWL_CONFIG_DEFAULT_GLASS_BEVEL          (56.0)
+#define GOWL_CONFIG_DEFAULT_GLASS_THICKNESS      (110.0)
+#define GOWL_CONFIG_DEFAULT_GLASS_SLOPE          (3.0)
+#define GOWL_CONFIG_DEFAULT_GLASS_SHAPE          "squircle"
+#define GOWL_CONFIG_DEFAULT_GLASS_DISPERSION     (1.6)
+#define GOWL_CONFIG_DEFAULT_GLASS_RIM            (1.76)
+#define GOWL_CONFIG_DEFAULT_GLASS_SHADE          (0.46)
+#define GOWL_CONFIG_DEFAULT_GLASS_EDGE_WIDTH     (8.0)
+#define GOWL_CONFIG_DEFAULT_GLASS_SATURATION     (0.86)
+#define GOWL_CONFIG_DEFAULT_GLASS_CLARITY        (0.85)
+#define GOWL_CONFIG_DEFAULT_GLASS_LIGHT          (-140.0)
+#define GOWL_CONFIG_DEFAULT_GLASS_TINT           "#ffffff"
+#define GOWL_CONFIG_DEFAULT_GLASS_BRIGHTNESS     (1.0)
+#define GOWL_CONFIG_DEFAULT_GLASS_OPACITY        (1.0)
+#define GOWL_CONFIG_DEFAULT_GLASS_FROST          (3)
+#define GOWL_CONFIG_DEFAULT_GLASS_FROST_PASSES   (2)
+
 #define GOWL_CONFIG_DEFAULT_WALLPAPER_FADE       (320)
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
@@ -226,6 +266,23 @@ struct _GowlConfig {
 	gint     shadow_offset_x;
 	gint     shadow_offset_y;
 	gchar   *shadow_color;
+	gint     backdrop_style;      /* GowlBackdropStyle */
+	gdouble  glass_bevel;
+	gdouble  glass_thickness;
+	gdouble  glass_slope;
+	gchar   *glass_shape;
+	gdouble  glass_dispersion;
+	gdouble  glass_rim;
+	gdouble  glass_shade;
+	gdouble  glass_edge_width;
+	gdouble  glass_saturation;
+	gdouble  glass_clarity;
+	gdouble  glass_light;
+	gchar   *glass_tint;
+	gdouble  glass_brightness;
+	gdouble  glass_opacity;
+	gint     glass_frost;
+	gint     glass_frost_passes;
 
 	/* Per-tag wallpaper overrides, 1-based; NULL means "use the default
 	 * wallpaper", which is what every entry is until a config says
@@ -796,6 +853,8 @@ gowl_config_finalize(GObject *object)
 	g_free(self->switcher_curve);
 	g_free(self->switcher_backdrop_color);
 	g_free(self->shadow_color);
+	g_free(self->glass_shape);
+	g_free(self->glass_tint);
 	{
 		gint ti;
 
@@ -1196,6 +1255,25 @@ gowl_config_init(GowlConfig *self)
 	self->shadow_offset_x  = GOWL_CONFIG_DEFAULT_SHADOW_OFFSET_X;
 	self->shadow_offset_y  = GOWL_CONFIG_DEFAULT_SHADOW_OFFSET_Y;
 	self->shadow_color     = g_strdup(GOWL_CONFIG_DEFAULT_SHADOW_COLOR);
+	/* Glass rather than blur out of the box.  Both modules read this and
+	 * only one of them draws; see GowlBackdropStyle. */
+	self->backdrop_style     = GOWL_BACKDROP_GLASS;
+	self->glass_bevel        = GOWL_CONFIG_DEFAULT_GLASS_BEVEL;
+	self->glass_thickness    = GOWL_CONFIG_DEFAULT_GLASS_THICKNESS;
+	self->glass_slope        = GOWL_CONFIG_DEFAULT_GLASS_SLOPE;
+	self->glass_shape        = g_strdup(GOWL_CONFIG_DEFAULT_GLASS_SHAPE);
+	self->glass_dispersion   = GOWL_CONFIG_DEFAULT_GLASS_DISPERSION;
+	self->glass_rim          = GOWL_CONFIG_DEFAULT_GLASS_RIM;
+	self->glass_shade        = GOWL_CONFIG_DEFAULT_GLASS_SHADE;
+	self->glass_edge_width   = GOWL_CONFIG_DEFAULT_GLASS_EDGE_WIDTH;
+	self->glass_saturation   = GOWL_CONFIG_DEFAULT_GLASS_SATURATION;
+	self->glass_clarity      = GOWL_CONFIG_DEFAULT_GLASS_CLARITY;
+	self->glass_light        = GOWL_CONFIG_DEFAULT_GLASS_LIGHT;
+	self->glass_tint         = g_strdup(GOWL_CONFIG_DEFAULT_GLASS_TINT);
+	self->glass_brightness   = GOWL_CONFIG_DEFAULT_GLASS_BRIGHTNESS;
+	self->glass_opacity      = GOWL_CONFIG_DEFAULT_GLASS_OPACITY;
+	self->glass_frost        = GOWL_CONFIG_DEFAULT_GLASS_FROST;
+	self->glass_frost_passes = GOWL_CONFIG_DEFAULT_GLASS_FROST_PASSES;
 
 	self->wallpaper_fade   = GOWL_CONFIG_DEFAULT_WALLPAPER_FADE;
 
@@ -1548,6 +1626,11 @@ static const gchar *const top_level_keys[] = {
 	"switcher-scale", "switcher-spacing", "switcher-angle",
 	"switcher-reflection", "switcher-all-tags", "switcher-backdrop-color",
 	"blur", "blur-downscale", "blur-passes", "blur-brightness", "shadow",
+	"window-backdrop", "glass-bevel", "glass-thickness", "glass-slope",
+	"glass-shape", "glass-dispersion", "glass-rim", "glass-shade",
+	"glass-edge-width", "glass-saturation", "glass-clarity", "glass-light",
+	"glass-tint", "glass-brightness", "glass-opacity", "glass-frost",
+	"glass-frost-passes",
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
 	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
 	"lock-command", "lock-on-suspend", "keybinds", "modes",
@@ -2173,6 +2256,116 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "shadow-offset-y")) {
 		self->shadow_offset_y = CLAMP((gint)yaml_mapping_get_int_member(
 			mapping, "shadow-offset-y"), -128, 128);
+	}
+	/*
+	 * What shows through a translucent window.
+	 *
+	 * Read before the glass keys so an unreadable value leaves the
+	 * default standing rather than half-applying a style.  `blur' here
+	 * and the older boolean `blur' key are not the same setting: the
+	 * boolean switches the blur MODULE's backdrop off entirely, while
+	 * this chooses between two modules that both draw one.
+	 */
+	if (yaml_mapping_has_member(mapping, "window-backdrop")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "window-backdrop");
+		GEnumClass  *ec;
+		GEnumValue  *ev = NULL;
+
+		if (v != NULL) {
+			g_autofree gchar *norm = g_strdup(v);
+
+			ec = (GEnumClass *)g_type_class_ref(
+				gowl_backdrop_style_get_type());
+			g_strdelimit(norm, "_", '-');
+			ev = g_enum_get_value_by_nick(ec, norm);
+			g_type_class_unref(ec);
+		}
+		if (ev != NULL)
+			self->backdrop_style = ev->value;
+		else
+			g_warning("gowl_config: unknown window-backdrop '%s'; "
+			          "expected none, blur or glass",
+			          v != NULL ? v : "(null)");
+	}
+	if (yaml_mapping_has_member(mapping, "glass-bevel")) {
+		self->glass_bevel = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-bevel"), 1.0, 400.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-thickness")) {
+		self->glass_thickness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-thickness"), 0.0, 400.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-slope")) {
+		self->glass_slope = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-slope"), 0.2, 4.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-shape")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "glass-shape");
+
+		if (v != NULL && (g_strcmp0(v, "circle") == 0
+		                  || g_strcmp0(v, "squircle") == 0
+		                  || g_strcmp0(v, "lip") == 0)) {
+			g_free(self->glass_shape);
+			self->glass_shape = g_strdup(v);
+		} else {
+			g_warning("gowl_config: unknown glass-shape '%s'; "
+			          "expected circle, squircle or lip",
+			          v != NULL ? v : "(null)");
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "glass-dispersion")) {
+		self->glass_dispersion = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-dispersion"), 0.0, 8.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-rim")) {
+		self->glass_rim = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-rim"), 0.0, 4.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-shade")) {
+		self->glass_shade = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-shade"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-edge-width")) {
+		self->glass_edge_width = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-edge-width"), 0.5, 64.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-saturation")) {
+		self->glass_saturation = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-saturation"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-clarity")) {
+		self->glass_clarity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-light")) {
+		self->glass_light = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-light"), -180.0, 180.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-tint")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "glass-tint");
+
+		if (v != NULL) {
+			g_free(self->glass_tint);
+			self->glass_tint = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "glass-brightness")) {
+		self->glass_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-brightness"), 0.2, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-opacity")) {
+		self->glass_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-frost")) {
+		self->glass_frost = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "glass-frost"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-frost-passes")) {
+		self->glass_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "glass-frost-passes"), 1, 6);
 	}
 	if (yaml_mapping_has_member(mapping, "shadow-color")) {
 		const gchar *v = yaml_mapping_get_string_member(mapping,
@@ -5441,6 +5634,206 @@ gowl_config_get_blur_brightness(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_BLUR_BRIGHTNESS);
 	return self->blur_brightness;
+}
+
+/* --- What shows through a translucent window, and the glass --- */
+
+GowlBackdropStyle
+gowl_config_get_backdrop_style(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_BACKDROP_GLASS);
+	return (GowlBackdropStyle)self->backdrop_style;
+}
+
+void
+gowl_config_set_backdrop_style(GowlConfig *self, GowlBackdropStyle style)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (style < GOWL_BACKDROP_NONE || style > GOWL_BACKDROP_GLASS)
+		return;
+	self->backdrop_style = (gint)style;
+}
+
+/*
+ * The names come from the enum's own nicks rather than a second table
+ * here, so the config spelling, the IPC reply and the Lisp symbol cannot
+ * drift apart from what gowl-enums.c registered.
+ *
+ * The class reference is taken ONCE and never dropped, deliberately.  The
+ * nick is a static string the class owns, and handing it out only to
+ * release the class in the same breath would be relying on GLib never
+ * finalising a static enum class -- true today, and not a thing to make
+ * this depend on.  One permanent reference to one enum class costs
+ * nothing and settles it.
+ */
+static GEnumClass *
+backdrop_enum_class(void)
+{
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		GEnumClass *ec = (GEnumClass *)g_type_class_ref(
+			gowl_backdrop_style_get_type());
+
+		g_once_init_leave(&once, (gsize)ec);
+	}
+	return (GEnumClass *)once;
+}
+
+const gchar *
+gowl_config_backdrop_style_name(GowlBackdropStyle style)
+{
+	GEnumValue *ev = g_enum_get_value(backdrop_enum_class(), (gint)style);
+
+	return ev != NULL && ev->value_nick != NULL ? ev->value_nick : "glass";
+}
+
+gboolean
+gowl_config_backdrop_style_from_name(const gchar       *name,
+                                     GowlBackdropStyle *out)
+{
+	GEnumValue       *ev;
+	g_autofree gchar *norm = NULL;
+
+	if (name == NULL || out == NULL)
+		return FALSE;
+
+	norm = g_strstrip(g_ascii_strdown(name, -1));
+	g_strdelimit(norm, "_", '-');
+	ev = g_enum_get_value_by_nick(backdrop_enum_class(), norm);
+	if (ev == NULL)
+		return FALSE;
+	*out = (GowlBackdropStyle)ev->value;
+	return TRUE;
+}
+
+gdouble
+gowl_config_get_glass_bevel(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_BEVEL);
+	return self->glass_bevel;
+}
+
+gdouble
+gowl_config_get_glass_thickness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_THICKNESS);
+	return self->glass_thickness;
+}
+
+gdouble
+gowl_config_get_glass_slope(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_SLOPE);
+	return self->glass_slope;
+}
+
+const gchar *
+gowl_config_get_glass_shape(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_SHAPE);
+	return self->glass_shape;
+}
+
+gdouble
+gowl_config_get_glass_dispersion(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_DISPERSION);
+	return self->glass_dispersion;
+}
+
+gdouble
+gowl_config_get_glass_rim(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_RIM);
+	return self->glass_rim;
+}
+
+gdouble
+gowl_config_get_glass_shade(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_SHADE);
+	return self->glass_shade;
+}
+
+gdouble
+gowl_config_get_glass_edge_width(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_EDGE_WIDTH);
+	return self->glass_edge_width;
+}
+
+gdouble
+gowl_config_get_glass_saturation(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_SATURATION);
+	return self->glass_saturation;
+}
+
+gdouble
+gowl_config_get_glass_clarity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_CLARITY);
+	return self->glass_clarity;
+}
+
+gdouble
+gowl_config_get_glass_light(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_LIGHT);
+	return self->glass_light;
+}
+
+const gchar *
+gowl_config_get_glass_tint(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_TINT);
+	return self->glass_tint;
+}
+
+gdouble
+gowl_config_get_glass_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_BRIGHTNESS);
+	return self->glass_brightness;
+}
+
+gdouble
+gowl_config_get_glass_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_OPACITY);
+	return self->glass_opacity;
+}
+
+gint
+gowl_config_get_glass_frost(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_FROST);
+	return self->glass_frost;
+}
+
+gint
+gowl_config_get_glass_frost_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_FROST_PASSES);
+	return self->glass_frost_passes;
 }
 
 gboolean

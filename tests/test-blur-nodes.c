@@ -1,8 +1,16 @@
-/* test-blur-nodes.c -- the blur module's nodes live and die with the
+/* test-blur-nodes.c -- the backdrop modules' nodes live and die with the
  * window, and follow it
  *
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Mostly the blur module, which came first.  The last case is about the
+ * pair: `blur' and `liquidglass' both hang a backdrop off the same place
+ * in the same window's tree, so they are alternatives and
+ * `window-backdrop' picks which one draws.  Both being loaded is normal
+ * -- that is what makes Super+Shift+" instant -- so what has to hold is
+ * that exactly one of them draws at a time, and that the one drawing is
+ * the one that was asked for.
  *
  * The blur module hangs two scene buffers off a window's own scene tree:
  * a drop shadow and a blurred backdrop.  It is told DESTROY for two
@@ -55,6 +63,8 @@ static const gchar *const blur_alone[]     = { "blur", NULL };
 static const gchar *const with_animation[] = { "blur", "animation", NULL };
 static const gchar *const with_rounded[]   = { "blur", "animation",
                                                "roundcorners", NULL };
+/* Both backdrops at once, which is how CMacs loads them. */
+static const gchar *const both_backdrops[] = { "blur", "liquidglass", NULL };
 
 typedef struct {
 	gchar             *parent;   /* XDG_RUNTIME_DIR before the rig */
@@ -544,6 +554,15 @@ rig_up(
 	gowl_module_manager_activate_all(r->modules);
 
 	r->config = gowl_config_new();
+	/*
+	 * `window-backdrop' now picks between this module and the liquid
+	 * glass, and its default is the glass -- so a rig that says nothing
+	 * gets a blur module that correctly draws no backdrop, and every
+	 * assertion below about where the backdrop went would fail for a
+	 * reason that has nothing to do with what it is testing.  Ask for the
+	 * blur explicitly; /blur-nodes/backdrop-style covers the other half.
+	 */
+	gowl_config_set_backdrop_style(r->config, GOWL_BACKDROP_BLUR);
 	r->compositor = gowl_compositor_new();
 	gowl_compositor_set_config(r->compositor, r->config);
 	gowl_compositor_set_module_manager(r->compositor, r->modules);
@@ -816,11 +835,188 @@ test_nodes_follow_an_animation(gconstpointer data)
 	rig_down(&r);
 }
 
+/*
+ * `window-backdrop' takes the blur's backdrop away and gives it back.
+ *
+ * The two backdrop modules draw into the same place in the same tree, so
+ * both drawing means one is hidden behind the other while both still pay
+ * for a capture and a blur on every tag switch.  The setting is what
+ * stops that, and Super+Shift+" is what moves it -- so a blur module that
+ * ignored it would show up as "cycling the backdrop does nothing", with
+ * the glass dutifully drawn underneath where nobody can see it.
+ *
+ * The SHADOW is not part of the choice and must survive: it is this
+ * module's alone, it has its own key, and a user who turns the backdrop
+ * off has not asked to lose their shadows.
+ */
+static void
+test_backdrop_style_picks_the_module(void)
+{
+	Rig   r;
+	Decor with, without, again;
+
+	if (!modules_built(blur_alone))
+		return;
+	if (!rig_up(&r, blur_alone)) {
+		rig_down(&r);
+		g_test_skip("no GLES2 renderer to draw with here");
+		return;
+	}
+
+	/* On the compositor's list, because that list is exactly what
+	 * gowl_compositor_set_backdrop_style() walks to tell the modules. */
+	list_client(&r);
+	as_tile(&r);
+	with = decor_of(r.c);
+	if (with.backdrop == NULL) {
+		/* No wallpaper was captured here, so there is nothing to take
+		 * away and nothing this case can say. */
+		rig_down(&r);
+		g_test_skip("no backdrop was built in this rig");
+		return;
+	}
+	g_assert_nonnull(with.shadow);
+
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_GLASS);
+	without = decor_of(r.c);
+	g_assert_null(without.backdrop);
+	g_assert_nonnull(without.shadow);
+
+	/* Nothing at all, which is the third stop on the cycle. */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_NONE);
+	g_assert_null(decor_of(r.c).backdrop);
+	g_assert_nonnull(decor_of(r.c).shadow);
+
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_BLUR);
+	again = decor_of(r.c);
+	g_assert_nonnull(again.backdrop);
+	g_assert_nonnull(again.shadow);
+
+	/*
+	 * And the order the key actually steps through, which is written out
+	 * in the compositor rather than derived from the enum: the two that
+	 * DRAW something come first, so one press from the default lands on
+	 * the other look and it takes two to turn the backdrop off.  Derived
+	 * from the enum it would be glass, nothing, blur -- which is what it
+	 * was until this case was written, and which nobody would notice was
+	 * wrong except by pressing the key.
+	 */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_GLASS);
+	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
+	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
+	                ==, GOWL_BACKDROP_BLUR);
+	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
+	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
+	                ==, GOWL_BACKDROP_NONE);
+	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
+	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
+	                ==, GOWL_BACKDROP_GLASS);
+	/* And back the other way. */
+	gowl_compositor_cycle_backdrop_style(r.compositor, -1);
+	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
+	                ==, GOWL_BACKDROP_NONE);
+
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_BLUR);
+	again = decor_of(r.c);
+	/* Back to where it started, not to a second copy layered on the
+	 * first: a module that added rather than restored would grow a node
+	 * on every press of the key. */
+	g_assert_cmpuint(again.count, ==, with.count);
+
+	rig_down(&r);
+}
+
+/*
+ * With both modules loaded, exactly one backdrop is drawn and it is the
+ * one `window-backdrop' names.
+ *
+ * The two are told apart by the SIZE of the buffer they point at, which
+ * is not a trick -- it is the architectural difference between them.  The
+ * blur's backdrop is a crop of one monitor-sized picture shared by every
+ * window; the glass is a render of THIS window, at this window's size,
+ * because what it draws depends on where the window is.  Anything that
+ * made the glass draw a monitor-sized buffer, or the blur a window-sized
+ * one, would be a much larger bug than this case looks.
+ *
+ * Without it, the failure to catch is the quiet one: both modules
+ * drawing, one hidden behind the other, each still paying for a capture
+ * and a blur on every tag switch, and the key that is supposed to change
+ * the look appearing to do nothing.
+ */
+static void
+test_only_one_backdrop_draws(void)
+{
+	Rig   r;
+	Decor d;
+	gint  mon_w, win_w;
+
+	if (!modules_built(both_backdrops))
+		return;
+	if (!rig_up(&r, both_backdrops)) {
+		rig_down(&r);
+		g_test_skip("no GLES2 renderer to draw with here");
+		return;
+	}
+
+	list_client(&r);
+	/* rig_up() asks for the blur, because every other case here is about
+	 * the blur.  This one starts from the shipped default instead. */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_GLASS);
+	as_tile(&r);
+
+	mon_w = r.compositor->selmon->wlr_output->width;
+	win_w = r.c->frame.width > 0 ? r.c->frame.width : r.c->geom.width;
+	/* The case only means anything while the two sizes differ. */
+	g_assert_cmpint(mon_w, !=, win_w);
+
+	d = decor_of(r.c);
+	if (d.backdrop == NULL) {
+		/* No wallpaper was captured in this rig, so neither module has
+		 * anything to draw and there is nothing to tell apart. */
+		rig_down(&r);
+		g_test_skip("no backdrop was built in this rig");
+		return;
+	}
+
+	/* Glass by default: one backdrop, and it is the window's own render. */
+	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
+	                ==, GOWL_BACKDROP_GLASS);
+	g_assert_cmpint(
+		wlr_scene_buffer_from_node(d.backdrop)->buffer->width, ==, win_w);
+
+	/* Over to the blur: still one backdrop, now the shared picture. */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_BLUR);
+	d = decor_of(r.c);
+	g_assert_nonnull(d.backdrop);
+	g_assert_cmpint(
+		wlr_scene_buffer_from_node(d.backdrop)->buffer->width, ==, mon_w);
+
+	/* Neither: the shadow stays, the backdrop goes. */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_NONE);
+	d = decor_of(r.c);
+	g_assert_null(d.backdrop);
+	g_assert_nonnull(d.shadow);
+
+	/* And back, without a second node having accumulated anywhere. */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_GLASS);
+	d = decor_of(r.c);
+	g_assert_nonnull(d.backdrop);
+	g_assert_cmpint(
+		wlr_scene_buffer_from_node(d.backdrop)->buffer->width, ==, win_w);
+	g_assert_cmpuint(d.count, ==, 2);
+
+	rig_down(&r);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
 
+	g_test_add_func("/blur-nodes/only-one-backdrop",
+	                test_only_one_backdrop_draws);
+	g_test_add_func("/blur-nodes/backdrop-style",
+	                test_backdrop_style_picks_the_module);
 	g_test_add_func("/blur-nodes/follow-the-window",
 	                test_nodes_follow_the_window);
 	g_test_add_func("/blur-nodes/follow-a-resize",

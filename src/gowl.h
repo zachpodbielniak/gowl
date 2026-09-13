@@ -99,6 +99,7 @@
 #include "core/gowl-session-lock.h"
 #include "core/gowl-idle-manager.h"
 #include "core/gowl-logind.h"
+#include "core/gowl-edid.h"
 #include "core/gowl-static-prefix-key-policy.h"
 #include "core/gowl-session-default.h"
 #include "core/gowl-mirror.h"

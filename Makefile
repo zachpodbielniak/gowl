@@ -123,6 +123,7 @@ LIB_SRCS := \
 	src/core/gowl-session-lock.c \
 	src/core/gowl-idle-manager.c \
 	src/core/gowl-logind.c \
+	src/core/gowl-edid.c \
 	src/core/gowl-output-power.c \
 	src/core/gowl-shortcuts-inhibit.c \
 	src/core/gowl-foreign-toplevel.c \
@@ -219,6 +220,7 @@ LIB_HDRS := \
 	src/core/gowl-session-lock.h \
 	src/core/gowl-idle-manager.h \
 	src/core/gowl-logind.h \
+	src/core/gowl-edid.h \
 	src/core/gowl-decor.h \
 	src/core/gowl-static-prefix-key-policy.h \
 	src/core/gowl-session-default.h \
@@ -407,7 +409,21 @@ modules: lib $(OUTDIR)/modules
 		fi \
 	done
 
-# Build and run tests
+# Build and run tests.
+#
+# `modules' is a prerequisite, not an assumption.  A dozen tests load
+# real module .so files, and only four of those have a rule here that
+# can build one -- the rest merely NAME the .so as a prerequisite, so an
+# existing but stale file counted as up to date.  Change a field in
+# struct _GowlMonitor and every module still on disk has the old
+# offsets: test-tabbed read layout_symbol out of the middle of another
+# field and failed with "[T]" != "[T2]", which reads as a layout bug and
+# is an ABI mismatch.  modules/dependencies.mk already knows each module
+# must rebuild when the core headers or libgowl change; this is what
+# makes the test run ask.
+ifeq ($(BUILD_MODULES),1)
+test: modules
+endif
 test: lib $(TEST_BINS)
 	@echo "Running source guards..."
 	@for guard in $(TEST_GUARDS); do \

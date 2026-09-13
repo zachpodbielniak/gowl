@@ -21,6 +21,7 @@
 
 #include <glib-object.h>
 #include "../boxed/gowl-geometry.h"
+#include "gowl-edid.h"
 
 struct wlr_output;
 struct wlr_scene_output;
@@ -92,6 +93,27 @@ guint32        gowl_monitor_get_tags          (GowlMonitor *self);
  * Returns: %TRUE if HDR can be turned on
  */
 gboolean       gowl_monitor_supports_hdr      (GowlMonitor *self);
+
+/**
+ * gowl_monitor_get_edid_hdr:
+ * @self: a #GowlMonitor
+ *
+ * What the display says about its own HDR range: whether it accepts PQ,
+ * and how bright and how dark it goes.
+ *
+ * Read out of the display's EDID the first time it is asked for and
+ * kept, because wlroots reports whether an output can do BT.2020 and PQ
+ * but not what luminance it reaches -- and switching into HDR while
+ * declaring a mastering display brighter than the panel makes the panel
+ * tone-map content that already fitted, which only dims it.
+ *
+ * Luminances of 0 mean the EDID stated none, not zero nits.
+ *
+ * Returns: (transfer none) (nullable): the parsed metadata; %NULL only
+ *          for an output with no EDID at all (nested, headless)
+ */
+const GowlEdidHdr *
+               gowl_monitor_get_edid_hdr      (GowlMonitor *self);
 
 /**
  * gowl_monitor_get_hdr:

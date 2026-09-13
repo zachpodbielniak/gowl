@@ -874,6 +874,33 @@ gowl_monitor_get_hdr(GowlMonitor *self)
 }
 
 /**
+ * gowl_monitor_get_edid_hdr:
+ * @self: a #GowlMonitor
+ *
+ * What the display said about its own HDR range, read out of its EDID
+ * the first time it is asked for and kept.
+ *
+ * Returns: (transfer none) (nullable): the parsed metadata, or %NULL
+ *          where there is no EDID to read (nested, headless)
+ */
+const GowlEdidHdr *
+gowl_monitor_get_edid_hdr(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), NULL);
+
+	if (!self->edid_read) {
+		self->edid_read = TRUE;
+		if (!gowl_edid_read_connector(gowl_monitor_get_name(self),
+		                              &self->edid_hdr))
+			memset(&self->edid_hdr, 0, sizeof self->edid_hdr);
+	}
+	/* An EDID with nothing to say about HDR still counts as read; the
+	 * zeroed luminances are what tell the caller to keep its own
+	 * defaults. */
+	return &self->edid_hdr;
+}
+
+/**
  * gowl_monitor_set_hdr:
  * @self: a #GowlMonitor
  * @enable: %TRUE for BT.2020 + PQ at 10 bits
@@ -903,14 +930,55 @@ gowl_monitor_set_hdr(
 
 	wlr_output_state_init(&state);
 	if (enable) {
+		const GowlEdidHdr *edid = gowl_monitor_get_edid_hdr(self);
+
 		memset(&desc, 0, sizeof desc);
 		desc.primaries = WLR_COLOR_NAMED_PRIMARIES_BT2020;
 		desc.transfer_function = WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ;
-		desc.mastering_display_primaries = gowl_bt2020_primaries;
+
+		/*
+		 * The mastering display: what the content is declared to have
+		 * been graded on.  A compositor has no single honest answer
+		 * for a desktop, so it describes THIS display -- which says
+		 * to the sink "what I am sending already fits you, leave it
+		 * alone".  Claiming a brighter mastering display than the
+		 * panel has is what makes it tone-map, and tone-mapping a
+		 * desktop that was never brighter than the panel only dims
+		 * it.
+		 *
+		 * The panel's own primaries come from wlroots (out of the
+		 * EDID's chromaticity); its luminance range does not, so it
+		 * is parsed here.  A display that states neither keeps the
+		 * conventional 1000 cd/m² grade, which is what most HDR
+		 * content is actually mastered at.
+		 */
+		desc.mastering_display_primaries =
+			self->wlr_output->default_primaries != NULL
+			? *self->wlr_output->default_primaries
+			: gowl_bt2020_primaries;
+
 		desc.mastering_luminance.min = 0.005;
 		desc.mastering_luminance.max = 1000.0;
 		desc.max_cll = 1000.0;
 		desc.max_fall = 400.0;
+		if (edid != NULL) {
+			if (edid->max_luminance > 0.0) {
+				desc.mastering_luminance.max = edid->max_luminance;
+				desc.max_cll = edid->max_luminance;
+			}
+			if (edid->min_luminance > 0.0)
+				desc.mastering_luminance.min = edid->min_luminance;
+			if (edid->max_frame_average > 0.0)
+				desc.max_fall = edid->max_frame_average;
+			g_debug("%s: mastering %.0f cd/m² peak, %.3f min, "
+			        "%.0f frame-average (%s)",
+			        gowl_monitor_get_name(self),
+			        desc.mastering_luminance.max,
+			        desc.mastering_luminance.min, desc.max_fall,
+			        edid->max_luminance > 0.0
+			        ? "from the display's EDID"
+			        : "the EDID states no luminance");
+		}
 		if (!wlr_output_state_set_image_description(&state, &desc)) {
 			g_warning("%s refused the HDR image description",
 			          gowl_monitor_get_name(self));

@@ -1200,6 +1200,27 @@ What gowl advertises comes from the renderer where it will answer, and otherwise
 
 The sRGB primaries are in that list on purpose.  The protocol requires a compositor to name every set it supports, and a client is entitled to read an absent name as unsupported -- so a list of BT.2020 alone told applications that gowl could not handle ORDINARY colour, and Chromium-based ones logged =Unable to set image primaries= and gave up on colour management entirely.  The sRGB *transfer function* is the one exception: wlroots adds that itself and refuses to be handed it, so it is filtered out of the list and advertised by wlroots.  =G_MESSAGES_DEBUG=gowl= logs how many of each were advertised and where they came from.
 
+***** The mastering display
+
+Switching an output into HDR means telling it what the content was
+graded on.  A compositor has no single honest answer for a desktop, so
+gowl describes *that display*: its own primaries (from the EDID's
+chromaticity, via wlroots) and its own luminance range, parsed out of
+the CTA-861 HDR Static Metadata Data Block in its EDID.
+
+This matters more than it sounds.  The mastering luminance is what a
+sink uses to decide whether to tone-map, and gowl used to declare a
+made-up 1000 cd/m² because that is what most HDR content is graded at.
+Tell a 700 cd/m² panel that and it squeezes everything into a range the
+content never used -- which just dims the desktop, and looks exactly
+like "HDR does not work".  Describing the panel says "what I am sending
+already fits you, leave it alone".
+
+A display that states no luminance keeps the conventional 1000 cd/m².
+=gowl-msg monitors= reports what was read as =hdr_max_luminance=,
+=hdr_min_luminance= and =hdr_max_frame_average= (0 = the EDID said
+nothing), and =G_MESSAGES_DEBUG=gowl-edid= logs the parse.
+
 Because of that, HDR is a toggle rather than something to leave on:
 
 #+begin_src sh

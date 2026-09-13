@@ -42,6 +42,7 @@
 #include "core/gowl-cursor.h"
 #include "core/gowl-idle-manager.h"
 #include "core/gowl-logind.h"
+#include "core/gowl-edid.h"
 #include "core/gowl-input-capture.h"
 #include "core/gowl-input-recorder.h"
 #include "core/gowl-bar.h"
@@ -673,6 +674,15 @@ struct _GowlMonitor {
 	 * off restores the format rather than guessing at 8-bit. */
 	gboolean hdr_enabled;
 	guint32  hdr_prev_render_format;
+	/* What the display said about its own brightness range, read out
+	 * of its EDID the first time HDR is asked for.  Declaring a
+	 * mastering luminance the panel cannot reach makes it tone-map
+	 * content that already fitted, so these are read rather than
+	 * guessed; `edid_read' distinguishes "nothing there" from "not
+	 * looked at yet" so a display without one is not re-read on every
+	 * toggle. */
+	gboolean    edid_read;
+	GowlEdidHdr edid_hdr;
 
 	struct wlr_box m;   /* monitor area, layout-relative */
 	struct wlr_box w;   /* window area (minus bar / layer-shell) */

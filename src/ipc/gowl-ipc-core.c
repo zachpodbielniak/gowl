@@ -146,6 +146,24 @@ add_monitor(GowlCompositor *self, JsonBuilder *b, GowlMonitor *m)
 	json_builder_add_boolean_value(b, gowl_monitor_get_hdr(m));
 	json_builder_set_member_name(b, "hdr_capable");
 	json_builder_add_boolean_value(b, gowl_monitor_supports_hdr(m));
+	/* What the display says about its own brightness, from its EDID.
+	 * Reported because it is what gowl declares as the mastering
+	 * display when HDR goes on, and because "HDR looks dim" is
+	 * usually this number disagreeing with the panel.  0 means the
+	 * EDID stated none. */
+	{
+		const GowlEdidHdr *e = gowl_monitor_get_edid_hdr(m);
+
+		json_builder_set_member_name(b, "hdr_max_luminance");
+		json_builder_add_double_value(b,
+			e != NULL ? e->max_luminance : 0.0);
+		json_builder_set_member_name(b, "hdr_min_luminance");
+		json_builder_add_double_value(b,
+			e != NULL ? e->min_luminance : 0.0);
+		json_builder_set_member_name(b, "hdr_max_frame_average");
+		json_builder_add_double_value(b,
+			e != NULL ? e->max_frame_average : 0.0);
+	}
 	json_builder_set_member_name(b, "x");
 	json_builder_add_int_value(b, m->m.x);
 	json_builder_set_member_name(b, "y");

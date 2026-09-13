@@ -128,6 +128,43 @@ gowl_backdrop_plan(
 	return TRUE;
 }
 
+gdouble
+gowl_backdrop_corner_radius(
+	gint decor_radius,
+	gint border_width,
+	gint frame_w,
+	gint frame_h
+){
+	gdouble half_bw;
+	gdouble r;
+	gdouble inner_w, inner_h;
+
+	if (decor_radius <= 0 || frame_w <= 0 || frame_h <= 0)
+		return 0.0;
+
+	half_bw = (gdouble)MAX(0, border_width) / 2.0;
+	r = (gdouble)decor_radius;
+
+	/* The decorator's own clamp, in its own terms: the path is inset by
+	 * half a border on every side, and its radius may not exceed half of
+	 * what that leaves. */
+	inner_w = (gdouble)frame_w - 2.0 * half_bw;
+	inner_h = (gdouble)frame_h - 2.0 * half_bw;
+	if (inner_w < 0.0)
+		inner_w = 0.0;
+	if (inner_h < 0.0)
+		inner_h = 0.0;
+	if (r > inner_w / 2.0)
+		r = inner_w / 2.0;
+	if (r > inner_h / 2.0)
+		r = inner_h / 2.0;
+	if (r < 0.0)
+		r = 0.0;
+
+	/* ...and the stroke reaches half a border further out than that. */
+	return r + half_bw;
+}
+
 gboolean
 gowl_backdrop_render_stale(
 	gboolean             have_buffer,

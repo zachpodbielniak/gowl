@@ -549,6 +549,14 @@ Two modules can fill the space behind a translucent window, and
 - =blur= --- the wallpaper, blurred ([[#blur][Frosted glass and shadows]]).
 - =none= --- the desktop, seen straight through.
 
+*A change says so on screen.* Switching backdrop raises the same
+=toast-requested= signal a layout change does, so the =layout-indicator=
+module draws a brief toast naming the new one --- "Liquid glass", "Liquid
+water", "Blur", "No backdrop". Without it the honest reaction to pressing
+the key over a busy wallpaper is "did that do anything?", because a calm
+water and a subtle glass can both look a great deal like the blur they
+replaced.
+
 *They are alternatives, not layers.* Each module puts one scene node in
 the same place in the same window's tree, so two of them drawing means
 one is hidden behind the other while both still cost a capture and a blur
@@ -652,6 +660,9 @@ size and around the corners, where a painted rim does not.
 | =glass-edge-width=   | float  | =8=         | How far the shading and the sheen reach, =0.5= to =64= px |
 | =glass-saturation=   | float  | =0.86=      | Saturation inside the bevel ring, =0= to =3=; the centre is never touched |
 | =glass-clarity=      | float  | =0.85=      | How much of the UNFROSTED wallpaper the ring shows, =0= to =1= |
+| =glass-centre-clarity= | float | =0.45=     | How much of that the flat middle keeps, =0= to =1= |
+| =glass-lens=         | float  | =0.055=     | Whole-surface magnification, =0= to =0.5= |
+| =glass-sheen=        | float  | =0.30=      | Highlight the dome catches; nothing without =glass-lens= |
 | =glass-light=        | float  | =-140=      | Light direction in degrees: =0= straight above, positive clockwise |
 | =glass-tint=         | string | ="#ffffff"= | Palette names resolve |
 | =glass-brightness=   | float  | =1.0=       | =0.2= to =2.0= |
@@ -661,6 +672,40 @@ size and around the corners, where a painted rim does not.
 
 Lengths are LOGICAL pixels and are scaled by the output's scale, so the
 same config looks the same on a HiDPI screen.
+
+***** Why it is not a blur
+:PROPERTIES:
+:CUSTOM_ID: liquidglass-not-blur
+:END:
+
+Two of the settings above exist because the first version of this module
+*was* hard to tell from the blur, and for a specific reason: the bevel is
+a narrow band, so nine tenths of a window showed nothing but blurred
+wallpaper --- which is the other module's whole job.
+
+- =glass-lens= makes the slab a very shallow DOME rather than a flat
+  pane. A flat slab passes light straight through, so it can do nothing
+  at all to its own middle; a domed one magnifies it. That is the
+  difference between seeing *through* something and seeing a blur.
+- =glass-centre-clarity= stops the middle being pure frost, so there is
+  something to see through it.
+- =glass-sheen= is the highlight the dome catches. It is derived from the
+  dome's own normal, not painted on, which is why it sits off-centre
+  towards the light and moves when the light moves. It does nothing at
+  =glass-lens: 0=, because a flat surface has no slope to catch anything.
+
+*The corners are a different lens from the edges, and that is physics
+rather than decoration.* A straight edge is a cylinder: it bends light in
+one direction, and the band of wallpaper it gathers is as long after the
+bend as before. A corner is a piece of a torus --- it bends in two, and
+the arc it gathers from is shorter than the arc it spreads over, so the
+same displacement concentrates far more there. The shader takes the
+curvature of the edge from the distance field (for a distance field the
+Laplacian *is* the curvature of the level set, so the samples it already
+needs for the direction give it away free) and folds it into both the
+shading and the colour fringe. Without it every point at the same depth
+looked identical whether it sat halfway along an edge or in the middle of
+a corner.
 
 ***** Three things worth knowing before you tune it
 :PROPERTIES:
@@ -707,9 +752,17 @@ move, and each window has its own small swapchain so a frame is never
 drawn into the buffer the scene is still reading.
 
 A window whose glass cannot be rendered keeps the last picture rather
-than blinking. It follows [[#wallpaper-tags][per-tag wallpapers]], like the blur, and it
-takes its corner radius from whichever =roundcorners= radius is in force,
-so the glass ends exactly where the window does.
+than blinking. It follows [[#wallpaper-tags][per-tag wallpapers]], like the blur.
+
+*It ends exactly where the window does.* =roundcorners= strokes its path
+inset by half the border width and clamps that path's radius to half of
+what is left, so the outer edge of the window is a rounded rect over the
+whole frame with radius /clamped radius + half a border/. Both per-window
+backdrops mask themselves with that number, computed by the same
+function (=gowl_backdrop_corner_radius=). Using the decorator's radius
+raw leaves a transparent nick inside each corner on a bordered window,
+and spills past the border on one small enough for the decorator to clamp
+and the backdrop not to.
 
 Under a renderer whose GL context it cannot borrow --- Vulkan, pixman ---
 it sits the session out, and so does a driver that will not compile the
@@ -745,7 +798,7 @@ pane with a slow wobble.
 |-------------+------------|
 | =pool=      | Barely disturbed. It is almost entirely its ripples --- four sources, almost no swell |
 | =fountain=  | Livelier and quick: six ripple sources, still calm between them |
-| =pond=      | A gentle swell with the odd ring (the default) |
+| =pond=      | A gentle swell with the odd ring |
 | =sea=       | A rolling swell, no ripples at all, a little foam |
 | =storm=     | Choppy, fast, white-capped, and running straight into the edges |
 
@@ -754,8 +807,8 @@ sea has none and lives entirely in the swell.
 
 | Property             | Type   | Default   | Description |
 |----------------------+--------+-----------+-------------|
-| =water-preset=       | string | ="pond"=  | One of the five above |
-| =water-intensity=    | float  | =1.0=     | How rough, over and above the preset, =0= to =3= |
+| =water-preset=       | string | ="sea"=   | One of the five above |
+| =water-intensity=    | float  | =0.4=     | How rough, over and above the preset, =0= to =3= |
 | =water-fps=          | int    | =30=      | How often the surface is redrawn; =0= is every frame |
 | =water-scale=        | int    | =2=       | Render at 1/this of the window's size, =1= to =4= |
 | =water-tint=         | string | ="#9edbff"= | What the water takes out of the light |

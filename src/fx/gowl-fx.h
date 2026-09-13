@@ -305,6 +305,14 @@ gboolean gowl_fx_pass_end (GowlFxPass *pass);
  *   touched.  Below 1 cleans up the colour folding and dispersion muddy
  * @clarity: how much the ring shows the UNBLURRED wallpaper, 0 to 1.
  *   Thick glass diffuses and a lens does not, and the ring is the lens
+ * @centre_clarity: how much of that clarity the FLAT MIDDLE keeps, 0 to
+ *   1.  At 0 the middle is pure frost, which is the other module's job
+ *   and is what made glass look like blur
+ * @lens: whole-surface magnification, 0 to 0.5.  The slab is very
+ *   slightly domed rather than flat; a flat one cannot do anything at
+ *   all to its own middle
+ * @sheen: strength of the highlight the dome catches.  Zero without
+ *   @lens: a flat surface has no slope to catch anything
  * @tint: multiplied into the result
  * @brightness: multiplied into the result
  * @alpha: overall opacity
@@ -332,6 +340,9 @@ typedef struct {
 	gfloat light[2];
 	gfloat saturation;
 	gfloat clarity;
+	gfloat centre_clarity;
+	gfloat lens;
+	gfloat sheen;
 	gfloat tint[3];
 	gfloat brightness;
 	gfloat alpha;

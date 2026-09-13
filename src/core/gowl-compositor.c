@@ -2638,6 +2638,29 @@ gowl_compositor_set_backdrop_style(GowlCompositor *self,
 	for (l = self->clients; l != NULL; l = l->next)
 		gowl_effects_client_placed(self, (GowlClient *)l->data);
 
+	/*
+	 * Say so on screen, the way a layout change does.
+	 *
+	 * The backdrop is the one setting whose effect can be genuinely hard
+	 * to see -- a calm water or a subtle glass over a busy wallpaper
+	 * looks a lot like the blur it replaced, and the key that changes it
+	 * is one press among four.  `toast-requested' is the same signal the
+	 * layout indicator already draws, so this needs no new drawing code
+	 * and looks identical to the layout toast, which is what somebody
+	 * pressing the key expects.
+	 */
+	if (self->selmon != NULL) {
+		const gchar *label = NULL;
+
+		switch (style) {
+		case GOWL_BACKDROP_GLASS: label = "Liquid glass"; break;
+		case GOWL_BACKDROP_WATER: label = "Liquid water"; break;
+		case GOWL_BACKDROP_BLUR:  label = "Blur";         break;
+		default:                  label = "No backdrop";  break;
+		}
+		g_signal_emit_by_name(self, "toast-requested", self->selmon, label);
+	}
+
 	if (self->ipc != NULL)
 		gowl_ipc_push_event(self->ipc, "EVENT backdrop %s",
 		                    gowl_config_backdrop_style_name(style));

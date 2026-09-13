@@ -168,7 +168,7 @@ typedef struct {
 	gboolean                 have;
 	guint64                  serial;      /* which wallpaper capture */
 	guint64                  generation;  /* which settings */
-	gint                     radius;
+	gdouble                  radius;
 } GowlWaterNodes;
 
 struct _GowlModuleLiquidWater {
@@ -501,18 +501,29 @@ water_drawn_frame(GowlClient *c)
 	return c->geom;
 }
 
-static gint
-water_corner_radius(GowlCompositor *self)
+/*
+ * The rounded rect the window is actually drawn as, so the backdrop ends
+ * exactly where the window does.
+ *
+ * Asks the decorator for its radius and then applies the SAME clamp and
+ * border arithmetic it does (gowl_backdrop_corner_radius).  Taking the
+ * decorator's number raw leaves a transparent nick inside each corner on
+ * a bordered window.  No decorator means square corners.
+ */
+static gdouble
+water_corner_radius(GowlCompositor *self, const struct wlr_box *frame,
+                     guint border_width)
 {
 	gpointer dec;
 
 	if (self->module_mgr == NULL)
-		return 0;
+		return 0.0;
 	dec = gowl_module_manager_get_decorator(self->module_mgr);
 	if (dec == NULL)
-		return 0;
-	return gowl_client_decorator_get_corner_radius(
-		(GowlClientDecorator *)dec);
+		return 0.0;
+	return gowl_backdrop_corner_radius(
+		gowl_client_decorator_get_corner_radius((GowlClientDecorator *)dec),
+		(gint)border_width, frame->width, frame->height);
 }
 
 static struct wlr_buffer *
@@ -548,7 +559,7 @@ water_acquire_buffer(GowlCompositor *self, GowlWaterNodes *nodes,
 
 static void
 water_fill_params(const GowlWaterStyle *style, const GowlBackdropPlan *plan,
-                  gint radius, GowlFxWaterParams *out)
+                  gdouble radius, GowlFxWaterParams *out)
 {
 	gdouble scale = (plan->scale_x + plan->scale_y) * 0.5;
 	gdouble rad   = style->light * G_PI / 180.0;
@@ -557,7 +568,7 @@ water_fill_params(const GowlWaterStyle *style, const GowlBackdropPlan *plan,
 	gowl_fx_water_params_init(out);
 	out->width      = plan->buf_width;
 	out->height     = plan->buf_height;
-	out->radius     = (gfloat)((gdouble)radius * scale);
+	out->radius     = (gfloat)(radius * scale);
 	/* Lengths scale with the render; weights and exponents do not. */
 	out->amplitude  = (gfloat)(style->amplitude * scale);
 	out->wavelength = (gfloat)(style->wavelength * scale);
@@ -615,7 +626,7 @@ water_update_client(GowlModuleLiquidWater *mod, GowlCompositor *self,
 	GowlWaterSource   *src;
 	GowlBackdropPlan   plan;
 	struct wlr_box     frame;
-	gint               radius;
+	gdouble            radius;
 
 	water_ensure_gl(mod, self);
 	if (mod->gl == NULL || self->config == NULL || self->locked)
@@ -649,7 +660,7 @@ water_update_client(GowlModuleLiquidWater *mod, GowlCompositor *self,
 	}
 
 	nodes  = water_nodes(c, TRUE);
-	radius = water_corner_radius(self);
+	radius = water_corner_radius(self, &frame, c->bw);
 
 	/*
 	 * There is no staleness question about the SURFACE -- the clock has

@@ -137,6 +137,9 @@
 #define GOWL_CONFIG_DEFAULT_GLASS_EDGE_WIDTH     (8.0)
 #define GOWL_CONFIG_DEFAULT_GLASS_SATURATION     (0.86)
 #define GOWL_CONFIG_DEFAULT_GLASS_CLARITY        (0.85)
+#define GOWL_CONFIG_DEFAULT_GLASS_CENTRE_CLARITY (0.45)
+#define GOWL_CONFIG_DEFAULT_GLASS_LENS           (0.055)
+#define GOWL_CONFIG_DEFAULT_GLASS_SHEEN          (0.30)
 #define GOWL_CONFIG_DEFAULT_GLASS_LIGHT          (-140.0)
 #define GOWL_CONFIG_DEFAULT_GLASS_TINT           "#ffffff"
 #define GOWL_CONFIG_DEFAULT_GLASS_BRIGHTNESS     (1.0)
@@ -161,8 +164,8 @@
  * to under half a pixel of displacement, which is to say no refraction at
  * all.
  */
-#define GOWL_CONFIG_DEFAULT_WATER_PRESET         "pond"
-#define GOWL_CONFIG_DEFAULT_WATER_INTENSITY      (1.0)
+#define GOWL_CONFIG_DEFAULT_WATER_PRESET         "sea"
+#define GOWL_CONFIG_DEFAULT_WATER_INTENSITY      (0.4)
 #define GOWL_CONFIG_DEFAULT_WATER_FPS            (30)
 #define GOWL_CONFIG_DEFAULT_WATER_SCALE          (2)
 #define GOWL_CONFIG_DEFAULT_WATER_TINT           "#9edbff"
@@ -310,6 +313,9 @@ struct _GowlConfig {
 	gdouble  glass_edge_width;
 	gdouble  glass_saturation;
 	gdouble  glass_clarity;
+	gdouble  glass_centre_clarity;
+	gdouble  glass_lens;
+	gdouble  glass_sheen;
 	gdouble  glass_light;
 	gchar   *glass_tint;
 	gdouble  glass_brightness;
@@ -1327,6 +1333,9 @@ gowl_config_init(GowlConfig *self)
 	self->glass_edge_width   = GOWL_CONFIG_DEFAULT_GLASS_EDGE_WIDTH;
 	self->glass_saturation   = GOWL_CONFIG_DEFAULT_GLASS_SATURATION;
 	self->glass_clarity      = GOWL_CONFIG_DEFAULT_GLASS_CLARITY;
+	self->glass_centre_clarity = GOWL_CONFIG_DEFAULT_GLASS_CENTRE_CLARITY;
+	self->glass_lens         = GOWL_CONFIG_DEFAULT_GLASS_LENS;
+	self->glass_sheen        = GOWL_CONFIG_DEFAULT_GLASS_SHEEN;
 	self->glass_light        = GOWL_CONFIG_DEFAULT_GLASS_LIGHT;
 	self->glass_tint         = g_strdup(GOWL_CONFIG_DEFAULT_GLASS_TINT);
 	self->glass_brightness   = GOWL_CONFIG_DEFAULT_GLASS_BRIGHTNESS;
@@ -1710,6 +1719,7 @@ static const gchar *const top_level_keys[] = {
 	"window-backdrop", "glass-bevel", "glass-thickness", "glass-slope",
 	"glass-shape", "glass-dispersion", "glass-rim", "glass-shade",
 	"glass-edge-width", "glass-saturation", "glass-clarity", "glass-light",
+	"glass-centre-clarity", "glass-lens", "glass-sheen",
 	"glass-tint", "glass-brightness", "glass-opacity", "glass-frost",
 	"glass-frost-passes",
 	"water-preset", "water-intensity", "water-fps", "water-scale",
@@ -2425,6 +2435,18 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "glass-clarity")) {
 		self->glass_clarity = CLAMP(yaml_mapping_get_double_member(
 			mapping, "glass-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-centre-clarity")) {
+		self->glass_centre_clarity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-centre-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-lens")) {
+		self->glass_lens = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-lens"), 0.0, 0.5);
+	}
+	if (yaml_mapping_has_member(mapping, "glass-sheen")) {
+		self->glass_sheen = CLAMP(yaml_mapping_get_double_member(
+			mapping, "glass-sheen"), 0.0, 3.0);
 	}
 	if (yaml_mapping_has_member(mapping, "glass-light")) {
 		self->glass_light = CLAMP(yaml_mapping_get_double_member(
@@ -5978,6 +6000,30 @@ gowl_config_get_glass_clarity(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_GLASS_CLARITY);
 	return self->glass_clarity;
+}
+
+gdouble
+gowl_config_get_glass_centre_clarity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_CENTRE_CLARITY);
+	return self->glass_centre_clarity;
+}
+
+gdouble
+gowl_config_get_glass_lens(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_LENS);
+	return self->glass_lens;
+}
+
+gdouble
+gowl_config_get_glass_sheen(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_GLASS_SHEEN);
+	return self->glass_sheen;
 }
 
 gdouble

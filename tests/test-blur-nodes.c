@@ -850,11 +850,25 @@ test_nodes_follow_an_animation(gconstpointer data)
  * module's alone, it has its own key, and a user who turns the backdrop
  * off has not asked to lose their shadows.
  */
+/* Collects the labels `toast-requested' is raised with. */
+static void
+on_toast(GowlCompositor *comp, GowlMonitor *mon, const gchar *label,
+         gpointer data)
+{
+	GPtrArray *seen = data;
+
+	(void)comp;
+	(void)mon;
+	g_ptr_array_add(seen, g_strdup(label));
+}
+
 static void
 test_backdrop_style_picks_the_module(void)
 {
 	Rig   r;
 	Decor with, without, again;
+	g_autoptr(GPtrArray) toasts = NULL;
+	gulong toast_id;
 
 	if (!modules_built(blur_alone))
 		return;
@@ -863,6 +877,18 @@ test_backdrop_style_picks_the_module(void)
 		g_test_skip("no GLES2 renderer to draw with here");
 		return;
 	}
+
+	/*
+	 * The change has to SAY so.  A calm water or a subtle glass over a
+	 * busy wallpaper looks a great deal like the blur it replaced, and
+	 * the key that changes it is one press among four -- so without a
+	 * toast the honest reaction to pressing it is "did that do
+	 * anything?".  It rides `toast-requested', the same signal the layout
+	 * indicator already draws, so it looks like the layout toast.
+	 */
+	toasts = g_ptr_array_new_with_free_func(g_free);
+	toast_id = g_signal_connect(r.compositor, "toast-requested",
+	                            G_CALLBACK(on_toast), toasts);
 
 	/* On the compositor's list, because that list is exactly what
 	 * gowl_compositor_set_backdrop_style() walks to tell the modules. */
@@ -926,6 +952,28 @@ test_backdrop_style_picks_the_module(void)
 	 * first: a module that added rather than restored would grow a node
 	 * on every press of the key. */
 	g_assert_cmpuint(again.count, ==, with.count);
+
+	/* Every style named itself on the way past, and named itself as a
+	 * person would say it rather than as the enum spells it. */
+	g_signal_handler_disconnect(r.compositor, toast_id);
+	{
+		gboolean saw_glass = FALSE, saw_water = FALSE;
+		gboolean saw_blur = FALSE, saw_none = FALSE;
+		guint    i;
+
+		for (i = 0; i < toasts->len; i++) {
+			const gchar *t = g_ptr_array_index(toasts, i);
+
+			if (g_strcmp0(t, "Liquid glass") == 0) saw_glass = TRUE;
+			if (g_strcmp0(t, "Liquid water") == 0) saw_water = TRUE;
+			if (g_strcmp0(t, "Blur") == 0)         saw_blur  = TRUE;
+			if (g_strcmp0(t, "No backdrop") == 0)  saw_none  = TRUE;
+		}
+		g_assert_true(saw_glass);
+		g_assert_true(saw_water);
+		g_assert_true(saw_blur);
+		g_assert_true(saw_none);
+	}
 
 	rig_down(&r);
 }

@@ -259,10 +259,57 @@ test_a_subpixel_move_is_not_a_move(void)
 	g_assert_true(gowl_backdrop_render_stale(TRUE, &a, &b, 1, 1, 1, 1));
 }
 
+/*
+ * The backdrop has to end exactly where the window does.
+ *
+ * modules/roundcorners strokes a path inset by half the border width,
+ * clamps that path's radius to half of what is left, and the stroke then
+ * reaches half a border back out.  A backdrop that masks itself with the
+ * decorator's raw radius is therefore wrong twice: too small by half a
+ * border, so a transparent nick shows inside each corner, and unclamped,
+ * so on a window small enough for the decorator to clamp it spills past
+ * the border instead.
+ *
+ * Neither is a crash and both are a few pixels, which is why this is
+ * arithmetic with a test rather than a number someone eyeballed.
+ */
+static void
+test_corner_radius_matches_the_decorator(void)
+{
+	/* No decoration, no rounding. */
+	g_assert_cmpfloat(gowl_backdrop_corner_radius(0, 2, 800, 600), ==, 0.0);
+
+	/* No border: the stroke has no width to reach out with, so the
+	 * backdrop's radius is the decorator's. */
+	g_assert_cmpfloat(gowl_backdrop_corner_radius(12, 0, 800, 600),
+	                  ==, 12.0);
+
+	/* With a border, the outer edge is half a border further out. */
+	g_assert_cmpfloat(gowl_backdrop_corner_radius(12, 4, 800, 600),
+	                  ==, 14.0);
+
+	/* A window too small for the radius: the decorator clamps to half
+	 * the inset extent, and so must this.  40 wide with a 4px border
+	 * leaves 36, so the path radius is 18 and the outer edge 20. */
+	g_assert_cmpfloat(gowl_backdrop_corner_radius(100, 4, 40, 600),
+	                  ==, 20.0);
+	/* ...whichever side is the short one. */
+	g_assert_cmpfloat(gowl_backdrop_corner_radius(100, 4, 600, 40),
+	                  ==, 20.0);
+
+	/* Degenerate frames answer rather than divide by anything. */
+	g_assert_cmpfloat(gowl_backdrop_corner_radius(12, 4, 0, 0), ==, 0.0);
+	g_assert_cmpfloat(gowl_backdrop_corner_radius(12, 100, 10, 10),
+	                  >=, 0.0);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
+
+	g_test_add_func("/backdrop-plan/corner-radius",
+	                test_corner_radius_matches_the_decorator);
 
 	g_test_add_func("/backdrop-plan/whole-window", test_whole_window_on_a_1x_output);
 	g_test_add_func("/backdrop-plan/hidpi", test_hidpi_doubles_everything_once);

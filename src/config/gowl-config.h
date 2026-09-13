@@ -1627,6 +1627,17 @@ gdouble      gowl_config_get_glass_saturation (GowlConfig *self);
 /* How much of the UNFROSTED wallpaper the ring shows, 0 to 1.  Thick
  * glass diffuses and a lens does not, and the ring is the lens. */
 gdouble      gowl_config_get_glass_clarity (GowlConfig *self);
+/* How much of that clarity the FLAT MIDDLE keeps, 0 to 1.  At 0 the
+ * middle is pure frost --- which is the blur module's job, and is what
+ * made glass look like blur. */
+gdouble      gowl_config_get_glass_centre_clarity (GowlConfig *self);
+/* Whole-surface magnification, 0 to 0.5.  The slab is very slightly
+ * domed rather than flat; a flat one cannot do anything to its own
+ * middle at all. */
+gdouble      gowl_config_get_glass_lens (GowlConfig *self);
+/* Strength of the highlight the dome catches.  Does nothing without
+ * `glass-lens': a flat surface has no slope to catch anything. */
+gdouble      gowl_config_get_glass_sheen (GowlConfig *self);
 /* Light direction in degrees: 0 straight above, positive clockwise. */
 gdouble      gowl_config_get_glass_light (GowlConfig *self);
 const gchar *gowl_config_get_glass_tint (GowlConfig *self);

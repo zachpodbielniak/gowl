@@ -135,6 +135,35 @@ gboolean gowl_backdrop_plan (const struct wlr_box *frame,
  *
  * Returns: %TRUE when the buffer must be rendered again
  */
+/**
+ * gowl_backdrop_corner_radius:
+ * @decor_radius: the radius the client decorator reports, in logical px
+ * @border_width: the window's border width
+ * @frame_w: the frame's width, in logical px
+ * @frame_h: its height
+ *
+ * The radius of the rounded rect a per-window backdrop must mask itself
+ * to, so that it ends exactly where the window does.
+ *
+ * This is NOT @decor_radius.  modules/roundcorners strokes a path inset
+ * by half the border width and clamps that path's radius to half of what
+ * is left; the stroke then extends half a border outwards from it.  So
+ * the outer edge of the window --- the line a backdrop must not cross,
+ * and must not stop short of --- is a rounded rect over the WHOLE frame
+ * whose radius is the clamped path radius plus half a border.
+ *
+ * Using @decor_radius raw leaves a transparent nick inside each corner
+ * on a bordered window, and a backdrop that spills past the border on a
+ * small one where the decorator clamped and the backdrop did not.
+ *
+ * Returns: the radius to mask with, in logical pixels; 0 when the
+ *   decorator draws square corners or there is no decorator.
+ */
+gdouble gowl_backdrop_corner_radius (gint decor_radius,
+                                     gint border_width,
+                                     gint frame_w,
+                                     gint frame_h);
+
 gboolean gowl_backdrop_render_stale (gboolean             have_buffer,
                                   const GowlBackdropPlan *cached,
                                   const GowlBackdropPlan *want,

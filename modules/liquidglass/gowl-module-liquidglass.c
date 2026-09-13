@@ -127,6 +127,9 @@ typedef struct {
 	gdouble edge_width;
 	gdouble saturation;
 	gdouble clarity;
+	gdouble centre_clarity;
+	gdouble lens;
+	gdouble sheen;
 	gdouble light;
 	gdouble brightness;
 	gdouble opacity;
@@ -182,7 +185,7 @@ typedef struct {
 	gboolean                 have;      /* whether @plan means anything */
 	guint64                  serial;    /* which wallpaper capture */
 	guint64                  generation;/* which settings */
-	gint                     radius;    /* the corner radius it was drawn with */
+	gdouble                  radius;    /* the corner radius it was drawn with */
 } GowlGlassNodes;
 
 struct _GowlModuleLiquidGlass {
@@ -358,6 +361,9 @@ glass_read_style(GowlModuleLiquidGlass *mod, GowlConfig *config)
 	style.edge_width   = gowl_config_get_glass_edge_width(config);
 	style.saturation   = gowl_config_get_glass_saturation(config);
 	style.clarity      = gowl_config_get_glass_clarity(config);
+	style.centre_clarity = gowl_config_get_glass_centre_clarity(config);
+	style.lens         = gowl_config_get_glass_lens(config);
+	style.sheen        = gowl_config_get_glass_sheen(config);
 	style.light        = gowl_config_get_glass_light(config);
 	style.brightness   = gowl_config_get_glass_brightness(config);
 	style.opacity      = gowl_config_get_glass_opacity(config);
@@ -509,20 +515,29 @@ glass_drawn_frame(GowlClient *c)
 	return c->geom;
 }
 
-/* The corner radius the window is actually drawn with, so the glass ends
- * where the window does.  No decorator means square corners. */
-static gint
-glass_corner_radius(GowlCompositor *self)
+/*
+ * The rounded rect the window is actually drawn as, so the backdrop ends
+ * exactly where the window does.
+ *
+ * Asks the decorator for its radius and then applies the SAME clamp and
+ * border arithmetic it does (gowl_backdrop_corner_radius).  Taking the
+ * decorator's number raw leaves a transparent nick inside each corner on
+ * a bordered window.  No decorator means square corners.
+ */
+static gdouble
+glass_corner_radius(GowlCompositor *self, const struct wlr_box *frame,
+                     guint border_width)
 {
 	gpointer dec;
 
 	if (self->module_mgr == NULL)
-		return 0;
+		return 0.0;
 	dec = gowl_module_manager_get_decorator(self->module_mgr);
 	if (dec == NULL)
-		return 0;
-	return gowl_client_decorator_get_corner_radius(
-		(GowlClientDecorator *)dec);
+		return 0.0;
+	return gowl_backdrop_corner_radius(
+		gowl_client_decorator_get_corner_radius((GowlClientDecorator *)dec),
+		(gint)border_width, frame->width, frame->height);
 }
 
 /*
@@ -571,7 +586,7 @@ glass_acquire_buffer(GowlCompositor *self, GowlGlassNodes *nodes,
  * place. */
 static void
 glass_fill_params(const GowlGlassStyle *style, const GowlBackdropPlan *plan,
-                  gint radius, GowlFxGlassParams *out)
+                  gdouble radius, GowlFxGlassParams *out)
 {
 	gdouble scale = (plan->scale_x + plan->scale_y) * 0.5;
 	gdouble rad   = style->light * G_PI / 180.0;
@@ -579,7 +594,7 @@ glass_fill_params(const GowlGlassStyle *style, const GowlBackdropPlan *plan,
 	gowl_fx_glass_params_init(out);
 	out->width      = plan->buf_width;
 	out->height     = plan->buf_height;
-	out->radius     = (gfloat)((gdouble)radius * scale);
+	out->radius     = (gfloat)(radius * scale);
 	out->bevel      = (gfloat)(style->bevel * scale);
 	out->thickness  = (gfloat)(style->thickness * scale);
 	out->slope      = (gfloat)style->slope;
@@ -590,6 +605,9 @@ glass_fill_params(const GowlGlassStyle *style, const GowlBackdropPlan *plan,
 	out->edge_width = (gfloat)(style->edge_width * scale);
 	out->saturation = (gfloat)style->saturation;
 	out->clarity    = (gfloat)style->clarity;
+	out->centre_clarity = (gfloat)style->centre_clarity;
+	out->lens       = (gfloat)style->lens;
+	out->sheen      = (gfloat)style->sheen;
 	out->brightness = (gfloat)style->brightness;
 	out->alpha      = (gfloat)style->opacity;
 	out->tint[0]    = (gfloat)style->tint[0];
@@ -640,7 +658,8 @@ glass_update_client(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 	GowlGlassSource *src;
 	GowlBackdropPlan    plan;
 	struct wlr_box   frame;
-	gint             divisor, radius;
+	gint             divisor;
+	gdouble          radius;
 
 	glass_ensure_gl(mod, self);
 	if (mod->gl == NULL || self->config == NULL || self->locked)
@@ -684,7 +703,7 @@ glass_update_client(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 	}
 
 	nodes  = glass_nodes(c, TRUE);
-	radius = glass_corner_radius(self);
+	radius = glass_corner_radius(self, &frame, c->bw);
 
 	if (gowl_backdrop_render_stale(nodes->have && nodes->node != NULL,
 	                            &nodes->plan, &plan,

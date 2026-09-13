@@ -92,6 +92,9 @@ typedef struct {
 	GLint  u_light;
 	GLint  u_sat;
 	GLint  u_clarity;
+	GLint  u_centre_clarity;
+	GLint  u_lens;
+	GLint  u_sheen;
 	GLint  u_tint;
 	GLint  u_brightness;
 	GLint  u_alpha;

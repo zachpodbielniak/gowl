@@ -169,11 +169,32 @@ magnifier-follow-cursor: true
 magnifier-smooth: true    # false shows the actual pixels, unfiltered
 magnifier-modifier: "Super"   # Super, Alt, Ctrl or Shift
 
-# Frosted glass and shadows (modules.blur.enabled).
+# What shows through a translucent window.
+#
+#   glass  the wallpaper refracted through the window, as though it were
+#          a slab of glass with a bevelled edge   (modules.liquidglass)
+#   water  refracted through a MOVING water surface (modules.liquidwater)
+#   blur   the wallpaper, blurred behind it              (modules.blur)
+#   none   the desktop, straight through
+#
+# THE MODULE IT NAMES HAS TO BE ENABLED.  All three are opt-in below, and
+# they are alternatives rather than layers -- each draws into the same
+# place in the same window's tree, so only the one named here draws.
+# Setting `window-backdrop: blur' and leaving modules.blur disabled gets
+# you nothing, and so does enabling modules.blur while this says glass.
+#
+# Super+Shift+" (cycle_backdrop) steps through all four at runtime, and
+# the layout indicator names the one it landed on.
+window-backdrop: glass
+
+# Frosted glass and shadows (modules.blur.enabled, window-backdrop: blur).
 # The blur is of the WALLPAPER, computed once and cropped per window --
 # not of other windows.  A translucent window over the desktop looks
 # right; one over another window shows blurred wallpaper rather than a
 # blurred copy of the window below.
+#
+# The SHADOWS are not part of the choice above: they are this module's
+# alone and stay whichever backdrop is selected, including none.
 blur: true
 blur-downscale: 4         # 1..8; higher is cheaper and softer
 blur-passes: 3            # 1..6; more is smoother and slower
@@ -184,6 +205,33 @@ shadow-opacity: 0.42
 shadow-offset-x: 0
 shadow-offset-y: 10
 shadow-color: "#000000"
+
+# Liquid glass (modules.liquidglass.enabled, window-backdrop: glass).
+# One ray traced per pixel through a bevelled slab: the rim bends what is
+# behind the middle out towards it, splits it into colours and catches a
+# line of light, and the slab is very slightly DOMED so the middle
+# magnifies rather than merely frosting.  Lengths are logical pixels.
+glass-bevel: 56           # width of the bent zone along the edge
+glass-thickness: 110      # slab depth: how far the edge pulls
+glass-slope: 3.0          # above 1 the field folds -- where the liquid look is
+glass-lens: 0.055         # whole-surface magnification; 0 is a flat pane
+glass-centre-clarity: 0.45 # how unfrosted the middle is; 0 is pure blur
+glass-sheen: 0.30         # highlight the dome catches
+glass-dispersion: 1.6     # colour fringe, in PIXELS, not a share
+glass-rim: 1.76
+glass-shade: 0.46
+
+# Liquid water (modules.liquidwater.enabled, window-backdrop: water).
+# A real height field, refracted at n = 1.333.  `water-preset' is a whole
+# tuned set: pool, fountain, pond, sea, storm.  `water-intensity' scales
+# how rough it is without touching the wavelength.
+#
+# THIS ONE NEVER SETTLES.  While a translucent window is on a screen,
+# that screen is rendering; `water-fps' is the throttle.
+water-preset: sea
+water-intensity: 0.4
+water-fps: 30             # 0 draws every frame the output offers
+water-scale: 2            # render at 1/this of the window, then stretch
 
 # Wallpaper.  `wallpaper' is the picture every tag uses; wallpaper-tags
 # overrides it for individual tags, and a tag with no entry keeps the
@@ -601,6 +649,16 @@ modules:
     enabled: false  # opt in here; CMacs loads this module by default
   blur:
     enabled: false  # opt in here; CMacs loads this module by default
+  liquidglass:
+    enabled: false  # opt in here; CMacs loads this module by default
+                    # needed for `window-backdrop: glass', which is the
+                    # default -- enable one of these three or nothing
+                    # shows through a translucent window
+  liquidwater:
+    enabled: false  # opt in here; CMacs loads this module by default
+                    # needed for `window-backdrop: water'.  It animates,
+                    # so it holds an output awake while a translucent
+                    # window is on it; see water-fps above
   vanitygaps:
     enabled: true
     # Shorthand: inner-gap / outer-gap set both axes.

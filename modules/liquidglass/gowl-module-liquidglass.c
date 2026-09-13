@@ -53,7 +53,7 @@
  *     it.  Nobody has ever caught a lens at half resolution sliding past
  *     at sixty hertz, and it is a quarter of the pixels.
  *   - A move of less than one texture pixel is not a move
- *     (gowl_glass_render_stale()).  A drag reports fractional positions
+ *     (gowl_backdrop_render_stale()).  A drag reports fractional positions
  *     that round to the same pixel several frames running.
  *   - Each window has its own small swapchain, so a frame is never drawn
  *     into the buffer the scene is still reading from.
@@ -66,7 +66,7 @@
 #undef G_LOG_DOMAIN
 #define G_LOG_DOMAIN "gowl-liquidglass"
 
-#include "gowl-glass-geom.h"
+#include "util/gowl-backdrop-plan.h"
 
 #include "core/gowl-core-private.h"
 #include "core/gowl-compositor.h"
@@ -178,7 +178,7 @@ typedef struct {
 	 * be more than one.
 	 */
 	struct wlr_swapchain    *swapchain;
-	GowlGlassPlan            plan;      /* what the buffer was drawn for */
+	GowlBackdropPlan            plan;      /* what the buffer was drawn for */
 	gboolean                 have;      /* whether @plan means anything */
 	guint64                  serial;    /* which wallpaper capture */
 	guint64                  generation;/* which settings */
@@ -567,10 +567,10 @@ glass_acquire_buffer(GowlCompositor *self, GowlGlassNodes *nodes,
 
 /* Fill in the shader's parameters from the look, the plan and the
  * window.  Lengths are logical and the plan's scale makes them the
- * buffer's; see gowl-glass-geom.h on why that conversion lives in one
+ * buffer's; see gowl-backdrop-plan.h on why that conversion lives in one
  * place. */
 static void
-glass_fill_params(const GowlGlassStyle *style, const GowlGlassPlan *plan,
+glass_fill_params(const GowlGlassStyle *style, const GowlBackdropPlan *plan,
                   gint radius, GowlFxGlassParams *out)
 {
 	gdouble scale = (plan->scale_x + plan->scale_y) * 0.5;
@@ -603,6 +603,10 @@ glass_fill_params(const GowlGlassStyle *style, const GowlGlassPlan *plan,
 	 * origin is in its own pixels and the plan already has it that way. */
 	out->src_origin[0] = (gfloat)plan->origin_x;
 	out->src_origin[1] = (gfloat)plan->origin_y;
+	/* And how far one buffer pixel reaches into it.  A render scaled
+	 * down while the window moves still covers the WHOLE window; without
+	 * this it covered a quarter of it, magnified. */
+	out->src_scale = (gfloat)plan->src_scale;
 }
 
 /*
@@ -634,7 +638,7 @@ glass_update_client(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 {
 	GowlGlassNodes  *nodes;
 	GowlGlassSource *src;
-	GowlGlassPlan    plan;
+	GowlBackdropPlan    plan;
 	struct wlr_box   frame;
 	gint             divisor, radius;
 
@@ -671,7 +675,7 @@ glass_update_client(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 
 	frame   = glass_drawn_frame(c);
 	divisor = settled ? 1 : GOWL_GLASS_MOVING_DIVISOR;
-	if (!gowl_glass_plan(&frame, &c->mon->m, src->width, src->height,
+	if (!gowl_backdrop_plan(&frame, &c->mon->m, src->width, src->height,
 	                     divisor, &plan)) {
 		nodes = glass_nodes(c, FALSE);
 		if (nodes != NULL && nodes->node != NULL)
@@ -682,7 +686,7 @@ glass_update_client(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 	nodes  = glass_nodes(c, TRUE);
 	radius = glass_corner_radius(self);
 
-	if (gowl_glass_render_stale(nodes->have && nodes->node != NULL,
+	if (gowl_backdrop_render_stale(nodes->have && nodes->node != NULL,
 	                            &nodes->plan, &plan,
 	                            nodes->serial, src->serial,
 	                            nodes->generation, mod->generation)

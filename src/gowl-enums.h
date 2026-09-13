@@ -335,19 +335,23 @@ GType gowl_action_get_type(void) G_GNUC_CONST;
  * @GOWL_BACKDROP_BLUR: the wallpaper, blurred (modules/blur)
  * @GOWL_BACKDROP_GLASS: the wallpaper refracted through a bevelled slab
  *   of glass (modules/liquidglass)
+ * @GOWL_BACKDROP_WATER: the wallpaper refracted through a moving water
+ *   surface (modules/liquidwater)
  *
  * What shows through a translucent window.
  *
- * The compositor owns this rather than either module because the two are
- * alternatives: both draw a node into the same place in the same window's
- * scene tree, and both being switched on means the second one's is simply
- * hidden behind the first.  One setting both of them read is what makes
- * `cycle-backdrop' a single key rather than a pair of module loads.
+ * The compositor owns this rather than any of the modules because they
+ * are alternatives: each draws a node into the same place in the same
+ * window's scene tree, and two being switched on means one is simply
+ * hidden behind the other while both still pay for it.  One setting they
+ * all read is what makes `cycle-backdrop' a single key rather than a set
+ * of module loads.
  */
 typedef enum {
 	GOWL_BACKDROP_NONE,
 	GOWL_BACKDROP_BLUR,
-	GOWL_BACKDROP_GLASS
+	GOWL_BACKDROP_GLASS,
+	GOWL_BACKDROP_WATER
 } GowlBackdropStyle;
 
 #define GOWL_TYPE_BACKDROP_STYLE (gowl_backdrop_style_get_type())

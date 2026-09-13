@@ -45,7 +45,7 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =action NAME [ARG]=           | Runs a keybind action by nick with an argument     |
 | =power on\vert{}off\vert{}toggle= | Powers every output                             |
 | =hdr [on\vert{}off\vert{}toggle] [OUTPUT]= | Switches an output between HDR and SDR (the focused one by default); =ERROR= when it cannot do HDR |
-| =backdrop [none\vert{}blur\vert{}glass\vert{}next\vert{}prev]= | What shows through translucent windows; no argument reports it. Both backdrop modules read it, so the change is immediate |
+| =backdrop [none\vert{}blur\vert{}glass\vert{}water\vert{}next\vert{}prev]= | What shows through translucent windows; no argument reports it. Both backdrop modules read it, so the change is immediate |
 | =lock=                        | Locks the screen, by whichever route =lock-command= names |
 | =unlock=                      | Opens the session with no password: the administrative override, for a lock program that is broken |
 | =locked=                      | =locked= or =unlocked=                             |
@@ -75,7 +75,7 @@ A subscriber receives one line per event, =EVENT <name> <args>=:
 | =monitor-added OUTPUT=             | an output was plugged in                       |
 | =monitor-removed OUTPUT=           | an output was unplugged                        |
 | =lock locked\vert{}unlocked=       | the session locked or unlocked, from any route |
-| =backdrop none\vert{}blur\vert{}glass= | what shows through translucent windows changed |
+| =backdrop none\vert{}blur\vert{}glass\vert{}water= | what shows through translucent windows changed |
 | =command LINE=                     | a module command ran, from any source          |
 
 Events are pushed from the compositor's own code paths, so a change made from a keybind, from Elisp, from MCP or from this socket is announced the same way.

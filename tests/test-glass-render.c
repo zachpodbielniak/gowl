@@ -464,10 +464,90 @@ test_the_maximum_displacement_behaves(void)
 	g_assert_cmpfloat(gowl_fx_glass_max_displacement(&p), <=, thick);
 }
 
+/*
+ * The same glass at two resolutions is the same glass.
+ *
+ * A window being MOVED is rendered at half resolution and stretched, and
+ * for a long time that half-resolution render walked the wallpaper at
+ * buffer pace: it bent a quarter of the region, magnified fourfold.  It
+ * shipped, because the reduced resolution is only used while something is
+ * in motion -- which is exactly when nobody can see it clearly enough to
+ * tell.
+ *
+ * Rendering the same slab at full size and at half, and comparing the
+ * half against every other pixel of the full, is what catches it.
+ */
+static void
+test_half_resolution_is_the_same_picture(void)
+{
+	Fixture           f;
+	GowlFxGlassParams p;
+	guint8           *full, *half;
+	gint              x, y, wrong = 0;
+
+	if (!fixture_open(&f) || !fixture_wallpaper(&f, WP_STEP)) {
+		fixture_close(&f);
+		g_test_skip("no GLES2 render node");
+		return;
+	}
+
+	/* A flat slab -- no bevel worth speaking of -- so what is compared is
+	 * where the wallpaper was SAMPLED and not how it was bent. */
+	plain_slab(&p);
+	p.bevel     = 2.0f;
+	p.thickness = 0.0f;
+	p.radius    = 0.0f;
+	p.src_scale = 1.0f;
+	full = render_glass(&f, &p);
+	g_assert_nonnull(full);
+
+	/* Half the rect, each of its pixels reaching twice as far. */
+	p.width  = TEST_W / 2;
+	p.height = TEST_H / 2;
+	p.src_scale = 2.0f;
+	half = render_glass(&f, &p);
+	g_assert_nonnull(half);
+
+	/*
+	 * The two are compared PIXEL FOR PIXEL, not every other pixel.  The
+	 * fixture draws into one fixed-size buffer either way, so the
+	 * half-scale rect is already stretched across it -- which is exactly
+	 * what the scene does when it sizes a half-resolution node to the
+	 * window.  A pixel of the half render and the same pixel of the full
+	 * one are looking at the same place on the wallpaper, or the units
+	 * are wrong.
+	 */
+	for (y = 4; y < TEST_H - 4; y++) {
+		for (x = 4; x < TEST_W - 4; x++) {
+			Rgba a = pixel_at(half, x, y);
+			Rgba b = pixel_at(full, x, y);
+
+			if (a.a < 200 || b.a < 200)
+				continue;
+			/* Same side of the step: the wallpaper is green left of
+			 * x = 40 and magenta from there on, so a sampling error of
+			 * any size shows up as the wrong colour. */
+			if ((a.g > a.r) != (b.g > b.r))
+				wrong++;
+		}
+	}
+	/* A handful of pixels either side of the step differ from filtering
+	 * at two sampling rates; a unit error puts thousands on the wrong
+	 * side. */
+	g_assert_cmpint(wrong, <, 256);
+
+	g_free(full);
+	g_free(half);
+	fixture_close(&f);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
+
+	g_test_add_func("/glass-render/half-resolution",
+	                test_half_resolution_is_the_same_picture);
 
 	g_test_add_func("/glass-render/flat-centre",
 	                test_the_flat_centre_passes_straight_through);

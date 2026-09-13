@@ -2655,7 +2655,8 @@ gowl_compositor_cycle_backdrop_style(GowlCompositor *self, gint direction)
 	 * presses to turn the backdrop off rather than one.
 	 */
 	static const GowlBackdropStyle order[] = {
-		GOWL_BACKDROP_GLASS, GOWL_BACKDROP_BLUR, GOWL_BACKDROP_NONE
+		GOWL_BACKDROP_GLASS, GOWL_BACKDROP_WATER,
+		GOWL_BACKDROP_BLUR,  GOWL_BACKDROP_NONE
 	};
 	GowlBackdropStyle now;
 	gint i, at = 0;
@@ -2667,8 +2668,9 @@ gowl_compositor_cycle_backdrop_style(GowlCompositor *self, gint direction)
 		if (order[i] == now)
 			at = i;
 	}
-	/* +2 rather than -1 keeps the modulus positive without a branch. */
-	at = (at + (direction < 0 ? 2 : 1)) % (gint)G_N_ELEMENTS(order);
+	/* N-1 rather than -1 keeps the modulus positive without a branch. */
+	at = (at + (direction < 0 ? (gint)G_N_ELEMENTS(order) - 1 : 1))
+	     % (gint)G_N_ELEMENTS(order);
 	gowl_compositor_set_backdrop_style(self, order[at]);
 }
 
@@ -9354,7 +9356,7 @@ run_keybind_entry(
 			gowl_compositor_set_backdrop_style(self, style);
 		} else {
 			g_warning("cycle_backdrop: unknown style '%s'; expected "
-			          "none, blur, glass, next or prev", kb->arg);
+			          "none, blur, glass, water, next or prev", kb->arg);
 		}
 		return TRUE;
 	}

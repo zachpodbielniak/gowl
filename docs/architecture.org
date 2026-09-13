@@ -971,7 +971,8 @@ wants to ask what is below it without receiving the call.
 =src/fx/= is the toolkit the effect modules are built on:
 =gowl_fx_gl_*= (borrowing the renderer's EGL context, textures, a styled
 quad pass, a separable blur), =gowl_fx_pass_glass()= (one ray traced
-through a bevelled slab of glass, per pixel), =gowl_fx_vis_*= and
+through a bevelled slab of glass, per pixel), =gowl_fx_pass_water()= (the
+same through a moving water surface), =gowl_fx_vis_*= and
 =gowl_fx_capture()= (rendering an output as it WOULD look under a
 different set of visible windows, and putting the scene back), and
 =GowlFxSheet= (one opaque monitor-sized buffer parked in the scene for as
@@ -986,7 +987,7 @@ make-current and restore because that context is process state shared
 with wlroots. Under any other renderer =gowl_fx_gl_new()= returns =NULL=
 and every module declines to run.
 
-Three invariants hold across all six callers:
+Three invariants hold across all seven callers:
 
 - *Y is negated in the projections.* wlroots hands out a buffer whose
   first row is the top of the picture while GL's first framebuffer row is
@@ -1012,12 +1013,12 @@ be wrong in a way that still looks plausible --- a lens that bends
 nothing is indistinguishable from a frosted backdrop, and one that bends
 the wrong way is indistinguishable in a screenshot and wrong over text.
 
-The glass program is the one thing =gowl_fx_gl_new()= does NOT build up
-front. It is compiled on first use and its failure is survivable
-(=gowl_fx_pass_glass()= returns =FALSE= and the module shows no glass),
-because building it eagerly would let a driver that chokes on one =atan=
-take the cube, the overview, the switcher, the magnifier and the blur
-down with it.
+The glass and water programs are the two things =gowl_fx_gl_new()= does
+NOT build up front. Each is compiled on first use and its failure is
+survivable (the pass returns =FALSE= and the module shows nothing),
+because building them eagerly would let a driver that chokes on one
+=atan= take the cube, the overview, the switcher, the magnifier and the
+blur down with it.
 
 *** Injected input takes the same path as real input
 :PROPERTIES:
@@ -1210,15 +1211,17 @@ take relative to a monitor.  Scale each axis from its own extent: a
 width-derived vertical scale is only correct while the output's pixels
 are square.
 
-=modules/liquidglass/gowl-glass-geom.c= is the same calculation one layer
-up, split out for the same reason and one more: the glass works in THREE
+=src/util/gowl-backdrop-plan.c= is the same calculation one layer up,
+shared by every backdrop that renders per window rather than cropping one
+shared picture. It is split out for the same reason and one more: these
+work in THREE
 coordinate systems at once --- layout for where the window is, the
 output's device pixels for the wallpaper it bends, and the render
 buffer's own pixels, which are the device ones divided by however far the
 render was scaled down while the window was moving. Getting one of those
 conversions wrong does not abort; it refracts the top-left quarter of the
 wallpaper, which is the kind of mistake that survives review.
-=tests/test-glass-geom.c= asserts each conversion separately.
+=tests/test-backdrop-plan.c= asserts each conversion separately.
 
 The other place a source box crosses a boundary is
 =modules/animation/gowl-scene-snapshot.c=, which copies one verbatim ---
@@ -1371,6 +1374,66 @@ can change any of a dozen settings, every window's render depends on all
 of them, and a comparison that forgot one would leave untouched windows
 showing the old look until they next moved --- a bug that appears only
 after a reload and only on the windows nobody is looking at.
+
+*** Liquid water
+:PROPERTIES:
+:CUSTOM_ID: liquidwater-architecture
+:END:
+
+=modules/liquidwater/= shows a translucent window the wallpaper through a
+moving surface. The optics are in =src/fx/gowl-fx-water.c=; the module is
+the part that is different from every other backdrop, and all of the
+difference is one word: MOVING.
+
+*The other backdrops settle and this one never does.* The blur draws a
+crop of one shared picture; the glass draws a window's own picture and
+redraws it when the window moves. Both are, between events, correct and
+free. This one is stale the moment it is drawn, which forces three things
+nothing else here needs --- a clock, a frame rate, and an honest
+admission about power.
+
+*The clock is four phases, not a time.* A seconds-since-start float loses
+its mantissa: after an hour a 32-bit float resolves about a quarter of a
+second and the waves visibly stutter. Wrapping it instead jumps every
+wave at once, because the four run at incommensurate rates and no wrap
+point is a whole number of cycles for all of them. So each phase is
+accumulated in a double and handed over already wrapped into [0, 2pi) ---
+exact in a float, forever, with no jump. That is also why nothing in the
+height field is evaluated outside a sine: an earlier version warped the
+domain with value noise, which is periodic on the integer lattice and not
+at 2pi at all, and every wrap would have snapped the whole surface
+sideways. It is ONE clock for the whole desktop, not one per window: two
+windows side by side are two holes in the same pond.
+
+*It advances against the wall, not once per output.* With two monitors
+the frame hook runs twice a frame, and advancing the clock in each would
+run the water at double speed on a two-screen desk.
+
+*The surface is two-dimensional by construction.* The obvious build --- a
+sum of directional sine waves --- does not work, and no retuning fixes
+it: a sine varies along one direction and is constant along the other, so
+a few of them summed and lit give regular parallel bands. The window came
+out looking like brushed metal. What is used instead (Alekseev's
+=Seascape=, MIT) takes =1 - |sin|= along each axis and MULTIPLIES them,
+which is a field of cells rather than a set of bands.
+
+*Two things about that construction have to be worked around.* Its
+octaves are non-negative, so the surface needs centring or "how high is
+this crest" --- which is what the foam threshold asks --- means nothing.
+And =1 - |sin|= has a kink wherever the sine crosses zero, whose second
+derivative is a spike: sampled a pixel and a half apart the Laplacian
+found those spikes and drew them, covering the window in a grid of white
+crosses. The sampling step scales with the wavelength so it steps OVER
+the kinks and measures the curvature that is actually there.
+
+*The frame hook is the pump, and =client_placed= is the bootstrap.*
+Returning TRUE from =frame= is what asks for another frame on that
+output, and it is returned exactly while there is water to draw. But an
+output with nothing changing on it has already stopped scheduling frames,
+so nothing would ever start the clock; drawing from =client_placed=
+damages a scene node, which is what makes the output ask for a frame.
+Without it a window that became translucent on a still screen would sit
+there with no water.
 
 *** Graphics tablets
 

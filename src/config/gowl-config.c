@@ -144,6 +144,39 @@
 #define GOWL_CONFIG_DEFAULT_GLASS_FROST          (3)
 #define GOWL_CONFIG_DEFAULT_GLASS_FROST_PASSES   (2)
 
+/*
+ * The liquid-water defaults.
+ *
+ * `water-preset' does the real work: each name is a whole tuned set, and
+ * the five of them span what the effect is FOR --- a barely-disturbed
+ * pool, a fountain's ripples, a pond, an open sea, a storm.  The
+ * individual keys below are overrides on top of whichever preset is
+ * selected, and start at a sentinel meaning "the preset decides", so a
+ * config that names a preset and nothing else gets all of it.
+ *
+ * Amplitude is a share of wavelength in disguise: what the refraction
+ * sees is the slope, and the displacement is depth * (1 - 1/1.333) *
+ * slope.  That is why the numbers in the presets run to hundreds of
+ * pixels of `depth' --- a first attempt with a 26-pixel depth worked out
+ * to under half a pixel of displacement, which is to say no refraction at
+ * all.
+ */
+#define GOWL_CONFIG_DEFAULT_WATER_PRESET         "pond"
+#define GOWL_CONFIG_DEFAULT_WATER_INTENSITY      (1.0)
+#define GOWL_CONFIG_DEFAULT_WATER_FPS            (30)
+#define GOWL_CONFIG_DEFAULT_WATER_SCALE          (2)
+#define GOWL_CONFIG_DEFAULT_WATER_TINT           "#9edbff"
+#define GOWL_CONFIG_DEFAULT_WATER_CLARITY        (0.45)
+#define GOWL_CONFIG_DEFAULT_WATER_OPACITY        (1.0)
+#define GOWL_CONFIG_DEFAULT_WATER_BRIGHTNESS     (1.0)
+#define GOWL_CONFIG_DEFAULT_WATER_LIGHT          (-140.0)
+#define GOWL_CONFIG_DEFAULT_WATER_FROST          (3)
+#define GOWL_CONFIG_DEFAULT_WATER_FROST_PASSES   (2)
+/* "the preset decides", for every override that is a length or a weight.
+ * Negative is impossible for all of them, which is what makes it usable
+ * as a sentinel without a second `has-' flag per key. */
+#define GOWL_CONFIG_WATER_FROM_PRESET            (-1.0)
+
 #define GOWL_CONFIG_DEFAULT_WALLPAPER_FADE       (320)
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
@@ -283,6 +316,30 @@ struct _GowlConfig {
 	gdouble  glass_opacity;
 	gint     glass_frost;
 	gint     glass_frost_passes;
+	gchar   *water_preset;
+	gdouble  water_intensity;
+	gint     water_fps;
+	gint     water_scale;
+	gchar   *water_tint;
+	gdouble  water_clarity;
+	gdouble  water_opacity;
+	gdouble  water_brightness;
+	gdouble  water_light;
+	gint     water_frost;
+	gint     water_frost_passes;
+	/* Overrides on the preset; GOWL_CONFIG_WATER_FROM_PRESET for "leave
+	 * it alone". */
+	gdouble  water_amplitude;
+	gdouble  water_wavelength;
+	gdouble  water_choppiness;
+	gdouble  water_depth;
+	gdouble  water_drops;
+	gdouble  water_shore;
+	gdouble  water_specular;
+	gdouble  water_caustics;
+	gdouble  water_foam;
+	gdouble  water_fresnel;
+	gdouble  water_speed;
 
 	/* Per-tag wallpaper overrides, 1-based; NULL means "use the default
 	 * wallpaper", which is what every entry is until a config says
@@ -855,6 +912,8 @@ gowl_config_finalize(GObject *object)
 	g_free(self->shadow_color);
 	g_free(self->glass_shape);
 	g_free(self->glass_tint);
+	g_free(self->water_preset);
+	g_free(self->water_tint);
 	{
 		gint ti;
 
@@ -1274,6 +1333,28 @@ gowl_config_init(GowlConfig *self)
 	self->glass_opacity      = GOWL_CONFIG_DEFAULT_GLASS_OPACITY;
 	self->glass_frost        = GOWL_CONFIG_DEFAULT_GLASS_FROST;
 	self->glass_frost_passes = GOWL_CONFIG_DEFAULT_GLASS_FROST_PASSES;
+	self->water_preset       = g_strdup(GOWL_CONFIG_DEFAULT_WATER_PRESET);
+	self->water_intensity    = GOWL_CONFIG_DEFAULT_WATER_INTENSITY;
+	self->water_fps          = GOWL_CONFIG_DEFAULT_WATER_FPS;
+	self->water_scale        = GOWL_CONFIG_DEFAULT_WATER_SCALE;
+	self->water_tint         = g_strdup(GOWL_CONFIG_DEFAULT_WATER_TINT);
+	self->water_clarity      = GOWL_CONFIG_DEFAULT_WATER_CLARITY;
+	self->water_opacity      = GOWL_CONFIG_DEFAULT_WATER_OPACITY;
+	self->water_brightness   = GOWL_CONFIG_DEFAULT_WATER_BRIGHTNESS;
+	self->water_light        = GOWL_CONFIG_DEFAULT_WATER_LIGHT;
+	self->water_frost        = GOWL_CONFIG_DEFAULT_WATER_FROST;
+	self->water_frost_passes = GOWL_CONFIG_DEFAULT_WATER_FROST_PASSES;
+	self->water_amplitude    = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->water_wavelength   = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->water_choppiness   = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->water_depth        = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->water_drops        = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->water_shore        = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->water_specular     = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->water_caustics     = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->water_foam         = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->water_fresnel      = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->water_speed        = GOWL_CONFIG_WATER_FROM_PRESET;
 
 	self->wallpaper_fade   = GOWL_CONFIG_DEFAULT_WALLPAPER_FADE;
 
@@ -1631,6 +1712,12 @@ static const gchar *const top_level_keys[] = {
 	"glass-edge-width", "glass-saturation", "glass-clarity", "glass-light",
 	"glass-tint", "glass-brightness", "glass-opacity", "glass-frost",
 	"glass-frost-passes",
+	"water-preset", "water-intensity", "water-fps", "water-scale",
+	"water-tint", "water-clarity", "water-opacity", "water-brightness",
+	"water-light", "water-frost", "water-frost-passes",
+	"water-amplitude", "water-wavelength", "water-choppiness",
+	"water-depth", "water-drops", "water-shore", "water-specular",
+	"water-caustics", "water-foam", "water-fresnel", "water-speed",
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
 	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
 	"lock-command", "lock-on-suspend", "keybinds", "modes",
@@ -2285,7 +2372,7 @@ gowl_config_apply_mapping(
 			self->backdrop_style = ev->value;
 		else
 			g_warning("gowl_config: unknown window-backdrop '%s'; "
-			          "expected none, blur or glass",
+			          "expected none, blur, glass or water",
 			          v != NULL ? v : "(null)");
 	}
 	if (yaml_mapping_has_member(mapping, "glass-bevel")) {
@@ -2366,6 +2453,111 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "glass-frost-passes")) {
 		self->glass_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
 			mapping, "glass-frost-passes"), 1, 6);
+	}
+	if (yaml_mapping_has_member(mapping, "water-preset")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "water-preset");
+
+		if (v != NULL && gowl_config_water_preset_valid(v)) {
+			g_free(self->water_preset);
+			self->water_preset = g_strdup(v);
+		} else {
+			g_warning("gowl_config: unknown water-preset '%s'; "
+			          "expected pool, fountain, pond, sea or storm",
+			          v != NULL ? v : "(null)");
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "water-intensity")) {
+		self->water_intensity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-intensity"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-fps")) {
+		/* 0 means every frame the output gives us. */
+		self->water_fps = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "water-fps"), 0, 144);
+	}
+	if (yaml_mapping_has_member(mapping, "water-scale")) {
+		self->water_scale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "water-scale"), 1, 4);
+	}
+	if (yaml_mapping_has_member(mapping, "water-tint")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "water-tint");
+
+		if (v != NULL) {
+			g_free(self->water_tint);
+			self->water_tint = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "water-clarity")) {
+		self->water_clarity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-opacity")) {
+		self->water_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-brightness")) {
+		self->water_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-brightness"), 0.2, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-light")) {
+		self->water_light = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-light"), -180.0, 180.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-frost")) {
+		self->water_frost = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "water-frost"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "water-frost-passes")) {
+		self->water_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "water-frost-passes"), 1, 6);
+	}
+	/* The overrides on the preset.  Each stays at its sentinel until the
+	 * config names it, which is how a preset can decide everything it was
+	 * not asked about. */
+	if (yaml_mapping_has_member(mapping, "water-amplitude")) {
+		self->water_amplitude = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-amplitude"), 0.0, 200.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-wavelength")) {
+		self->water_wavelength = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-wavelength"), 8.0, 2000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-choppiness")) {
+		self->water_choppiness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-choppiness"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-depth")) {
+		self->water_depth = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-depth"), 0.0, 1000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-drops")) {
+		self->water_drops = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-drops"), 0.0, 6.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-shore")) {
+		self->water_shore = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-shore"), 0.0, 400.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-specular")) {
+		self->water_specular = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-specular"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-caustics")) {
+		self->water_caustics = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-caustics"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-foam")) {
+		self->water_foam = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-foam"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-fresnel")) {
+		self->water_fresnel = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-fresnel"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "water-speed")) {
+		self->water_speed = CLAMP(yaml_mapping_get_double_member(
+			mapping, "water-speed"), 0.0, 5.0);
 	}
 	if (yaml_mapping_has_member(mapping, "shadow-color")) {
 		const gchar *v = yaml_mapping_get_string_member(mapping,
@@ -5650,7 +5842,7 @@ gowl_config_set_backdrop_style(GowlConfig *self, GowlBackdropStyle style)
 {
 	g_return_if_fail(GOWL_IS_CONFIG(self));
 
-	if (style < GOWL_BACKDROP_NONE || style > GOWL_BACKDROP_GLASS)
+	if (style < GOWL_BACKDROP_NONE || style > GOWL_BACKDROP_WATER)
 		return;
 	self->backdrop_style = (gint)style;
 }
@@ -5834,6 +6026,259 @@ gowl_config_get_glass_frost_passes(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_GLASS_FROST_PASSES);
 	return self->glass_frost_passes;
+}
+
+/* --- Liquid water --- */
+
+/**
+ * GowlWaterPreset:
+ *
+ * One whole tuned set of water.
+ *
+ * The five of them span what the effect is FOR, and they are a table
+ * rather than five sets of defaults because the numbers only mean
+ * anything together: a pool's amplitude over a sea's wavelength is not a
+ * calmer sea, it is a flat pane with a slow wobble.  Naming the
+ * combinations is what lets somebody ask for "a fountain" instead of
+ * discovering fourteen numbers.
+ *
+ * What varies most is not the height.  A pool is its RIPPLES --- four
+ * drop sources and almost no swell; a sea has no drops at all and lives
+ * entirely in the swell.  Between them the balance shifts.
+ */
+typedef struct {
+	const gchar *name;
+	gdouble      amplitude;    /* px */
+	gdouble      wavelength;   /* px */
+	gdouble      choppiness;   /* 0..1 */
+	gdouble      depth;        /* px the refracted ray travels */
+	gdouble      drops;        /* how many expanding rings */
+	gdouble      drop_amp;     /* how tall, relative to amplitude */
+	gdouble      shore;        /* px over which it calms at the edge */
+	gdouble      specular;
+	gdouble      shine;        /* specular exponent */
+	gdouble      fresnel;
+	gdouble      caustics;
+	gdouble      foam;
+	gdouble      absorption;
+	gdouble      speed;
+} GowlWaterPreset;
+
+static const GowlWaterPreset water_presets[] = {
+	/* name        amp   wave  chop  depth drop damp shore  spec shine fres caust foam absorb speed */
+	{ "pool",      0.9,   80.0, 0.05,  95.0, 4.0, 3.0, 46.0, 0.35, 88.0, 0.24, 0.30, 0.00, 0.18, 0.40 },
+	{ "fountain",  1.5,   95.0, 0.12, 125.0, 6.0, 2.8, 36.0, 0.60, 68.0, 0.36, 0.55, 0.00, 0.26, 1.20 },
+	{ "pond",      5.0,  150.0, 0.22, 175.0, 2.0, 1.2, 56.0, 0.55, 44.0, 0.45, 0.50, 0.00, 0.34, 0.60 },
+	{ "sea",      16.0,  330.0, 0.58, 250.0, 0.0, 0.0, 28.0, 0.80, 34.0, 0.58, 0.55, 0.16, 0.42, 0.85 },
+	{ "storm",    32.0,  430.0, 0.92, 320.0, 1.0, 1.2,  0.0, 0.95, 26.0, 0.66, 0.62, 0.42, 0.48, 1.40 }
+};
+
+static const GowlWaterPreset *
+water_preset_by_name(const gchar *name)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(water_presets); i++) {
+		if (g_strcmp0(water_presets[i].name, name) == 0)
+			return &water_presets[i];
+	}
+	/* The pond: the one in the middle, and the shipped default. */
+	return &water_presets[2];
+}
+
+/* An override wins unless it is the sentinel, in which case the preset
+ * decides.  Negative is impossible for every one of these, which is what
+ * lets one number carry both the value and "unset". */
+static gdouble
+water_pick(gdouble override, gdouble from_preset)
+{
+	return override < 0.0 ? from_preset : override;
+}
+
+gboolean
+gowl_config_water_preset_valid(const gchar *name)
+{
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(water_presets); i++) {
+		if (g_strcmp0(water_presets[i].name, name) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar * const *
+gowl_config_water_preset_names(void)
+{
+	static const gchar *names[G_N_ELEMENTS(water_presets) + 1];
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		guint i;
+
+		for (i = 0; i < G_N_ELEMENTS(water_presets); i++)
+			names[i] = water_presets[i].name;
+		names[G_N_ELEMENTS(water_presets)] = NULL;
+		g_once_init_leave(&once, 1);
+	}
+	return names;
+}
+
+const gchar *
+gowl_config_get_water_preset(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_PRESET);
+	return self->water_preset;
+}
+
+void
+gowl_config_set_water_preset(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_water_preset_valid(name))
+		return;
+	g_free(self->water_preset);
+	self->water_preset = g_strdup(name);
+}
+
+gdouble
+gowl_config_get_water_intensity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_INTENSITY);
+	return self->water_intensity;
+}
+
+void
+gowl_config_set_water_intensity(GowlConfig *self, gdouble intensity)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->water_intensity = CLAMP(intensity, 0.0, 3.0);
+}
+
+#define GOWL_WATER_GETTER(field)                                           \
+gdouble                                                                    \
+gowl_config_get_water_##field(GowlConfig *self)                            \
+{                                                                          \
+	const GowlWaterPreset *p;                                              \
+                                                                           \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.0);                       \
+	p = water_preset_by_name(self->water_preset);                          \
+	return water_pick(self->water_##field, p->field);                      \
+}
+
+GOWL_WATER_GETTER(amplitude)
+GOWL_WATER_GETTER(wavelength)
+GOWL_WATER_GETTER(choppiness)
+GOWL_WATER_GETTER(depth)
+GOWL_WATER_GETTER(drops)
+GOWL_WATER_GETTER(shore)
+GOWL_WATER_GETTER(specular)
+GOWL_WATER_GETTER(caustics)
+GOWL_WATER_GETTER(foam)
+GOWL_WATER_GETTER(fresnel)
+GOWL_WATER_GETTER(speed)
+
+#undef GOWL_WATER_GETTER
+
+/* Preset-only, with no override key of their own: they are part of what
+ * makes a named water what it is, and a config that wants to move them is
+ * really asking for a different preset. */
+gdouble
+gowl_config_get_water_drop_amp(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 1.0);
+	return water_preset_by_name(self->water_preset)->drop_amp;
+}
+
+gdouble
+gowl_config_get_water_shine(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 48.0);
+	return water_preset_by_name(self->water_preset)->shine;
+}
+
+gdouble
+gowl_config_get_water_absorption(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.34);
+	return water_preset_by_name(self->water_preset)->absorption;
+}
+
+gint
+gowl_config_get_water_fps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_FPS);
+	return self->water_fps;
+}
+
+gint
+gowl_config_get_water_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_SCALE);
+	return self->water_scale;
+}
+
+const gchar *
+gowl_config_get_water_tint(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_TINT);
+	return self->water_tint;
+}
+
+gdouble
+gowl_config_get_water_clarity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_CLARITY);
+	return self->water_clarity;
+}
+
+gdouble
+gowl_config_get_water_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_OPACITY);
+	return self->water_opacity;
+}
+
+gdouble
+gowl_config_get_water_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_BRIGHTNESS);
+	return self->water_brightness;
+}
+
+gdouble
+gowl_config_get_water_light(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_LIGHT);
+	return self->water_light;
+}
+
+gint
+gowl_config_get_water_frost(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_FROST);
+	return self->water_frost;
+}
+
+gint
+gowl_config_get_water_frost_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_WATER_FROST_PASSES);
+	return self->water_frost_passes;
 }
 
 gboolean

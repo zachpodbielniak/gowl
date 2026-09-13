@@ -116,6 +116,7 @@ static const gchar glass_frag_src[] =
 	"uniform sampler2D u_soft;      /* the frosted wallpaper */\n"
 	"uniform sampler2D u_sharp;     /* the same wallpaper, unblurred */\n"
 	"uniform vec2  u_src_origin;    /* where this rect sits in them, px */\n"
+	"uniform float u_src_scale;   /* source px per buffer px */\n"
 	"uniform vec2  u_src_size;      /* their size, px */\n"
 	"uniform vec2  u_size;          /* the rect, px */\n"
 	"uniform float u_radius;        /* corner radius, px */\n"
@@ -216,7 +217,7 @@ static const gchar glass_frag_src[] =
 	" * the bevel: thick glass diffuses, a lens does not, and the ring is\n"
 	" * where the lens is. */\n"
 	"vec3 tap(vec2 px, float clear) {\n"
-	"  vec2 uv = (u_src_origin + px) / u_src_size;\n"
+	"  vec2 uv = (u_src_origin + px * u_src_scale) / u_src_size;\n"
 	"  uv = clamp(uv, vec2(0.0), vec2(1.0));\n"
 	"  vec3 soft  = texture2D(u_soft,  uv).rgb;\n"
 	"  vec3 sharp = texture2D(u_sharp, uv).rgb;\n"
@@ -415,6 +416,7 @@ glass_prog_ensure(GowlFxGl *self)
 	p->u_sharp      = glGetUniformLocation(p->program, "u_sharp");
 	p->u_src_origin = glGetUniformLocation(p->program, "u_src_origin");
 	p->u_src_size   = glGetUniformLocation(p->program, "u_src_size");
+	p->u_src_scale  = glGetUniformLocation(p->program, "u_src_scale");
 	p->u_size       = glGetUniformLocation(p->program, "u_size");
 	p->u_radius     = glGetUniformLocation(p->program, "u_radius");
 	p->u_bevel      = glGetUniformLocation(p->program, "u_bevel");
@@ -459,6 +461,7 @@ gowl_fx_glass_params_init(GowlFxGlassParams *params)
 	params->clarity    = 1.0f;
 	params->brightness = 1.0f;
 	params->alpha      = 1.0f;
+	params->src_scale = 1.0f;
 	params->tint[0] = params->tint[1] = params->tint[2] = 1.0f;
 	/* -140 degrees, the angle it was tuned at: light from the upper left.
 	 * 0 is straight above and positive turns clockwise, with screen y
@@ -516,6 +519,7 @@ gowl_fx_pass_glass(GowlFxPass              *pass,
 	glUniform2f(p->u_src_origin, use.src_origin[0], use.src_origin[1]);
 	glUniform2f(p->u_src_size, (gfloat)MAX(1, soft->width),
 	            (gfloat)MAX(1, soft->height));
+	glUniform1f(p->u_src_scale, use.src_scale > 0.0f ? use.src_scale : 1.0f);
 	glUniform2f(p->u_size, (gfloat)use.width, (gfloat)use.height);
 	glUniform1f(p->u_radius, use.radius);
 	glUniform1f(p->u_bevel, use.bevel);

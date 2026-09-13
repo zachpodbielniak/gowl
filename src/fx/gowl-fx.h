@@ -29,15 +29,16 @@
  *     with wlroots and every entry point below respects it;
  *   - textures the effect layer owns, and a copy-in that also settles the
  *     external-image case a dma-buf capture arrives as;
- *   - a pass that draws styled quads into a wlr_buffer, and one that
- *     traces a ray through a bevelled slab of glass into one;
+ *   - a pass that draws styled quads into a wlr_buffer, one that traces a
+ *     ray through a bevelled slab of glass into one, and one that traces
+ *     it through a moving water surface;
  *   - a way to capture what an output would look like under a different
  *     set of visible windows, and put the scene back exactly;
  *   - a "sheet": one opaque monitor-sized buffer parked in the scene for
  *     as long as an effect owns that output.
  *
- * SIX MODULES USE THIS (cube, expo, switcher, magnifier, blur,
- * liquidglass) and none of them contains any of it.  That is the point: the plumbing is where a
+ * SEVEN MODULES USE THIS (cube, expo, switcher, magnifier, blur,
+ * liquidglass, liquidwater) and none of them contains any of it.  That is the point: the plumbing is where a
  * mistake is expensive and hard to see -- a context left current, a scene
  * node left hidden, a buffer freed after its renderer -- so it lives in
  * one place with one set of tests rather than in five modules with five.
@@ -309,6 +310,10 @@ gboolean gowl_fx_pass_end (GowlFxPass *pass);
  * @alpha: overall opacity
  * @src_origin: where this rect's top-left sits in the source textures,
  *   in pixels
+ * @src_scale: how many SOURCE pixels one pixel of this rect is.  1 when
+ *   drawing at full resolution; a rect rendered smaller than the window
+ *   it covers is still looking at ALL of that window's wallpaper, and
+ *   this is what says so.  0 is read as 1
  *
  * One slab of glass.  gowl_fx_glass_params_init() fills in the tuned
  * defaults; a caller only assigns what it means to change.
@@ -331,6 +336,7 @@ typedef struct {
 	gfloat brightness;
 	gfloat alpha;
 	gfloat src_origin[2];
+	gfloat src_scale;
 } GowlFxGlassParams;
 
 /**
@@ -376,6 +382,149 @@ gboolean gowl_fx_pass_glass (GowlFxPass              *pass,
                              const GowlFxTexture     *soft,
                              const GowlFxTexture     *sharp,
                              const GowlFxGlassParams *params);
+
+/* ── Liquid water ────────────────────────────────────────────────── */
+
+/**
+ * GowlFxWaterClock:
+ * @phase: the four swell phases, each in [0, 2pi)
+ * @drop: the ripple clock, whose integer part is which drop is falling
+ *
+ * Where the waves have got to.
+ *
+ * It is four phases and not a time, which is not fussiness.  A
+ * seconds-since-start float loses its mantissa: after an hour a 32-bit
+ * float resolves about a quarter of a second, and the waves visibly
+ * stutter.  Wrapping the time instead makes every wave jump at once,
+ * because the four run at incommensurate rates and no wrap point is a
+ * whole number of cycles for all of them.  Accumulating each phase in a
+ * double and wrapping it into the range a float represents exactly is the
+ * only one of the three that never goes wrong.
+ *
+ * Advance it with gowl_fx_water_advance(); a zeroed clock is still water.
+ */
+typedef struct {
+	gdouble phase[4];
+	gdouble drop;
+} GowlFxWaterClock;
+
+/**
+ * gowl_fx_water_advance:
+ * @clock: (inout): the clock
+ * @dt: seconds since the last advance
+ * @speed: how fast the water runs; 1.0 is the tuned rate
+ *
+ * Moves the waves on.  A @dt over a quarter of a second is treated as a
+ * quarter of a second: coming back from a stall --- a tag switch, a VT
+ * switch, a laptop lid --- should not teleport the sea.
+ */
+void gowl_fx_water_advance (GowlFxWaterClock *clock,
+                            gdouble           dt,
+                            gdouble           speed);
+
+/**
+ * GowlFxWaterParams:
+ * @width: the rect's width in pixels
+ * @height: the rect's height in pixels
+ * @radius: corner radius in pixels
+ * @amplitude: wave height in pixels.  Everything that reads as "how rough
+ *   is it" is ultimately this and @choppiness
+ * @wavelength: the longest wave's length in pixels; the other three are
+ *   derived from it
+ * @choppiness: 0 is a pure sine --- a swell; towards 1 the troughs flatten
+ *   and the crests narrow, which is what wind does to one
+ * @depth: how far the refracted ray travels before it reaches the
+ *   wallpaper, in pixels.  This is what decides how much the water bends
+ *   what is behind it
+ * @drops: how many expanding rings, 0 to 6.  A calm pool IS its ripples;
+ *   a sea has none
+ * @drop_amp: how tall those rings are, relative to @amplitude
+ * @shore: how far from the window's edge the water calms, in pixels.  0
+ *   runs the waves straight into the edge
+ * @dispersion: chromatic aberration in pixels of channel separation
+ * @specular: strength of the glint on the crests.  A surface that
+ *   refracts but never catches the light reads as warped glass, not as a
+ *   liquid
+ * @shine: specular exponent; higher is a tighter, harder glint
+ * @fresnel: how much the surface reflects at grazing angles
+ * @reflect: how far along the normal the faked reflection reaches, in
+ *   pixels
+ * @caustics: strength of the light gathered where the surface is concave
+ * @foam: whitecaps on the crests, 0 to 1
+ * @meniscus: light along the waterline where the surface climbs the edge
+ * @light: direction to the light, as a 3-vector
+ * @tint: what the water takes out of the light
+ * @absorption: how much of @tint is applied, 0 to 1
+ * @clarity: how much of the UNFROSTED wallpaper shows through, 0 to 1
+ * @brightness: multiplied into the result
+ * @alpha: overall opacity
+ * @src_origin: where this rect's top-left sits in the source textures, in
+ *   pixels
+ * @src_scale: how many SOURCE pixels one pixel of this rect is.  1 when
+ *   drawing at full resolution; a rect rendered smaller than the window
+ *   it covers is still looking at ALL of that window's wallpaper, and
+ *   this is what says so.  0 is read as 1
+ *
+ * One body of water.  gowl_fx_water_params_init() fills in a quiet pond.
+ */
+typedef struct {
+	gint   width, height;
+	gfloat radius;
+	gfloat amplitude;
+	gfloat wavelength;
+	gfloat choppiness;
+	gfloat depth;
+	gfloat drops;
+	gfloat drop_amp;
+	gfloat shore;
+	gfloat dispersion;
+	gfloat specular;
+	gfloat shine;
+	gfloat fresnel;
+	gfloat reflect;
+	gfloat caustics;
+	gfloat foam;
+	gfloat meniscus;
+	gfloat light[3];
+	gfloat tint[3];
+	gfloat absorption;
+	gfloat clarity;
+	gfloat brightness;
+	gfloat alpha;
+	gfloat src_origin[2];
+	gfloat src_scale;
+} GowlFxWaterParams;
+
+/**
+ * gowl_fx_water_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_water_params_init (GowlFxWaterParams *params);
+
+/**
+ * gowl_fx_pass_water:
+ * @pass: a pass, begun on the buffer the water is drawn into
+ * @soft: the frosted wallpaper, covering the whole output
+ * @sharp: (nullable): the same wallpaper unblurred
+ * @params: the water to draw
+ * @clock: (nullable): where the waves have got to; %NULL is still water
+ *
+ * Builds a height field, takes its normal and its curvature from five
+ * samples, refracts one ray per pixel through it at n = 1.333, and writes
+ * what it finds --- bent, tinted, lit and foamed --- over the whole of
+ * @pass's buffer, with premultiplied alpha and rounded corners.
+ *
+ * Unlike every other pass here this one is NEVER up to date: the caller
+ * is expected to draw it again next frame.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller shows no water and the desktop is as it was.
+ */
+gboolean gowl_fx_pass_water (GowlFxPass              *pass,
+                             const GowlFxTexture     *soft,
+                             const GowlFxTexture     *sharp,
+                             const GowlFxWaterParams *params,
+                             const GowlFxWaterClock  *clock);
 
 /* ── Scene visibility scratchpad ─────────────────────────────────── */
 

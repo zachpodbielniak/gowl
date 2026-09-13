@@ -95,10 +95,12 @@ LIB_SRCS := \
 	src/ipc/gowl-ipc-core.c \
 	src/util/gowl-log.c \
 	src/util/gowl-easing.c \
+	src/util/gowl-backdrop-plan.c \
 	src/fx/gowl-fx-gl.c \
 	src/fx/gowl-fx-capture.c \
 	src/fx/gowl-fx-sheet.c \
 	src/fx/gowl-fx-glass.c \
+	src/fx/gowl-fx-water.c \
 	src/util/gowl-systemd.c \
 	src/util/gowl-wayland-socket.c \
 	src/util/gowl-wallpaper-scale.c \
@@ -669,7 +671,8 @@ $(OUTDIR)/modules/screenlock.so: $(wildcard modules/screenlock/*.c)
 $(OUTDIR)/modules/roundcorners.so: $(wildcard modules/roundcorners/*.c)
 $(OUTDIR)/modules/blur.so: $(wildcard modules/blur/*.c modules/blur/*.h)
 $(OUTDIR)/modules/liquidglass.so: $(wildcard modules/liquidglass/*.c modules/liquidglass/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+$(OUTDIR)/modules/liquidwater.so: $(wildcard modules/liquidwater/*.c modules/liquidwater/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
@@ -680,7 +683,7 @@ $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(absp
 # and a window the animation module resizes, claiming the placement, must
 # still have them follow it; again with the rounded borders, which draw the
 # frame through the decorator instead.
-$(OUTDIR)/test-blur-nodes: $(addprefix $(OUTDIR)/modules/,blur.so liquidglass.so animation.so roundcorners.so)
+$(OUTDIR)/test-blur-nodes: $(addprefix $(OUTDIR)/modules/,blur.so liquidglass.so liquidwater.so animation.so roundcorners.so)
 $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 # Everything cmacs --gowl loads but the bar, started under a headless
@@ -688,7 +691,7 @@ $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abs
 # manager's dispose deactivates each module with the compositor already
 # gone.  The same list as cmacs_modules[] in the test.
 TEARDOWN_MODULES := wallpaper tile monocle float scrolling animation cube \
-	expo switcher magnifier blur liquidglass layout-indicator alpha \
+	expo switcher magnifier blur liquidglass liquidwater layout-indicator alpha \
 	vanitygaps roundcorners windowrules dropdown scratchpad screenshot \
 	osd clipboard
 $(OUTDIR)/test-compositor-teardown: $(patsubst %,$(OUTDIR)/modules/%.so,$(TEARDOWN_MODULES))

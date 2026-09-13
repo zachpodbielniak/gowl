@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-#include "gowl-glass-geom.h"
+#include "gowl-backdrop-plan.h"
 
 #include <math.h>
 
-/* Below this a window has no room for a bevel worth tracing, and the
- * arithmetic that widens the direction field runs out of rectangle. */
-#define GOWL_GLASS_MIN_SIDE (8)
+/* Below this a window has no room for an edge effect worth drawing, and
+ * the arithmetic that widens the direction field runs out of rectangle. */
+#define GOWL_BACKDROP_MIN_SIDE (8)
 
 /* Keep a crop inside its buffer, whatever arrived. */
 static void
@@ -42,15 +42,15 @@ clamp_src(struct wlr_fbox *src, gint buf_w, gint buf_h)
 }
 
 gboolean
-gowl_glass_plan(
+gowl_backdrop_plan(
 	const struct wlr_box *frame,
 	const struct wlr_box *monitor,
 	gint                  tex_w,
 	gint                  tex_h,
 	gint                  divisor,
-	GowlGlassPlan        *out
+	GowlBackdropPlan        *out
 ){
-	GowlGlassPlan   plan;
+	GowlBackdropPlan   plan;
 	struct wlr_box  vis;
 	gdouble         dev_x, dev_y;
 
@@ -58,8 +58,8 @@ gowl_glass_plan(
 		return FALSE;
 	if (tex_w <= 0 || tex_h <= 0)
 		return FALSE;
-	if (frame->width < GOWL_GLASS_MIN_SIDE
-	    || frame->height < GOWL_GLASS_MIN_SIDE)
+	if (frame->width < GOWL_BACKDROP_MIN_SIDE
+	    || frame->height < GOWL_BACKDROP_MIN_SIDE)
 		return FALSE;
 	if (divisor < 1)
 		divisor = 1;
@@ -93,6 +93,16 @@ gowl_glass_plan(
 	 * rim. */
 	plan.scale_x = dev_x / (gdouble)divisor;
 	plan.scale_y = dev_y / (gdouble)divisor;
+	/*
+	 * ...and how to get BACK, which is a separate fact and the one that
+	 * is easy to leave out.  A half-resolution buffer is not looking at
+	 * half the window: it is looking at all of it, less finely.  A shader
+	 * handed only the buffer's own units walks the source at buffer pace
+	 * and covers a quarter of the area, magnified fourfold -- which is
+	 * invisible in review and, because the reduced resolution is only
+	 * used while a window is MOVING, very nearly invisible on screen too.
+	 */
+	plan.src_scale = (gdouble)divisor;
 
 	plan.buf_width  = (gint)floor((gdouble)frame->width  * plan.scale_x + 0.5);
 	plan.buf_height = (gint)floor((gdouble)frame->height * plan.scale_y + 0.5);
@@ -119,10 +129,10 @@ gowl_glass_plan(
 }
 
 gboolean
-gowl_glass_render_stale(
+gowl_backdrop_render_stale(
 	gboolean             have_buffer,
-	const GowlGlassPlan *cached,
-	const GowlGlassPlan *want,
+	const GowlBackdropPlan *cached,
+	const GowlBackdropPlan *want,
 	guint64              cached_serial,
 	guint64              serial,
 	guint64              cached_generation,

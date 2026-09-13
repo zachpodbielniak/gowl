@@ -320,6 +320,7 @@ gowl_backdrop_style_get_type(void)
 			{ GOWL_BACKDROP_NONE,  "GOWL_BACKDROP_NONE",  "none" },
 			{ GOWL_BACKDROP_BLUR,  "GOWL_BACKDROP_BLUR",  "blur" },
 			{ GOWL_BACKDROP_GLASS, "GOWL_BACKDROP_GLASS", "glass" },
+			{ GOWL_BACKDROP_WATER, "GOWL_BACKDROP_WATER", "water" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlBackdropStyle", values);

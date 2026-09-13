@@ -541,21 +541,22 @@ Two modules can fill the space behind a translucent window, and
 
 | Property           | Type   | Default   | Description |
 |--------------------+--------+-----------+-------------|
-| =window-backdrop=  | enum   | =glass=   | =glass=, =blur= or =none= |
+| =window-backdrop=  | enum   | =glass=   | =glass=, =water=, =blur= or =none= |
 
 - =glass= --- the wallpaper refracted through the window, as though the
   window were a slab of glass with a bevelled edge ([[#liquidglass][Liquid glass]]).
+- =water= --- refracted through a MOVING water surface ([[#liquidwater][Liquid water]]).
 - =blur= --- the wallpaper, blurred ([[#blur][Frosted glass and shadows]]).
 - =none= --- the desktop, seen straight through.
 
-*They are alternatives, not layers.* Both modules put one scene node in
-the same place in the same window's tree, so both drawing means one is
-hidden behind the other while still costing a capture and a blur on every
-tag switch. Loading both is normal and intended: the setting picks which
-one draws, and =Super+Shift+"= (=cycle_backdrop=) steps through them ---
-glass, blur, nothing, glass again --- without loading anything. The two
-that draw something come first, so one press from the default lands on
-the other look rather than on nothing.
+*They are alternatives, not layers.* Each module puts one scene node in
+the same place in the same window's tree, so two of them drawing means
+one is hidden behind the other while both still cost a capture and a blur
+on every tag switch. Loading all of them is normal and intended: the
+setting picks which one draws, and =Super+Shift+"= (=cycle_backdrop=)
+steps through them --- glass, water, blur, nothing, round again ---
+without loading anything. The ones that draw something come first, so one
+press from the default lands on another look rather than on nothing.
 
 Scripts reach the same setting with =gowl-msg backdrop glass= or
 =gowl-msg backdrop next=, and a change is announced as =EVENT backdrop=
@@ -714,6 +715,112 @@ Under a renderer whose GL context it cannot borrow --- Vulkan, pixman ---
 it sits the session out, and so does a driver that will not compile the
 refraction shader. Neither is an error, and neither takes the other
 effect modules down with it.
+
+**** Liquid water
+:PROPERTIES:
+:CUSTOM_ID: liquidwater
+:END:
+
+The wallpaper seen through a moving water surface. Opt in with
+=modules.liquidwater.enabled: true=; CMacs loads it by default.
+
+A real height field --- four octaves of two-dimensional wave plus up to
+six expanding ripples --- is built per pixel, its normal and its
+curvature taken from five samples, and one ray refracted through it at
+n = 1.333. Nothing is painted on: the glints sit on the crests because
+that is where a tilted surface points at the light, and the caustics are
+brightest where the surface is concave because that is what a caustic is.
+
+***** Presets
+:PROPERTIES:
+:CUSTOM_ID: liquidwater-presets
+:END:
+
+=water-preset= names a whole tuned set. They are a table rather than a
+knob because the numbers in one only mean anything together: a pool's
+wave height over a sea's wavelength is not a calmer sea, it is a flat
+pane with a slow wobble.
+
+| Preset      | What it is |
+|-------------+------------|
+| =pool=      | Barely disturbed. It is almost entirely its ripples --- four sources, almost no swell |
+| =fountain=  | Livelier and quick: six ripple sources, still calm between them |
+| =pond=      | A gentle swell with the odd ring (the default) |
+| =sea=       | A rolling swell, no ripples at all, a little foam |
+| =storm=     | Choppy, fast, white-capped, and running straight into the edges |
+
+What varies most between them is not the height. A pool IS its ripples; a
+sea has none and lives entirely in the swell.
+
+| Property             | Type   | Default   | Description |
+|----------------------+--------+-----------+-------------|
+| =water-preset=       | string | ="pond"=  | One of the five above |
+| =water-intensity=    | float  | =1.0=     | How rough, over and above the preset, =0= to =3= |
+| =water-fps=          | int    | =30=      | How often the surface is redrawn; =0= is every frame |
+| =water-scale=        | int    | =2=       | Render at 1/this of the window's size, =1= to =4= |
+| =water-tint=         | string | ="#9edbff"= | What the water takes out of the light |
+| =water-clarity=      | float  | =0.45=    | How much of the UNFROSTED wallpaper shows |
+| =water-opacity=      | float  | =1.0=     | Opacity of the water itself |
+| =water-brightness=   | float  | =1.0=     | =0.2= to =2.0= |
+| =water-light=        | float  | =-140=    | Light direction in degrees: =0= straight above |
+| =water-frost=        | int    | =3=       | How much smaller the frost is computed, =1= to =8= |
+| =water-frost-passes= | int    | =2=       | Box passes for the frost, =1= to =6= |
+
+=water-intensity= is the one knob over the whole preset, and it scales
+exactly the four things that together mean "how rough is it": the wave
+height, the choppiness, how far the water bends what is behind it, and
+the foam. It deliberately does NOT scale the wavelength --- that would
+not make a rougher sea, it would make the same sea seen from further
+away. At =0= the surface is flat, and a flat surface passes light
+straight through: still water, not a fixed distortion.
+
+Every preset value can be overridden individually. An override that is
+not named leaves the preset in charge, so a config can say
+=water-preset: sea= and =water-foam: 0= and get exactly that.
+
+| Override             | Range      | Description |
+|----------------------+------------+-------------|
+| =water-amplitude=    | =0=--=200= | Wave height in pixels |
+| =water-wavelength=   | =8=--=2000= | The longest wave's length in pixels |
+| =water-choppiness=   | =0=--=1=   | =0= is a pure swell; towards =1= the crests narrow |
+| =water-depth=        | =0=--=1000= | How far the refracted ray travels; this is what decides how much it bends |
+| =water-drops=        | =0=--=6=   | How many expanding rings |
+| =water-shore=        | =0=--=400= | How far from the edge the water calms; =0= runs the waves into it |
+| =water-specular=     | =0=--=3=   | The glint on the crests |
+| =water-caustics=     | =0=--=3=   | Light gathered where the surface is concave |
+| =water-foam=         | =0=--=1=   | Whitecaps |
+| =water-fresnel=      | =0=--=1=   | How much the surface reflects at grazing angles |
+| =water-speed=        | =0=--=5=   | How fast it runs |
+
+*Amplitude is a share of wavelength in disguise.* What the refraction
+sees is the SLOPE, and the displacement is roughly =water-depth= times a
+quarter of it. That is why the presets run to hundreds of pixels of
+depth: a first attempt with a 26-pixel depth worked out to under half a
+pixel of displacement, which is to say no refraction at all.
+
+***** It never settles, and what that costs
+:PROPERTIES:
+:CUSTOM_ID: liquidwater-cost
+:END:
+
+This is the only effect here with a frame rate, because it is the only
+one that is stale the moment it is drawn. The blur and the glass are,
+between events, correct and free; this one is not.
+
+Per output, once per tag switch: one capture of the desktop with the
+windows hidden, and one blur of it --- exactly what the other two pay.
+Then one fragment pass per eligible window per tick, at 1/=water-scale=
+of the window's size. On a 2880x1920 screen a maximised window is about a
+millisecond.
+
+*While a translucent window is on a screen, that screen is rendering.*
+The module asks for another frame for as long as it has water to draw,
+which is what keeps the surface moving --- an output with nothing else
+changing stops redrawing and would freeze it. It stops the moment there
+is nothing to draw: no translucent window on that output, the session
+locked, the style changed. There is no version of an animated backdrop
+that does not do this, and =water-fps: 30= is half the cost of =60= for a
+difference nobody can see on something that moves as slowly as water.
 
 **** Per-tag wallpaper
 :PROPERTIES:
@@ -994,7 +1101,7 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =resize_window=     | --                               | Resize the window under the pointer from its nearest corner |
 | =toggle_sticky=     | --                               | Pin the focused window to every tag of its monitor, or unpin it |
 | =toggle_hdr=        | --, ="on"=, ="off"=, or an output name | Switch an output between HDR and SDR (the focused one by default) |
-| =cycle_backdrop=    | --, ="next"=, ="prev"=, or a style name | Cycle what shows through translucent windows: =glass=, =blur=, =none= |
+| =cycle_backdrop=    | --, ="next"=, ="prev"=, or a style name | Cycle what shows through translucent windows: =glass=, =water=, =blur=, =none= |
 | =focus_dir=         | ="left"=, ="right"=, ="up"=, ="down"= | Focus the nearest window that way, crossing to the next monitor when there is none |
 | =focus_urgent=      | --                               | Focus the window marked urgent, viewing its tags if need be |
 | =focus_last=        | --                               | Focus the window that had focus before this one |

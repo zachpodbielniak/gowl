@@ -63,8 +63,9 @@ static const gchar *const blur_alone[]     = { "blur", NULL };
 static const gchar *const with_animation[] = { "blur", "animation", NULL };
 static const gchar *const with_rounded[]   = { "blur", "animation",
                                                "roundcorners", NULL };
-/* Both backdrops at once, which is how CMacs loads them. */
-static const gchar *const both_backdrops[] = { "blur", "liquidglass", NULL };
+/* Every backdrop at once, which is how CMacs loads them. */
+static const gchar *const both_backdrops[] = { "blur", "liquidglass",
+                                               "liquidwater", NULL };
 
 typedef struct {
 	gchar             *parent;   /* XDG_RUNTIME_DIR before the rig */
@@ -904,6 +905,9 @@ test_backdrop_style_picks_the_module(void)
 	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_GLASS);
 	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
+	                ==, GOWL_BACKDROP_WATER);
+	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
+	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
 	                ==, GOWL_BACKDROP_BLUR);
 	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
@@ -984,6 +988,19 @@ test_only_one_backdrop_draws(void)
 	g_assert_cmpint(
 		wlr_scene_buffer_from_node(d.backdrop)->buffer->width, ==, win_w);
 
+	/*
+	 * Over to the water: still ONE backdrop, and a third distinguishable
+	 * size.  The water renders at `water-scale' of the window (half by
+	 * default) because a refracting surface hides the difference and it
+	 * is a quarter of the pixels -- and unlike the other two it pays that
+	 * cost every tick, not once per move.
+	 */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_WATER);
+	d = decor_of(r.c);
+	g_assert_nonnull(d.backdrop);
+	g_assert_cmpint(
+		wlr_scene_buffer_from_node(d.backdrop)->buffer->width, ==, win_w / 2);
+
 	/* Over to the blur: still one backdrop, now the shared picture. */
 	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_BLUR);
 	d = decor_of(r.c);
@@ -991,7 +1008,7 @@ test_only_one_backdrop_draws(void)
 	g_assert_cmpint(
 		wlr_scene_buffer_from_node(d.backdrop)->buffer->width, ==, mon_w);
 
-	/* Neither: the shadow stays, the backdrop goes. */
+	/* None of them: the shadow stays, the backdrop goes. */
 	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_NONE);
 	d = decor_of(r.c);
 	g_assert_null(d.backdrop);

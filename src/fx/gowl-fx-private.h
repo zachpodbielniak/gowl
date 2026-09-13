@@ -77,6 +77,7 @@ typedef struct {
 	GLint  u_sharp;
 	GLint  u_src_origin;
 	GLint  u_src_size;
+	GLint  u_src_scale;
 	GLint  u_size;
 	GLint  u_radius;
 	GLint  u_bevel;
@@ -98,6 +99,47 @@ typedef struct {
 	GLint  a_uv;
 } GowlFxGlassProg;
 
+/*
+ * The liquid-water program (gowl-fx-water.c).
+ *
+ * Built on first use like the glass, and for the same reason.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_soft;
+	GLint  u_sharp;
+	GLint  u_src_origin;
+	GLint  u_src_size;
+	GLint  u_src_scale;
+	GLint  u_size;
+	GLint  u_radius;
+	GLint  u_phase;
+	GLint  u_drop_t;
+	GLint  u_amp;
+	GLint  u_wavelength;
+	GLint  u_choppy;
+	GLint  u_depth;
+	GLint  u_drops;
+	GLint  u_drop_amp;
+	GLint  u_shore;
+	GLint  u_dispersion;
+	GLint  u_specular;
+	GLint  u_shine;
+	GLint  u_fresnel;
+	GLint  u_reflect;
+	GLint  u_caustics;
+	GLint  u_foam;
+	GLint  u_meniscus;
+	GLint  u_light;
+	GLint  u_tint;
+	GLint  u_absorb;
+	GLint  u_clarity;
+	GLint  u_brightness;
+	GLint  u_alpha;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxWaterProg;
+
 struct _GowlFxGl {
 	struct wlr_renderer *renderer;   /* borrowed */
 	EGLDisplay           display;
@@ -110,6 +152,8 @@ struct _GowlFxGl {
 	GowlFxSamplerProg    blur;
 	GowlFxGlassProg      glass;      /* built on first use, see above */
 	gboolean             glass_tried;
+	GowlFxWaterProg      water;      /* likewise */
+	gboolean             water_tried;
 
 	GLuint               scratch_fbo;
 	GowlFxTexture        scratch_a;

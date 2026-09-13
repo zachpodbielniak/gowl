@@ -1639,6 +1639,90 @@ gdouble      gowl_config_get_glass_opacity (GowlConfig *self);
 gint         gowl_config_get_glass_frost (GowlConfig *self);
 gint         gowl_config_get_glass_frost_passes (GowlConfig *self);
 
+/* --- Liquid water (modules/liquidwater) ---
+ *
+ * `water-preset' names a whole tuned set --- "pool", "fountain", "pond",
+ * "sea", "storm" --- and every getter below returns what that preset
+ * says unless the config named an override for it.  The five spans what
+ * the effect is for; the numbers in one only mean anything together, and
+ * a pool's height over a sea's wavelength is not a calmer sea but a flat
+ * pane with a slow wobble.
+ *
+ * Lengths are LOGICAL pixels, scaled by the output's scale at render
+ * time. */
+
+const gchar *gowl_config_get_water_preset (GowlConfig *self);
+void         gowl_config_set_water_preset (GowlConfig *self,
+                                           const gchar *name);
+gboolean     gowl_config_water_preset_valid (const gchar *name);
+/* (array zero-terminated=1) (transfer none): every preset name, for a
+ * completion list.  Static; do not free. */
+const gchar * const *gowl_config_water_preset_names (void);
+
+/* One knob over the whole preset, 0 to 3.  Scales the wave height, the
+ * choppiness, how far the water bends what is behind it and the foam ---
+ * the four that together mean "how rough is it".  1.0 is the preset as
+ * tuned. */
+gdouble      gowl_config_get_water_intensity (GowlConfig *self);
+void         gowl_config_set_water_intensity (GowlConfig *self,
+                                              gdouble intensity);
+
+/* Wave height in pixels.  What reaches the refraction is the SLOPE, so
+ * this and `wavelength' together are what decide how much it bends. */
+gdouble      gowl_config_get_water_amplitude (GowlConfig *self);
+/* The longest wave's length in pixels; the finer octaves derive from it. */
+gdouble      gowl_config_get_water_wavelength (GowlConfig *self);
+/* 0 is a pure swell; towards 1 the troughs flatten and the crests
+ * narrow, which is what wind does to one. */
+gdouble      gowl_config_get_water_choppiness (GowlConfig *self);
+/* How far the refracted ray travels before it reaches the wallpaper, in
+ * pixels.  Runs to hundreds: the displacement is roughly this times a
+ * quarter of the surface slope, so a shallow setting is no refraction at
+ * all. */
+gdouble      gowl_config_get_water_depth (GowlConfig *self);
+/* How many expanding rings, 0 to 6.  A calm pool IS its ripples; a sea
+ * has none. */
+gdouble      gowl_config_get_water_drops (GowlConfig *self);
+/* How tall those rings are, relative to the wave height.  Preset only. */
+gdouble      gowl_config_get_water_drop_amp (GowlConfig *self);
+/* How far from the window's edge the water calms, in pixels.  0 runs the
+ * waves straight into the edge. */
+gdouble      gowl_config_get_water_shore (GowlConfig *self);
+/* The glint on the crests, and how tight it is (the latter preset only).
+ * A surface that refracts but never catches the light reads as warped
+ * glass, not as a liquid. */
+gdouble      gowl_config_get_water_specular (GowlConfig *self);
+gdouble      gowl_config_get_water_shine (GowlConfig *self);
+/* Light gathered where the surface is concave --- computed from the
+ * curvature, not painted, which is why it moves with the waves. */
+gdouble      gowl_config_get_water_caustics (GowlConfig *self);
+/* Whitecaps on the crests, 0 to 1. */
+gdouble      gowl_config_get_water_foam (GowlConfig *self);
+/* How much the surface reflects at grazing angles, 0 to 1. */
+gdouble      gowl_config_get_water_fresnel (GowlConfig *self);
+/* How fast it runs; 1.0 is the preset's own rate. */
+gdouble      gowl_config_get_water_speed (GowlConfig *self);
+/* How much of the tint the water takes out of the light.  Preset only. */
+gdouble      gowl_config_get_water_absorption (GowlConfig *self);
+
+/* How often the surface is redrawn, 0 to 144; 0 means every frame the
+ * output offers.  This is the one effect that never settles, so it is
+ * also the one with a frame rate. */
+gint         gowl_config_get_water_fps (GowlConfig *self);
+/* How much smaller than the window the surface is rendered, 1 to 4. */
+gint         gowl_config_get_water_scale (GowlConfig *self);
+const gchar *gowl_config_get_water_tint (GowlConfig *self);
+/* How much of the UNFROSTED wallpaper shows through, 0 to 1. */
+gdouble      gowl_config_get_water_clarity (GowlConfig *self);
+gdouble      gowl_config_get_water_opacity (GowlConfig *self);
+gdouble      gowl_config_get_water_brightness (GowlConfig *self);
+/* Light direction in degrees: 0 straight above, positive clockwise. */
+gdouble      gowl_config_get_water_light (GowlConfig *self);
+/* How much smaller the frost is computed, 1 to 8, and how many box
+ * passes, 1 to 6. */
+gint         gowl_config_get_water_frost (GowlConfig *self);
+gint         gowl_config_get_water_frost_passes (GowlConfig *self);
+
 /* Drop shadows under windows. */
 gboolean     gowl_config_get_shadow (GowlConfig *self);
 /* Shadow softness in pixels, 0 to 128. */

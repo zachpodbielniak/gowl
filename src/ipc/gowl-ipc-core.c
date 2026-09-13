@@ -164,6 +164,12 @@ add_monitor(GowlCompositor *self, JsonBuilder *b, GowlMonitor *m)
 		json_builder_add_double_value(b,
 			e != NULL ? e->max_frame_average : 0.0);
 	}
+	/* Bits per channel HDR is actually being driven at.  10 is what it
+	 * is for; 8 means every 10-bit format was refused and the picture
+	 * will band.  0 when HDR is off. */
+	json_builder_set_member_name(b, "hdr_bpc");
+	json_builder_add_int_value(b, gowl_monitor_get_hdr(m)
+		? (m->hdr_format != 0 ? 10 : 8) : 0);
 	json_builder_set_member_name(b, "x");
 	json_builder_add_int_value(b, m->m.x);
 	json_builder_set_member_name(b, "y");

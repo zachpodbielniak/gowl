@@ -674,6 +674,10 @@ struct _GowlMonitor {
 	 * off restores the format rather than guessing at 8-bit. */
 	gboolean hdr_enabled;
 	guint32  hdr_prev_render_format;
+	/* The DRM fourcc HDR is actually being driven at, 0 for "whatever
+	 * the output was already using" -- which means 8 bits per channel,
+	 * because every 10-bit format was refused. */
+	guint32  hdr_format;
 	/* What the display said about its own brightness range, read out
 	 * of its EDID the first time HDR is asked for.  Declaring a
 	 * mastering luminance the panel cannot reach makes it tone-map

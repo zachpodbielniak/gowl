@@ -914,6 +914,8 @@ gowl_monitor_set_hdr(
 ){
 	struct wlr_output_state state;
 	struct wlr_output_image_description desc;
+	guint32 chosen_format = 0;
+	gsize tested = 0;
 	gboolean ok;
 
 	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
@@ -989,12 +991,128 @@ gowl_monitor_set_hdr(
 		 * not leave a 10-bit format behind on a display that only
 		 * wanted it for HDR. */
 		self->hdr_prev_render_format = self->wlr_output->render_format;
-		wlr_output_state_set_render_format(&state, DRM_FORMAT_XRGB2101010);
+
+		/*
+		 * Which 10-bit format, asked rather than assumed.
+		 *
+		 * This used to name DRM_FORMAT_XRGB2101010 and commit.  When
+		 * a driver would not take that one the whole commit failed,
+		 * the image description went with it, and the only thing
+		 * anybody saw was "the output refused the change" -- with no
+		 * way to tell a display that cannot do HDR from one that
+		 * simply wanted the other byte order.  Channel order is a
+		 * property of the plane, not of HDR.
+		 *
+		 * The other half is that ten bits per channel is a change of
+		 * pipe depth, and on a DisplayPort link that means retraining
+		 * it -- which wlroots will not do unless the state says
+		 * disruption is acceptable.  Without allow_reconfiguration
+		 * the atomic test simply fails, which is what
+		 * "Swapchain for output 'eDP-1' failed test" was: not a
+		 * display that cannot do HDR, a link that was never allowed
+		 * to be retrained for it.  A brief black flash while it
+		 * retrains is what every television does when it switches
+		 * into HDR.
+		 *
+		 * So: test each candidate against the backend, in order, and
+		 * take the first that would be accepted.
+		 * wlr_output_test_state() is a test-only atomic commit, so
+		 * the ones that fail cost nothing and are not seen.
+		 *
+		 * The last candidate is 0, meaning "leave the format alone":
+		 * PQ at 8 bits per channel bands visibly in gradients, but it
+		 * is HDR, and a panel that will not give 10 bits at its
+		 * current mode -- no DSC and not enough link for it -- can
+		 * still show it.  That is a worse picture offered knowingly,
+		 * with a warning, rather than a feature that silently does
+		 * nothing.
+		 */
+		{
+			/*
+			 * Ordered by preference, most desirable first: ten bits
+			 * without disturbing the link, ten bits with a retrain,
+			 * and finally whatever the output is already using.
+			 */
+			static const struct {
+				guint32  format;
+				gboolean reconfigure;
+			} attempts[] = {
+				{ DRM_FORMAT_XRGB2101010, FALSE },
+				{ DRM_FORMAT_XBGR2101010, FALSE },
+				{ DRM_FORMAT_XRGB2101010, TRUE  },
+				{ DRM_FORMAT_XBGR2101010, TRUE  },
+				{ 0,                      FALSE },
+				{ 0,                      TRUE  }
+			};
+			gsize i;
+			gboolean found = FALSE;
+			GString *refused = g_string_new(NULL);
+
+			for (i = 0; i < G_N_ELEMENTS(attempts); i++) {
+				const gchar *what = attempts[i].format == 0
+					? "the current format (8-bit)"
+					: (attempts[i].format == DRM_FORMAT_XRGB2101010
+					   ? "XRGB2101010" : "XBGR2101010");
+
+				if (attempts[i].format != 0)
+					wlr_output_state_set_render_format(&state,
+						attempts[i].format);
+				else
+					/* `committed' is a public field; the bit is
+					 * one this loop set itself through the
+					 * setter, so clearing it is well defined and
+					 * is the only way to say "do not touch the
+					 * format" once it has been said once. */
+					state.committed &=
+						~(guint32)WLR_OUTPUT_STATE_RENDER_FORMAT;
+				state.allow_reconfiguration =
+					attempts[i].reconfigure ? true : false;
+
+				if (wlr_output_test_state(self->wlr_output,
+				                          &state)) {
+					chosen_format = attempts[i].format;
+					found = TRUE;
+					break;
+				}
+				tested++;
+				g_string_append_printf(refused, "%s%s%s",
+					refused->len > 0 ? ", " : "", what,
+					attempts[i].reconfigure
+					? " (with a retrain)" : "");
+			}
+			if (!found) {
+				/* At warning level with the whole list, because
+				 * this is the message somebody has to act on:
+				 * "the output refused the change" on its own says
+				 * nothing about which part was refused. */
+				g_warning("%s: the display advertises BT.2020 + PQ "
+				          "but the driver refused every way of "
+				          "sending it -- tried %s",
+				          gowl_monitor_get_name(self), refused->str);
+				g_string_free(refused, TRUE);
+				wlr_output_state_finish(&state);
+				return FALSE;
+			}
+			if (tested > 0)
+				g_message("%s: HDR accepted after %s was refused",
+				          gowl_monitor_get_name(self),
+				          refused->str);
+			g_string_free(refused, TRUE);
+		}
 	} else {
 		wlr_output_state_set_image_description(&state, NULL);
 		wlr_output_state_set_render_format(&state,
 			self->hdr_prev_render_format != 0
 			? self->hdr_prev_render_format : DRM_FORMAT_XRGB8888);
+		/*
+		 * Going back to eight bits is a change of pipe depth as much
+		 * as going up was, so it needs the same permission to retrain
+		 * the link -- and being unable to leave HDR is worse than
+		 * being unable to enter it.  Asked for only if the
+		 * undisturbed version is refused.
+		 */
+		if (!wlr_output_test_state(self->wlr_output, &state))
+			state.allow_reconfiguration = true;
 	}
 
 	ok = wlr_output_commit_state(self->wlr_output, &state);
@@ -1006,8 +1124,14 @@ gowl_monitor_set_hdr(
 	}
 
 	self->hdr_enabled = enable;
-	g_message("%s: HDR %s", gowl_monitor_get_name(self),
-	          enable ? "on (BT.2020, PQ, 10-bit)" : "off");
+	self->hdr_format = enable ? chosen_format : 0;
+	if (enable && chosen_format == 0)
+		g_warning("%s: HDR on, but only at 8 bits per channel -- the "
+		          "driver refused every 10-bit format, so gradients "
+		          "will band", gowl_monitor_get_name(self));
+	else
+		g_message("%s: HDR %s", gowl_monitor_get_name(self),
+		          enable ? "on (BT.2020, PQ, 10-bit)" : "off");
 	if (self->compositor != NULL)
 		g_signal_emit_by_name(self->compositor, "monitor-hdr-changed",
 		                      self, enable);

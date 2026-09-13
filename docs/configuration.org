@@ -1221,6 +1221,32 @@ A display that states no luminance keeps the conventional 1000 cd/m².
 =hdr_min_luminance= and =hdr_max_frame_average= (0 = the EDID said
 nothing), and =G_MESSAGES_DEBUG=gowl-edid= logs the parse.
 
+***** When it will not switch on
+
+Two things have to be accepted together: an image description (BT.2020
+primaries, the PQ transfer function) and a render format deep enough to
+carry it.  gowl asks the backend rather than assuming, testing each
+combination with a test-only atomic commit -- so nothing is seen until
+one is accepted:
+
+1. =XRGB2101010=, then =XBGR2101010=, leaving the link alone.  Channel
+   order is a property of the plane and not of HDR; a driver that
+   refuses one may take the other.
+2. The same two again, allowing *reconfiguration*.  Ten bits per channel
+   is a change of pipe depth, and on a DisplayPort link that means
+   retraining it, which wlroots will not do unless the state says
+   disruption is acceptable.  Expect a brief black flash, exactly as a
+   television does when it switches into HDR.
+3. The format the output is already using.  PQ at eight bits bands
+   visibly in gradients, but a panel that cannot give ten bits at its
+   current mode -- no DSC, and not enough link for it uncompressed --
+   can still show HDR.  gowl warns when it settles for this, and
+   =gowl-msg monitors= reports =hdr_bpc= as 8 rather than 10.
+
+If all of them are refused the log names every one that was tried, which
+is the difference between "this display cannot do HDR" and "this driver
+would not take it that way".
+
 Because of that, HDR is a toggle rather than something to leave on:
 
 #+begin_src sh

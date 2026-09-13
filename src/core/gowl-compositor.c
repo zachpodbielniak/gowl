@@ -2655,6 +2655,7 @@ gowl_compositor_set_backdrop_style(GowlCompositor *self,
 		switch (style) {
 		case GOWL_BACKDROP_GLASS: label = "Liquid glass"; break;
 		case GOWL_BACKDROP_WATER: label = "Liquid water"; break;
+		case GOWL_BACKDROP_RAIN:  label = "Liquid rain";  break;
 		case GOWL_BACKDROP_BLUR:  label = "Blur";         break;
 		default:                  label = "No backdrop";  break;
 		}
@@ -2674,15 +2675,18 @@ gowl_compositor_cycle_backdrop_style(GowlCompositor *self, gint direction)
 	 * The order the key steps through, written out rather than derived
 	 * from the enum -- because it is NOT the enum's order.
 	 *
-	 * The three that draw something come first and the liveliest first of
+	 * The four that draw something come first and the liveliest first of
 	 * all, so from either shipped default (water under cmacs, glass
 	 * standalone) one press lands on another LOOK rather than on nothing,
 	 * and turning the backdrop off takes the full way round rather than a
-	 * single press somebody did not mean.
+	 * single press somebody did not mean.  The two that move are adjacent
+	 * on purpose: water and rain are the pair somebody is most likely to
+	 * be comparing.
 	 */
 	static const GowlBackdropStyle order[] = {
-		GOWL_BACKDROP_WATER, GOWL_BACKDROP_GLASS,
-		GOWL_BACKDROP_BLUR,  GOWL_BACKDROP_NONE
+		GOWL_BACKDROP_WATER, GOWL_BACKDROP_RAIN,
+		GOWL_BACKDROP_GLASS, GOWL_BACKDROP_BLUR,
+		GOWL_BACKDROP_NONE
 	};
 	GowlBackdropStyle now;
 	gint i, at = 0;

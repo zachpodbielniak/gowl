@@ -647,6 +647,7 @@ another.
 | =blur=           | Frosted glass behind translucent windows, plus shadows |
 | =liquidglass=    | The wallpaper refracted through translucent windows     |
 | =liquidwater=    | The wallpaper through a moving water surface            |
+| =liquidrain=     | The wallpaper through a rained-on window                |
 | =autostart=      | Runs autostart commands from config                   |
 | =notifyd=        | org.freedesktop.Notifications daemon feeding the bar   |
 | =vanitygaps=     | Adds configurable inner/outer gaps to layouts         |
@@ -1267,26 +1268,28 @@ first frame on every output when it starts: ffmpeg reads a fixed frame
 rate, so without it a stretch of screen standing still would drop out of
 the video's timeline. =tests/test-idle-output.c= checks the contract.
 
-** Eight effect modules, one interface
+** Nine effect modules, one interface
 
 =animation=, =cube=, =expo=, =switcher=, =magnifier=, =blur=,
-=liquidglass= and =liquidwater= all implement =GowlSceneEffect=, all opt
-in through the =modules= mapping, and all are loaded by CMacs by default.
+=liquidglass=, =liquidwater= and =liquidrain= all implement
+=GowlSceneEffect=, all opt in through the =modules= mapping, and all are
+loaded by CMacs by default.
 They are separate plugins rather than one because each is a separate
 decision: somebody who wants shadows and no cube, or a magnifier and
 nothing else, configures exactly that.
 
-=blur=, =liquidglass= and =liquidwater= are the set that are
-ALTERNATIVES rather than additions --- each puts a node in the same place
-in the same window's tree, so the =window-backdrop= setting picks which
-one draws and =Super+Shift+"= cycles it. Loading all of them is still
+=blur=, =liquidglass=, =liquidwater= and =liquidrain= are the set that
+are ALTERNATIVES rather than additions --- each puts a node in the same
+place in the same window's tree, so the =window-backdrop= setting picks
+which one draws and =Super+"= cycles it. Loading all of them is still
 normal and intended: that is what makes the key instant rather than a
 module load.
 
-=liquidwater= is also the only effect here that never settles. Everything
-else is, between events, correct and free; the water is stale the moment
-it is drawn, which is why it is the only one with a clock and a frame
-rate.
+=liquidwater= and =liquidrain= are the two that never settle. Everything
+else is, between events, correct and free; those two are stale the moment
+they are drawn, which is why they are the only ones with a clock and a
+frame rate, and why they hold an output awake while they have something
+to draw on it.
 
 *How eight providers share one interface.* Every hook is either
 CONSUMABLE or BROADCAST, and which one it is is a property of the hook
@@ -1315,8 +1318,8 @@ every module after it in priority order.
 The consequence for a module author is that there is nothing to forward.
 Implement what you need, return =FALSE= or =NULL= for the rest, and pick
 a priority. The current order is =cube= (-10), =expo= (-8), =switcher=
-(-6), =animation= (0), =blur=, =liquidglass= and =liquidwater= (10),
-=magnifier= (100); the effects that
+(-6), =animation= (0), =blur=, =liquidglass=, =liquidwater= and
+=liquidrain= (10), =magnifier= (100); the effects that
 own a whole output sort before the ones that decorate a window, and the
 magnifier sorts last because it magnifies whatever the others drew.
 
@@ -1327,8 +1330,9 @@ texture, capture and scene-sheet lives in =src/fx= (see *Visual effect
 layer* in [[file:architecture.org][architecture]]), because that is where a mistake is
 expensive and invisible --- a context left current, a scene node left
 hidden, a buffer freed after its renderer. One implementation, one set of
-tests (=tests/test-fx-render.c=, =tests/test-glass-render.c= and
-=tests/test-water-render.c=, all against a real GPU), seven callers.
+tests (=tests/test-fx-render.c=, =tests/test-glass-render.c=,
+=tests/test-water-render.c= and =tests/test-rain-render.c=, all against a
+real GPU), eight callers.
 
 What is left in each module is the part that is actually about that
 effect: the shape of a prism and where the camera stands (=cube=), how a

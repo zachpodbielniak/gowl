@@ -537,6 +537,162 @@ gboolean gowl_fx_pass_water (GowlFxPass              *pass,
                              const GowlFxWaterParams *params,
                              const GowlFxWaterClock  *clock);
 
+/* ── Liquid rain ─────────────────────────────────────────────────── */
+
+/**
+ * GowlFxRainClock:
+ * @life: the resting drops' lifecycle clock, in [0, 1)
+ * @run: the three running-drop clocks, each in [0, 1)
+ *
+ * Where the rain has got to.
+ *
+ * Fractions of a cycle rather than a time, and rather than the water's
+ * radians: everything the rain shader does with these is `fract(clock +
+ * something)', which is continuous across a wrap at 1.0, so a double
+ * wrapped into [0, 1) hands a float a value it represents exactly and
+ * keeps doing so forever.  A seconds-since-start float instead loses its
+ * mantissa and the drops visibly step.
+ *
+ * The one rule this brings with it: any multiplier applied to one of
+ * these INSIDE the shader must be a whole number, or that layer snaps at
+ * every wrap.  The per-column speed there is 1 or 2 for exactly this
+ * reason.
+ *
+ * Advance it with gowl_fx_rain_advance(); a zeroed clock is a pane that
+ * has only just started to wet.
+ */
+typedef struct {
+	gdouble life;
+	gdouble run[3];
+} GowlFxRainClock;
+
+/**
+ * gowl_fx_rain_advance:
+ * @clock: (inout): the clock
+ * @dt: seconds since the last advance
+ * @speed: how fast the running drops fall; 1.0 is the tuned rate
+ * @life_seconds: how long a resting drop lives, from condensing to
+ *   sliding away
+ *
+ * Moves the rain on.  A @dt over a quarter of a second is treated as a
+ * quarter of a second: coming back from a stall --- a tag switch, a VT
+ * switch, a laptop lid --- should not teleport every drop down the pane.
+ */
+void gowl_fx_rain_advance (GowlFxRainClock *clock,
+                           gdouble          dt,
+                           gdouble          speed,
+                           gdouble          life_seconds);
+
+/**
+ * GowlFxRainParams:
+ * @width: the rect's width in pixels
+ * @height: the rect's height in pixels
+ * @radius: corner radius in pixels
+ * @cell: pixels per cell of the fine resting-drop layer.  Everything
+ *   about a drop is a fraction of this, so it is the one number that
+ *   means "how big is the rain"
+ * @density: how many cells hold a drop at all, 0 to 1.  Well under half
+ *   on purpose: a jittered grid reads as random only while it is sparse
+ * @bulge: how domed a drop is.  1 is a hemisphere; lower is a bead that
+ *   has spread, higher is a marble
+ * @depth: how far the refracted ray travels before it reaches the
+ *   wallpaper, in multiples of the DROP'S OWN RADIUS.  Radii and not
+ *   pixels: a lens shows an inverted image of what is a few of its own
+ *   widths behind it, so a figure in pixels makes a small drop sample
+ *   something tens of widths away and come back one flat colour.  Around
+ *   2.5 inverts; below 1 merely shifts
+ * @dispersion: chromatic separation inside a drop
+ * @runs: how many columns have a drop running down them, 0 to 1
+ * @run_width: pixels per column of the fine running layer
+ * @run_len: pixels of trail behind a running head
+ * @beads: how much of a trail is left behind as residual drops, 0 to 1
+ * @fog: how frosted the DRY pane is, 0 to 1.  The drops lift this, which
+ *   is the whole reason the effect does not look like the blur with
+ *   spots painted on it
+ * @clarity: how much of the fog a drop lifts, 0 to 1
+ * @specular: strength of the glint on each drop
+ * @shine: specular exponent; higher is a tighter, harder glint
+ * @rim: how much darker the edge of a drop is than its middle
+ * @impact: strength of the ring a landing drop throws
+ * @light: direction to the light, as a 3-vector
+ * @tint: what the water takes out of the light
+ * @absorption: how much of @tint is applied, 0 to 1.  Small: rain is not
+ *   a swimming pool
+ * @brightness: multiplied into the result
+ * @alpha: overall opacity
+ * @src_origin: where this rect's top-left sits in the source textures,
+ *   in pixels
+ * @src_scale: how many SOURCE pixels one pixel of this rect is.  1 when
+ *   drawing at full resolution; a rect rendered smaller than the window
+ *   it covers is still looking at ALL of that window's wallpaper, and
+ *   this is what says so.  0 is read as 1
+ *
+ * One rainy pane.  gowl_fx_rain_params_init() fills in a steady shower.
+ */
+typedef struct {
+	gint   width, height;
+	gfloat radius;
+	gfloat cell;
+	gfloat density;
+	gfloat bulge;
+	gfloat depth;
+	gfloat dispersion;
+	gfloat runs;
+	gfloat run_width;
+	gfloat run_len;
+	gfloat beads;
+	gfloat fog;
+	gfloat clarity;
+	gfloat specular;
+	gfloat shine;
+	gfloat rim;
+	gfloat impact;
+	gfloat light[3];
+	gfloat tint[3];
+	gfloat absorption;
+	gfloat brightness;
+	gfloat alpha;
+	gfloat src_origin[2];
+	gfloat src_scale;
+} GowlFxRainParams;
+
+/**
+ * gowl_fx_rain_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_rain_params_init (GowlFxRainParams *params);
+
+/**
+ * gowl_fx_pass_rain:
+ * @pass: a pass, begun on the buffer the rain is drawn into
+ * @soft: the frosted wallpaper, covering the whole output
+ * @sharp: (nullable): the same wallpaper unblurred
+ * @params: the rain to draw
+ * @clock: (nullable): where the rain has got to; %NULL is a pane that
+ *   has only just started to wet
+ *
+ * Draws a field of water drops on a frosted pane, each one a spherical
+ * cap refracting the wallpaper at n = 1.333, over the whole of @pass's
+ * buffer, with premultiplied alpha and rounded corners.
+ *
+ * Resting drops grow, sit and slide away; running drops fall down
+ * wandering columns leaving beaded trails that clear the frost behind
+ * them.  All of it is a function of the clock and the pixel --- there is
+ * no simulation state anywhere, which is what lets any frame be drawn
+ * without the one before it.
+ *
+ * Unlike every other pass here except the water, this one is NEVER up to
+ * date: the caller is expected to draw it again next frame.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller shows no rain and the desktop is as it was.
+ */
+gboolean gowl_fx_pass_rain (GowlFxPass             *pass,
+                            const GowlFxTexture    *soft,
+                            const GowlFxTexture    *sharp,
+                            const GowlFxRainParams *params,
+                            const GowlFxRainClock  *clock);
+
 /* ── Scene visibility scratchpad ─────────────────────────────────── */
 
 /**

@@ -65,7 +65,8 @@ static const gchar *const with_rounded[]   = { "blur", "animation",
                                                "roundcorners", NULL };
 /* Every backdrop at once, which is how CMacs loads them. */
 static const gchar *const both_backdrops[] = { "blur", "liquidglass",
-                                               "liquidwater", NULL };
+                                               "liquidwater", "liquidrain",
+                                               NULL };
 
 typedef struct {
 	gchar             *parent;   /* XDG_RUNTIME_DIR before the rig */
@@ -921,14 +922,17 @@ test_backdrop_style_picks_the_module(void)
 
 	/*
 	 * And the order the key actually steps through, which is written out
-	 * in the compositor rather than derived from the enum: the three that
+	 * in the compositor rather than derived from the enum: the four that
 	 * DRAW something come first, so one press from either shipped default
 	 * lands on another look and turning the backdrop off takes the full
 	 * way round.  Derived from the enum it would be none, blur, glass,
-	 * water -- which nobody would notice was wrong except by pressing the
-	 * key.
+	 * water, rain -- which nobody would notice was wrong except by
+	 * pressing the key.  The two that MOVE are adjacent on purpose.
 	 */
 	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_WATER);
+	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
+	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
+	                ==, GOWL_BACKDROP_RAIN);
 	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
 	                ==, GOWL_BACKDROP_GLASS);
@@ -958,6 +962,7 @@ test_backdrop_style_picks_the_module(void)
 	g_signal_handler_disconnect(r.compositor, toast_id);
 	{
 		gboolean saw_glass = FALSE, saw_water = FALSE;
+		gboolean saw_rain = FALSE;
 		gboolean saw_blur = FALSE, saw_none = FALSE;
 		guint    i;
 
@@ -966,11 +971,13 @@ test_backdrop_style_picks_the_module(void)
 
 			if (g_strcmp0(t, "Liquid glass") == 0) saw_glass = TRUE;
 			if (g_strcmp0(t, "Liquid water") == 0) saw_water = TRUE;
+			if (g_strcmp0(t, "Liquid rain") == 0)  saw_rain  = TRUE;
 			if (g_strcmp0(t, "Blur") == 0)         saw_blur  = TRUE;
 			if (g_strcmp0(t, "No backdrop") == 0)  saw_none  = TRUE;
 		}
 		g_assert_true(saw_glass);
 		g_assert_true(saw_water);
+		g_assert_true(saw_rain);
 		g_assert_true(saw_blur);
 		g_assert_true(saw_none);
 	}

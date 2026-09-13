@@ -337,6 +337,8 @@ GType gowl_action_get_type(void) G_GNUC_CONST;
  *   of glass (modules/liquidglass)
  * @GOWL_BACKDROP_WATER: the wallpaper refracted through a moving water
  *   surface (modules/liquidwater)
+ * @GOWL_BACKDROP_RAIN: the wallpaper through a rainy window --- drops
+ *   that collect, run and streak (modules/liquidrain)
  *
  * What shows through a translucent window.
  *
@@ -351,7 +353,8 @@ typedef enum {
 	GOWL_BACKDROP_NONE,
 	GOWL_BACKDROP_BLUR,
 	GOWL_BACKDROP_GLASS,
-	GOWL_BACKDROP_WATER
+	GOWL_BACKDROP_WATER,
+	GOWL_BACKDROP_RAIN
 } GowlBackdropStyle;
 
 #define GOWL_TYPE_BACKDROP_STYLE (gowl_backdrop_style_get_type())

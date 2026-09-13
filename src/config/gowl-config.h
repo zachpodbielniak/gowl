@@ -1734,6 +1734,98 @@ gdouble      gowl_config_get_water_light (GowlConfig *self);
 gint         gowl_config_get_water_frost (GowlConfig *self);
 gint         gowl_config_get_water_frost_passes (GowlConfig *self);
 
+/* --- Liquid rain (modules/liquidrain) ---
+ *
+ * `rain-preset' names a whole tuned set --- "mist", "drizzle", "shower",
+ * "downpour", "storm" --- and every getter below returns what that
+ * preset says unless the config named an override for it.
+ *
+ * `rain-cell' is the ruler: a drop is between a tenth and a third of a
+ * cell across, and most cells hold nothing.  Raising `rain-density'
+ * without raising the cell gives a finer mist rather than heavier rain,
+ * which is why the two are set together in a preset.
+ *
+ * Lengths are LOGICAL pixels, scaled by the output's scale at render
+ * time. */
+
+const gchar *gowl_config_get_rain_preset (GowlConfig *self);
+void         gowl_config_set_rain_preset (GowlConfig *self,
+                                          const gchar *name);
+gboolean     gowl_config_rain_preset_valid (const gchar *name);
+/* (array zero-terminated=1) (transfer none): every preset name, for a
+ * completion list.  Static; do not free. */
+const gchar * const *gowl_config_rain_preset_names (void);
+
+/* One knob over the whole preset, 0 to 3.  Scales how many drops there
+ * are, how many of them are running and how fast they fall --- the three
+ * that together mean "how hard is it raining".  It deliberately leaves
+ * the DROP SIZE alone: scaling that as well would not be heavier rain,
+ * it would be the same rain on a smaller window.  1.0 is the preset as
+ * tuned. */
+gdouble      gowl_config_get_rain_intensity (GowlConfig *self);
+void         gowl_config_set_rain_intensity (GowlConfig *self,
+                                             gdouble intensity);
+
+/* Pixels per cell of the fine resting-drop layer: the one number that
+ * means "how big is the rain". */
+gdouble      gowl_config_get_rain_cell (GowlConfig *self);
+/* How many cells hold a drop at all, 0 to 1.  Well under half on
+ * purpose --- a jittered grid reads as random only while it is sparse. */
+gdouble      gowl_config_get_rain_density (GowlConfig *self);
+/* How domed a drop is.  1 is a hemisphere; lower is a bead that has
+ * spread out, higher is a marble. */
+gdouble      gowl_config_get_rain_bulge (GowlConfig *self);
+/* How far the refracted ray travels before it reaches the wallpaper, in
+ * multiples of the drop's OWN RADIUS -- so it means the same thing to
+ * the smallest drop as to the largest, and does not scale with the
+ * render.  Around 2.5 turns what is behind a drop upside down, which is
+ * the most recognisable thing a water drop does; below 1 merely shifts
+ * it. */
+gdouble      gowl_config_get_rain_depth (GowlConfig *self);
+/* How many columns have a drop running down them, 0 to 1, and how wide
+ * a column is in pixels. */
+gdouble      gowl_config_get_rain_runs (GowlConfig *self);
+gdouble      gowl_config_get_rain_run_width (GowlConfig *self);
+/* How long the wet trail behind a running head is, in pixels. */
+gdouble      gowl_config_get_rain_run_length (GowlConfig *self);
+/* How much of that trail is left behind as residual drops, 0 to 1.  A
+ * clean wet stripe is what a finger leaves; rain leaves beads. */
+gdouble      gowl_config_get_rain_beads (GowlConfig *self);
+/* How frosted the DRY pane is, 0 to 1.  The drops lift this, which is
+ * the whole reason the effect does not look like the blur with spots
+ * painted on it. */
+gdouble      gowl_config_get_rain_fog (GowlConfig *self);
+/* The glint on each drop, and how tight it is (the latter preset only). */
+gdouble      gowl_config_get_rain_specular (GowlConfig *self);
+gdouble      gowl_config_get_rain_shine (GowlConfig *self);
+/* How much darker the edge of a drop is than its middle.  Preset only. */
+gdouble      gowl_config_get_rain_rim (GowlConfig *self);
+/* The ring a landing drop throws, 0 to 1. */
+gdouble      gowl_config_get_rain_impact (GowlConfig *self);
+/* How fast the running drops fall; 1.0 is the preset's own rate. */
+gdouble      gowl_config_get_rain_speed (GowlConfig *self);
+/* How much of the tint the water takes out of the light, and how long a
+ * resting drop lives in seconds.  Both preset only. */
+gdouble      gowl_config_get_rain_absorption (GowlConfig *self);
+gdouble      gowl_config_get_rain_life (GowlConfig *self);
+
+/* How often the pane is redrawn, 0 to 144; 0 means every frame the
+ * output offers. */
+gint         gowl_config_get_rain_fps (GowlConfig *self);
+/* How much smaller than the window the rain is rendered, 1 to 4. */
+gint         gowl_config_get_rain_scale (GowlConfig *self);
+const gchar *gowl_config_get_rain_tint (GowlConfig *self);
+/* How much of the frost a drop lifts, 0 to 1. */
+gdouble      gowl_config_get_rain_clarity (GowlConfig *self);
+gdouble      gowl_config_get_rain_opacity (GowlConfig *self);
+gdouble      gowl_config_get_rain_brightness (GowlConfig *self);
+/* Light direction in degrees: 0 straight above, positive clockwise. */
+gdouble      gowl_config_get_rain_light (GowlConfig *self);
+/* How much smaller the frost is computed, 1 to 8, and how many box
+ * passes, 1 to 6. */
+gint         gowl_config_get_rain_frost (GowlConfig *self);
+gint         gowl_config_get_rain_frost_passes (GowlConfig *self);
+
 /* Drop shadows under windows. */
 gboolean     gowl_config_get_shadow (GowlConfig *self);
 /* Shadow softness in pixels, 0 to 128. */

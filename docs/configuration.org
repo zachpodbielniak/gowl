@@ -876,6 +876,128 @@ locked, the style changed. There is no version of an animated backdrop
 that does not do this, and =water-fps: 30= is half the cost of =60= for a
 difference nobody can see on something that moves as slowly as water.
 
+**** Liquid rain
+:PROPERTIES:
+:CUSTOM_ID: liquidrain
+:END:
+
+The wallpaper through a window somebody left out in the rain: drops that
+collect, sit, slide away, and run down the glass leaving beaded trails
+behind them. =window-backdrop: rain= switches it on; =modules: [liquidrain]=
+loads the module that draws it.
+
+*The drops are lenses and the glass is not*, and that contrast is the
+whole effect. The pane between the drops is frosted; a drop is a clean
+spherical cap, and what shows through it is sharp, bent, and --- past a
+certain depth --- upside down, because that is what a ball lens does. A
+field of blurred blobs on blurred glass reads as a smudge.
+
+Nothing is simulated and nothing is stored. Every drop, every trail and
+every bead is a function of the clock and the pixel, which is what lets
+any frame be drawn without the one before it.
+
+***** Presets
+:PROPERTIES:
+:CUSTOM_ID: liquidrain-presets
+:END:
+
+=rain-preset= names a whole tuned set, for the same reason the water's
+does: raising the drop count without raising the drop size gives a finer
+mist, not heavier rain.
+
+| Preset      | What it is |
+|-------------+------------|
+| =mist=      | Almost entirely resting condensation; barely anything runs |
+| =drizzle=   | A light scatter with the occasional run |
+| =shower=    | A steady fall, with runs and beaded trails |
+| =downpour=  | Heavy and fast; most of the glass is running |
+| =storm=     | As hard as it goes |
+
+What varies most across them is not how many drops there are. It is the
+balance between drops that SIT and drops that RUN --- a mist is
+condensation, a storm is water going down the glass.
+
+| Property            | Type   | Default     | Description |
+|---------------------+--------+-------------+-------------|
+| =rain-preset=       | string | ="shower"=  | One of the five above |
+| =rain-intensity=    | float  | =1.0=       | How hard it rains, over and above the preset, =0= to =3= |
+| =rain-fps=          | int    | =30=        | How often the pane is redrawn; =0= is every frame |
+| =rain-scale=        | int    | =2=         | Render at 1/this of the window's size, =1= to =4= |
+| =rain-tint=         | string | ="#dceeff"= | What the water takes out of the light |
+| =rain-clarity=      | float  | =0.95=      | How much of the frost a drop lifts |
+| =rain-opacity=      | float  | =1.0=       | Opacity of the result |
+| =rain-brightness=   | float  | =1.0=       | =0.2= to =2.0= |
+| =rain-light=        | float  | =-140=      | Light direction in degrees: =0= straight above |
+| =rain-frost=        | int    | =3=         | How much smaller the frost is computed, =1= to =8= |
+| =rain-frost-passes= | int    | =2=         | Box passes for the frost, =1= to =6= |
+
+=rain-intensity= is the one knob over the whole preset, and it scales
+exactly the three things that together mean "how hard is it raining":
+how many drops there are, how many of them are running, and how fast
+those fall. It deliberately does NOT scale the drop size --- that would
+not give heavier rain, it would give the same rain on a smaller window,
+which is the mistake the water's knob avoids with its wavelength. At =0=
+the pane is clean and dry, and a dry pane passes light straight through.
+
+Every preset value can be overridden individually. An override that is
+not named leaves the preset in charge, so a config can say
+=rain-preset: storm= and =rain-runs: 0= and get a hard, static spatter.
+
+| Override            | Range       | Description |
+|---------------------+-------------+-------------|
+| =rain-cell=         | =8=--=400=  | Pixels per cell of the fine drop layer: the ruler everything else uses |
+| =rain-density=      | =0=--=1=    | How many cells hold a drop at all |
+| =rain-bulge=        | =0.1=--=3=  | How domed a drop is; =1= is a hemisphere |
+| =rain-depth=        | =0=--=20=   | How far the wallpaper is behind the pane, in a drop's own RADII |
+| =rain-runs=         | =0=--=1=    | How many columns have a drop running down them |
+| =rain-run-width=    | =10=--=600= | Pixels per column of the fine running layer |
+| =rain-run-length=   | =0=--=4000= | Pixels of trail behind a running head |
+| =rain-beads=        | =0=--=1=    | How much of a trail is left behind as residual drops |
+| =rain-fog=          | =0=--=1=    | How frosted the DRY pane is |
+| =rain-specular=     | =0=--=3=    | The glint on each drop |
+| =rain-impact=       | =0=--=1=    | The ring a landing drop throws |
+| =rain-speed=        | =0=--=5=    | How fast the running drops fall |
+
+***** Three numbers that are not what they look like
+
+*=rain-cell= is the ruler, not a spacing.* A drop is between a tenth and
+a bit over a quarter of a cell across, and most cells are empty, so this
+one number sets both how big the drops are and how far apart. The first
+numbers tried here were less than half the shipped ones, and the result
+is worth recording: a small cell buries a window under a thousand drops
+of four or five pixels each, which does not read as rain at all. It reads
+as GRAIN, and the whole effect looks like a noisy blur.
+
+*=rain-depth= is measured in a drop's own radii*, not in pixels, and it
+does not scale with the render. A lens shows an inverted image of what is
+a few of its own widths behind it; measured in pixels, a small drop --
+which is most of them -- samples something tens of widths away and comes
+back one flat colour, so the field reads as a scatter of beads rather
+than as a scatter of lenses. A sphere of water has its focus at two
+radii, so the magnification is =1 - depth/2=: below =2= a drop merely
+shifts what is behind it, at =2= the whole drop shows a single point, and
+above =2= it is upside down. The presets run from =5= to =7=.
+
+*=rain-fog= is what makes the drops visible.* The drops and the trails
+lift it; the dry pane keeps it. Set it to =0= and the effect still
+refracts correctly and looks like almost nothing, because a clear streak
+through a clear pane is not a streak.
+
+***** It never settles, and what that costs
+:PROPERTIES:
+:CUSTOM_ID: liquidrain-cost
+:END:
+
+Everything [[#liquidwater-cost][the water's cost section]] says applies
+here unchanged --- the clock, the frame rate, and the honest admission
+that a screen showing rain is a screen that is rendering.
+
+The one difference is that the shader is dearer per pixel. The water
+takes five samples of one height field; this asks nine cells of each of
+two turned lattices and three columns of running drops, so =rain-scale=
+matters more here than =water-scale= does. The shipped =2= renders a
+quarter of the pixels, which through a refracting surface is invisible.
+
 **** Per-tag wallpaper
 :PROPERTIES:
 :CUSTOM_ID: wallpaper-tags

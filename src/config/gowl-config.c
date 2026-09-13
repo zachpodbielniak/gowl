@@ -180,6 +180,34 @@
  * as a sentinel without a second `has-' flag per key. */
 #define GOWL_CONFIG_WATER_FROM_PRESET            (-1.0)
 
+/*
+ * The liquid-rain defaults.
+ *
+ * Same shape as the water above -- a named preset carries a whole tuned
+ * set and the individual keys are overrides on top of it -- because the
+ * numbers here mean even less on their own than the water's do.  Drop
+ * size, how many cells hold a drop, how far the refracted ray travels
+ * and how long a drop lives are one description of weather between them;
+ * a downpour's density over a mist's cell size is not heavier rain, it
+ * is a window someone has sprayed.
+ *
+ * `rain-cell' is the ruler.  A drop is between a tenth and a third of a
+ * cell across and most cells are empty, so a 46 px cell a third full is
+ * the scatter a window picks up in a shower.
+ */
+#define GOWL_CONFIG_DEFAULT_RAIN_PRESET          "shower"
+#define GOWL_CONFIG_DEFAULT_RAIN_INTENSITY       (1.0)
+#define GOWL_CONFIG_DEFAULT_RAIN_FPS             (30)
+#define GOWL_CONFIG_DEFAULT_RAIN_SCALE           (2)
+#define GOWL_CONFIG_DEFAULT_RAIN_TINT            "#dceeff"
+#define GOWL_CONFIG_DEFAULT_RAIN_CLARITY         (0.95)
+#define GOWL_CONFIG_DEFAULT_RAIN_OPACITY         (1.0)
+#define GOWL_CONFIG_DEFAULT_RAIN_BRIGHTNESS      (1.0)
+#define GOWL_CONFIG_DEFAULT_RAIN_LIGHT           (-140.0)
+#define GOWL_CONFIG_DEFAULT_RAIN_FROST           (3)
+#define GOWL_CONFIG_DEFAULT_RAIN_FROST_PASSES    (2)
+#define GOWL_CONFIG_RAIN_FROM_PRESET             (-1.0)
+
 #define GOWL_CONFIG_DEFAULT_WALLPAPER_FADE       (320)
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
@@ -205,6 +233,7 @@
 #define GOWL_CONFIG_FILENAME "config.yaml"
 
 static void gowl_config_reresolve_colors(GowlConfig *self);
+static GEnumClass *backdrop_enum_class(void);
 
 /* --- Instance struct --- */
 
@@ -346,6 +375,31 @@ struct _GowlConfig {
 	gdouble  water_foam;
 	gdouble  water_fresnel;
 	gdouble  water_speed;
+	gchar   *rain_preset;
+	gdouble  rain_intensity;
+	gint     rain_fps;
+	gint     rain_scale;
+	gchar   *rain_tint;
+	gdouble  rain_clarity;
+	gdouble  rain_opacity;
+	gdouble  rain_brightness;
+	gdouble  rain_light;
+	gint     rain_frost;
+	gint     rain_frost_passes;
+	/* Overrides on the preset; GOWL_CONFIG_RAIN_FROM_PRESET for "leave
+	 * it alone". */
+	gdouble  rain_cell;
+	gdouble  rain_density;
+	gdouble  rain_bulge;
+	gdouble  rain_depth;
+	gdouble  rain_runs;
+	gdouble  rain_run_width;
+	gdouble  rain_run_length;
+	gdouble  rain_beads;
+	gdouble  rain_fog;
+	gdouble  rain_specular;
+	gdouble  rain_impact;
+	gdouble  rain_speed;
 
 	/* Per-tag wallpaper overrides, 1-based; NULL means "use the default
 	 * wallpaper", which is what every entry is until a config says
@@ -920,6 +974,8 @@ gowl_config_finalize(GObject *object)
 	g_free(self->glass_tint);
 	g_free(self->water_preset);
 	g_free(self->water_tint);
+	g_free(self->rain_preset);
+	g_free(self->rain_tint);
 	{
 		gint ti;
 
@@ -1364,6 +1420,29 @@ gowl_config_init(GowlConfig *self)
 	self->water_foam         = GOWL_CONFIG_WATER_FROM_PRESET;
 	self->water_fresnel      = GOWL_CONFIG_WATER_FROM_PRESET;
 	self->water_speed        = GOWL_CONFIG_WATER_FROM_PRESET;
+	self->rain_preset        = g_strdup(GOWL_CONFIG_DEFAULT_RAIN_PRESET);
+	self->rain_intensity     = GOWL_CONFIG_DEFAULT_RAIN_INTENSITY;
+	self->rain_fps           = GOWL_CONFIG_DEFAULT_RAIN_FPS;
+	self->rain_scale         = GOWL_CONFIG_DEFAULT_RAIN_SCALE;
+	self->rain_tint          = g_strdup(GOWL_CONFIG_DEFAULT_RAIN_TINT);
+	self->rain_clarity       = GOWL_CONFIG_DEFAULT_RAIN_CLARITY;
+	self->rain_opacity       = GOWL_CONFIG_DEFAULT_RAIN_OPACITY;
+	self->rain_brightness    = GOWL_CONFIG_DEFAULT_RAIN_BRIGHTNESS;
+	self->rain_light         = GOWL_CONFIG_DEFAULT_RAIN_LIGHT;
+	self->rain_frost         = GOWL_CONFIG_DEFAULT_RAIN_FROST;
+	self->rain_frost_passes  = GOWL_CONFIG_DEFAULT_RAIN_FROST_PASSES;
+	self->rain_cell          = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_density       = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_bulge         = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_depth         = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_runs          = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_run_width     = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_run_length    = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_beads         = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_fog           = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_specular      = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_impact        = GOWL_CONFIG_RAIN_FROM_PRESET;
+	self->rain_speed         = GOWL_CONFIG_RAIN_FROM_PRESET;
 
 	self->wallpaper_fade   = GOWL_CONFIG_DEFAULT_WALLPAPER_FADE;
 
@@ -1728,6 +1807,12 @@ static const gchar *const top_level_keys[] = {
 	"water-amplitude", "water-wavelength", "water-choppiness",
 	"water-depth", "water-drops", "water-shore", "water-specular",
 	"water-caustics", "water-foam", "water-fresnel", "water-speed",
+	"rain-preset", "rain-intensity", "rain-fps", "rain-scale",
+	"rain-tint", "rain-clarity", "rain-opacity", "rain-brightness",
+	"rain-light", "rain-frost", "rain-frost-passes",
+	"rain-cell", "rain-density", "rain-bulge", "rain-depth",
+	"rain-runs", "rain-run-width", "rain-run-length", "rain-beads",
+	"rain-fog", "rain-specular", "rain-impact", "rain-speed",
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
 	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
 	"lock-command", "lock-on-suspend", "keybinds", "modes",
@@ -2382,7 +2467,7 @@ gowl_config_apply_mapping(
 			self->backdrop_style = ev->value;
 		else
 			g_warning("gowl_config: unknown window-backdrop '%s'; "
-			          "expected none, blur, glass or water",
+			          "expected none, blur, glass, water or rain",
 			          v != NULL ? v : "(null)");
 	}
 	if (yaml_mapping_has_member(mapping, "glass-bevel")) {
@@ -2580,6 +2665,113 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "water-speed")) {
 		self->water_speed = CLAMP(yaml_mapping_get_double_member(
 			mapping, "water-speed"), 0.0, 5.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-preset")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "rain-preset");
+
+		if (v != NULL && gowl_config_rain_preset_valid(v)) {
+			g_free(self->rain_preset);
+			self->rain_preset = g_strdup(v);
+		} else {
+			g_warning("gowl_config: unknown rain-preset '%s'; "
+			          "expected mist, drizzle, shower, downpour or storm",
+			          v != NULL ? v : "(null)");
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "rain-intensity")) {
+		self->rain_intensity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-intensity"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-fps")) {
+		/* 0 means every frame the output gives us. */
+		self->rain_fps = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "rain-fps"), 0, 144);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-scale")) {
+		self->rain_scale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "rain-scale"), 1, 4);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-tint")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "rain-tint");
+
+		if (v != NULL) {
+			g_free(self->rain_tint);
+			self->rain_tint = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "rain-clarity")) {
+		self->rain_clarity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-opacity")) {
+		self->rain_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-brightness")) {
+		self->rain_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-brightness"), 0.2, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-light")) {
+		self->rain_light = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-light"), -180.0, 180.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-frost")) {
+		self->rain_frost = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "rain-frost"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-frost-passes")) {
+		self->rain_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "rain-frost-passes"), 1, 6);
+	}
+	/* The overrides on the preset, each at its sentinel until named. */
+	if (yaml_mapping_has_member(mapping, "rain-cell")) {
+		self->rain_cell = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-cell"), 8.0, 400.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-density")) {
+		self->rain_density = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-density"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-bulge")) {
+		self->rain_bulge = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-bulge"), 0.1, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-depth")) {
+		self->rain_depth = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-depth"), 0.0, 20.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-runs")) {
+		self->rain_runs = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-runs"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-run-width")) {
+		self->rain_run_width = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-run-width"), 10.0, 600.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-run-length")) {
+		self->rain_run_length = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-run-length"), 0.0, 4000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-beads")) {
+		self->rain_beads = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-beads"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-fog")) {
+		self->rain_fog = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-fog"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-specular")) {
+		self->rain_specular = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-specular"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-impact")) {
+		self->rain_impact = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-impact"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-speed")) {
+		self->rain_speed = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-speed"), 0.0, 5.0);
 	}
 	if (yaml_mapping_has_member(mapping, "shadow-color")) {
 		const gchar *v = yaml_mapping_get_string_member(mapping,
@@ -5864,7 +6056,16 @@ gowl_config_set_backdrop_style(GowlConfig *self, GowlBackdropStyle style)
 {
 	g_return_if_fail(GOWL_IS_CONFIG(self));
 
-	if (style < GOWL_BACKDROP_NONE || style > GOWL_BACKDROP_WATER)
+	/*
+	 * Asked of the ENUM rather than compared against its last member.
+	 *
+	 * This used to read `style > GOWL_BACKDROP_WATER', which was correct
+	 * exactly until a fifth backdrop was added -- and then silently
+	 * refused it, so the cycle key stopped on the new one and the toast
+	 * announced a style the config had just declined to store.  A bound
+	 * written as a member name is a bound that has to be remembered.
+	 */
+	if (g_enum_get_value(backdrop_enum_class(), (gint)style) == NULL)
 		return;
 	self->backdrop_style = (gint)style;
 }
@@ -6253,6 +6454,271 @@ gowl_config_get_water_absorption(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.34);
 	return water_preset_by_name(self->water_preset)->absorption;
+}
+
+/* --- Liquid rain --------------------------------------------------- */
+
+/**
+ * GowlRainPreset:
+ *
+ * One whole tuned set of rain.
+ *
+ * A table for the same reason the water's is: the numbers only mean
+ * anything together.  `density' is a fraction of CELLS, so raising it
+ * without raising the cell size makes a finer mist and not heavier rain;
+ * `depth' is what inverts the image inside a drop, and it is measured in
+ * the drop's OWN RADII so that it means the same thing to the smallest
+ * drop and the largest; `life' against `speed' decides
+ * whether the pane looks like it is being rained on or like it is drying
+ * out.
+ *
+ * What varies most across the five is not how many drops there are.  It
+ * is the balance between drops that SIT and drops that RUN -- a mist is
+ * almost entirely resting condensation, and a storm is almost entirely
+ * water going down the glass.
+ */
+typedef struct {
+	const gchar *name;
+	gdouble      cell;        /* px; the ruler everything else uses */
+	gdouble      density;     /* fraction of cells holding a drop */
+	gdouble      bulge;       /* how domed */
+	gdouble      depth;       /* ray travel, in drop radii */
+	gdouble      runs;        /* fraction of columns running */
+	gdouble      run_width;   /* px per column */
+	gdouble      run_length;  /* px of trail */
+	gdouble      beads;       /* how beaded a trail is */
+	gdouble      fog;         /* how frosted the dry pane is */
+	gdouble      specular;
+	gdouble      shine;       /* specular exponent */
+	gdouble      rim;
+	gdouble      impact;
+	gdouble      absorption;
+	gdouble      speed;
+	gdouble      life;        /* seconds a resting drop lives */
+} GowlRainPreset;
+
+static const GowlRainPreset rain_presets[] = {
+	/* name       cell dens bulge depth runs  rw    rlen beads fog  spec shine rim  imp  abs  spd  life */
+	{ "mist",     48.0, 0.46, 0.75, 5.00, 0.05, 240.0, 300.0, 0.25, 0.94, 0.30, 80.0, 0.22, 0.15, 0.06, 0.50, 16.0 },
+	{ "drizzle",  70.0, 0.34, 0.90, 5.50, 0.18, 210.0, 480.0, 0.40, 0.91, 0.38, 70.0, 0.26, 0.35, 0.08, 0.70, 12.0 },
+	{ "shower",   95.0, 0.30, 1.00, 6.00, 0.45, 170.0, 700.0, 0.55, 0.88, 0.42, 60.0, 0.30, 0.50, 0.10, 1.00,  8.0 },
+	{ "downpour",118.0, 0.34, 1.05, 6.50, 0.70, 140.0, 900.0, 0.68, 0.84, 0.50, 52.0, 0.32, 0.70, 0.12, 1.50,  5.0 },
+	{ "storm",   142.0, 0.40, 1.10, 7.00, 0.90, 115.0,1150.0, 0.78, 0.78, 0.58, 46.0, 0.34, 0.85, 0.14, 2.20,  3.5 }
+};
+
+static const GowlRainPreset *
+rain_preset_by_name(const gchar *name)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(rain_presets); i++) {
+		if (g_strcmp0(rain_presets[i].name, name) == 0)
+			return &rain_presets[i];
+	}
+	/* The shower: the one in the middle, and the shipped default. */
+	return &rain_presets[2];
+}
+
+/* An override wins unless it is the sentinel, in which case the preset
+ * decides.  Negative is impossible for every one of these. */
+static gdouble
+rain_pick(gdouble override, gdouble from_preset)
+{
+	return override < 0.0 ? from_preset : override;
+}
+
+gboolean
+gowl_config_rain_preset_valid(const gchar *name)
+{
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(rain_presets); i++) {
+		if (g_strcmp0(rain_presets[i].name, name) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar * const *
+gowl_config_rain_preset_names(void)
+{
+	static const gchar *names[G_N_ELEMENTS(rain_presets) + 1];
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		guint i;
+
+		for (i = 0; i < G_N_ELEMENTS(rain_presets); i++)
+			names[i] = rain_presets[i].name;
+		names[G_N_ELEMENTS(rain_presets)] = NULL;
+		g_once_init_leave(&once, 1);
+	}
+	return names;
+}
+
+const gchar *
+gowl_config_get_rain_preset(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_PRESET);
+	return self->rain_preset;
+}
+
+void
+gowl_config_set_rain_preset(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_rain_preset_valid(name))
+		return;
+	g_free(self->rain_preset);
+	self->rain_preset = g_strdup(name);
+}
+
+gdouble
+gowl_config_get_rain_intensity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_INTENSITY);
+	return self->rain_intensity;
+}
+
+void
+gowl_config_set_rain_intensity(GowlConfig *self, gdouble intensity)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->rain_intensity = CLAMP(intensity, 0.0, 3.0);
+}
+
+#define GOWL_RAIN_GETTER(field)                                            \
+gdouble                                                                    \
+gowl_config_get_rain_##field(GowlConfig *self)                             \
+{                                                                          \
+	const GowlRainPreset *p;                                               \
+                                                                           \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.0);                       \
+	p = rain_preset_by_name(self->rain_preset);                            \
+	return rain_pick(self->rain_##field, p->field);                        \
+}
+
+GOWL_RAIN_GETTER(cell)
+GOWL_RAIN_GETTER(density)
+GOWL_RAIN_GETTER(bulge)
+GOWL_RAIN_GETTER(depth)
+GOWL_RAIN_GETTER(runs)
+GOWL_RAIN_GETTER(run_width)
+GOWL_RAIN_GETTER(run_length)
+GOWL_RAIN_GETTER(beads)
+GOWL_RAIN_GETTER(fog)
+GOWL_RAIN_GETTER(specular)
+GOWL_RAIN_GETTER(impact)
+GOWL_RAIN_GETTER(speed)
+
+#undef GOWL_RAIN_GETTER
+
+/* Preset-only, with no override key of their own: they are part of what
+ * makes a named rain what it is, and a config that wants to move them is
+ * really asking for a different preset. */
+gdouble
+gowl_config_get_rain_shine(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 60.0);
+	return rain_preset_by_name(self->rain_preset)->shine;
+}
+
+gdouble
+gowl_config_get_rain_rim(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.35);
+	return rain_preset_by_name(self->rain_preset)->rim;
+}
+
+gdouble
+gowl_config_get_rain_absorption(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.10);
+	return rain_preset_by_name(self->rain_preset)->absorption;
+}
+
+gdouble
+gowl_config_get_rain_life(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 8.0);
+	return rain_preset_by_name(self->rain_preset)->life;
+}
+
+gint
+gowl_config_get_rain_fps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_FPS);
+	return self->rain_fps;
+}
+
+gint
+gowl_config_get_rain_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_SCALE);
+	return self->rain_scale;
+}
+
+const gchar *
+gowl_config_get_rain_tint(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_TINT);
+	return self->rain_tint;
+}
+
+gdouble
+gowl_config_get_rain_clarity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_CLARITY);
+	return self->rain_clarity;
+}
+
+gdouble
+gowl_config_get_rain_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_OPACITY);
+	return self->rain_opacity;
+}
+
+gdouble
+gowl_config_get_rain_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_BRIGHTNESS);
+	return self->rain_brightness;
+}
+
+gdouble
+gowl_config_get_rain_light(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_LIGHT);
+	return self->rain_light;
+}
+
+gint
+gowl_config_get_rain_frost(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_FROST);
+	return self->rain_frost;
+}
+
+gint
+gowl_config_get_rain_frost_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_FROST_PASSES);
+	return self->rain_frost_passes;
 }
 
 gint

@@ -359,6 +359,9 @@ seat-only guard is =nested_wl_backend == NULL=; a nested gowl never
 touches the host session's portal.
 
 ** Locking, and the seat side of it
+:PROPERTIES:
+:CUSTOM_ID: locking-and-the-seat-side-of-it
+:END:
 
 The screen lock is a separate program, =gowl-lock= (=tools/gowl-lock/=),
 not a module inside the compositor. It links no libgowl: it is a Wayland
@@ -541,11 +544,12 @@ and checks the ones applications give up silently without.
 | wlr-output-power-management | gowl-output-power.c | powered-off outputs keep their layout place and windows |
 | tearing-control, content-type | gowl-compositor.c (frame handler) | tearing for a fullscreen window that asks, with =allow-tearing=; content-type drives =vrr: on-demand= |
 | xdg-foreign v1/v2 | gowl-compositor.c | a portal dialog parents itself to a sandboxed app's window |
-| wlr-data-control, primary-selection, ext-session-lock | gowl-compositor.c, gowl-session-lock.c | |
+| wlr-data-control, primary-selection, ext-session-lock | gowl-compositor.c, gowl-session-lock.c | the lock client owns the screen; the compositor owns the locked STATE, so a client that dies leaves it locked -- see [[#locking-and-the-seat-side-of-it][Locking]] |
+| wp-color-management-v1 | gowl-compositor.c, gowl-monitor.c | parametric descriptions and a mastering display volume; no ICC.  What is advertised comes from the renderer where wlroots answers for it, else a built-in list -- a set too narrow tells clients gowl cannot describe ORDINARY colour, which is how Chromium ends up logging "Unable to set image primaries" |
 | ext-workspace-v1 | protocols/gowl-ext-workspace.c | with a workspace provider installed |
 | gowl-input-capture (private) | gowl-input-capture.c | the InputCapture / RemoteDesktop portal backend |
 
-Not served: security-context, drm-lease, wp-color-management, alpha-modifier, xdg-toplevel-icon / -tag / -drag, xdg-dialog, fifo, commit-timing, pointer-warp.
+Not served: security-context, drm-lease, alpha-modifier, xdg-toplevel-icon / -tag / -drag, xdg-dialog, fifo, commit-timing, pointer-warp.
 
 *** Input, as configured
 The keymap is built by =build_keymap()= from the =xkb-*= keys (a keymap file, else rules/model/layout/variant/options, else the environment) and applied to the keyboard group and every keyboard =gowl-input-config.c= tracks. Per-device libinput settings from the =input:= section are applied by the same file when a device appears and again on reload. Key modes, bind flags, pointer binds and gestures all end in =run_keybind_entry()=: one function runs an action whatever bound it, so =dispatch_key()= (mode, lock and press/release filtering), =dispatch_mousebind()= and =dispatch_gesture()= only decide whether a bind matched. A finger count with a configured gesture is claimed before the module gesture handlers, like a module claimant, and summed until the gesture ends.

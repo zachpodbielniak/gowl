@@ -705,6 +705,11 @@ The way out without a password is =gowl-msg unlock=, reachable only from
 inside the session (the socket lives in your runtime directory). It is
 the escape hatch for a broken lock program, not a second door.
 
+Every change of state -- whoever caused it -- is announced three ways at
+once: the compositor's =lock-changed= signal, =EVENT lock locked= /
+=EVENT lock unlocked= on the socket, and logind's locked hint.
+=gowl-msg locked= asks for it directly.
+
 If no =gowl-lock= can be started, gowl falls back to the =screenlock=
 module rather than leaving the desktop open --- a lock that quietly does
 nothing is the one failure a lock must not have.

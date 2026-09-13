@@ -338,6 +338,12 @@ make install
 Installs to =$PREFIX= (default =/usr/local=):
 
 - =$PREFIX/bin/gowl= -- Compositor executable
+- =$PREFIX/bin/gowl-msg= -- The IPC socket's command-line client
+- =$PREFIX/bin/gowl-lock= -- The screen lock (built where PAM's headers are)
+- =$PREFIX/bin/gowl-mcp= -- MCP relay (with =MCP=1=)
+- =$PREFIX/bin/xdg-desktop-portal-gowl= -- Portal backend (where libeis is)
+- =/etc/pam.d/gowl= -- PAM profile for the lock, never overwriting an
+  existing one; =make install-pam= on its own
 - =$PREFIX/lib/libgowl.so.*= -- Shared library
 - =$PREFIX/lib/libgowl.a= -- Static library
 - =$PREFIX/include/gowl/= -- Header files

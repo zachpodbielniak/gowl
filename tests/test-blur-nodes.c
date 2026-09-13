@@ -927,12 +927,13 @@ test_backdrop_style_picks_the_module(void)
 	 * lands on another look and turning the backdrop off takes the full
 	 * way round.  Derived from the enum it would be none, blur, glass,
 	 * water, rain -- which nobody would notice was wrong except by
-	 * pressing the key.  The two that MOVE are adjacent on purpose.
+	 * pressing the key.  The two that MOVE lead, so one press from the
+	 * cmacs default is the other animated backdrop.
 	 */
-	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_WATER);
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_RAIN);
 	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-	                ==, GOWL_BACKDROP_RAIN);
+	                ==, GOWL_BACKDROP_WATER);
 	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
 	                ==, GOWL_BACKDROP_GLASS);
@@ -944,7 +945,7 @@ test_backdrop_style_picks_the_module(void)
 	                ==, GOWL_BACKDROP_NONE);
 	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-	                ==, GOWL_BACKDROP_WATER);
+	                ==, GOWL_BACKDROP_RAIN);
 	/* And back the other way. */
 	gowl_compositor_cycle_backdrop_style(r.compositor, -1);
 	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),

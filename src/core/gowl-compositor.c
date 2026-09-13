@@ -2685,15 +2685,16 @@ gowl_compositor_cycle_backdrop_style(GowlCompositor *self, gint direction)
 	 * from the enum -- because it is NOT the enum's order.
 	 *
 	 * The four that draw something come first and the liveliest first of
-	 * all, so from either shipped default (water under cmacs, glass
+	 * all, so from either shipped default (rain under cmacs, glass
 	 * standalone) one press lands on another LOOK rather than on nothing,
 	 * and turning the backdrop off takes the full way round rather than a
-	 * single press somebody did not mean.  The two that move are adjacent
-	 * on purpose: water and rain are the pair somebody is most likely to
-	 * be comparing.
+	 * single press somebody did not mean.  The two that MOVE lead, in
+	 * that order: from the cmacs default one press is the other animated
+	 * backdrop, which is the comparison somebody pressing this key is
+	 * most often making.
 	 */
 	static const GowlBackdropStyle order[] = {
-		GOWL_BACKDROP_WATER, GOWL_BACKDROP_RAIN,
+		GOWL_BACKDROP_RAIN,  GOWL_BACKDROP_WATER,
 		GOWL_BACKDROP_GLASS, GOWL_BACKDROP_BLUR,
 		GOWL_BACKDROP_NONE
 	};

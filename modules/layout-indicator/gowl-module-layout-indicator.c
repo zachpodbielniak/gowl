@@ -158,6 +158,13 @@ static void startup_init(GowlStartupHandlerInterface *iface) { iface->on_startup
 static gboolean activate(GowlModule *self) { return TRUE; }
 static void deactivate(GowlModule *self) { detach((LayoutIndicator *)self); }
 static const gchar *name_of(GowlModule *self) { return "layout-indicator"; }
+
+static const gchar *
+desc_of(GowlModule *module)
+{
+	(void)module;
+	return "Brief click-through toast naming the layout when it changes";
+}
 static void finalize(GObject *object)
 {
  detach((LayoutIndicator *)object);
@@ -169,6 +176,7 @@ static void gowl_layout_indicator_class_init(LayoutIndicatorClass *klass)
  module->activate = activate;
  module->deactivate = deactivate;
  module->get_name = name_of;
+	module->get_description = desc_of;
  G_OBJECT_CLASS(klass)->finalize = finalize;
 }
 static void gowl_layout_indicator_init(LayoutIndicator *self)

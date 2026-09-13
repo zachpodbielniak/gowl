@@ -564,6 +564,13 @@ static gboolean clip_activate(GowlModule *m) { (void)m; return TRUE; }
 static void clip_deactivate(GowlModule *m) { clip_detach((GowlClipboard *)m); }
 static const gchar *clip_name(GowlModule *m) { (void)m; return "clipboard"; }
 
+static const gchar *
+clip_desc(GowlModule *module)
+{
+	(void)module;
+	return "A history of everything that has been on the clipboard";
+}
+
 static void
 clip_finalize(GObject *object)
 {
@@ -582,6 +589,7 @@ gowl_clipboard_class_init(GowlClipboardClass *klass)
 	module->activate = clip_activate;
 	module->deactivate = clip_deactivate;
 	module->get_name = clip_name;
+	module->get_description = clip_desc;
 	G_OBJECT_CLASS(klass)->finalize = clip_finalize;
 }
 

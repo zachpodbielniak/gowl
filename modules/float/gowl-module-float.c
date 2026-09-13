@@ -42,7 +42,8 @@ static void arrange(GowlLayoutProvider *p, gpointer monitor, GList *clients, gpo
 }
 static void provider_init(GowlLayoutProviderInterface *iface)
 { iface->arrange = arrange; iface->get_symbol = symbol_of;  }
+static const gchar *desc_of(GowlModule *m) { return "Free window placement: windows keep the size and place they ask for"; }
 static void gowl_float_module_class_init(FloatLayoutModuleClass *klass)
-{ GowlModuleClass *m = GOWL_MODULE_CLASS(klass); m->activate = activate; m->get_name = name_of; }
+{ GowlModuleClass *m = GOWL_MODULE_CLASS(klass); m->activate = activate; m->get_name = name_of; m->get_description = desc_of; }
 static void gowl_float_module_init(FloatLayoutModule *self) { }
 G_MODULE_EXPORT GType gowl_module_register(void) { return gowl_float_module_get_type(); }

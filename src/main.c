@@ -400,6 +400,220 @@ static const gchar *default_yaml_config =
 	"  autostart:\n"
 	"    enabled: true\n";
 
+/* ── Module discovery ────────────────────────────────────────────── */
+
+/**
+ * gowl_module_search_dirs:
+ *
+ * The module search path, highest priority first.
+ *
+ * ONE definition, used by the startup loader AND by --list-modules.
+ * They used to be different things: the loader walked the filesystem
+ * while the listing printed a hand-written table in this file, and the
+ * table drifted.  By the time anybody noticed it was missing six of the
+ * twelve layouts and a third of everything else, which made it look as
+ * though those layouts were not modules at all.  A list of what is
+ * installed has to be produced by looking at what is installed.
+ *
+ * Returns: (transfer full) (array zero-terminated=1): the directories
+ *   that exist, in the order a module is looked for.
+ */
+static gchar **
+gowl_module_search_dirs(void)
+{
+	GPtrArray        *dirs = g_ptr_array_new();
+	g_autofree gchar *exe_path = NULL;
+
+	/* Next to the running binary: a development tree, and it wins, so a
+	 * build in place shadows an installed copy. */
+	exe_path = g_file_read_link("/proc/self/exe", NULL);
+	if (exe_path != NULL) {
+		g_autofree gchar *bin_dir = g_path_get_dirname(exe_path);
+		gchar *dev = g_build_filename(bin_dir, "modules", NULL);
+
+		if (g_file_test(dev, G_FILE_TEST_IS_DIR))
+			g_ptr_array_add(dirs, dev);
+		else
+			g_free(dev);
+	}
+
+	if (g_file_test(GOWL_MODULEDIR, G_FILE_TEST_IS_DIR))
+		g_ptr_array_add(dirs, g_strdup(GOWL_MODULEDIR));
+
+	g_ptr_array_add(dirs, NULL);
+	return (gchar **)g_ptr_array_free(dirs, FALSE);
+}
+
+/**
+ * gowl_module_path_for:
+ * @name: a module name, as the config spells it
+ *
+ * Where @name would be loaded from, without loading it.
+ *
+ * Returns: (transfer full) (nullable): the path, or %NULL when no
+ *   directory on the search path has it.
+ */
+static gchar *
+gowl_module_path_for(const gchar *name)
+{
+	g_auto(GStrv) dirs = gowl_module_search_dirs();
+	gint i;
+
+	if (name == NULL || *name == '\0')
+		return NULL;
+
+	for (i = 0; dirs != NULL && dirs[i] != NULL; i++) {
+		g_autofree gchar *so = g_strdup_printf("%s.so", name);
+		gchar *path = g_build_filename(dirs[i], so, NULL);
+
+		if (g_file_test(path, G_FILE_TEST_EXISTS))
+			return path;
+		g_free(path);
+	}
+	return NULL;
+}
+
+/**
+ * GowlFoundModule:
+ * @name: the name the config and --modules use, from the file name
+ * @path: the copy that would actually be loaded
+ * @shadowed: (element-type utf8): lower-priority copies, in order
+ * @description: what the module says about itself, or %NULL
+ * @error: why it could not be loaded, or %NULL
+ *
+ * One module as found on disk.  @shadowed is the point of
+ * --list-modules-ex: two copies of a module on the path is not an error
+ * and not visible any other way, and it is exactly what makes a fix
+ * appear not to have taken effect.
+ */
+typedef struct {
+	gchar     *name;
+	gchar     *path;
+	GPtrArray *shadowed;
+	gchar     *description;
+	gchar     *error;
+} GowlFoundModule;
+
+static void
+found_module_free(gpointer data)
+{
+	GowlFoundModule *m = data;
+
+	g_free(m->name);
+	g_free(m->path);
+	g_free(m->description);
+	g_free(m->error);
+	g_clear_pointer(&m->shadowed, g_ptr_array_unref);
+	g_free(m);
+}
+
+static gint
+found_module_cmp(gconstpointer a, gconstpointer b)
+{
+	const GowlFoundModule *ma = *(GowlFoundModule * const *)a;
+	const GowlFoundModule *mb = *(GowlFoundModule * const *)b;
+
+	return g_strcmp0(ma->name, mb->name);
+}
+
+/**
+ * gowl_scan_modules:
+ *
+ * Every module on the search path, sorted by name.
+ *
+ * A module is named by its file: `blur.so' is `blur', which is what the
+ * config's `modules:' mapping and --modules take.  The first directory
+ * that has a given name wins and the rest are recorded as shadowed
+ * rather than dropped.
+ *
+ * Each winner is loaded far enough to ask it what it is -- loaded, not
+ * activated, exactly as the compositor does at startup before it
+ * activates anything -- so the descriptions cannot drift from the
+ * modules.  One that will not load is still listed, with the reason.
+ *
+ * Returns: (transfer full) (element-type GowlFoundModule)
+ */
+static GPtrArray *
+gowl_scan_modules(void)
+{
+	g_auto(GStrv)  dirs = gowl_module_search_dirs();
+	GPtrArray     *found;
+	GHashTable    *by_name;
+	gint           i;
+
+	found = g_ptr_array_new_with_free_func(found_module_free);
+	by_name = g_hash_table_new(g_str_hash, g_str_equal);
+
+	for (i = 0; dirs != NULL && dirs[i] != NULL; i++) {
+		GDir        *dir;
+		const gchar *entry;
+
+		dir = g_dir_open(dirs[i], 0, NULL);
+		if (dir == NULL)
+			continue;
+
+		while ((entry = g_dir_read_name(dir)) != NULL) {
+			GowlFoundModule *m;
+			g_autofree gchar *name = NULL;
+			gchar *path;
+
+			if (!g_str_has_suffix(entry, ".so"))
+				continue;
+			name = g_strndup(entry, strlen(entry) - 3);
+			path = g_build_filename(dirs[i], entry, NULL);
+
+			m = g_hash_table_lookup(by_name, name);
+			if (m != NULL) {
+				/* A copy further down the path: it will never be
+				 * loaded, and saying so is the whole point of -ex. */
+				g_ptr_array_add(m->shadowed, path);
+				continue;
+			}
+
+			m = g_new0(GowlFoundModule, 1);
+			m->name = g_strdup(name);
+			m->path = path;
+			m->shadowed = g_ptr_array_new_with_free_func(g_free);
+			g_ptr_array_add(found, m);
+			g_hash_table_insert(by_name, m->name, m);
+		}
+		g_dir_close(dir);
+	}
+	g_hash_table_destroy(by_name);
+
+	/* Ask each one what it is. */
+	for (i = 0; i < (gint)found->len; i++) {
+		GowlFoundModule   *m = g_ptr_array_index(found, i);
+		GowlModuleManager *mgr;
+		GError            *err = NULL;
+
+		mgr = gowl_module_manager_new();
+		if (gowl_module_manager_load_module(mgr, m->path, &err)) {
+			/* GowlModuleInfo, NOT GowlModule: the manager hands out
+			 * descriptions, not the instances. */
+			GList *infos = gowl_module_manager_get_modules(mgr);
+
+			if (infos != NULL) {
+				const gchar *d;
+
+				d = gowl_module_info_get_description(
+					(const GowlModuleInfo *)infos->data);
+				m->description = g_strdup(d != NULL ? d : "");
+			}
+			g_list_free_full(infos, (GDestroyNotify)gowl_module_info_free);
+		} else {
+			m->error = g_strdup(err != NULL ? err->message : "load failed");
+			g_clear_error(&err);
+		}
+		/* One manager per module: a module that aborts on load takes
+		 * only itself down, and nothing here is ever activated. */
+		g_object_unref(mgr);
+	}
+
+	g_ptr_array_sort(found, found_module_cmp);
+	return found;
+}
+
 /**
  * find_builtin_module:
  * @name: module name to look up
@@ -418,6 +632,14 @@ find_builtin_module(const gchar *name)
 			return &builtin_modules[i];
 	}
 
+	/*
+	 * Not every module needs an entry here.  The table exists for the
+	 * few whose config is more than an on switch -- autostart's command
+	 * list, the cube's angles -- and a module that has nothing to say
+	 * beyond `enabled: true' should not have to be listed to be usable
+	 * with --modules.  That expectation is what let the table drift out
+	 * of step with modules/ in the first place.
+	 */
 	return NULL;
 }
 
@@ -492,8 +714,18 @@ generate_yaml_with_modules(const gchar *modules_csv)
 		if (bmod != NULL) {
 			g_print("%s", bmod->yaml_snippet);
 		} else {
-			g_printerr("warning: unknown module '%s'\n",
-			           mod_names[i]);
+			/* No entry in the table only means the module has nothing
+			 * to configure beyond being on.  Refusing to emit anything
+			 * for it -- which is what this did -- made half the
+			 * catalogue unreachable from --modules. */
+			g_autofree gchar *path = gowl_module_path_for(mod_names[i]);
+
+			if (path != NULL) {
+				g_print("  %s:\n    enabled: true\n", mod_names[i]);
+			} else {
+				g_printerr("warning: no module '%s' on the search path\n",
+				           mod_names[i]);
+			}
 		}
 	}
 
@@ -552,8 +784,17 @@ generate_c_with_modules(const gchar *modules_csv)
 			continue;
 
 		bmod = find_builtin_module(mod_names[i]);
-		if (bmod != NULL)
+		if (bmod != NULL) {
 			g_print("%s", bmod->c_snippet);
+		} else {
+			g_autofree gchar *path = gowl_module_path_for(mod_names[i]);
+
+			if (path != NULL)
+				g_print(" *   - %s\n", mod_names[i]);
+			else
+				g_printerr("warning: no module '%s' on the search path\n",
+				           mod_names[i]);
+		}
 	}
 
 	g_print(
@@ -592,22 +833,66 @@ generate_c_with_modules(const gchar *modules_csv)
  * Prints all known modules with a short summary.
  */
 static void
-print_module_list(void)
+print_module_list(gboolean verbose)
 {
-	gint i;
+	g_autoptr(GPtrArray) found = NULL;
+	g_auto(GStrv)        dirs = NULL;
+	guint                i;
+	gint                 d;
+
+	found = gowl_scan_modules();
+	dirs = gowl_module_search_dirs();
 
 	g_print("Available gowl modules:\n\n");
-	g_print("  %-18s %s\n", "MODULE", "DESCRIPTION");
-	g_print("  %-18s %s\n", "------", "-----------");
-
-	for (i = 0; builtin_modules[i].name != NULL; i++) {
-		g_print("  %-18s %s\n",
-		        builtin_modules[i].name,
-		        builtin_modules[i].description);
+	if (verbose) {
+		g_print("  %-18s %-52s %s\n", "MODULE", "DESCRIPTION", "PATH");
+		g_print("  %-18s %-52s %s\n", "------", "-----------", "----");
+	} else {
+		g_print("  %-18s %s\n", "MODULE", "DESCRIPTION");
+		g_print("  %-18s %s\n", "------", "-----------");
 	}
 
-	g_print("\nUse --modules MODULE1,MODULE2 with --generate-yaml-config\n"
-	        "or --generate-c-config to include modules in generated config.\n");
+	for (i = 0; i < found->len; i++) {
+		GowlFoundModule *m = g_ptr_array_index(found, i);
+		const gchar *desc;
+
+		desc = m->error != NULL ? "(will not load)"
+		     : (m->description != NULL && *m->description != '\0')
+		       ? m->description : "";
+
+		if (verbose) {
+			guint k;
+
+			g_print("  %-18s %-52s %s\n", m->name, desc, m->path);
+			if (m->error != NULL)
+				g_print("  %-18s   %s\n", "", m->error);
+			/* A second copy further down the path never loads.  It is
+			 * not an error and nothing else would show it, which is
+			 * why it is here. */
+			for (k = 0; k < m->shadowed->len; k++) {
+				g_print("  %-18s   shadowed: %s\n", "",
+				        (const gchar *)g_ptr_array_index(m->shadowed, k));
+			}
+		} else {
+			g_print("  %-18s %s\n", m->name, desc);
+		}
+	}
+
+	if (found->len == 0)
+		g_print("  (none found)\n");
+
+	g_print("\nSearched, in order:\n");
+	for (d = 0; dirs != NULL && dirs[d] != NULL; d++)
+		g_print("  %d. %s\n", d + 1, dirs[d]);
+	if (dirs == NULL || dirs[0] == NULL)
+		g_print("  (no module directory exists)\n");
+
+	g_print("\n%u module(s).  Use --modules MODULE1,MODULE2 with "
+	        "--generate-yaml-config\n"
+	        "or --generate-c-config to include modules in generated "
+	        "config.\n", found->len);
+	if (!verbose)
+		g_print("--list-modules-ex also shows where each one is.\n");
 }
 
 /* Default C config template for --generate-c-config */
@@ -703,6 +988,7 @@ main(int argc, char *argv[])
 	gboolean generate_yaml = FALSE;
 	gboolean generate_c = FALSE;
 	gboolean list_modules = FALSE;
+	gboolean list_modules_ex = FALSE;
 	gboolean no_c_config = FALSE;
 	gboolean no_yaml_config = FALSE;
 	gboolean recompile = FALSE;
@@ -734,6 +1020,8 @@ main(int argc, char *argv[])
 			"MOD1,MOD2" },
 		{ "list-modules", 0, 0, G_OPTION_ARG_NONE, &list_modules,
 			"List available modules with descriptions", NULL },
+		{ "list-modules-ex", 0, 0, G_OPTION_ARG_NONE, &list_modules_ex,
+		  "List available modules with the file each would load from", NULL },
 		{ "config", 0, 0, G_OPTION_ARG_FILENAME, &config_path,
 			"Override YAML config path", "PATH" },
 		{ "c-config", 0, 0, G_OPTION_ARG_FILENAME, &c_config_path,
@@ -780,9 +1068,11 @@ main(int argc, char *argv[])
 		"Config precedence (lowest to highest):\n"
 		"  Built-in defaults < YAML config < C config < CLI arguments\n"
 		"\n"
-		"Modules are loaded from:\n"
+		"Modules are loaded from, in order:\n"
 		"  1. <exe-dir>/modules/ (development)\n"
 		"  2. " GOWL_MODULEDIR " (installed)\n"
+		"The first directory with a module wins.  --list-modules-ex\n"
+		"shows which copy of each would load, and what it shadows.\n"
 		"\n"
 		"C config cache: $XDG_CACHE_HOME/gowl/ (compiled .so files)");
 	g_option_context_add_main_entries(opt_ctx, entries, NULL);
@@ -868,9 +1158,9 @@ main(int argc, char *argv[])
 		goto cleanup;
 	}
 
-	/* Handle --list-modules */
-	if (list_modules) {
-		print_module_list();
+	/* Handle --list-modules / --list-modules-ex */
+	if (list_modules || list_modules_ex) {
+		print_module_list(list_modules_ex);
 		ret = 0;
 		goto cleanup;
 	}
@@ -1037,25 +1327,15 @@ main(int argc, char *argv[])
 	 * This prevents duplicates and respects the enabled flag.
 	 */
 	{
-		g_autofree gchar *dev_mod_dir = NULL;
-		g_autofree gchar *bin_dir = NULL;
-		g_autofree gchar *exe_path = NULL;
-		const gchar *search_dirs[3] = { NULL, NULL, NULL };
-		gint n_dirs = 0;
+		/* The same path --list-modules reports, from the same function:
+		 * a listing that does not match what would be loaded is worse
+		 * than no listing. */
+		g_auto(GStrv) search_dirs = gowl_module_search_dirs();
+		gint n_dirs = search_dirs != NULL
+			? (gint)g_strv_length(search_dirs) : 0;
 		GHashTable *enabled_modules;
 		GHashTableIter iter;
 		gpointer key, value;
-
-		/* Build ordered list of module search directories */
-		exe_path = g_file_read_link("/proc/self/exe", NULL);
-		if (exe_path != NULL) {
-			bin_dir = g_path_get_dirname(exe_path);
-			dev_mod_dir = g_build_filename(bin_dir, "modules", NULL);
-			if (g_file_test(dev_mod_dir, G_FILE_TEST_IS_DIR))
-				search_dirs[n_dirs++] = dev_mod_dir;
-		}
-		if (g_file_test(GOWL_MODULEDIR, G_FILE_TEST_IS_DIR))
-			search_dirs[n_dirs++] = GOWL_MODULEDIR;
 
 		/* Collect the set of module names with enabled: true */
 		enabled_modules = gowl_config_get_all_module_configs(config);

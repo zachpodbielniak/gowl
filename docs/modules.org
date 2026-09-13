@@ -619,6 +619,12 @@ The =configure()= method receives a =gpointer= to the config data structure, whi
 :END:
 Gowl ships with several modules in the =modules/= directory:
 
+*This table is a summary and can go stale; =gowl --list-modules= cannot.*
+It reports what is actually on the search path, with each module's own
+description, and =gowl --list-modules-ex= adds the file each one would be
+loaded from --- which is the only way to see that one copy is shadowing
+another.
+
 | Module           | Description                                           |
 |------------------+-------------------------------------------------------|
 | =tile=           | Master/stack tiling, including vertical split          |
@@ -658,6 +664,11 @@ Gowl ships with several modules in the =modules/= directory:
 | =osd=            | Centred level overlay for volume, brightness and mic  |
 | =clipboard=      | History of everything that has been on the clipboard  |
 | =recording=      | Record an output, a window or a region                |
+| =wallpaper=      | Desktop wallpaper, per tag and per output             |
+| =roundcorners=   | Rounded window corners drawn through the decorator    |
+| =windowrules=    | Float/tag/monitor rules and the float-nudging actions |
+| =screenlock=     | In-process lock screen with PAM (see also =gowl-lock=) |
+| =mcp=            | MCP server for AI control (needs an MCP=1 build)      |
 
 *** The clipboard module
 

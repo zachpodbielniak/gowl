@@ -168,6 +168,21 @@ Each module enabled in the YAML config is looked up as =<name>.so= in, in order:
 1. =<exe-dir>/modules/= -- next to the running binary; =build/release/modules/= in a development tree
 2. =GOWL_MODULEDIR= -- the compile-time =$(LIBDIR)/gowl/modules= (=/usr/local/lib/gowl/modules/= with the default prefix)
 
+The first directory that has a given name wins, so a development build
+shadows an installed copy.  =gowl_module_search_dirs()= in =src/main.c=
+is the single definition of that order, used both by the loader and by
+=--list-modules=; =--list-modules-ex= prints the file each module would
+be loaded from and names the copies it shadows, which is not visible any
+other way and is exactly what makes a fix appear not to have taken.
+
+*The listing is produced by looking, not from a list.*  It used to be a
+table in =src/main.c=, and it drifted: by the time anybody checked it was
+missing six of the twelve layout modules and a third of everything else,
+which made it look as though those layouts were not modules at all.
+Nothing failed --- a stale list still prints --- so
+=tests/test-list-modules.sh= compares the output against the module
+directory.
+
 The first directory that has the file wins. There is no home-directory search; =gowl --help= prints the resolved list.
 
 ** Interface-Based Hook System

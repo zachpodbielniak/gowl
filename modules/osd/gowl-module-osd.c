@@ -331,6 +331,13 @@ static gboolean osd_activate(GowlModule *self) { (void)self; return TRUE; }
 static void osd_deactivate(GowlModule *self) { osd_detach((GowlOsd *)self); }
 static const gchar *osd_name(GowlModule *self) { (void)self; return "osd"; }
 
+static const gchar *
+osd_desc(GowlModule *module)
+{
+	(void)module;
+	return "Centred on-screen level for volume, brightness and the mic";
+}
+
 static void
 osd_finalize(GObject *object)
 {
@@ -346,6 +353,7 @@ gowl_osd_class_init(GowlOsdClass *klass)
 	module->activate = osd_activate;
 	module->deactivate = osd_deactivate;
 	module->get_name = osd_name;
+	module->get_description = osd_desc;
 	G_OBJECT_CLASS(klass)->finalize = osd_finalize;
 }
 

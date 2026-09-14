@@ -41,6 +41,7 @@
 #include <drm_fourcc.h>
 #include <linux/input-event-codes.h>
 #include <wlr/render/wlr_texture.h>
+#include <wlr/render/swapchain.h>
 #include <wlr/types/wlr_damage_ring.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_pointer_gestures_v1.h>
@@ -7053,6 +7054,175 @@ on_gamma_control_set_gamma(struct wl_listener *listener, void *data)
 	wlr_output_schedule_frame(event->output);
 }
 
+/*
+ * ── The PQ encode ────────────────────────────────────────────────────
+ *
+ * An output in HDR is being driven in ST.2084 PQ, where a code value is
+ * an ABSOLUTE luminance rather than a fraction of the display's maximum.
+ * Committing an image description therefore changes what every number
+ * already in the framebuffer means, and something has to restate them.
+ *
+ * wlroots does that in the renderer and only under Vulkan.  gowl needs
+ * GLES2 for every one of its effects, so on this renderer it does the
+ * encode itself: the scene renders into one swapchain, a single
+ * full-screen pass (fx/gowl-fx-pq.c) states it correctly in PQ into a
+ * second, and that is what gets committed.
+ *
+ * Without it sRGB white reaches the panel as a request for 10,000
+ * candelas instead of 203, which is most of what HDR costs in battery
+ * and is why the one application that encodes itself correctly looks
+ * dark beside everything that does not.
+ */
+
+static gboolean
+monitor_pq_wanted(GowlMonitor *m)
+{
+	if (m == NULL || m->compositor == NULL || m->wlr_output == NULL)
+		return FALSE;
+	if (!m->hdr_enabled)
+		return FALSE;
+	/* A renderer that converts colour has already done this properly and
+	 * per surface, which is better than anything done here. */
+	if (gowl_renderer_can_color_manage(m->compositor->renderer))
+		return FALSE;
+	return gowl_fx_gl_supported(m->compositor->renderer);
+}
+
+/*
+ * The context and the two swapchains, made on first use.
+ *
+ * Both chains go through wlr_output_configure_primary_swapchain() rather
+ * than being allocated by hand, so they carry whatever format and
+ * modifiers this output is actually scanning out -- ten bits per channel
+ * while it is in HDR, without this code having to know that.
+ */
+static gboolean
+monitor_pq_prepare(GowlMonitor *m)
+{
+	GowlCompositor *self = m->compositor;
+
+	if (self->pq_gl == NULL) {
+		if (self->pq_gl_tried)
+			return FALSE;
+		self->pq_gl_tried = TRUE;
+		self->pq_gl = gowl_fx_gl_new(self->renderer);
+		if (self->pq_gl == NULL) {
+			g_warning("%s: no GL context for the PQ encode; HDR will "
+			          "show SDR content uncorrected",
+			          gowl_monitor_get_name(m));
+			return FALSE;
+		}
+	}
+
+	if (!wlr_output_configure_primary_swapchain(m->wlr_output, NULL,
+	                                            &m->pq_scene))
+		return FALSE;
+	if (!wlr_output_configure_primary_swapchain(m->wlr_output, NULL,
+	                                            &m->pq_out))
+		return FALSE;
+	return m->pq_scene != NULL && m->pq_out != NULL;
+}
+
+/*
+ * Encode what the scene just drew, and commit that instead.
+ *
+ * The whole buffer is rewritten, so the damage goes with it: a partial
+ * damage region against a buffer from a rotating swapchain would leave
+ * whatever that buffer held two frames ago showing through everywhere
+ * the region did not cover.
+ */
+static void
+monitor_pq_encode(GowlMonitor *m, struct wlr_output_state *state)
+{
+	GowlCompositor      *self = m->compositor;
+	struct wlr_buffer   *dst;
+	struct wlr_texture  *tex;
+	GowlFxTexture        scene;
+	GowlFxPass          *pass;
+	pixman_region32_t    full;
+	const GowlEdidHdr   *edid;
+	gdouble              peak;
+	gboolean             ok;
+
+	if ((state->committed & WLR_OUTPUT_STATE_BUFFER) == 0
+	    || state->buffer == NULL)
+		return;
+
+	dst = wlr_swapchain_acquire(m->pq_out);
+	if (dst == NULL)
+		return;
+
+	tex = wlr_texture_from_buffer(self->renderer, state->buffer);
+	if (tex == NULL) {
+		wlr_buffer_unlock(dst);
+		return;
+	}
+	memset(&scene, 0, sizeof(scene));
+	ok = gowl_fx_texture_store(self->pq_gl, &scene, tex,
+	                           state->buffer->width, state->buffer->height);
+	wlr_texture_destroy(tex);
+	if (!ok) {
+		wlr_buffer_unlock(dst);
+		return;
+	}
+
+	/* The panel's own peak, so the encode stops where the display does
+	 * rather than handing it a number it will clip -- clipping in the
+	 * PANEL is what pins the backlight. */
+	edid = gowl_monitor_get_edid_hdr(m);
+	peak = (edid != NULL && edid->max_luminance > 0.0)
+		? edid->max_luminance : 0.0;
+
+	pass = gowl_fx_pass_begin(self->pq_gl, dst);
+	if (pass != NULL) {
+		ok = gowl_fx_pass_pq(pass, &scene,
+		                     gowl_config_get_hdr_sdr_white(self->config),
+		                     peak);
+		gowl_fx_pass_end(pass);
+	} else {
+		ok = FALSE;
+	}
+	gowl_fx_texture_drop(self->pq_gl, &scene);
+
+	if (!ok) {
+		/* Said once: an output that cannot encode draws every frame
+		 * uncorrected, and one line per frame helps nobody. */
+		if (!m->pq_warned) {
+			m->pq_warned = TRUE;
+			g_warning("%s: the PQ encode would not run, so HDR is "
+			          "showing SDR content uncorrected",
+			          gowl_monitor_get_name(m));
+		}
+		wlr_buffer_unlock(dst);
+		return;
+	}
+
+	pixman_region32_init_rect(&full, 0, 0,
+	                          (unsigned)dst->width, (unsigned)dst->height);
+	wlr_output_state_set_buffer(state, dst);
+	wlr_output_state_set_damage(state, &full);
+	pixman_region32_fini(&full);
+	wlr_buffer_unlock(dst);
+}
+
+void
+gowl_compositor_drop_pq_encode(GowlCompositor *self)
+{
+	GList *l;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	for (l = self->monitors; l != NULL; l = l->next) {
+		GowlMonitor *m = (GowlMonitor *)l->data;
+
+		g_clear_pointer(&m->pq_scene, wlr_swapchain_destroy);
+		g_clear_pointer(&m->pq_out, wlr_swapchain_destroy);
+		m->pq_warned = FALSE;
+	}
+	g_clear_pointer(&self->pq_gl, gowl_fx_gl_free);
+	self->pq_gl_tried = FALSE;
+}
+
 /* Refused commits in a row before frames go on a timer rather than on
  * the idle loop. */
 #define GOWL_FRAME_FAILURES_BEFORE_BACKOFF (3)
@@ -7158,10 +7328,22 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 	          && !m->gamma_dirty;
 	if (!skipped) {
 		struct wlr_output_state state;
+		struct wlr_scene_output_state_options opts;
+		struct wlr_scene_output_state_options *optp = NULL;
 
 		wlr_output_state_init(&state);
+
+		/* On an HDR output this renderer cannot colour-manage, the
+		 * scene goes into a buffer of ours so the encode below has
+		 * something to read. */
+		if (monitor_pq_wanted(m) && monitor_pq_prepare(m)) {
+			memset(&opts, 0, sizeof(opts));
+			opts.swapchain = m->pq_scene;
+			optp = &opts;
+		}
+
 		if (!wlr_scene_output_build_state(m->scene_output, &state,
-		                                   NULL)) {
+		                                   optp)) {
 			wlr_output_state_finish(&state);
 			/* Nothing was rendered, so `frame-rendered' must not
 			 * fire: the recording module re-arms a frame from that
@@ -7172,6 +7354,9 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 				"the scene would not build a frame");
 			goto frame_done;
 		}
+		if (optp != NULL)
+			monitor_pq_encode(m, &state);
+
 		monitor_frame_presentation(m, &state);
 
 		if (m->gamma_dirty && m->compositor != NULL
@@ -7267,6 +7452,10 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 
 	/* And the backoff timer, which holds a pointer to this monitor. */
 	g_clear_handle_id(&m->frame_retry_id, g_source_remove);
+
+	/* And the encode's buffers, before the renderer that made them. */
+	g_clear_pointer(&m->pq_scene, wlr_swapchain_destroy);
+	g_clear_pointer(&m->pq_out, wlr_swapchain_destroy);
 
 	/* Remove from compositor's monitor list */
 	self->monitors = g_list_remove(self->monitors, m);
@@ -7866,8 +8055,10 @@ gpu_reset_swap(void *data)
 		return;
 	}
 
-	/* 2. Effects let go of what they hold on the old pair. */
+	/* 2. Effects let go of what they hold on the old pair, and so does
+	 *    the PQ encode -- its swapchains came from the old allocator. */
 	gowl_effects_release(self);
+	gowl_compositor_drop_pq_encode(self);
 
 	/* 3. The swap, and the lost signal follows the renderer. */
 	old_renderer = self->renderer;

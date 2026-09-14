@@ -243,6 +243,17 @@
  */
 #define GOWL_CONFIG_DEFAULT_HDR_UNMANAGED       (TRUE)
 #define GOWL_CONFIG_DEFAULT_HDR_ADVERTISE_PQ    (FALSE)
+/*
+ * Where SDR diffuse white lands in the HDR signal, in cd/m2.
+ *
+ * 203 is ITU-R BT.2408's reference white, which is what the rest of the
+ * industry grades and masters against, and it is the number that decides
+ * whether an HDR desktop idles or runs the panel at its peak.  It is a
+ * key rather than a constant because it is also the one honest brightness
+ * control an HDR output has: the backlight does nothing there, so this is
+ * what "make the desktop dimmer" means.
+ */
+#define GOWL_CONFIG_DEFAULT_HDR_SDR_WHITE       (203.0)
 #define GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE   ("smart")
 #define GOWL_CONFIG_DEFAULT_INPUT_RECORDING     (FALSE)
 #define GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS ""
@@ -458,6 +469,7 @@ struct _GowlConfig {
 	gboolean allow_tearing;
 	gboolean hdr_unmanaged;
 	gboolean hdr_advertise_pq;
+	gdouble  hdr_sdr_white;
 	gchar   *focus_on_activate;
 	gboolean input_recording;
 	gchar   *input_recording_deny_apps;
@@ -1489,6 +1501,7 @@ gowl_config_init(GowlConfig *self)
 	self->allow_tearing       = GOWL_CONFIG_DEFAULT_ALLOW_TEARING;
 	self->hdr_unmanaged       = GOWL_CONFIG_DEFAULT_HDR_UNMANAGED;
 	self->hdr_advertise_pq    = GOWL_CONFIG_DEFAULT_HDR_ADVERTISE_PQ;
+	self->hdr_sdr_white       = GOWL_CONFIG_DEFAULT_HDR_SDR_WHITE;
 	self->focus_on_activate   = g_strdup(GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE);
 	self->input_recording     = GOWL_CONFIG_DEFAULT_INPUT_RECORDING;
 	self->input_recording_deny_apps =
@@ -1798,7 +1811,7 @@ gowl_config_apply_palette_mapping(GowlConfig *self, YamlMapping *mapping)
 static const gchar *const top_level_keys[] = {
 	"ignore_yaml", "log-level", "log-file", "repeat-rate", "repeat-delay",
 	"terminal", "menu", "sloppyfocus", "manage_lid", "idle-timeout",
-	"dpms-timeout", "allow-tearing", "hdr-unmanaged", "hdr-advertise-pq",
+	"dpms-timeout", "allow-tearing", "hdr-unmanaged", "hdr-advertise-pq", "hdr-sdr-white",
 	"focus-on-activate",
 	"input-recording", "input-recording-deny-apps",
 	"evaluate_gowl_config_with_cmacs", "evaluate-gowl-config-with-cmacs",
@@ -2991,6 +3004,12 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "hdr-advertise-pq")) {
 		self->hdr_advertise_pq = yaml_mapping_get_boolean_member(
 			mapping, "hdr-advertise-pq");
+	}
+	if (yaml_mapping_has_member(mapping, "hdr-sdr-white")) {
+		/* Below about 40 the desktop is unreadable and above a few
+		 * hundred it is the uncorrected picture again. */
+		self->hdr_sdr_white = CLAMP(yaml_mapping_get_double_member(
+			mapping, "hdr-sdr-white"), 40.0, 600.0);
 	}
 	if (yaml_mapping_has_member(mapping, "allow-tearing")) {
 		gboolean val = yaml_mapping_get_boolean_member(mapping, "allow-tearing");
@@ -6777,6 +6796,21 @@ gowl_config_get_hdr_advertise_pq(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_HDR_ADVERTISE_PQ);
 	return self->hdr_advertise_pq;
+}
+
+gdouble
+gowl_config_get_hdr_sdr_white(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HDR_SDR_WHITE);
+	return self->hdr_sdr_white;
+}
+
+void
+gowl_config_set_hdr_sdr_white(GowlConfig *self, gdouble nits)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->hdr_sdr_white = CLAMP(nits, 40.0, 600.0);
 }
 
 gint

@@ -1715,15 +1715,38 @@ lives behind two renderer flags --- =input_color_transform= and
 construction and the GLES2 render pass never reads a surface's transfer
 function, primaries or luminance multiplier at all.
 
-So gowl OFFERS HDR anyway, and says what is missing rather than
-preventing it: the toggle works, the log says the renderer does not
-convert colour, and the bar's toast says to expect everything brighter
-and the panel at its peak.
+*So gowl does the conversion itself.* Since it cannot ask the renderer
+for it, the scene is rendered into a buffer of gowl's own and a single
+full-screen pass states it correctly in PQ before the commit: sRGB EOTF,
+BT.709 to BT.2020 primaries, scaled so SDR white lands on the reference
+white an HDR signal uses, clamped to the panel's own peak out of its
+EDID, then the inverse PQ EOTF. =src/fx/gowl-fx-pq.c=, and
+=tests/test-pq-encode.c= checks it against ST.2084's own constants
+rather than against a picture.
 
-| Property            | Type | Default | Description |
-|---------------------+------+---------+-------------|
-| =hdr-unmanaged=     | bool | =true=  | Allow HDR where the compositor cannot convert colour for it |
-| =hdr-advertise-pq=  | bool | =false= | Also tell CLIENTS that PQ and BT.2020 content is accepted |
+That is what stops the panel running at its peak, and it is most of what
+HDR was costing in battery. It is an OUTPUT transform only: it states an
+all-SDR desktop correctly in an HDR signal, and gives a client no way to
+deliver PQ content of its own. For that there is still no substitute for
+a renderer that colour-manages.
+
+If the encode cannot run --- a driver that will not compile the shader,
+a format the effect layer cannot render into --- the output falls back
+to committing the scene unencoded, which is what it did before this
+existed, and says so once in the log.
+
+| Property            | Type  | Default | Description |
+|---------------------+-------+---------+-------------|
+| =hdr-sdr-white=     | float | =203=   | Where SDR white lands in the HDR signal, in cd/m²; 40 to 600 |
+| =hdr-unmanaged=     | bool  | =true=  | Allow HDR where the compositor cannot convert colour for it |
+| =hdr-advertise-pq=  | bool  | =false= | Also tell CLIENTS that PQ and BT.2020 content is accepted |
+
+*=hdr-sdr-white= is the brightness control an HDR output has*, and the
+only honest one: the backlight decides nothing in PQ, so a slider that
+moves it is a slider that does nothing (see
+[[file:bar.org][Display]]). 203 is ITU-R BT.2408's reference white, which
+is what the rest of the industry grades against; lower it for a dimmer
+desktop, raise it for a brighter one. Read live, so a reload applies it.
 
 *Those are two decisions and not one.* =hdr-unmanaged: false= makes gowl
 refuse HDR on such a renderer, reporting =hdr_capable: false=; that is

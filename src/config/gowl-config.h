@@ -1856,6 +1856,16 @@ gboolean     gowl_config_get_hdr_unmanaged (GowlConfig *self);
  * darker than the desktop around it. */
 gboolean     gowl_config_get_hdr_advertise_pq (GowlConfig *self);
 
+/* Where SDR diffuse white lands in the HDR signal, in cd/m2 (40 to 600,
+ * default 203 -- ITU-R BT.2408's reference white).
+ *
+ * This is the number that decides whether an HDR desktop idles or runs
+ * the panel at its peak, and on an HDR output it is also the only honest
+ * brightness control there is: the backlight does nothing in PQ, so this
+ * is what "make the desktop dimmer" means. */
+gdouble      gowl_config_get_hdr_sdr_white (GowlConfig *self);
+void         gowl_config_set_hdr_sdr_white (GowlConfig *self, gdouble nits);
+
 /* Drop shadows under windows. */
 gboolean     gowl_config_get_shadow (GowlConfig *self);
 /* Shadow softness in pixels, 0 to 128. */

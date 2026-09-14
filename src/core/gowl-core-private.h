@@ -62,6 +62,8 @@
 #include <wlr/backend/session.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
+
+#include "fx/gowl-fx.h"
 #include <wlr/render/drm_format_set.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_subcompositor.h>
@@ -214,6 +216,10 @@ struct _GowlCompositor {
 	struct wlr_backend           *backend;
 	struct wlr_session           *session;
 	struct wlr_renderer          *renderer;
+	/* The GL context the PQ encode borrows, made on first use and let go
+	 * of with gowl_compositor_drop_pq_encode(). */
+	GowlFxGl                     *pq_gl;
+	gboolean                      pq_gl_tried;
 	struct wlr_allocator         *allocator;
 	struct wlr_scene             *scene;
 	struct wlr_compositor        *wlr_compositor;
@@ -686,6 +692,20 @@ struct _GowlMonitor {
 	 * time, with nothing in any log. */
 	guint    commit_failures;
 	guint    frame_retry_id;
+	/*
+	 * The PQ encode: the scene is rendered into `pq_scene' and then
+	 * encoded into `pq_out', which is what gets committed.  Two
+	 * swapchains rather than one because a shader cannot read and write
+	 * the same buffer, and both are made with
+	 * wlr_output_configure_primary_swapchain() so they carry whatever
+	 * format and modifiers this output is actually scanning out.
+	 *
+	 * Only ever allocated on an output in HDR under a renderer that
+	 * cannot colour-manage, which is the only case the encode is for.
+	 */
+	struct wlr_swapchain *pq_scene;
+	struct wlr_swapchain *pq_out;
+	gboolean              pq_warned;
 	guint32  hdr_prev_render_format;
 	/* The DRM fourcc HDR is actually being driven at, 0 for "whatever
 	 * the output was already using" -- which means 8 bits per channel,
@@ -1085,6 +1105,19 @@ gboolean gowl_compositor_wake_outputs      (GowlCompositor *self);
  * Returns: %TRUE when both the input and output colour transforms work
  */
 gboolean gowl_renderer_can_color_manage   (struct wlr_renderer *renderer);
+
+/**
+ * gowl_compositor_drop_pq_encode:
+ * @self: a #GowlCompositor
+ *
+ * Lets go of everything the PQ encode holds on the current renderer: the
+ * GL context it borrowed and every output's pair of swapchains.
+ *
+ * Called on a GPU reset, alongside gowl_effects_release(), and at
+ * shutdown.  Buffers outliving the renderer they came from is the one
+ * way this can take the session down rather than merely the picture.
+ */
+void gowl_compositor_drop_pq_encode       (GowlCompositor *self);
 
 /* keyboard-shortcuts-inhibit: gowl-shortcuts-inhibit.c */
 void     gowl_shortcuts_inhibit_init       (GowlCompositor *self);

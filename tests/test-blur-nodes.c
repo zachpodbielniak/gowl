@@ -1081,6 +1081,93 @@ test_only_one_backdrop_draws(void)
 	rig_down(&r);
 }
 
+/*
+ * An HDR output gets its picture ENCODED, and not merely relabelled.
+ *
+ * Committing an image description tells the panel to read what follows
+ * as PQ, where a code value is an absolute number of candelas rather
+ * than a fraction of the display's maximum.  Nothing in wlroots then
+ * restates the framebuffer for that meaning unless the renderer can
+ * convert colour, which only its Vulkan one does -- so gowl encodes the
+ * finished scene itself, through a pair of swapchains of its own.
+ *
+ * What this asserts is that the path RUNS.  The arithmetic is pinned
+ * precisely in tests/test-pq-encode.c; the thing that can rot here is
+ * the plumbing quietly falling back -- a format the fx layer will not
+ * render into, a buffer it cannot sample -- and every one of those
+ * failures is designed to be survivable, which is to say silent.  An
+ * uncorrected HDR desktop looks like an HDR desktop.  It is merely far
+ * too bright, and it costs a laptop its afternoon.
+ *
+ * The headless output advertises neither BT.2020 nor PQ, so they are
+ * widened here; both are public members of struct wlr_output.
+ */
+static void
+test_an_hdr_output_is_encoded(void)
+{
+	Rig          r;
+	GowlMonitor *m;
+	guint        i;
+
+	if (!rig_up(&r, blur_alone)) {
+		rig_down(&r);
+		g_test_skip("no GLES2 compositor available");
+		return;
+	}
+	if (r.compositor->monitors == NULL) {
+		rig_down(&r);
+		g_test_skip("no output in this rig");
+		return;
+	}
+	m = (GowlMonitor *)r.compositor->monitors->data;
+
+	/* Nothing allocated while the output is in SDR: the encode is for
+	 * HDR alone and must not cost an ordinary session two swapchains. */
+	g_assert_null(m->pq_scene);
+	g_assert_null(m->pq_out);
+
+	/*
+	 * The flag is set directly rather than through
+	 * gowl_monitor_set_hdr(), which would be the honest thing if the
+	 * headless backend could take an HDR commit.  It cannot -- it
+	 * refuses every 10-bit format and the image description with it --
+	 * so going through the setter makes this case SKIP on every machine,
+	 * which is a test that tells nobody anything.
+	 *
+	 * Nothing is lost by reaching past it.  Whether a driver accepts a
+	 * PQ commit is the backend's business and fails loudly; the encode
+	 * path reads this one flag and is the half that fails silently.
+	 */
+	m->wlr_output->supported_primaries |= WLR_COLOR_NAMED_PRIMARIES_BT2020;
+	m->wlr_output->supported_transfer_functions |=
+		WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ;
+	m->hdr_enabled = TRUE;
+
+	/* The premise: if this renderer could convert colour, gowl would
+	 * rightly leave the job to it and there would be nothing to test. */
+	g_assert_false(gowl_monitor_hdr_color_managed(m));
+
+	for (i = 0; i < 40; i++) {
+		wlr_output_schedule_frame(m->wlr_output);
+		wl_event_loop_dispatch(r.compositor->event_loop, 5);
+	}
+
+	/*
+	 * Both chains exist, which only happens inside the frame path: the
+	 * scene was told to render into one of them and the encode acquired
+	 * from the other.  A fallback to the uncorrected picture leaves both
+	 * NULL, and leaves nothing else to see.
+	 */
+	g_assert_nonnull(m->pq_scene);
+	g_assert_nonnull(m->pq_out);
+	/* And it did not give up on the way: pq_warned is set exactly once,
+	 * by an encode that would not run. */
+	g_assert_false(m->pq_warned);
+
+	m->hdr_enabled = FALSE;
+	rig_down(&r);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1088,6 +1175,8 @@ main(int argc, char **argv)
 
 	g_test_add_func("/blur-nodes/only-one-backdrop",
 	                test_only_one_backdrop_draws);
+	g_test_add_func("/blur-nodes/hdr-is-encoded",
+	                test_an_hdr_output_is_encoded);
 	g_test_add_func("/blur-nodes/backdrop-style",
 	                test_backdrop_style_picks_the_module);
 	g_test_add_func("/blur-nodes/follow-the-window",

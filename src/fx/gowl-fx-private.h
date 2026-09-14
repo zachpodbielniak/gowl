@@ -185,6 +185,22 @@ typedef struct {
 	GLint  a_uv;
 } GowlFxRainProg;
 
+/*
+ * The PQ output encode (gowl-fx-pq.c).
+ *
+ * Built on first use like the rest, and its failure survivable: an HDR
+ * output then shows what it showed before this existed, which is wrong
+ * but is not a dead session.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_src;
+	GLint  u_white;
+	GLint  u_peak;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxPqProg;
+
 struct _GowlFxGl {
 	struct wlr_renderer *renderer;   /* borrowed */
 	EGLDisplay           display;
@@ -201,6 +217,8 @@ struct _GowlFxGl {
 	gboolean             water_tried;
 	GowlFxRainProg       rain;       /* likewise */
 	gboolean             rain_tried;
+	GowlFxPqProg         pq;         /* likewise */
+	gboolean             pq_tried;
 
 	GLuint               scratch_fbo;
 	GowlFxTexture        scratch_a;

@@ -719,6 +719,52 @@ gboolean gowl_fx_pass_rain (GowlFxPass             *pass,
                             const GowlFxRainParams *params,
                             const GowlFxRainClock  *clock);
 
+/* ── PQ output encode ────────────────────────────────────────────── */
+
+/**
+ * GOWL_FX_PQ_SDR_WHITE:
+ *
+ * Where SDR diffuse white sits in an HDR signal, in cd/m2.
+ *
+ * 203, from ITU-R BT.2408.  It is not a preference: PQ code values are
+ * absolute luminance, so an SDR desktop has to be told where its own
+ * white belongs, and 203 is the number the rest of the industry grades
+ * and masters against.
+ */
+#define GOWL_FX_PQ_SDR_WHITE (203.0)
+
+/**
+ * gowl_fx_pass_pq:
+ * @pass: a pass, begun on the buffer that will be committed to the output
+ * @scene: the composited desktop, sRGB-encoded, as a texture
+ * @sdr_white: where SDR white should land, in cd/m2; 0 means
+ *   %GOWL_FX_PQ_SDR_WHITE
+ * @peak: the panel's own peak luminance in cd/m2, from its EDID; 0 means
+ *   a conventional 1000
+ *
+ * Encodes an SDR desktop for an output being driven in BT.2020 and PQ:
+ * sRGB EOTF, BT.709 to BT.2020 primaries, scaled so white lands on
+ * @sdr_white and clamped to @peak, then the inverse PQ EOTF.
+ *
+ * This is what wlroots does in its renderer and only under Vulkan.  On
+ * the GLES2 renderer gowl needs for its effects, without it, an HDR
+ * output receives sRGB code values with PQ's meaning -- so white asks
+ * the panel for 10,000 cd/m2 instead of 203, the backlight runs at its
+ * peak, and any client that DOES encode correctly is the only correctly
+ * scaled window on the screen.
+ *
+ * An OUTPUT transform only: it states an all-SDR desktop correctly in an
+ * HDR signal, and gives a client no way to deliver PQ content of its
+ * own.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller commits the scene unencoded, as it did before
+ */
+gboolean gowl_fx_pass_pq (GowlFxPass          *pass,
+                          const GowlFxTexture *scene,
+                          gdouble              sdr_white,
+                          gdouble              peak);
+
 /* ── Scene visibility scratchpad ─────────────────────────────────── */
 
 /**

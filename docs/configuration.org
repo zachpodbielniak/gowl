@@ -531,6 +531,153 @@ nothing. It also sits above the bar, since a magnifier that magnified
 everything except the panel would be useless to somebody who needs it to
 read the panel.
 
+**** Window hints
+:PROPERTIES:
+:CUSTOM_ID: hints
+:END:
+
+A letter on every visible window; press it and that window takes focus.
+tmux's =C-b q= for a compositor. Opt in with =modules.hints.enabled:
+true=; CMacs loads it by default and binds it to =Super+q=.
+
+Standalone, bind it yourself --- it is an =ipc_command= rather than an
+action, so the key works whether or not the module is loaded:
+
+#+begin_src yaml
+keybinds:
+  "Super+q": { action: ipc_command, arg: "hints", desc: "Label the windows" }
+#+end_src
+
+***** Why, when =Super+j= already moves focus
+
+*Everything else is RELATIVE.* Next window, window to the left, next in
+the stack. Relative motion is fine with three windows and useless with
+twelve, because the cost of reaching a window grows with how far away it
+is --- and you have to count the hops by eye before you can start. A hint
+is ABSOLUTE and the cost is flat: one keystroke, whichever corner of
+whichever screen the window is in.
+
+That is the whole argument, and it says where the feature pays off. On a
+laptop with two windows it is slower than =Super+j=. On a 49-inch
+ultrawide with nine tiles, or three screens with a dozen between them, it
+is the only thing that scales.
+
+***** The letters do not move, and that is the feature
+
+A window's label depends on WHERE IT IS and on nothing else: not the
+order it was opened in, not the focus stack, not where it sits in the
+compositor's client list. Outputs left to right, and within an output the
+left column before the right.
+
+This is not a detail. If a window's letter changes between one press and
+the next, the overlay is a lookup table you have to READ every time ---
+and reading it is slower than counting hops was. It is only faster than
+the alternative once the letters have become muscle memory, and that
+needs them to be the same letters tomorrow.
+
+=tests/test-hints.c= opens the overlay, reverses the compositor's client
+list underneath it --- which is what a session of opening and closing
+windows does --- and requires every window to come back wearing the
+letter it had.
+
+The alphabet is the home row first for the same reason, so the first
+eight windows are under fingers that are already resting on them.
+
+***** Settings
+
+| Property               | Type   | Default                  | Description |
+|------------------------+--------+--------------------------+-------------|
+| =hints-keys=           | string | ="asdfghjklqwertyuiopzxcvbnm"= | The alphabet, home row first |
+| =hints-colors=         | string | ="mauve,green,peach,..."= | Badge colours, as PALETTE NAMES |
+| =hints-timeout=        | int    | =0=                      | Milliseconds before it gives up; =0= waits |
+| =hints-size=           | int    | =96=                     | Badge diameter in logical pixels, =16=--=512= |
+| =hints-border-width=   | int    | =3=                      | The coloured border on a labelled window, =0=--=32= |
+| =hints-scrim=          | float  | =0.40=                   | How far the window's own content is dimmed |
+| =hints-warp-pointer=   | bool   | =true=                   | Move the cursor into the chosen window |
+| =hints-current-output= | bool   | =false=                  | Label only the focused output's windows |
+
+***** =hints-keys= does two jobs
+
+It is the alphabet, and its LENGTH decides whether labels are one
+character or two. The overlay uses single keys while the alphabet is long
+enough for the windows on screen and pairs once it is not --- so a longer
+alphabet is how somebody with a great many windows keeps one-key hints,
+and a deliberately short one is how to test the pair path.
+
+All labels are the same length, which is what makes no label a prefix of
+another. With pairs, the first key narrows and dims the badges it has
+ruled out; =Backspace= takes it back, because a mistyped first key should
+not cost the whole overlay.
+
+*A repeated character is refused* and the default kept, with a warning.
+=hints-keys: "asdfa"= would give two windows the same label and leave one
+of them permanently unreachable, which looks like a bug in the overlay
+rather than a typo in a config.
+
+***** Colours come from the palette
+
+=hints-colors= is a comma-separated list of palette KEYS, not hex, so the
+overlay follows whatever [[#palette][=palette=]] is configured without
+knowing anything about Catppuccin --- and a config that defines its own
+=mauve= gets its own mauve here. The list is cycled when there are more
+windows than colours, and it is ordered for contrast between consecutive
+entries, since telling one badge from the badge next to it is the whole
+job.
+
+***** Three defaults that are not tmux's
+
+*=hints-timeout= is =0=, where =display-panes-time= is one second.* The
+tmux default is the most complained-about thing about the feature: the
+labels vanish while you are still looking for the one you want, and the
+only recovery is to press the key again. Waiting costs nothing here,
+because every key is swallowed while the overlay is up, so there is no
+state to get stuck in --- and =Escape= is right there. Set it to =1000=
+to get tmux's behaviour back.
+
+*=hints-warp-pointer= is on*, because =sloppyfocus= is.
+Focusing a window across the desk and leaving the cursor where it was
+means the next nudge of the mouse hands focus straight back to whatever
+it was sitting over, which makes the feature look broken in the one
+configuration most people are running.
+
+*It labels EVERY output*, not the focused one. Reaching a window on
+another screen in one keystroke is most of what it is for.
+=hints-current-output: true= narrows it.
+
+***** What it does not do
+
+*It does not change the view.* Only windows that are already visible get
+a label, so there is never a tag to switch to --- and switching one could
+only hide the other windows it had just drawn badges on. Choosing a
+window moves the keyboard and selects that window's output; the tags stay
+where they were. To jump to a window on another tag, that is what
+[[#switcher][the switcher]] and =gowl-msg= are for.
+
+*It is modal while it is up.* Every key is swallowed, matched or not: an
+unmatched keystroke reaching the window underneath would be a feature
+that occasionally types into your editor. =Escape=, a click, or any key
+that cannot begin a label cancels.
+
+*It costs nothing to open.* The badges are cairo into a raw buffer ---
+there is no capture and no shader, unlike [[#expo][the overview]] and
+[[#switcher][the switcher]], so it works on a machine with no GPU
+acceleration at all and cannot fail on a driver that will not compile
+something.
+
+***** Over IPC
+
+| Command                 | What it does |
+|-------------------------+--------------|
+| =hints=                 | Toggle. What =Super+q= runs |
+| =hints-show=            | Show, whether or not it is already up |
+| =hints-hide=            | Take it down |
+| =hints-select LABEL=    | Focus the window wearing =LABEL=; replies with its window id |
+| =hints-list=            | =LABEL ID TITLE= per line, for whatever is showing |
+
+=hints-list= is there so an embedder can draw its own picker over the
+same assignment rather than inventing a second one that disagrees with
+what is on screen.
+
 **** What shows through a translucent window
 :PROPERTIES:
 :CUSTOM_ID: window-backdrop

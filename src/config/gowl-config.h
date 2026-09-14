@@ -2181,6 +2181,64 @@ gdouble      gowl_config_get_snow_light (GowlConfig *self);
 gint         gowl_config_get_snow_frost (GowlConfig *self);
 gint         gowl_config_get_snow_frost_passes (GowlConfig *self);
 
+/* --- Window hints (modules/hints) ---
+ *
+ * The overlay that puts a letter on every visible window, tmux's
+ * `C-b q' for a compositor.  Lengths are LOGICAL pixels.
+ *
+ * `hints-keys' does double duty: it is the alphabet, and its LENGTH is
+ * what decides whether labels are one character or two.  The overlay
+ * uses single keys while the alphabet is long enough for the windows on
+ * screen and pairs once it is not, so a longer alphabet is how somebody
+ * with a great many windows keeps one-key hints. */
+
+/* The alphabet, home row first.  Matched case-insensitively and stored
+ * lowercase. */
+const gchar *gowl_config_get_hints_keys (GowlConfig *self);
+void         gowl_config_set_hints_keys (GowlConfig *self,
+                                         const gchar *keys);
+/* Whether @keys can label windows at all: at least two characters, all
+ * printable ASCII, none repeated.  A repeat would give two windows the
+ * same label and leave one of them unreachable. */
+gboolean     gowl_config_hints_keys_valid (const gchar *keys);
+
+/* The badge colours, as a comma-separated list of PALETTE NAMES rather
+ * than hex, so the overlay follows whatever flavour is configured.
+ * Cycled when there are more windows than colours. */
+const gchar *gowl_config_get_hints_colors (GowlConfig *self);
+void         gowl_config_set_hints_colors (GowlConfig *self,
+                                           const gchar *colors);
+
+/* How long the overlay stays up with no keystroke, in milliseconds; 0
+ * waits.  0 rather than tmux's 1000 on purpose: every key is swallowed
+ * while it is up, so waiting costs nothing and labels that vanish while
+ * somebody is still reading them do. */
+gint         gowl_config_get_hints_timeout (GowlConfig *self);
+void         gowl_config_set_hints_timeout (GowlConfig *self, gint ms);
+
+/* The badge diameter in logical pixels, 16 to 512.  Capped against the
+ * window at render time, so a small window still shows a legible
+ * letter. */
+gint         gowl_config_get_hints_size (GowlConfig *self);
+/* The coloured border around a labelled window, 0 to 32. */
+gint         gowl_config_get_hints_border_width (GowlConfig *self);
+/* How far the window's own content is dimmed under the overlay, 0 to
+ * 1. */
+gdouble      gowl_config_get_hints_scrim (GowlConfig *self);
+
+/* Whether choosing a window also moves the pointer into it.  On by
+ * default because `sloppyfocus' is: focusing a window across the desk
+ * and leaving the cursor behind means the next nudge of the mouse hands
+ * focus straight back to whatever it was sitting over. */
+gboolean     gowl_config_get_hints_warp_pointer (GowlConfig *self);
+void         gowl_config_set_hints_warp_pointer (GowlConfig *self,
+                                                 gboolean warp);
+
+/* Whether to label only the focused output's windows.  Off by default:
+ * reaching a window on ANOTHER screen in one keystroke is most of what
+ * the overlay is for. */
+gboolean     gowl_config_get_hints_current_output (GowlConfig *self);
+
 /* --- HDR ---
  *
  * Two decisions, and they are not the same one.

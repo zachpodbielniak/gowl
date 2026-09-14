@@ -15,6 +15,7 @@ gowl-msg action tag-view 2       # run an action by name
 gowl-msg mode resize             # enter a key mode; `mode' alone reads it
 gowl-msg power off
 gowl-msg backdrop next           # what Super+Shift+" runs
+gowl-msg hints                   # what Super+q runs: label every window
 gowl-msg lock                    # what Super+Shift+l runs
 gowl-msg expo                    # a module's command, by name
 gowl-msg -s                      # subscribe; print events until killed
@@ -46,6 +47,9 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =power on\vert{}off\vert{}toggle= | Powers every output                             |
 | =hdr [on\vert{}off\vert{}toggle] [OUTPUT]= | Switches an output between HDR and SDR (the focused one by default); =ERROR= when it cannot do HDR |
 | =backdrop [none\vert{}blur\vert{}glass\vert{}water\vert{}rain\vert{}snow\vert{}leaves\vert{}fizz\vert{}next\vert{}prev]= | What shows through translucent windows; no argument reports it. Every backdrop module reads it, so the change is immediate. =carbonation=, =autumn= and a few other spellings resolve too |
+| =hints [-show\vert{}-hide]= | Put a letter on every visible window; press it to focus that window. Toggles with no argument |
+| =hints-select LABEL= | Focus the window wearing =LABEL=; replies with its window id |
+| =hints-list= | =LABEL ID TITLE= per line, for whatever the overlay is showing |
 | =lock=                        | Locks the screen, by whichever route =lock-command= names |
 | =unlock=                      | Opens the session with no password: the administrative override, for a lock program that is broken |
 | =locked=                      | =locked= or =unlocked=                             |

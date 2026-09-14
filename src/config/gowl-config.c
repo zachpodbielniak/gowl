@@ -296,6 +296,43 @@
 #define GOWL_CONFIG_SNOW_FROM_PRESET             (-1.0)
 
 #define GOWL_CONFIG_DEFAULT_WALLPAPER_FADE       (320)
+
+/*
+ * The window-hint overlay.
+ *
+ * `hints-keys' is the home row first, then the top row, then the bottom
+ * -- not alphabetical, because the first eight windows should be
+ * reachable without moving a finger.  It is also what decides whether
+ * labels are one character or two: the overlay uses one while the
+ * alphabet is long enough for the windows on screen and two once it is
+ * not, so a longer alphabet is how somebody with a great many windows
+ * keeps single-key hints.
+ *
+ * `hints-timeout' is 0, which is where this parts company with tmux.
+ * `display-panes-time' there is one second and is the most complained
+ * about thing about the feature: the labels go away while you are still
+ * looking for the one you want.  Waiting costs nothing, because every
+ * key is swallowed while the overlay is up and Escape is right there.
+ *
+ * `hints-warp-pointer' is on because `sloppyfocus' is: focusing a window
+ * across the desk and leaving the cursor behind means the next nudge of
+ * the mouse hands focus straight back.
+ */
+#define GOWL_CONFIG_DEFAULT_HINTS_KEYS \
+	"asdfghjklqwertyuiopzxcvbnm"
+/* Palette NAMES, so the overlay follows whatever flavour is configured
+ * rather than hard-coding one.  Ordered for contrast between consecutive
+ * entries, since telling one badge from the badge next to it is the
+ * whole job. */
+#define GOWL_CONFIG_DEFAULT_HINTS_COLORS \
+	"mauve,green,peach,blue,pink,teal,yellow,red,sapphire,lavender," \
+	"flamingo,sky"
+#define GOWL_CONFIG_DEFAULT_HINTS_TIMEOUT        (0)
+#define GOWL_CONFIG_DEFAULT_HINTS_SIZE           (96)
+#define GOWL_CONFIG_DEFAULT_HINTS_BORDER_WIDTH   (3)
+#define GOWL_CONFIG_DEFAULT_HINTS_SCRIM          (0.40)
+#define GOWL_CONFIG_DEFAULT_HINTS_WARP_POINTER   (TRUE)
+#define GOWL_CONFIG_DEFAULT_HINTS_CURRENT_OUTPUT (FALSE)
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
 #define GOWL_CONFIG_DEFAULT_REPEAT_RATE         (25)
@@ -634,6 +671,15 @@ struct _GowlConfig {
 	gdouble  snow_glow;
 	gdouble  snow_specular;
 	gdouble  snow_speed;
+
+	gchar   *hints_keys;
+	gchar   *hints_colors;
+	gint     hints_timeout;
+	gint     hints_size;
+	gint     hints_border_width;
+	gdouble  hints_scrim;
+	gboolean hints_warp_pointer;
+	gboolean hints_current_output;
 
 	/* Per-tag wallpaper overrides, 1-based; NULL means "use the default
 	 * wallpaper", which is what every entry is until a config says
@@ -1257,6 +1303,8 @@ gowl_config_finalize(GObject *object)
 	g_free(self->leaves_dry);
 	g_free(self->snow_preset);
 	g_free(self->snow_tint);
+	g_free(self->hints_keys);
+	g_free(self->hints_colors);
 	{
 		gint ti;
 
@@ -1870,6 +1918,15 @@ gowl_config_init(GowlConfig *self)
 	self->snow_specular      = GOWL_CONFIG_SNOW_FROM_PRESET;
 	self->snow_speed         = GOWL_CONFIG_SNOW_FROM_PRESET;
 
+	self->hints_keys           = g_strdup(GOWL_CONFIG_DEFAULT_HINTS_KEYS);
+	self->hints_colors         = g_strdup(GOWL_CONFIG_DEFAULT_HINTS_COLORS);
+	self->hints_timeout        = GOWL_CONFIG_DEFAULT_HINTS_TIMEOUT;
+	self->hints_size           = GOWL_CONFIG_DEFAULT_HINTS_SIZE;
+	self->hints_border_width   = GOWL_CONFIG_DEFAULT_HINTS_BORDER_WIDTH;
+	self->hints_scrim          = GOWL_CONFIG_DEFAULT_HINTS_SCRIM;
+	self->hints_warp_pointer   = GOWL_CONFIG_DEFAULT_HINTS_WARP_POINTER;
+	self->hints_current_output = GOWL_CONFIG_DEFAULT_HINTS_CURRENT_OUTPUT;
+
 	self->wallpaper_fade   = GOWL_CONFIG_DEFAULT_WALLPAPER_FADE;
 
 	self->lock_command     = g_strdup(GOWL_CONFIG_DEFAULT_LOCK_COMMAND);
@@ -2268,6 +2325,9 @@ static const gchar *const top_level_keys[] = {
 	"snow-depth", "snow-runs", "snow-run-width", "snow-run-length",
 	"snow-beads", "snow-ice", "snow-ice-rate", "snow-ice-scale",
 	"snow-sparkle", "snow-fog", "snow-glow", "snow-specular", "snow-speed",
+	"hints-keys", "hints-colors", "hints-timeout", "hints-size",
+	"hints-border-width", "hints-scrim", "hints-warp-pointer",
+	"hints-current-output",
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
 	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
 	"lock-command", "lock-on-suspend", "keybinds", "modes",
@@ -3647,6 +3707,58 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "snow-speed")) {
 		self->snow_speed = CLAMP(yaml_mapping_get_double_member(
 			mapping, "snow-speed"), 0.0, 5.0);
+	}
+	if (yaml_mapping_has_member(mapping, "hints-keys")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "hints-keys");
+
+		/*
+		 * Rejected rather than sanitised when it is unusable.  An
+		 * alphabet with a repeated character would give two windows the
+		 * same label, and one that is empty would give none at all --
+		 * both of which look like the overlay is broken rather than
+		 * like the config is.
+		 */
+		if (v != NULL && gowl_config_hints_keys_valid(v)) {
+			g_free(self->hints_keys);
+			self->hints_keys = g_ascii_strdown(v, -1);
+		} else {
+			g_warning("gowl_config: hints-keys '%s' is empty, too short "
+			          "or has a repeated character; keeping the default",
+			          v != NULL ? v : "(null)");
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "hints-colors")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "hints-colors");
+		if (v != NULL && *v != '\0') {
+			g_free(self->hints_colors);
+			self->hints_colors = g_strdup(v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "hints-timeout")) {
+		/* 0 waits for a keystroke. */
+		self->hints_timeout = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "hints-timeout"), 0, 60000);
+	}
+	if (yaml_mapping_has_member(mapping, "hints-size")) {
+		self->hints_size = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "hints-size"), 16, 512);
+	}
+	if (yaml_mapping_has_member(mapping, "hints-border-width")) {
+		self->hints_border_width = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "hints-border-width"), 0, 32);
+	}
+	if (yaml_mapping_has_member(mapping, "hints-scrim")) {
+		self->hints_scrim = CLAMP(yaml_mapping_get_double_member(
+			mapping, "hints-scrim"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "hints-warp-pointer")) {
+		self->hints_warp_pointer = yaml_mapping_get_boolean_member(
+			mapping, "hints-warp-pointer");
+	}
+	if (yaml_mapping_has_member(mapping, "hints-current-output")) {
+		self->hints_current_output = yaml_mapping_get_boolean_member(
+			mapping, "hints-current-output");
 	}
 	if (yaml_mapping_has_member(mapping, "shadow-color")) {
 		const gchar *v = yaml_mapping_get_string_member(mapping,
@@ -8499,6 +8611,151 @@ gowl_config_get_snow_frost_passes(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_SNOW_FROST_PASSES);
 	return self->snow_frost_passes;
+}
+
+/* --- Window hints (modules/hints) ---------------------------------- */
+
+/**
+ * gowl_config_hints_keys_valid:
+ * @keys: a candidate alphabet
+ *
+ * Whether @keys can label windows.
+ *
+ * Two things disqualify it and both are worth refusing rather than
+ * working around.  A REPEATED character would give two windows the same
+ * label, so one of them could never be reached; and fewer than two
+ * characters cannot make a two-character label either, so a config with
+ * one key would silently cap the overlay at a single window.  Both look
+ * like the overlay is broken rather than like the config is.
+ *
+ * Case-insensitive, because the labels are matched that way.
+ *
+ * Returns: %TRUE when @keys is usable as an alphabet.
+ */
+gboolean
+gowl_config_hints_keys_valid(const gchar *keys)
+{
+	gboolean seen[128] = { FALSE };
+	gsize i, n;
+
+	if (keys == NULL)
+		return FALSE;
+	n = strlen(keys);
+	if (n < 2)
+		return FALSE;
+
+	for (i = 0; i < n; i++) {
+		guchar c = (guchar)g_ascii_tolower(keys[i]);
+
+		/* Printable ASCII only: a label has to be a keysym somebody can
+		 * press and the overlay matches against one byte. */
+		if (c < 0x21 || c > 0x7e)
+			return FALSE;
+		if (seen[c])
+			return FALSE;
+		seen[c] = TRUE;
+	}
+	return TRUE;
+}
+
+const gchar *
+gowl_config_get_hints_keys(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HINTS_KEYS);
+	return self->hints_keys;
+}
+
+void
+gowl_config_set_hints_keys(GowlConfig *self, const gchar *keys)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_hints_keys_valid(keys))
+		return;
+	g_free(self->hints_keys);
+	self->hints_keys = g_ascii_strdown(keys, -1);
+}
+
+const gchar *
+gowl_config_get_hints_colors(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HINTS_COLORS);
+	return self->hints_colors;
+}
+
+void
+gowl_config_set_hints_colors(GowlConfig *self, const gchar *colors)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (colors == NULL || *colors == '\0')
+		return;
+	g_free(self->hints_colors);
+	self->hints_colors = g_strdup(colors);
+}
+
+gint
+gowl_config_get_hints_timeout(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HINTS_TIMEOUT);
+	return self->hints_timeout;
+}
+
+void
+gowl_config_set_hints_timeout(GowlConfig *self, gint ms)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->hints_timeout = CLAMP(ms, 0, 60000);
+}
+
+gint
+gowl_config_get_hints_size(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HINTS_SIZE);
+	return self->hints_size;
+}
+
+gint
+gowl_config_get_hints_border_width(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HINTS_BORDER_WIDTH);
+	return self->hints_border_width;
+}
+
+gdouble
+gowl_config_get_hints_scrim(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HINTS_SCRIM);
+	return self->hints_scrim;
+}
+
+gboolean
+gowl_config_get_hints_warp_pointer(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HINTS_WARP_POINTER);
+	return self->hints_warp_pointer;
+}
+
+void
+gowl_config_set_hints_warp_pointer(GowlConfig *self, gboolean warp)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->hints_warp_pointer = warp;
+}
+
+gboolean
+gowl_config_get_hints_current_output(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HINTS_CURRENT_OUTPUT);
+	return self->hints_current_output;
 }
 
 gboolean

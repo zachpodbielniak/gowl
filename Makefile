@@ -681,7 +681,8 @@ $(OUTDIR)/modules/liquidrain.so: $(wildcard modules/liquidrain/*.c modules/liqui
 $(OUTDIR)/modules/fizz.so: $(wildcard modules/fizz/*.c modules/fizz/*.h)
 $(OUTDIR)/modules/leaves.so: $(wildcard modules/leaves/*.c modules/leaves/*.h)
 $(OUTDIR)/modules/snow.so: $(wildcard modules/snow/*.c modules/snow/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+$(OUTDIR)/modules/hints.so: $(wildcard modules/hints/*.c modules/hints/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
@@ -701,7 +702,7 @@ $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abs
 # list as cmacs_modules[] in the test.
 TEARDOWN_MODULES := wallpaper tile monocle float scrolling animation cube \
 	expo switcher magnifier blur liquidglass liquidwater liquidrain \
-	fizz leaves snow \
+	fizz leaves snow hints \
 	layout-indicator alpha \
 	vanitygaps roundcorners windowrules dropdown scratchpad screenshot \
 	osd clipboard bar
@@ -714,6 +715,12 @@ $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(
 # outputs, with a plugin compiled from a `.c' file at test time: a
 # widget is told which screen each draw is for, and told nothing in a
 # poll.
+# The hint overlay against the real .so in a headless compositor with two
+# outputs: the labels have to depend on where a window IS and on nothing
+# else, which is invisible in a screenshot and is the whole feature.
+$(OUTDIR)/test-hints: $(OUTDIR)/modules/hints.so
+$(OBJDIR)/tests/test-hints.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
 $(OUTDIR)/test-bar-monitor: $(OUTDIR)/modules/bar.so
 $(OBJDIR)/tests/test-bar-monitor.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 

@@ -651,6 +651,7 @@ another.
 | =snow=           | Snow that settles on the window, melts and runs off     |
 | =leaves=         | Autumn leaves that collect until the wind takes them    |
 | =fizz=           | The wallpaper through a glass of something carbonated   |
+| =hints=          | A letter on every window; press it to focus that window |
 | =autostart=      | Runs autostart commands from config                   |
 | =notifyd=        | org.freedesktop.Notifications daemon feeding the bar   |
 | =vanitygaps=     | Adds configurable inner/outer gaps to layouts         |
@@ -1271,11 +1272,11 @@ first frame on every output when it starts: ffmpeg reads a fixed frame
 rate, so without it a stretch of screen standing still would drop out of
 the video's timeline. =tests/test-idle-output.c= checks the contract.
 
-** Twelve effect modules, one interface
+** Thirteen effect modules, one interface
 
 =animation=, =cube=, =expo=, =switcher=, =magnifier=, =blur=,
-=liquidglass=, =liquidwater=, =liquidrain=, =snow=, =leaves= and =fizz=
-all implement =GowlSceneEffect=, all opt in through the =modules=
+=liquidglass=, =liquidwater=, =liquidrain=, =snow=, =leaves=, =fizz= and
+=hints= all implement =GowlSceneEffect=, all opt in through the =modules=
 mapping, and all are loaded by CMacs by default.
 They are separate plugins rather than one because each is a separate
 decision: somebody who wants shadows and no cube, or a magnifier and
@@ -1293,6 +1294,13 @@ that never settle. Everything else is, between events, correct and free;
 those five are stale the moment they are drawn, which is why they are the
 only ones with a clock and a frame rate, and why they hold an output
 awake while they have something to draw on it.
+
+=hints= is in that list but is none of those things: it implements
+=GowlSceneEffect= only to hear that a window moved or went away under an
+overlay that can wait indefinitely.  It draws with cairo into a raw
+buffer, so unlike the overview and the switcher it needs no GL, takes no
+capture, and cannot fail on a driver that will not compile a shader ---
+which is why it is the one visual module that works everywhere.
 
 *The five animated ones are the same module written five times, and that
 is deliberate.* The host half of an animated backdrop --- the clock, the

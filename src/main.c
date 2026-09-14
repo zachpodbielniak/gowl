@@ -142,6 +142,13 @@ static const GowlBuiltinModule builtin_modules[] = {
 		" *   - fizz: bubbles rising through a carbonated drink\n"
 	},
 	{
+		"hints",
+		"Labels every window with a key that focuses it",
+		"  hints:\n"
+		"    enabled: true\n",
+		" *   - hints: a letter on every window, press it to focus\n"
+	},
+	{
 		"autostart",
 		"Spawn configured commands on compositor startup",
 		"  autostart:\n"
@@ -333,6 +340,12 @@ static const gchar *default_yaml_config =
 	"  # Every backdrop module reads `window-backdrop', so this is\n"
 	"  # instant and needs none of them loaded to be bound.\n"
 	"  \"Super+Shift+apostrophe\": { action: cycle_backdrop, desc: \"Cycle the window backdrop\" }\n"
+	"\n"
+	"  # Put a letter on every visible window and focus the one you\n"
+	"  # press -- tmux's `C-b q' for a compositor, and the fastest way\n"
+	"  # to reach a window on a large or a multi-output desk.  Needs\n"
+	"  # the `hints' module; harmless while it is not loaded.\n"
+	"  \"Super+q\": { action: ipc_command, arg: \"hints\", desc: \"Label the windows\" }\n"
 	"\n"
 	"  # Locking.  A compositor bind, so it works whatever has the\n"
 	"  # keyboard and whichever tag is in view.\n"

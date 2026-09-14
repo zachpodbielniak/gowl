@@ -308,7 +308,6 @@ static const gchar *default_yaml_config =
 	"\n"
 	"  # Client management\n"
 	"  \"Super+Shift+c\": { action: kill_client }\n"
-	"  \"Super+space\": { action: toggle_float }\n"
 	"  \"Super+Shift+space\": { action: toggle_fullscreen }\n"
 	"  \"Super+Shift+Return\": { action: zoom }\n"
 	"\n"

@@ -55,7 +55,7 @@
  * section in config.yaml.  Defaults (if the section is absent)
  * are:
  *
- *   toggle-float:       Super+space
+ *   toggle-float:       (none -- see below)
  *   center-float:       Super+c
  *   move-float-left:    Super+Shift+Left
  *   move-float-right:   Super+Shift+Right
@@ -267,7 +267,22 @@ static void
 wr_apply_defaults(GowlModuleWindowrules *self)
 {
 	static const gchar *defaults[WR_ACTION_COUNT] = {
-		"Super+space",         /* WR_TOGGLE_FLOAT */
+		/*
+		 * NO DEFAULT KEY, where this used to claim Super+space.
+		 *
+		 * The compositor has its own `toggle_float' action bound to
+		 * Super+Shift+f, and two keys for one operation is not the
+		 * problem -- the problem is that they were not the same
+		 * operation.  A config keybind is consulted before any module
+		 * sees the key, so while the shipped config also bound
+		 * Super+space this one never ran; the moment that bind went
+		 * away it would have started running instead, and quietly done
+		 * LESS (see wr_dispatch_action).
+		 *
+		 * Still configurable: `windowrules: { toggle-float: ... }'
+		 * binds it to whatever you like.
+		 */
+		"",                    /* WR_TOGGLE_FLOAT */
 		"Super+c",             /* WR_CENTER_FLOAT */
 		"Super+Shift+Left",    /* WR_MOVE_LEFT */
 		"Super+Shift+Right",   /* WR_MOVE_RIGHT */
@@ -738,10 +753,20 @@ wr_dispatch_action(
 	step = self->step_px > 0 ? self->step_px : 32;
 
 	if (action == WR_TOGGLE_FLOAT) {
-		gboolean was_floating;
-
-		was_floating = gowl_client_get_floating(c);
-		gowl_client_set_floating(c, !was_floating);
+		/*
+		 * The COMPOSITOR's setter, not the client's.
+		 *
+		 * gowl_client_set_floating() only flips the flag -- its own
+		 * header says callers outside the compositor should not use it
+		 * -- so a window toggled that way stayed parented in the tile
+		 * layer and the layout was never re-run: it kept its tiled
+		 * geometry, still counted against the windows around it, and
+		 * looked floating only once something else happened to
+		 * re-arrange.  This one reparents between the scene layers and
+		 * re-tiles what is left, which is what the operation means.
+		 */
+		gowl_compositor_set_floating(self->compositor, c,
+		                             !gowl_client_get_floating(c));
 		return;
 	}
 

@@ -285,7 +285,6 @@ keybinds:
 
   # Client management
   "Super+Shift+c": { action: kill_client, desc: "Close window" }
-  "Super+space": { action: toggle_float, desc: "Toggle floating" }
   "Super+Shift+space": { action: toggle_fullscreen, desc: "Toggle fullscreen" }
   "Super+Shift+Return": { action: zoom, desc: "Promote to master" }
 

@@ -922,34 +922,63 @@ test_backdrop_style_picks_the_module(void)
 
 	/*
 	 * And the order the key actually steps through, which is written out
-	 * in the compositor rather than derived from the enum: the four that
-	 * DRAW something come first, so one press from either shipped default
-	 * lands on another look and turning the backdrop off takes the full
-	 * way round.  Derived from the enum it would be none, blur, glass,
-	 * water, rain -- which nobody would notice was wrong except by
-	 * pressing the key.  The two that MOVE lead, so one press from the
-	 * cmacs default is the other animated backdrop.
+	 * in the compositor rather than derived from the enum: everything
+	 * that DRAWS something comes first, so one press from either shipped
+	 * default lands on another look and turning the backdrop off takes
+	 * the full way round.  Derived from the enum it would be none, blur,
+	 * glass, water, rain, snow, leaves, fizz -- which nobody would notice
+	 * was wrong except by pressing the key.
+	 *
+	 * The five that MOVE lead, grouped by what they are: the three
+	 * weathers, then the two that are liquid in a pane.  Written out in
+	 * full here rather than looped, because the ORDER is the thing being
+	 * asserted and a loop over a copy of the same array would assert
+	 * nothing at all.
 	 */
-	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_RAIN);
-	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
-	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-	                ==, GOWL_BACKDROP_WATER);
-	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
-	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-	                ==, GOWL_BACKDROP_GLASS);
-	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
-	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-	                ==, GOWL_BACKDROP_BLUR);
-	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
-	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-	                ==, GOWL_BACKDROP_NONE);
-	gowl_compositor_cycle_backdrop_style(r.compositor, 1);
-	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-	                ==, GOWL_BACKDROP_RAIN);
-	/* And back the other way. */
-	gowl_compositor_cycle_backdrop_style(r.compositor, -1);
-	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-	                ==, GOWL_BACKDROP_NONE);
+	{
+		static const GowlBackdropStyle expect[] = {
+			GOWL_BACKDROP_SNOW, GOWL_BACKDROP_LEAVES,
+			GOWL_BACKDROP_FIZZ, GOWL_BACKDROP_WATER,
+			GOWL_BACKDROP_GLASS, GOWL_BACKDROP_BLUR,
+			GOWL_BACKDROP_NONE, GOWL_BACKDROP_RAIN
+		};
+		guint i;
+
+		gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_RAIN);
+		for (i = 0; i < G_N_ELEMENTS(expect); i++) {
+			gowl_compositor_cycle_backdrop_style(r.compositor, 1);
+			g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
+			                ==, expect[i]);
+		}
+		/* Eight presses is all the way round, which is what the last
+		 * entry above says.  And back the other way. */
+		gowl_compositor_cycle_backdrop_style(r.compositor, -1);
+		g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
+		                ==, GOWL_BACKDROP_NONE);
+	}
+
+	/*
+	 * The names a person would reach for resolve as well as the nicks do.
+	 *
+	 * The carbonation's setting is spelled `fizz' because it is also the
+	 * prefix on thirty config keys, but the toast says "Carbonation" --
+	 * and a setting whose displayed name is not accepted as its own value
+	 * is a trap laid for whoever reads the toast and types it.
+	 */
+	{
+		GowlBackdropStyle got;
+
+		g_assert_true(gowl_config_backdrop_style_from_name("carbonation",
+		                                                   &got));
+		g_assert_cmpint(got, ==, GOWL_BACKDROP_FIZZ);
+		g_assert_true(gowl_config_backdrop_style_from_name("fizz", &got));
+		g_assert_cmpint(got, ==, GOWL_BACKDROP_FIZZ);
+		g_assert_true(gowl_config_backdrop_style_from_name("autumn", &got));
+		g_assert_cmpint(got, ==, GOWL_BACKDROP_LEAVES);
+		g_assert_true(gowl_config_backdrop_style_from_name("snow", &got));
+		g_assert_cmpint(got, ==, GOWL_BACKDROP_SNOW);
+		g_assert_false(gowl_config_backdrop_style_from_name("weather", &got));
+	}
 
 	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_BLUR);
 	again = decor_of(r.c);
@@ -962,25 +991,26 @@ test_backdrop_style_picks_the_module(void)
 	 * person would say it rather than as the enum spells it. */
 	g_signal_handler_disconnect(r.compositor, toast_id);
 	{
-		gboolean saw_glass = FALSE, saw_water = FALSE;
-		gboolean saw_rain = FALSE;
-		gboolean saw_blur = FALSE, saw_none = FALSE;
-		guint    i;
+		/* Every one of them, because a style added to the cycle and left
+		 * out of the switch that labels it toasts "No backdrop" while
+		 * quite visibly drawing something. */
+		static const gchar *const expect[] = {
+			"Liquid glass", "Liquid water", "Liquid rain",
+			"Snow", "Falling leaves", "Carbonation",
+			"Blur", "No backdrop"
+		};
+		guint i, j;
 
-		for (i = 0; i < toasts->len; i++) {
-			const gchar *t = g_ptr_array_index(toasts, i);
+		for (j = 0; j < G_N_ELEMENTS(expect); j++) {
+			gboolean saw = FALSE;
 
-			if (g_strcmp0(t, "Liquid glass") == 0) saw_glass = TRUE;
-			if (g_strcmp0(t, "Liquid water") == 0) saw_water = TRUE;
-			if (g_strcmp0(t, "Liquid rain") == 0)  saw_rain  = TRUE;
-			if (g_strcmp0(t, "Blur") == 0)         saw_blur  = TRUE;
-			if (g_strcmp0(t, "No backdrop") == 0)  saw_none  = TRUE;
+			for (i = 0; i < toasts->len; i++) {
+				if (g_strcmp0(g_ptr_array_index(toasts, i), expect[j]) == 0)
+					saw = TRUE;
+			}
+			if (!saw)
+				g_error("switching to %s said nothing on screen", expect[j]);
 		}
-		g_assert_true(saw_glass);
-		g_assert_true(saw_water);
-		g_assert_true(saw_rain);
-		g_assert_true(saw_blur);
-		g_assert_true(saw_none);
 	}
 
 	rig_down(&r);

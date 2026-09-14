@@ -208,6 +208,93 @@
 #define GOWL_CONFIG_DEFAULT_RAIN_FROST_PASSES    (2)
 #define GOWL_CONFIG_RAIN_FROM_PRESET             (-1.0)
 
+/*
+ * The carbonation defaults.
+ *
+ * Same shape as the water and the rain above -- a named preset carries a
+ * whole tuned set and the individual keys are overrides on top of it --
+ * and here the presets are literally a scale, which is what the effect
+ * is for: `sparkling' barely moves, `soda' is a glass of cola, `seltzer'
+ * is a hard-carbonated water that will not sit still.
+ *
+ * `fizz-site-width' is the ruler, not the cell.  What the eye counts in
+ * a fizzy drink is TRAINS -- files of bubbles streaming from one point
+ * on the glass -- so the number of nucleation sites across the window is
+ * the number that means "how carbonated is this", and the bubble size
+ * follows from it.  Raising the bubble size without narrowing the
+ * columns gives bigger bubbles rather than more of them, which is a
+ * different drink and usually a worse one.
+ */
+#define GOWL_CONFIG_DEFAULT_FIZZ_PRESET          "soda"
+#define GOWL_CONFIG_DEFAULT_FIZZ_INTENSITY       (1.0)
+#define GOWL_CONFIG_DEFAULT_FIZZ_FPS             (30)
+#define GOWL_CONFIG_DEFAULT_FIZZ_SCALE           (2)
+#define GOWL_CONFIG_DEFAULT_FIZZ_TINT            "#fff5db"
+#define GOWL_CONFIG_DEFAULT_FIZZ_CLARITY         (0.90)
+#define GOWL_CONFIG_DEFAULT_FIZZ_OPACITY         (1.0)
+#define GOWL_CONFIG_DEFAULT_FIZZ_BRIGHTNESS      (1.0)
+#define GOWL_CONFIG_DEFAULT_FIZZ_LIGHT           (-140.0)
+#define GOWL_CONFIG_DEFAULT_FIZZ_FROST           (3)
+#define GOWL_CONFIG_DEFAULT_FIZZ_FROST_PASSES    (2)
+#define GOWL_CONFIG_FIZZ_FROM_PRESET             (-1.0)
+
+/*
+ * The falling-leaves defaults.
+ *
+ * `leaves-preset' spans a season rather than a storm: `turning' is the
+ * first few coming down, `autumn' is the middle of it, `peak' is the
+ * week the tree empties, and the two windy ones are the same fall with
+ * the weather against it.
+ *
+ * `leaves-leaf' is the ruler and it is capped against BOTH the column
+ * and the cell at render time, because a leaf wider than a third of its
+ * own column would be sliced off at the column edge.  So asking for
+ * bigger leaves without widening the spacing quietly gets smaller ones;
+ * the presets move the three together, which is the whole reason they
+ * are a table.
+ */
+#define GOWL_CONFIG_DEFAULT_LEAVES_PRESET        "autumn"
+#define GOWL_CONFIG_DEFAULT_LEAVES_INTENSITY     (1.0)
+#define GOWL_CONFIG_DEFAULT_LEAVES_FPS           (30)
+#define GOWL_CONFIG_DEFAULT_LEAVES_SCALE         (2)
+#define GOWL_CONFIG_DEFAULT_LEAVES_WARM          "#dc381f"
+#define GOWL_CONFIG_DEFAULT_LEAVES_GOLD          "#f29e22"
+#define GOWL_CONFIG_DEFAULT_LEAVES_DRY           "#a3622b"
+#define GOWL_CONFIG_DEFAULT_LEAVES_OPACITY       (1.0)
+#define GOWL_CONFIG_DEFAULT_LEAVES_BRIGHTNESS    (1.0)
+#define GOWL_CONFIG_DEFAULT_LEAVES_LIGHT         (-140.0)
+#define GOWL_CONFIG_DEFAULT_LEAVES_FROST         (3)
+#define GOWL_CONFIG_DEFAULT_LEAVES_FROST_PASSES  (2)
+#define GOWL_CONFIG_LEAVES_FROM_PRESET           (-1.0)
+
+/*
+ * The snow defaults.
+ *
+ * `snow-preset' is a scale of how hard it is coming down, and -- unlike
+ * the rain's, which only ever gets wetter -- it is also a scale of
+ * TEMPERATURE.  A flurry is a warm pane: what lands melts almost at
+ * once and runs.  A blizzard is a cold one: it settles, it stays, and
+ * the frost grows in from the edges while it does.  `snow-melt' and
+ * `snow-frost-rate' are what carry that, and they move opposite ways
+ * across the table.
+ *
+ * `snow-flake' is the ruler.  It is small compared with the rain's cell
+ * on purpose: a crystal has to be big enough for its six arms to be
+ * legible, and a window of flakes too small to resolve is dust.
+ */
+#define GOWL_CONFIG_DEFAULT_SNOW_PRESET          "steady"
+#define GOWL_CONFIG_DEFAULT_SNOW_INTENSITY       (1.0)
+#define GOWL_CONFIG_DEFAULT_SNOW_FPS             (30)
+#define GOWL_CONFIG_DEFAULT_SNOW_SCALE           (2)
+#define GOWL_CONFIG_DEFAULT_SNOW_TINT            "#e0f0ff"
+#define GOWL_CONFIG_DEFAULT_SNOW_CLARITY         (0.92)
+#define GOWL_CONFIG_DEFAULT_SNOW_OPACITY         (1.0)
+#define GOWL_CONFIG_DEFAULT_SNOW_BRIGHTNESS      (1.0)
+#define GOWL_CONFIG_DEFAULT_SNOW_LIGHT           (-140.0)
+#define GOWL_CONFIG_DEFAULT_SNOW_FROST           (3)
+#define GOWL_CONFIG_DEFAULT_SNOW_FROST_PASSES    (2)
+#define GOWL_CONFIG_SNOW_FROM_PRESET             (-1.0)
+
 #define GOWL_CONFIG_DEFAULT_WALLPAPER_FADE       (320)
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
@@ -446,6 +533,107 @@ struct _GowlConfig {
 	gdouble  rain_specular;
 	gdouble  rain_impact;
 	gdouble  rain_speed;
+
+	gchar   *fizz_preset;
+	gdouble  fizz_intensity;
+	gint     fizz_fps;
+	gint     fizz_scale;
+	gchar   *fizz_tint;
+	gdouble  fizz_clarity;
+	gdouble  fizz_opacity;
+	gdouble  fizz_brightness;
+	gdouble  fizz_light;
+	gint     fizz_frost;
+	gint     fizz_frost_passes;
+	/* Overrides on the preset; GOWL_CONFIG_FIZZ_FROM_PRESET for "leave
+	 * it alone". */
+	gdouble  fizz_cell;
+	gdouble  fizz_bubble;
+	gdouble  fizz_growth;
+	gdouble  fizz_sites;
+	gdouble  fizz_site_width;
+	gdouble  fizz_spacing;
+	gdouble  fizz_stray;
+	gdouble  fizz_cling;
+	gdouble  fizz_wobble;
+	gdouble  fizz_foam;
+	gdouble  fizz_foam_depth;
+	gdouble  fizz_depth;
+	gdouble  fizz_mirror;
+	gdouble  fizz_fog;
+	gdouble  fizz_specular;
+	gdouble  fizz_speed;
+
+	gchar   *leaves_preset;
+	gdouble  leaves_intensity;
+	gint     leaves_fps;
+	gint     leaves_scale;
+	gchar   *leaves_warm;
+	gchar   *leaves_gold;
+	gchar   *leaves_dry;
+	gdouble  leaves_opacity;
+	gdouble  leaves_brightness;
+	gdouble  leaves_light;
+	gint     leaves_frost;
+	gint     leaves_frost_passes;
+	/* Overrides on the preset; GOWL_CONFIG_LEAVES_FROM_PRESET for
+	 * "leave it alone". */
+	gdouble  leaves_leaf;
+	gdouble  leaves_cell;
+	gdouble  leaves_stuck;
+	gdouble  leaves_column;
+	gdouble  leaves_falling;
+	gdouble  leaves_flutter;
+	gdouble  leaves_tumble;
+	gdouble  leaves_wind;
+	gdouble  leaves_gust;
+	gdouble  leaves_gustiness;
+	gdouble  leaves_curl;
+	gdouble  leaves_veins;
+	gdouble  leaves_translucency;
+	gdouble  leaves_gloss;
+	gdouble  leaves_shadow;
+	gdouble  leaves_fog;
+	gdouble  leaves_speed;
+	gdouble  leaves_tenure;
+
+	gchar   *snow_preset;
+	gdouble  snow_intensity;
+	gint     snow_fps;
+	gint     snow_scale;
+	gchar   *snow_tint;
+	gdouble  snow_clarity;
+	gdouble  snow_opacity;
+	gdouble  snow_brightness;
+	gdouble  snow_light;
+	gint     snow_frost;
+	gint     snow_frost_passes;
+	/* Overrides on the preset; GOWL_CONFIG_SNOW_FROM_PRESET for "leave
+	 * it alone". */
+	gdouble  snow_flake;
+	gdouble  snow_cell;
+	gdouble  snow_settled;
+	gdouble  snow_column;
+	gdouble  snow_falling;
+	gdouble  snow_arms;
+	gdouble  snow_drift;
+	gdouble  snow_flutter;
+	gdouble  snow_spin;
+	gdouble  snow_melt;
+	gdouble  snow_shrink;
+	gdouble  snow_depth;
+	gdouble  snow_runs;
+	gdouble  snow_run_width;
+	gdouble  snow_run_length;
+	gdouble  snow_beads;
+	gdouble  snow_ice;
+	gdouble  snow_ice_rate;
+	gdouble  snow_ice_scale;
+	gdouble  snow_sparkle;
+	gdouble  snow_fog;
+	gdouble  snow_glow;
+	gdouble  snow_specular;
+	gdouble  snow_speed;
 
 	/* Per-tag wallpaper overrides, 1-based; NULL means "use the default
 	 * wallpaper", which is what every entry is until a config says
@@ -1061,6 +1249,14 @@ gowl_config_finalize(GObject *object)
 	g_free(self->water_tint);
 	g_free(self->rain_preset);
 	g_free(self->rain_tint);
+	g_free(self->fizz_preset);
+	g_free(self->fizz_tint);
+	g_free(self->leaves_preset);
+	g_free(self->leaves_warm);
+	g_free(self->leaves_gold);
+	g_free(self->leaves_dry);
+	g_free(self->snow_preset);
+	g_free(self->snow_tint);
 	{
 		gint ti;
 
@@ -1579,6 +1775,101 @@ gowl_config_init(GowlConfig *self)
 	self->rain_impact        = GOWL_CONFIG_RAIN_FROM_PRESET;
 	self->rain_speed         = GOWL_CONFIG_RAIN_FROM_PRESET;
 
+	self->fizz_preset        = g_strdup(GOWL_CONFIG_DEFAULT_FIZZ_PRESET);
+	self->fizz_intensity     = GOWL_CONFIG_DEFAULT_FIZZ_INTENSITY;
+	self->fizz_fps           = GOWL_CONFIG_DEFAULT_FIZZ_FPS;
+	self->fizz_scale         = GOWL_CONFIG_DEFAULT_FIZZ_SCALE;
+	self->fizz_tint          = g_strdup(GOWL_CONFIG_DEFAULT_FIZZ_TINT);
+	self->fizz_clarity       = GOWL_CONFIG_DEFAULT_FIZZ_CLARITY;
+	self->fizz_opacity       = GOWL_CONFIG_DEFAULT_FIZZ_OPACITY;
+	self->fizz_brightness    = GOWL_CONFIG_DEFAULT_FIZZ_BRIGHTNESS;
+	self->fizz_light         = GOWL_CONFIG_DEFAULT_FIZZ_LIGHT;
+	self->fizz_frost         = GOWL_CONFIG_DEFAULT_FIZZ_FROST;
+	self->fizz_frost_passes  = GOWL_CONFIG_DEFAULT_FIZZ_FROST_PASSES;
+	self->fizz_cell          = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_bubble        = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_growth        = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_sites         = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_site_width    = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_spacing       = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_stray         = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_cling         = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_wobble        = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_foam          = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_foam_depth    = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_depth         = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_mirror        = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_fog           = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_specular      = GOWL_CONFIG_FIZZ_FROM_PRESET;
+	self->fizz_speed         = GOWL_CONFIG_FIZZ_FROM_PRESET;
+
+	self->leaves_preset      = g_strdup(GOWL_CONFIG_DEFAULT_LEAVES_PRESET);
+	self->leaves_intensity   = GOWL_CONFIG_DEFAULT_LEAVES_INTENSITY;
+	self->leaves_fps         = GOWL_CONFIG_DEFAULT_LEAVES_FPS;
+	self->leaves_scale       = GOWL_CONFIG_DEFAULT_LEAVES_SCALE;
+	self->leaves_warm        = g_strdup(GOWL_CONFIG_DEFAULT_LEAVES_WARM);
+	self->leaves_gold        = g_strdup(GOWL_CONFIG_DEFAULT_LEAVES_GOLD);
+	self->leaves_dry         = g_strdup(GOWL_CONFIG_DEFAULT_LEAVES_DRY);
+	self->leaves_opacity     = GOWL_CONFIG_DEFAULT_LEAVES_OPACITY;
+	self->leaves_brightness  = GOWL_CONFIG_DEFAULT_LEAVES_BRIGHTNESS;
+	self->leaves_light       = GOWL_CONFIG_DEFAULT_LEAVES_LIGHT;
+	self->leaves_frost       = GOWL_CONFIG_DEFAULT_LEAVES_FROST;
+	self->leaves_frost_passes = GOWL_CONFIG_DEFAULT_LEAVES_FROST_PASSES;
+	self->leaves_leaf        = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_cell        = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_stuck       = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_column      = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_falling     = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_flutter     = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_tumble      = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_wind        = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_gust        = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_gustiness   = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_curl        = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_veins       = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_translucency = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_gloss       = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_shadow      = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_fog         = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_speed       = GOWL_CONFIG_LEAVES_FROM_PRESET;
+	self->leaves_tenure      = GOWL_CONFIG_LEAVES_FROM_PRESET;
+
+	self->snow_preset        = g_strdup(GOWL_CONFIG_DEFAULT_SNOW_PRESET);
+	self->snow_intensity     = GOWL_CONFIG_DEFAULT_SNOW_INTENSITY;
+	self->snow_fps           = GOWL_CONFIG_DEFAULT_SNOW_FPS;
+	self->snow_scale         = GOWL_CONFIG_DEFAULT_SNOW_SCALE;
+	self->snow_tint          = g_strdup(GOWL_CONFIG_DEFAULT_SNOW_TINT);
+	self->snow_clarity       = GOWL_CONFIG_DEFAULT_SNOW_CLARITY;
+	self->snow_opacity       = GOWL_CONFIG_DEFAULT_SNOW_OPACITY;
+	self->snow_brightness    = GOWL_CONFIG_DEFAULT_SNOW_BRIGHTNESS;
+	self->snow_light         = GOWL_CONFIG_DEFAULT_SNOW_LIGHT;
+	self->snow_frost         = GOWL_CONFIG_DEFAULT_SNOW_FROST;
+	self->snow_frost_passes  = GOWL_CONFIG_DEFAULT_SNOW_FROST_PASSES;
+	self->snow_flake         = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_cell          = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_settled       = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_column        = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_falling       = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_arms          = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_drift         = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_flutter       = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_spin          = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_melt          = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_shrink        = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_depth         = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_runs          = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_run_width     = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_run_length    = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_beads         = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_ice           = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_ice_rate      = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_ice_scale     = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_sparkle       = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_fog           = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_glow          = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_specular      = GOWL_CONFIG_SNOW_FROM_PRESET;
+	self->snow_speed         = GOWL_CONFIG_SNOW_FROM_PRESET;
+
 	self->wallpaper_fade   = GOWL_CONFIG_DEFAULT_WALLPAPER_FADE;
 
 	self->lock_command     = g_strdup(GOWL_CONFIG_DEFAULT_LOCK_COMMAND);
@@ -1955,6 +2246,28 @@ static const gchar *const top_level_keys[] = {
 	"rain-cell", "rain-density", "rain-bulge", "rain-depth",
 	"rain-runs", "rain-run-width", "rain-run-length", "rain-beads",
 	"rain-fog", "rain-specular", "rain-impact", "rain-speed",
+	"fizz-preset", "fizz-intensity", "fizz-fps", "fizz-scale", "fizz-tint",
+	"fizz-clarity", "fizz-opacity", "fizz-brightness", "fizz-light",
+	"fizz-frost", "fizz-frost-passes", "fizz-cell", "fizz-bubble",
+	"fizz-growth", "fizz-sites", "fizz-site-width", "fizz-spacing",
+	"fizz-stray", "fizz-cling", "fizz-wobble", "fizz-foam",
+	"fizz-foam-depth", "fizz-depth", "fizz-mirror", "fizz-fog",
+	"fizz-specular", "fizz-speed", "leaves-preset", "leaves-intensity",
+	"leaves-fps", "leaves-scale", "leaves-warm", "leaves-gold",
+	"leaves-dry", "leaves-opacity", "leaves-brightness", "leaves-light",
+	"leaves-frost", "leaves-frost-passes", "leaves-leaf", "leaves-cell",
+	"leaves-stuck", "leaves-column", "leaves-falling", "leaves-flutter",
+	"leaves-tumble", "leaves-wind", "leaves-gust", "leaves-gustiness",
+	"leaves-curl", "leaves-veins", "leaves-translucency", "leaves-gloss",
+	"leaves-shadow", "leaves-fog", "leaves-speed", "leaves-tenure",
+	"snow-preset", "snow-intensity", "snow-fps", "snow-scale", "snow-tint",
+	"snow-clarity", "snow-opacity", "snow-brightness", "snow-light",
+	"snow-frost", "snow-frost-passes", "snow-flake", "snow-cell",
+	"snow-settled", "snow-column", "snow-falling", "snow-arms",
+	"snow-drift", "snow-flutter", "snow-spin", "snow-melt", "snow-shrink",
+	"snow-depth", "snow-runs", "snow-run-width", "snow-run-length",
+	"snow-beads", "snow-ice", "snow-ice-rate", "snow-ice-scale",
+	"snow-sparkle", "snow-fog", "snow-glow", "snow-specular", "snow-speed",
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
 	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
 	"lock-command", "lock-on-suspend", "keybinds", "modes",
@@ -2609,7 +2922,8 @@ gowl_config_apply_mapping(
 			self->backdrop_style = ev->value;
 		else
 			g_warning("gowl_config: unknown window-backdrop '%s'; "
-			          "expected none, blur, glass, water or rain",
+			          "expected none, blur, glass, water, rain, snow, "
+			          "leaves or fizz",
 			          v != NULL ? v : "(null)");
 	}
 	if (yaml_mapping_has_member(mapping, "glass-bevel")) {
@@ -2914,6 +3228,425 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "rain-speed")) {
 		self->rain_speed = CLAMP(yaml_mapping_get_double_member(
 			mapping, "rain-speed"), 0.0, 5.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-preset")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "fizz-preset");
+
+		if (v != NULL && gowl_config_fizz_preset_valid(v)) {
+			g_free(self->fizz_preset);
+			self->fizz_preset = g_strdup(v);
+		} else {
+			g_warning("gowl_config: unknown fizz-preset '%s'; "
+			          "expected flat, sparkling, soda, seltzer or champagne",
+			          v != NULL ? v : "(null)");
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-intensity")) {
+		self->fizz_intensity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-intensity"), 0.0, 3.0);
+	}
+	/* 0 means every frame the output gives us. */
+	if (yaml_mapping_has_member(mapping, "fizz-fps")) {
+		self->fizz_fps = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "fizz-fps"), 0, 144);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-scale")) {
+		self->fizz_scale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "fizz-scale"), 1, 4);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-tint")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "fizz-tint");
+
+		if (v != NULL) {
+			g_free(self->fizz_tint);
+			self->fizz_tint = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-clarity")) {
+		self->fizz_clarity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-opacity")) {
+		self->fizz_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-brightness")) {
+		self->fizz_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-brightness"), 0.2, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-light")) {
+		self->fizz_light = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-light"), -180.0, 180.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-frost")) {
+		self->fizz_frost = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "fizz-frost"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-frost-passes")) {
+		self->fizz_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "fizz-frost-passes"), 1, 6);
+	}
+	/* The overrides on the preset, each at its sentinel until named. */
+	if (yaml_mapping_has_member(mapping, "fizz-cell")) {
+		self->fizz_cell = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-cell"), 8.0, 400.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-bubble")) {
+		self->fizz_bubble = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-bubble"), 0.01, 0.22);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-growth")) {
+		self->fizz_growth = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-growth"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-sites")) {
+		self->fizz_sites = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-sites"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-site-width")) {
+		self->fizz_site_width = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-site-width"), 12.0, 600.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-spacing")) {
+		self->fizz_spacing = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-spacing"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-stray")) {
+		self->fizz_stray = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-stray"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-cling")) {
+		self->fizz_cling = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-cling"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-wobble")) {
+		self->fizz_wobble = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-wobble"), 0.0, 200.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-foam")) {
+		self->fizz_foam = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-foam"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-foam-depth")) {
+		self->fizz_foam_depth = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-foam-depth"), 0.0, 2000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-depth")) {
+		self->fizz_depth = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-depth"), 0.0, 20.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-mirror")) {
+		self->fizz_mirror = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-mirror"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-fog")) {
+		self->fizz_fog = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-fog"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-specular")) {
+		self->fizz_specular = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-specular"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "fizz-speed")) {
+		self->fizz_speed = CLAMP(yaml_mapping_get_double_member(
+			mapping, "fizz-speed"), 0.0, 5.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-preset")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "leaves-preset");
+
+		if (v != NULL && gowl_config_leaves_preset_valid(v)) {
+			g_free(self->leaves_preset);
+			self->leaves_preset = g_strdup(v);
+		} else {
+			g_warning("gowl_config: unknown leaves-preset '%s'; "
+			          "expected turning, autumn, peak, blustery or gale",
+			          v != NULL ? v : "(null)");
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-intensity")) {
+		self->leaves_intensity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-intensity"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-fps")) {
+		self->leaves_fps = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "leaves-fps"), 0, 144);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-scale")) {
+		self->leaves_scale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "leaves-scale"), 1, 4);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-warm")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "leaves-warm");
+
+		if (v != NULL) {
+			g_free(self->leaves_warm);
+			self->leaves_warm = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-gold")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "leaves-gold");
+
+		if (v != NULL) {
+			g_free(self->leaves_gold);
+			self->leaves_gold = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-dry")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "leaves-dry");
+
+		if (v != NULL) {
+			g_free(self->leaves_dry);
+			self->leaves_dry = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-opacity")) {
+		self->leaves_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-brightness")) {
+		self->leaves_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-brightness"), 0.2, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-light")) {
+		self->leaves_light = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-light"), -180.0, 180.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-frost")) {
+		self->leaves_frost = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "leaves-frost"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-frost-passes")) {
+		self->leaves_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "leaves-frost-passes"), 1, 6);
+	}
+	/* The overrides on the preset, each at its sentinel until named. */
+	if (yaml_mapping_has_member(mapping, "leaves-leaf")) {
+		self->leaves_leaf = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-leaf"), 8.0, 500.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-cell")) {
+		self->leaves_cell = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-cell"), 32.0, 2000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-stuck")) {
+		self->leaves_stuck = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-stuck"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-column")) {
+		self->leaves_column = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-column"), 32.0, 2000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-falling")) {
+		self->leaves_falling = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-falling"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-flutter")) {
+		self->leaves_flutter = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-flutter"), 0.0, 0.45);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-tumble")) {
+		self->leaves_tumble = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-tumble"), 0.0, 12.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-wind")) {
+		self->leaves_wind = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-wind"), -2000.0, 2000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-gust")) {
+		self->leaves_gust = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-gust"), 0.0, 3000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-gustiness")) {
+		self->leaves_gustiness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-gustiness"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-curl")) {
+		self->leaves_curl = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-curl"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-veins")) {
+		self->leaves_veins = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-veins"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-translucency")) {
+		self->leaves_translucency = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-translucency"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-gloss")) {
+		self->leaves_gloss = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-gloss"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-shadow")) {
+		self->leaves_shadow = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-shadow"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-fog")) {
+		self->leaves_fog = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-fog"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-speed")) {
+		self->leaves_speed = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-speed"), 0.0, 5.0);
+	}
+	if (yaml_mapping_has_member(mapping, "leaves-tenure")) {
+		self->leaves_tenure = CLAMP(yaml_mapping_get_double_member(
+			mapping, "leaves-tenure"), 1.0, 600.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-preset")) {
+		const gchar *v = yaml_mapping_get_string_member(
+			mapping, "snow-preset");
+
+		if (v != NULL && gowl_config_snow_preset_valid(v)) {
+			g_free(self->snow_preset);
+			self->snow_preset = g_strdup(v);
+		} else {
+			g_warning("gowl_config: unknown snow-preset '%s'; "
+			          "expected flurry, light, steady, heavy or blizzard",
+			          v != NULL ? v : "(null)");
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "snow-intensity")) {
+		self->snow_intensity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-intensity"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-fps")) {
+		self->snow_fps = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "snow-fps"), 0, 144);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-scale")) {
+		self->snow_scale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "snow-scale"), 1, 4);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-tint")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "snow-tint");
+
+		if (v != NULL) {
+			g_free(self->snow_tint);
+			self->snow_tint = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "snow-clarity")) {
+		self->snow_clarity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-opacity")) {
+		self->snow_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-brightness")) {
+		self->snow_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-brightness"), 0.2, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-light")) {
+		self->snow_light = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-light"), -180.0, 180.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-frost")) {
+		self->snow_frost = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "snow-frost"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-frost-passes")) {
+		self->snow_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "snow-frost-passes"), 1, 6);
+	}
+	/* The overrides on the preset, each at its sentinel until named. */
+	if (yaml_mapping_has_member(mapping, "snow-flake")) {
+		self->snow_flake = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-flake"), 4.0, 400.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-cell")) {
+		self->snow_cell = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-cell"), 16.0, 2000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-settled")) {
+		self->snow_settled = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-settled"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-column")) {
+		self->snow_column = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-column"), 16.0, 2000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-falling")) {
+		self->snow_falling = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-falling"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-arms")) {
+		self->snow_arms = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-arms"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-drift")) {
+		self->snow_drift = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-drift"), -2000.0, 2000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-flutter")) {
+		self->snow_flutter = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-flutter"), 0.0, 0.40);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-spin")) {
+		self->snow_spin = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-spin"), 0.0, 8.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-melt")) {
+		self->snow_melt = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-melt"), 0.0, 0.80);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-shrink")) {
+		self->snow_shrink = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-shrink"), 0.05, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-depth")) {
+		self->snow_depth = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-depth"), 0.0, 20.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-runs")) {
+		self->snow_runs = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-runs"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-run-width")) {
+		self->snow_run_width = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-run-width"), 10.0, 600.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-run-length")) {
+		self->snow_run_length = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-run-length"), 0.0, 4000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-beads")) {
+		self->snow_beads = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-beads"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-ice")) {
+		self->snow_ice = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-ice"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-ice-rate")) {
+		self->snow_ice_rate = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-ice-rate"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-ice-scale")) {
+		self->snow_ice_scale = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-ice-scale"), 4.0, 400.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-sparkle")) {
+		self->snow_sparkle = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-sparkle"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-fog")) {
+		self->snow_fog = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-fog"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-glow")) {
+		self->snow_glow = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-glow"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-specular")) {
+		self->snow_specular = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-specular"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "snow-speed")) {
+		self->snow_speed = CLAMP(yaml_mapping_get_double_member(
+			mapping, "snow-speed"), 0.0, 5.0);
 	}
 	if (yaml_mapping_has_member(mapping, "shadow-color")) {
 		const gchar *v = yaml_mapping_get_string_member(mapping,
@@ -6284,10 +7017,37 @@ gowl_config_backdrop_style_from_name(const gchar       *name,
 	norm = g_strstrip(g_ascii_strdown(name, -1));
 	g_strdelimit(norm, "_", '-');
 	ev = g_enum_get_value_by_nick(backdrop_enum_class(), norm);
-	if (ev == NULL)
-		return FALSE;
-	*out = (GowlBackdropStyle)ev->value;
-	return TRUE;
+	if (ev != NULL) {
+		*out = (GowlBackdropStyle)ev->value;
+		return TRUE;
+	}
+
+	/*
+	 * The names a person would reach for that are not the nicks.
+	 *
+	 * The nick is the short form because it is also the prefix on ninety
+	 * config keys -- `fizz-site-width' rather than
+	 * `carbonation-site-width' -- but nobody asked for a "fizz"
+	 * backdrop, they asked for carbonation, and the toast says
+	 * "Carbonation".  A setting whose displayed name is not accepted as
+	 * its own value is a small trap laid for whoever reads the toast and
+	 * types it.
+	 */
+	if (g_strcmp0(norm, "carbonation") == 0 || g_strcmp0(norm, "soda") == 0
+	    || g_strcmp0(norm, "bubbles") == 0) {
+		*out = GOWL_BACKDROP_FIZZ;
+		return TRUE;
+	}
+	if (g_strcmp0(norm, "leaf") == 0 || g_strcmp0(norm, "autumn") == 0
+	    || g_strcmp0(norm, "fall") == 0) {
+		*out = GOWL_BACKDROP_LEAVES;
+		return TRUE;
+	}
+	if (g_strcmp0(norm, "snowfall") == 0) {
+		*out = GOWL_BACKDROP_SNOW;
+		return TRUE;
+	}
+	return FALSE;
 }
 
 gdouble
@@ -6893,6 +7653,852 @@ gowl_config_get_rain_frost_passes(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_RAIN_FROST_PASSES);
 	return self->rain_frost_passes;
+}
+
+/* --- Carbonation ---------------------------------------------------- */
+
+/**
+ * GowlFizzPreset:
+ *
+ * One whole tuned set of carbonation.
+ *
+ * A table for the same reason the water's and the rain's are: the
+ * numbers only mean anything together.  `sites' is a fraction of
+ * COLUMNS, so raising it without narrowing `site_width' merely fills in
+ * the columns that were already there; `bubble' is a fraction of the
+ * column too, and `growth' multiplies it on the way up -- so the two
+ * together decide the size at the top and either one alone does not.
+ *
+ * What varies across the five is not mainly how many bubbles there are.
+ * It is how FINE they are and how fast they go.  A champagne is far more
+ * carbonated than a cola and its bubbles are a third the size; a flat
+ * drink is not a cola with fewer bubbles, it is a cola whose bubbles are
+ * all stuck to the glass.
+ *
+ * The three the user asked for by name are the middle three, and they
+ * are a straight scale: sparkling, soda, seltzer.  `flat' and
+ * `champagne' extend it at either end.
+ *
+ * `flat' is not as flat as the name allows, and on purpose.  A drink
+ * with genuinely nothing in it is indistinguishable from the effect
+ * being switched off, and somebody who has just picked a preset wants to
+ * see that they picked one.  So most of what is left is clinging to the
+ * glass, which is what a drink that has been sitting out actually looks
+ * like, rather than nothing at all.
+ */
+typedef struct {
+	const gchar *name;
+	gdouble      cell;        /* px; the clinging layer's lattice */
+	gdouble      bubble;      /* release radius, as a share of a column */
+	gdouble      growth;      /* how much bigger at the top */
+	gdouble      sites;       /* fraction of columns that nucleate */
+	gdouble      site_width;  /* px per column; the real ruler */
+	gdouble      spacing;     /* how closely a site emits */
+	gdouble      stray;       /* loose bubbles between the trains */
+	gdouble      cling;       /* fraction of cells holding a stuck one */
+	gdouble      wobble;      /* px of sideways wander */
+	gdouble      foam;        /* the head */
+	gdouble      foam_depth;  /* px */
+	gdouble      depth;       /* ray travel, in bubble radii */
+	gdouble      mirror;      /* the silvered ring */
+	gdouble      fog;         /* how cloudy the drink is */
+	gdouble      specular;
+	gdouble      shine;       /* specular exponent */
+	gdouble      rim;
+	gdouble      absorption;
+	gdouble      speed;
+	gdouble      cling_life;  /* seconds a stuck bubble holds on */
+} GowlFizzPreset;
+
+static const GowlFizzPreset fizz_presets[] = {
+	/* name         cell  bub   grow  site  sw    spc   stray cling wob   foam  fdep  dep   mir   fog   spec shine rim   abs   spd   life */
+	{ "flat",       140.0, 0.11, 0.35, 0.20, 132.0, 0.26, 0.10, 0.44, 6.0,  0.18,  50.0, 3.6, 0.62, 0.62, 0.42, 80.0, 0.30, 0.16, 0.55, 30.0 },
+	{ "sparkling",  130.0, 0.10, 0.48, 0.28, 118.0, 0.46, 0.20, 0.30, 10.0, 0.30,  90.0, 3.4, 0.66, 0.58, 0.48, 74.0, 0.29, 0.15, 0.80, 22.0 },
+	{ "soda",       110.0, 0.085, 0.60, 0.46, 92.0, 0.72, 0.30, 0.26, 14.0, 0.55, 150.0, 3.2, 0.70, 0.55, 0.55, 70.0, 0.28, 0.14, 1.00, 14.0 },
+	{ "seltzer",     92.0, 0.068, 0.72, 0.64, 72.0, 0.90, 0.42, 0.22, 18.0, 0.72, 200.0, 3.0, 0.74, 0.50, 0.62, 64.0, 0.26, 0.10, 1.30,  9.0 },
+	{ "champagne",   74.0, 0.048, 0.85, 0.82, 54.0, 1.00, 0.52, 0.18, 21.0, 0.86, 250.0, 2.8, 0.80, 0.44, 0.72, 58.0, 0.24, 0.07, 1.70,  6.0 }
+};
+
+static const GowlFizzPreset *
+fizz_preset_by_name(const gchar *name)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(fizz_presets); i++) {
+		if (g_strcmp0(fizz_presets[i].name, name) == 0)
+			return &fizz_presets[i];
+	}
+	/* The soda: the one in the middle, and the shipped default. */
+	return &fizz_presets[2];
+}
+
+/* An override wins unless it is the sentinel, in which case the preset
+ * decides.  Negative is impossible for every one of these. */
+static gdouble
+fizz_pick(gdouble override, gdouble from_preset)
+{
+	return override < 0.0 ? from_preset : override;
+}
+
+gboolean
+gowl_config_fizz_preset_valid(const gchar *name)
+{
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(fizz_presets); i++) {
+		if (g_strcmp0(fizz_presets[i].name, name) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar * const *
+gowl_config_fizz_preset_names(void)
+{
+	static const gchar *names[G_N_ELEMENTS(fizz_presets) + 1];
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		guint i;
+
+		for (i = 0; i < G_N_ELEMENTS(fizz_presets); i++)
+			names[i] = fizz_presets[i].name;
+		names[G_N_ELEMENTS(fizz_presets)] = NULL;
+		g_once_init_leave(&once, 1);
+	}
+	return names;
+}
+
+const gchar *
+gowl_config_get_fizz_preset(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_PRESET);
+	return self->fizz_preset;
+}
+
+void
+gowl_config_set_fizz_preset(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_fizz_preset_valid(name))
+		return;
+	g_free(self->fizz_preset);
+	self->fizz_preset = g_strdup(name);
+}
+
+gdouble
+gowl_config_get_fizz_intensity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_INTENSITY);
+	return self->fizz_intensity;
+}
+
+void
+gowl_config_set_fizz_intensity(GowlConfig *self, gdouble intensity)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->fizz_intensity = CLAMP(intensity, 0.0, 3.0);
+}
+
+#define GOWL_FIZZ_GETTER(field)                                            \
+gdouble                                                                    \
+gowl_config_get_fizz_##field(GowlConfig *self)                             \
+{                                                                          \
+	const GowlFizzPreset *p;                                               \
+                                                                           \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.0);                       \
+	p = fizz_preset_by_name(self->fizz_preset);                            \
+	return fizz_pick(self->fizz_##field, p->field);                        \
+}
+
+GOWL_FIZZ_GETTER(cell)
+GOWL_FIZZ_GETTER(bubble)
+GOWL_FIZZ_GETTER(growth)
+GOWL_FIZZ_GETTER(sites)
+GOWL_FIZZ_GETTER(site_width)
+GOWL_FIZZ_GETTER(spacing)
+GOWL_FIZZ_GETTER(stray)
+GOWL_FIZZ_GETTER(cling)
+GOWL_FIZZ_GETTER(wobble)
+GOWL_FIZZ_GETTER(foam)
+GOWL_FIZZ_GETTER(foam_depth)
+GOWL_FIZZ_GETTER(depth)
+GOWL_FIZZ_GETTER(mirror)
+GOWL_FIZZ_GETTER(fog)
+GOWL_FIZZ_GETTER(specular)
+GOWL_FIZZ_GETTER(speed)
+
+#undef GOWL_FIZZ_GETTER
+
+/* Preset-only, with no override key of their own: they are part of what
+ * makes a named drink what it is, and a config that wants to move them
+ * is really asking for a different preset. */
+gdouble
+gowl_config_get_fizz_shine(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 70.0);
+	return fizz_preset_by_name(self->fizz_preset)->shine;
+}
+
+gdouble
+gowl_config_get_fizz_rim(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.28);
+	return fizz_preset_by_name(self->fizz_preset)->rim;
+}
+
+gdouble
+gowl_config_get_fizz_absorption(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.14);
+	return fizz_preset_by_name(self->fizz_preset)->absorption;
+}
+
+gdouble
+gowl_config_get_fizz_cling_life(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 14.0);
+	return fizz_preset_by_name(self->fizz_preset)->cling_life;
+}
+
+gint
+gowl_config_get_fizz_fps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_FPS);
+	return self->fizz_fps;
+}
+
+void
+gowl_config_set_fizz_fps(GowlConfig *self, gint fps)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->fizz_fps = CLAMP(fps, 0, 144);
+}
+
+gint
+gowl_config_get_fizz_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_SCALE);
+	return self->fizz_scale;
+}
+
+const gchar *
+gowl_config_get_fizz_tint(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_TINT);
+	return self->fizz_tint;
+}
+
+gdouble
+gowl_config_get_fizz_clarity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_CLARITY);
+	return self->fizz_clarity;
+}
+
+gdouble
+gowl_config_get_fizz_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_OPACITY);
+	return self->fizz_opacity;
+}
+
+gdouble
+gowl_config_get_fizz_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_BRIGHTNESS);
+	return self->fizz_brightness;
+}
+
+gdouble
+gowl_config_get_fizz_light(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_LIGHT);
+	return self->fizz_light;
+}
+
+gint
+gowl_config_get_fizz_frost(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_FROST);
+	return self->fizz_frost;
+}
+
+gint
+gowl_config_get_fizz_frost_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FIZZ_FROST_PASSES);
+	return self->fizz_frost_passes;
+}
+
+/* --- Falling leaves ------------------------------------------------- */
+
+/**
+ * GowlLeavesPreset:
+ *
+ * One whole tuned set of autumn.
+ *
+ * A table, and here more necessarily than anywhere else in this file,
+ * because the numbers are coupled BOTH ways.  `leaf' is capped against
+ * `column' and `cell' at render time -- a blade wider than a third of
+ * its own column would be sliced off at the column edge -- so asking for
+ * bigger leaves without widening the spacing quietly gets smaller ones.
+ * And `falling' is a fraction of columns, so narrowing the column to get
+ * the leaves bigger also gets fewer of them.
+ *
+ * What varies across the five is a season and a wind at the same time.
+ * `turning' is the first few coming down in still air and they stay on
+ * the glass for a long time; `gale' is the same tree in March, where
+ * nothing sticks for more than a moment.
+ *
+ * Even `turning' keeps a couple of leaves on a small window, for the
+ * reason `flat' does next door: a preset that is usually EMPTY is
+ * indistinguishable from the effect being off, and the tumble already
+ * takes half of what is there out of view at any instant.
+ */
+typedef struct {
+	const gchar *name;
+	gdouble      leaf;         /* px; blade radius, the ruler */
+	gdouble      cell;         /* px per cell of the stuck layer */
+	gdouble      stuck;        /* fraction of cells holding one */
+	gdouble      column;       /* px per column of the falling layer */
+	gdouble      falling;      /* fraction of columns carrying one */
+	gdouble      flutter;      /* swing, as a share of a column */
+	gdouble      tumble;       /* turns per fall */
+	gdouble      wind;         /* steady drift, px per fall */
+	gdouble      gust;         /* px a gust throws things */
+	gdouble      gustiness;    /* how hard and how often it blows */
+	gdouble      curl;         /* how dried out */
+	gdouble      veins;
+	gdouble      translucency;
+	gdouble      gloss;
+	gdouble      shadow;
+	gdouble      fog;          /* how hazy the pane is */
+	gdouble      shine;        /* specular exponent */
+	gdouble      speed;
+	gdouble      tenure;       /* seconds a leaf holds the glass */
+} GowlLeavesPreset;
+
+static const GowlLeavesPreset leaves_presets[] = {
+	/* name       leaf  cell  stuck col   fall  flut tumb wind  gust  gy   curl vein tran glos shad fog   shine spd  ten */
+	{ "turning",  82.0, 350.0, 0.34, 290.0, 0.55, 0.22, 1.6,  40.0, 110.0, 0.45, 0.18, 0.50, 0.68, 0.12, 0.40, 0.18, 18.0, 0.7, 52.0 },
+	{ "autumn",   76.0, 300.0, 0.48, 240.0, 0.85, 0.30, 2.4,  90.0, 220.0, 1.00, 0.35, 0.55, 0.62, 0.16, 0.45, 0.22, 18.0, 1.0, 26.0 },
+	{ "peak",     70.0, 250.0, 0.62, 200.0, 1.00, 0.34, 2.9, 130.0, 290.0, 1.20, 0.48, 0.58, 0.58, 0.18, 0.48, 0.24, 17.0, 1.3, 18.0 },
+	{ "blustery", 66.0, 265.0, 0.40, 190.0, 0.95, 0.42, 4.2, 260.0, 470.0, 1.70, 0.58, 0.55, 0.55, 0.22, 0.42, 0.26, 16.0, 1.8, 10.0 },
+	{ "gale",     60.0, 290.0, 0.22, 170.0, 1.00, 0.45, 6.0, 430.0, 700.0, 2.00, 0.70, 0.50, 0.52, 0.28, 0.36, 0.30, 15.0, 2.6,  5.0 }
+};
+
+static const GowlLeavesPreset *
+leaves_preset_by_name(const gchar *name)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(leaves_presets); i++) {
+		if (g_strcmp0(leaves_presets[i].name, name) == 0)
+			return &leaves_presets[i];
+	}
+	/* The autumn: the one in the middle, and the shipped default. */
+	return &leaves_presets[1];
+}
+
+static gdouble
+leaves_pick(gdouble override, gdouble from_preset)
+{
+	return override < 0.0 ? from_preset : override;
+}
+
+gboolean
+gowl_config_leaves_preset_valid(const gchar *name)
+{
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(leaves_presets); i++) {
+		if (g_strcmp0(leaves_presets[i].name, name) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar * const *
+gowl_config_leaves_preset_names(void)
+{
+	static const gchar *names[G_N_ELEMENTS(leaves_presets) + 1];
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		guint i;
+
+		for (i = 0; i < G_N_ELEMENTS(leaves_presets); i++)
+			names[i] = leaves_presets[i].name;
+		names[G_N_ELEMENTS(leaves_presets)] = NULL;
+		g_once_init_leave(&once, 1);
+	}
+	return names;
+}
+
+const gchar *
+gowl_config_get_leaves_preset(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_PRESET);
+	return self->leaves_preset;
+}
+
+void
+gowl_config_set_leaves_preset(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_leaves_preset_valid(name))
+		return;
+	g_free(self->leaves_preset);
+	self->leaves_preset = g_strdup(name);
+}
+
+gdouble
+gowl_config_get_leaves_intensity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_INTENSITY);
+	return self->leaves_intensity;
+}
+
+void
+gowl_config_set_leaves_intensity(GowlConfig *self, gdouble intensity)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->leaves_intensity = CLAMP(intensity, 0.0, 3.0);
+}
+
+#define GOWL_LEAVES_GETTER(field)                                          \
+gdouble                                                                    \
+gowl_config_get_leaves_##field(GowlConfig *self)                           \
+{                                                                          \
+	const GowlLeavesPreset *p;                                             \
+                                                                           \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.0);                       \
+	p = leaves_preset_by_name(self->leaves_preset);                        \
+	return leaves_pick(self->leaves_##field, p->field);                    \
+}
+
+GOWL_LEAVES_GETTER(leaf)
+GOWL_LEAVES_GETTER(cell)
+GOWL_LEAVES_GETTER(stuck)
+GOWL_LEAVES_GETTER(column)
+GOWL_LEAVES_GETTER(falling)
+GOWL_LEAVES_GETTER(flutter)
+GOWL_LEAVES_GETTER(tumble)
+GOWL_LEAVES_GETTER(wind)
+GOWL_LEAVES_GETTER(gust)
+GOWL_LEAVES_GETTER(gustiness)
+GOWL_LEAVES_GETTER(curl)
+GOWL_LEAVES_GETTER(veins)
+GOWL_LEAVES_GETTER(translucency)
+GOWL_LEAVES_GETTER(gloss)
+GOWL_LEAVES_GETTER(shadow)
+GOWL_LEAVES_GETTER(fog)
+GOWL_LEAVES_GETTER(speed)
+GOWL_LEAVES_GETTER(tenure)
+
+#undef GOWL_LEAVES_GETTER
+
+gdouble
+gowl_config_get_leaves_shine(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 18.0);
+	return leaves_preset_by_name(self->leaves_preset)->shine;
+}
+
+gint
+gowl_config_get_leaves_fps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_FPS);
+	return self->leaves_fps;
+}
+
+void
+gowl_config_set_leaves_fps(GowlConfig *self, gint fps)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->leaves_fps = CLAMP(fps, 0, 144);
+}
+
+gint
+gowl_config_get_leaves_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_SCALE);
+	return self->leaves_scale;
+}
+
+const gchar *
+gowl_config_get_leaves_warm(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_WARM);
+	return self->leaves_warm;
+}
+
+const gchar *
+gowl_config_get_leaves_gold(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_GOLD);
+	return self->leaves_gold;
+}
+
+const gchar *
+gowl_config_get_leaves_dry(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_DRY);
+	return self->leaves_dry;
+}
+
+gdouble
+gowl_config_get_leaves_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_OPACITY);
+	return self->leaves_opacity;
+}
+
+gdouble
+gowl_config_get_leaves_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_BRIGHTNESS);
+	return self->leaves_brightness;
+}
+
+gdouble
+gowl_config_get_leaves_light(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_LIGHT);
+	return self->leaves_light;
+}
+
+gint
+gowl_config_get_leaves_frost(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_FROST);
+	return self->leaves_frost;
+}
+
+gint
+gowl_config_get_leaves_frost_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_LEAVES_FROST_PASSES);
+	return self->leaves_frost_passes;
+}
+
+/* --- Snow ----------------------------------------------------------- */
+
+/**
+ * GowlSnowPreset:
+ *
+ * One whole tuned set of snow.
+ *
+ * A table for the usual reason and one more: this one is TWO scales at
+ * once.  Left to right it snows harder, and left to right the pane also
+ * gets COLDER -- `melt' moves later, `ice' and `ice_rate' go up, `runs'
+ * goes down.  A flurry is a warm window that turns everything that lands
+ * on it into water within seconds; a blizzard is a cold one that keeps
+ * its crystals and grows frost around them.  Picking those apart into
+ * separate knobs would be truer to the physics and useless in practice,
+ * because nobody wants heavy snow melting instantly.
+ *
+ * `flake' is the ruler, and it is small: a crystal has to be wide enough
+ * for six arms to read, and a window of flakes below that size is dust.
+ */
+typedef struct {
+	const gchar *name;
+	gdouble      flake;        /* px; the ruler */
+	gdouble      cell;         /* px per cell of the settled layer */
+	gdouble      settled;      /* fraction of cells holding one */
+	gdouble      column;       /* px per column of the falling layer */
+	gdouble      falling;      /* fraction of columns carrying one */
+	gdouble      arms;         /* how dendritic */
+	gdouble      drift;        /* steady sideways wind, px per fall */
+	gdouble      flutter;      /* wander, as a share of a column */
+	gdouble      spin;         /* turns per fall */
+	gdouble      melt;         /* where in a life the melt begins */
+	gdouble      shrink;       /* bead size, as a share of the flake */
+	gdouble      depth;        /* ray travel, in bead radii */
+	gdouble      runs;         /* melt-water columns running */
+	gdouble      run_width;    /* px per run column */
+	gdouble      run_length;   /* px of trail */
+	gdouble      beads;
+	gdouble      ice;          /* frost from the edges */
+	gdouble      ice_rate;     /* how fast it creeps in */
+	gdouble      ice_scale;    /* px per feather */
+	gdouble      sparkle;
+	gdouble      fog;
+	gdouble      glow;         /* how bright a crystal is */
+	gdouble      specular;
+	gdouble      shine;
+	gdouble      rim;
+	gdouble      absorption;
+	gdouble      speed;
+	gdouble      life;         /* seconds: land, sit, melt, run */
+} GowlSnowPreset;
+
+static const GowlSnowPreset snow_presets[] = {
+	/* name        flake cell   set   col    fall  arms drift flut spin melt shr  dep  runs rw     rlen  bead ice   irate isc   spk  fog   glow spec shine rim  abs   spd  life */
+	{ "flurry",    24.0, 210.0, 0.16, 140.0, 0.34, 0.55, 40.0, 0.20, 0.5, 0.18, 0.32, 5.5, 0.44, 105.0, 340.0, 0.66, 0.10, 0.006, 30.0, 0.40, 0.48, 1.06, 0.42, 62.0, 0.30, 0.10, 0.75, 16.0 },
+	{ "light",     27.0, 185.0, 0.22, 115.0, 0.50, 0.65, 80.0, 0.26, 0.6, 0.32, 0.34, 5.5, 0.38, 100.0, 320.0, 0.64, 0.26, 0.012, 27.0, 0.48, 0.54, 1.09, 0.41, 61.0, 0.29, 0.09, 0.88, 22.0 },
+	{ "steady",    30.0, 165.0, 0.30,  95.0, 0.70, 0.75, 120.0, 0.30, 0.8, 0.45, 0.35, 5.5, 0.30,  95.0, 300.0, 0.62, 0.45, 0.022, 24.0, 0.55, 0.60, 1.12, 0.40, 60.0, 0.28, 0.08, 1.00, 30.0 },
+	{ "heavy",     33.0, 145.0, 0.40,  78.0, 0.88, 0.82, 170.0, 0.34, 1.0, 0.58, 0.36, 5.5, 0.20,  90.0, 260.0, 0.60, 0.62, 0.036, 21.0, 0.62, 0.66, 1.16, 0.38, 58.0, 0.26, 0.07, 1.25, 42.0 },
+	{ "blizzard",  36.0, 130.0, 0.52,  62.0, 1.00, 0.90, 260.0, 0.40, 1.4, 0.72, 0.38, 5.5, 0.12,  84.0, 210.0, 0.58, 0.82, 0.055, 18.0, 0.70, 0.74, 1.20, 0.36, 56.0, 0.24, 0.06, 1.60, 60.0 }
+};
+
+static const GowlSnowPreset *
+snow_preset_by_name(const gchar *name)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(snow_presets); i++) {
+		if (g_strcmp0(snow_presets[i].name, name) == 0)
+			return &snow_presets[i];
+	}
+	/* The steady fall: the one in the middle, and the shipped default. */
+	return &snow_presets[2];
+}
+
+static gdouble
+snow_pick(gdouble override, gdouble from_preset)
+{
+	return override < 0.0 ? from_preset : override;
+}
+
+gboolean
+gowl_config_snow_preset_valid(const gchar *name)
+{
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(snow_presets); i++) {
+		if (g_strcmp0(snow_presets[i].name, name) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar * const *
+gowl_config_snow_preset_names(void)
+{
+	static const gchar *names[G_N_ELEMENTS(snow_presets) + 1];
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		guint i;
+
+		for (i = 0; i < G_N_ELEMENTS(snow_presets); i++)
+			names[i] = snow_presets[i].name;
+		names[G_N_ELEMENTS(snow_presets)] = NULL;
+		g_once_init_leave(&once, 1);
+	}
+	return names;
+}
+
+const gchar *
+gowl_config_get_snow_preset(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_PRESET);
+	return self->snow_preset;
+}
+
+void
+gowl_config_set_snow_preset(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_snow_preset_valid(name))
+		return;
+	g_free(self->snow_preset);
+	self->snow_preset = g_strdup(name);
+}
+
+gdouble
+gowl_config_get_snow_intensity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_INTENSITY);
+	return self->snow_intensity;
+}
+
+void
+gowl_config_set_snow_intensity(GowlConfig *self, gdouble intensity)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->snow_intensity = CLAMP(intensity, 0.0, 3.0);
+}
+
+#define GOWL_SNOW_GETTER(field)                                            \
+gdouble                                                                    \
+gowl_config_get_snow_##field(GowlConfig *self)                             \
+{                                                                          \
+	const GowlSnowPreset *p;                                               \
+                                                                           \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.0);                       \
+	p = snow_preset_by_name(self->snow_preset);                            \
+	return snow_pick(self->snow_##field, p->field);                        \
+}
+
+GOWL_SNOW_GETTER(flake)
+GOWL_SNOW_GETTER(cell)
+GOWL_SNOW_GETTER(settled)
+GOWL_SNOW_GETTER(column)
+GOWL_SNOW_GETTER(falling)
+GOWL_SNOW_GETTER(arms)
+GOWL_SNOW_GETTER(drift)
+GOWL_SNOW_GETTER(flutter)
+GOWL_SNOW_GETTER(spin)
+GOWL_SNOW_GETTER(melt)
+GOWL_SNOW_GETTER(shrink)
+GOWL_SNOW_GETTER(depth)
+GOWL_SNOW_GETTER(runs)
+GOWL_SNOW_GETTER(run_width)
+GOWL_SNOW_GETTER(run_length)
+GOWL_SNOW_GETTER(beads)
+GOWL_SNOW_GETTER(ice)
+GOWL_SNOW_GETTER(ice_rate)
+GOWL_SNOW_GETTER(ice_scale)
+GOWL_SNOW_GETTER(sparkle)
+GOWL_SNOW_GETTER(fog)
+GOWL_SNOW_GETTER(glow)
+GOWL_SNOW_GETTER(specular)
+GOWL_SNOW_GETTER(speed)
+
+#undef GOWL_SNOW_GETTER
+
+gdouble
+gowl_config_get_snow_shine(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 60.0);
+	return snow_preset_by_name(self->snow_preset)->shine;
+}
+
+gdouble
+gowl_config_get_snow_rim(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.28);
+	return snow_preset_by_name(self->snow_preset)->rim;
+}
+
+gdouble
+gowl_config_get_snow_absorption(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.08);
+	return snow_preset_by_name(self->snow_preset)->absorption;
+}
+
+gdouble
+gowl_config_get_snow_life(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 30.0);
+	return snow_preset_by_name(self->snow_preset)->life;
+}
+
+gint
+gowl_config_get_snow_fps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_FPS);
+	return self->snow_fps;
+}
+
+void
+gowl_config_set_snow_fps(GowlConfig *self, gint fps)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->snow_fps = CLAMP(fps, 0, 144);
+}
+
+gint
+gowl_config_get_snow_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_SCALE);
+	return self->snow_scale;
+}
+
+const gchar *
+gowl_config_get_snow_tint(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_TINT);
+	return self->snow_tint;
+}
+
+gdouble
+gowl_config_get_snow_clarity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_CLARITY);
+	return self->snow_clarity;
+}
+
+gdouble
+gowl_config_get_snow_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_OPACITY);
+	return self->snow_opacity;
+}
+
+gdouble
+gowl_config_get_snow_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_BRIGHTNESS);
+	return self->snow_brightness;
+}
+
+gdouble
+gowl_config_get_snow_light(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_LIGHT);
+	return self->snow_light;
+}
+
+gint
+gowl_config_get_snow_frost(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_FROST);
+	return self->snow_frost;
+}
+
+gint
+gowl_config_get_snow_frost_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SNOW_FROST_PASSES);
+	return self->snow_frost_passes;
 }
 
 gboolean

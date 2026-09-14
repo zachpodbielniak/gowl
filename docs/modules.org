@@ -648,6 +648,9 @@ another.
 | =liquidglass=    | The wallpaper refracted through translucent windows     |
 | =liquidwater=    | The wallpaper through a moving water surface            |
 | =liquidrain=     | The wallpaper through a rained-on window                |
+| =snow=           | Snow that settles on the window, melts and runs off     |
+| =leaves=         | Autumn leaves that collect until the wind takes them    |
+| =fizz=           | The wallpaper through a glass of something carbonated   |
 | =autostart=      | Runs autostart commands from config                   |
 | =notifyd=        | org.freedesktop.Notifications daemon feeding the bar   |
 | =vanitygaps=     | Adds configurable inner/outer gaps to layouts         |
@@ -1268,30 +1271,42 @@ first frame on every output when it starts: ffmpeg reads a fixed frame
 rate, so without it a stretch of screen standing still would drop out of
 the video's timeline. =tests/test-idle-output.c= checks the contract.
 
-** Nine effect modules, one interface
+** Twelve effect modules, one interface
 
 =animation=, =cube=, =expo=, =switcher=, =magnifier=, =blur=,
-=liquidglass=, =liquidwater= and =liquidrain= all implement
-=GowlSceneEffect=, all opt in through the =modules= mapping, and all are
-loaded by CMacs by default.
+=liquidglass=, =liquidwater=, =liquidrain=, =snow=, =leaves= and =fizz=
+all implement =GowlSceneEffect=, all opt in through the =modules=
+mapping, and all are loaded by CMacs by default.
 They are separate plugins rather than one because each is a separate
 decision: somebody who wants shadows and no cube, or a magnifier and
 nothing else, configures exactly that.
 
-=blur=, =liquidglass=, =liquidwater= and =liquidrain= are the set that
-are ALTERNATIVES rather than additions --- each puts a node in the same
-place in the same window's tree, so the =window-backdrop= setting picks
-which one draws and =Super+"= cycles it. Loading all of them is still
-normal and intended: that is what makes the key instant rather than a
-module load.
+=blur=, =liquidglass=, =liquidwater=, =liquidrain=, =snow=, =leaves= and
+=fizz= are the set that are ALTERNATIVES rather than additions --- each
+puts a node in the same place in the same window's tree, so the
+=window-backdrop= setting picks which one draws and =Super+"= cycles it.
+Loading all of them is still normal and intended: that is what makes the
+key instant rather than a module load.
 
-=liquidwater= and =liquidrain= are the two that never settle. Everything
-else is, between events, correct and free; those two are stale the moment
-they are drawn, which is why they are the only ones with a clock and a
-frame rate, and why they hold an output awake while they have something
-to draw on it.
+=liquidwater=, =liquidrain=, =snow=, =leaves= and =fizz= are the five
+that never settle. Everything else is, between events, correct and free;
+those five are stale the moment they are drawn, which is why they are the
+only ones with a clock and a frame rate, and why they hold an output
+awake while they have something to draw on it.
 
-*How eight providers share one interface.* Every hook is either
+*The five animated ones are the same module written five times, and that
+is deliberate.* The host half of an animated backdrop --- the clock, the
+per-output frame throttle, the wallpaper capture, the per-client scene
+buffer, the weak reference to the compositor and the teardown --- does
+not change with what the shader draws, so each carries its own copy
+rather than sharing a base class. What that buys is that a shader can be
+added or removed without touching the other four, and what it costs is
+that a fix to the host half has to be applied five times.
+=tests/test-compositor-teardown.c= loads all five for exactly that
+reason: each has its own chance to reach a freed compositor on the way
+out.
+
+*How providers share one interface.* Every hook is either
 CONSUMABLE or BROADCAST, and which one it is is a property of the hook
 rather than of the module:
 

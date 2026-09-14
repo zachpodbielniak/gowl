@@ -1450,6 +1450,170 @@ damages a scene node, which is what makes the output ask for a frame.
 Without it a window that became translucent on a still screen would sit
 there with no water.
 
+*** The three weathers that are not liquid
+:PROPERTIES:
+:CUSTOM_ID: weather-backdrops
+:END:
+
+=modules/snow/=, =modules/leaves/= and =modules/fizz/= are the other
+three animated backdrops, drawn by =src/fx/gowl-fx-snow.c=,
+=gowl-fx-leaves.c= and =gowl-fx-fizz.c=.
+
+*The host half is the rain's, written out three more times.* The clock,
+the per-output frame throttle, the wallpaper capture with the windows
+hidden, the per-client =wlr_swapchain= and scene buffer, the weak
+reference to the compositor and the teardown are the same problem
+whatever the shader draws, and every word of
+[[#liquidwater-architecture][the water's section]] about them applies
+unchanged. Each
+module carries its own copy rather than inheriting one: what that buys is
+that a shader can be added or removed without touching the other four,
+and what it costs is that a fix to the host half has to be applied five
+times. =tests/test-compositor-teardown.c= loads all five, because each
+has its own chance to reach a freed compositor on the way out.
+
+What follows is only what is genuinely different.
+
+**** A bubble is a diverging lens
+
+Every other backdrop in the tree bends light the same way: liquid in gas,
+converging, and past a certain depth INVERTING --- which is the most
+recognisable thing a raindrop does. A gas bubble in liquid is the other
+sign. It minifies, it is a tiny fisheye, and it never inverts however
+large it gets.
+
+That is one character in the displacement, so it is asserted rather than
+commented. =tests/test-weather-render.c= puts a horizontal RAMP behind
+both shaders at the same depth --- so the rendered value at a pixel says
+where in x the shader sampled --- and reads the sign of its local slope.
+The bubbles come out four to one upright-and-steeper; the drops better
+than two to one reversed. Neither count is ever zero, because every lens
+of either kind reverses the gradient along its own antialiased rim, so
+the test is on each lens's own BALANCE of the two rather than on a
+comparison between them.
+
+The other half of a bubble's optics is not a knob either: light inside
+the liquid meeting the wall past the critical angle is totally reflected,
+and =sin(theta_c) = 1/1.333 = 0.75=, so the silvered ring starts at
+exactly three quarters of the radius. It is why bubbles read as rings
+rather than as dots.
+
+**** A train is indexed by emission number
+
+The rain's running drops are one drop per column per cycle, found by
+=fract()= of the column's clock. A nucleation site emits a FILE of
+bubbles, several of which are on screen at once, so a pixel cannot ask
+"which drop is here" --- it has to ask "which of the several".
+
+It works out the phase a bubble at this pixel's HEIGHT would be on and
+turns that into the emission that would be there now, then checks three
+either side. That inverse exists because the rise itself is a closed
+form: a bubble grows as it rises and its speed goes as the square of its
+radius, so =dh/dt = c(1 + g*h)^2=, which integrates and inverts. Growth,
+acceleration and the widening of the gaps up a train all fall out of the
+one number.
+
+The consequence is a new rule. The emission index is the clock times the
+column's rate times its bubbles per cycle, so both of those have to be
+WHOLE numbers or the index does not change by a multiple of the cycle
+count when the clock wraps --- and every train would jump once a wrap.
+The cycle count is also smaller than the rain's, 64 rather than 256,
+because the integer being hashed is now up to =cycles * 3 * 8= rather
+than the clock itself.
+
+**** A leaf is opaque, and that changes the whole shader
+
+There is no displacement in =gowl-fx-leaves.c= and no surface normal. A
+leaf covers the wallpaper rather than bending it, and the only thing that
+saves it from being a brown sticker is that it is BACKLIT: the wallpaper
+comes through it tinted and DIFFUSED, and the venation shows dark because
+a vein is thicker tissue that passes less light.
+
+Sampling the sharp wallpaper for that term is the obvious thing to write
+and it prints the desktop onto the leaf, which is exactly how it looked
+before the term was moved to the blurred source.
+
+The leaf's own silhouette is three shapes, because one is a logo. The
+maple is a polar profile, since a maple really is radial --- five lobes
+spreading from the point where the stem joins, and the sinus falls out of
+the phase rather than being carved. The oak is NOT: pinnate lobing runs
+down either side of a midrib, and a polar profile gives a lobed disc
+however much it is elongated, which is a flower. It is the ovate profile
+with its half-width rippled along the blade instead.
+
+*The tumble is worth more than every other cue put together.* A falling
+leaf turns about its long axis and twice a turn presents its edge,
+collapsing to a LINE. Nothing else on a screen does that. It is one
+multiply --- the blade squashed across by =|cos(tumble)|= --- and its
+sign says which face is towards the viewer, so the paler underside is
+free and makes the tumble legible as a turn rather than as a narrowing.
+
+**** The wind is one number on the CPU
+
+Every leaf on every screen reads the same gust, and that is the whole
+reason a gust looks like ONE gust rather than like each leaf
+independently deciding to leave. It also carries the releases: a stuck
+leaf's adhesion is hashed per tenure and the gust pulls its release point
+EARLIER, so a gust takes several leaves at once and calm air takes almost
+none --- correlated departures with no state anywhere.
+
+It is one slow sine modulated by two slower ones and then squared. Both
+halves of that are load-bearing. A SUM of three sines is a poor gust,
+because three things that rarely agree spend nearly all their time
+cancelling; the first version was exactly that and produced a wind that
+sat at a quarter strength forever and never once got up. And a sine,
+however modulated, spends half its life above the middle of its range,
+which is a fan --- squaring is what makes it calm most of the time and
+strong briefly. Measured over eleven minutes: below a fifth of full
+strength 58% of the time, peaking at 0.87.
+
+The three phases are wrapped at 2pi INDIVIDUALLY. Deriving them from one
+accumulator and scaling it is the obvious economy and makes the scaled
+values jump at every wrap, because they do not reach a whole turn
+together.
+
+**** A settled snowflake is three objects in succession
+
+It lands as a crystal, which SCATTERS --- snow is a foam of ice and air,
+so a flake on glass is a bright diffusing patch and not a lens. It melts
+into a bead, which is a raindrop and refracts like one. And then it runs,
+through what is structurally the rain's =run_layer()= because once a
+flake has melted there is nothing snow-specific left to model.
+
+One phase drives the shape (six-fold towards a circle), the size (down by
+=snow-shrink=) and the optics (scatter towards lens), which is what keeps
+a half-melted flake half-rounded, half-collapsed and half-refracting at
+the same instant. The crystal is accumulated SEPARATELY from the water
+rather than into the same winner-takes-all: folding both together would
+force a half-melted flake to be one or the other, and a half-melted flake
+is visibly both.
+
+=snow-shrink= at 0.35 is severe and not severe enough to be wrong; a
+snowflake is mostly air. Cross-fading white to clear at a constant size
+--- the obvious implementation --- reads as a flake going invisible
+rather than as one turning into water.
+
+*Testing that took two attempts and the first is worth recording.*
+Walking the settled clock through a life and measuring the pane at eight
+points measures NOTHING: every cell carries its own phase offset, so the
+population is spread evenly across the whole lifecycle at every instant
+and advancing the clock only rotates which cell is where. The aggregate
+is invariant by construction, and the eight numbers came out flat to two
+significant figures. The test varies =snow-melt= instead, which moves the
+whole population to one end or the other.
+
+**** The frost is the one clock that is not wrapped
+
+Ice does not repeat, so =GowlFxSnowClock.frost= saturates rather than
+wrapping. What it moves is a THRESHOLD on a warped ridged-noise field, so
+lowering it is the growth FRONT advancing --- feathers appear at their
+tips and reach inwards. Raising an alpha on a finished pattern is what
+frost does not do, and ten seconds of watching tells the two apart.
+
+The ridge is cubed. Without that the field is broad and smooth and the
+threshold lets whole REGIONS through, which is not frost but a smudge on
+the lens; that is what the first version drew.
+
 *** Graphics tablets
 
 Before =src/core/gowl-tablet.c=, the new-input switch handled

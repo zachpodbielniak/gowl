@@ -114,6 +114,34 @@ static const GowlBuiltinModule builtin_modules[] = {
 		" *   - liquidwater: the wallpaper, through moving water\n"
 	},
 	{
+		"liquidrain",
+		"Shows the wallpaper through a rained-on window",
+		"  liquidrain:\n"
+		"    enabled: true\n",
+		" *   - liquidrain: the wallpaper, through a rainy window\n"
+	},
+	{
+		"snow",
+		"Snow falling past the window, settling on it and melting off",
+		"  snow:\n"
+		"    enabled: true\n",
+		" *   - snow: flakes that settle, melt into beads and run off\n"
+	},
+	{
+		"leaves",
+		"Autumn leaves falling past the window and collecting on it",
+		"  leaves:\n"
+		"    enabled: true\n",
+		" *   - leaves: autumn, with a wind that takes them off again\n"
+	},
+	{
+		"fizz",
+		"Shows the wallpaper through a glass of something carbonated",
+		"  fizz:\n"
+		"    enabled: true\n",
+		" *   - fizz: bubbles rising through a carbonated drink\n"
+	},
+	{
 		"autostart",
 		"Spawn configured commands on compositor startup",
 		"  autostart:\n"
@@ -300,8 +328,8 @@ static const gchar *default_yaml_config =
 	"  \"Super+v\": { action: set_split, arg: \"vsplit\" }\n"
 	"  \"Super+Shift+v\": { action: set_split, arg: \"normal\" }\n"
 	"\n"
-	"  # What shows through a translucent window: water, glass, blur,\n"
-	"  # nothing.\n"
+	"  # What shows through a translucent window: rain, snow, leaves,\n"
+	"  # fizz, water, glass, blur or nothing.\n"
 	"  # Every backdrop module reads `window-backdrop', so this is\n"
 	"  # instant and needs none of them loaded to be bound.\n"
 	"  \"Super+Shift+apostrophe\": { action: cycle_backdrop, desc: \"Cycle the window backdrop\" }\n"

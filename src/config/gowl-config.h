@@ -1850,6 +1850,337 @@ gdouble      gowl_config_get_rain_light (GowlConfig *self);
 gint         gowl_config_get_rain_frost (GowlConfig *self);
 gint         gowl_config_get_rain_frost_passes (GowlConfig *self);
 
+/* --- Carbonation (modules/fizz) ---
+ *
+ * `fizz-preset' names a whole tuned set --- "flat", "sparkling", "soda",
+ * "seltzer", "champagne" --- and every getter below returns what that
+ * preset says unless the config named an override for it.
+ *
+ * `fizz-site-width' is the ruler, not the cell.  What the eye counts in
+ * a fizzy drink is TRAINS: files of bubbles streaming up from one point
+ * on the glass.  So the number of nucleation sites across the window is
+ * what "how carbonated" means, and the bubble size is a fraction of the
+ * column rather than a length of its own.
+ *
+ * Lengths are LOGICAL pixels, scaled by the output's scale at render
+ * time. */
+
+const gchar *gowl_config_get_fizz_preset (GowlConfig *self);
+void         gowl_config_set_fizz_preset (GowlConfig *self,
+                                          const gchar *name);
+gboolean     gowl_config_fizz_preset_valid (const gchar *name);
+/* (array zero-terminated=1) (transfer none): every preset name, for a
+ * completion list.  Static; do not free. */
+const gchar * const *gowl_config_fizz_preset_names (void);
+
+/* One knob over the whole preset, 0 to 3.  Scales how many sites there
+ * are, how closely they emit, how many strays there are and how fast
+ * they rise --- what together means "how carbonated is this".  It
+ * deliberately leaves the BUBBLE SIZE alone: scaling that as well would
+ * not be a fizzier drink, it would be the same drink in a smaller
+ * glass.  1.0 is the preset as tuned. */
+gdouble      gowl_config_get_fizz_intensity (GowlConfig *self);
+void         gowl_config_set_fizz_intensity (GowlConfig *self,
+                                             gdouble intensity);
+
+/* Pixels per cell of the clinging-bubble lattice. */
+gdouble      gowl_config_get_fizz_cell (GowlConfig *self);
+/* A bubble's radius at release, as a fraction of its column.  Capped
+ * against `fizz-growth' at render time: a bubble ends its rise
+ * (1 + growth) times the size it started, and the column lookup has a
+ * grown bubble of at most a third of a column in it. */
+gdouble      gowl_config_get_fizz_bubble (GowlConfig *self);
+/* How much bigger a bubble is at the top of the pane than at the
+ * bottom.  0 is a bubble that does not grow; 1 doubles it.  It is also
+ * what makes a train SPREAD as it rises, because rise speed goes as the
+ * square of the radius. */
+gdouble      gowl_config_get_fizz_growth (GowlConfig *self);
+/* How many columns hold a nucleation site, 0 to 1, and how wide a
+ * column is in pixels. */
+gdouble      gowl_config_get_fizz_sites (GowlConfig *self);
+gdouble      gowl_config_get_fizz_site_width (GowlConfig *self);
+/* How closely a site emits, 0 to 1.  Quantised to a whole number of
+ * bubbles per cycle inside the shader, which is what keeps a train
+ * continuous when the clock wraps. */
+gdouble      gowl_config_get_fizz_spacing (GowlConfig *self);
+/* How many columns carry a loose bubble that came from no site. */
+gdouble      gowl_config_get_fizz_stray (GowlConfig *self);
+/* How many cells hold a bubble stuck to the glass, growing until it is
+ * buoyant enough to let go. */
+gdouble      gowl_config_get_fizz_cling (GowlConfig *self);
+/* How far a bubble wanders sideways as it rises, in pixels.  Applied
+ * only above the size at which a real bubble's straight path goes
+ * unstable, so the small ones go up straight and the big ones zigzag. */
+gdouble      gowl_config_get_fizz_wobble (GowlConfig *self);
+/* The head at the top of the pane, 0 to 1, and how far down it reaches
+ * in pixels. */
+gdouble      gowl_config_get_fizz_foam (GowlConfig *self);
+gdouble      gowl_config_get_fizz_foam_depth (GowlConfig *self);
+/* How far the wallpaper is behind the pane, in multiples of a bubble's
+ * OWN RADIUS.  A gas bubble in liquid is a DIVERGING lens, so unlike a
+ * raindrop this never inverts however large it is --- it minifies,
+ * which is what a bubble in a glass actually does. */
+gdouble      gowl_config_get_fizz_depth (GowlConfig *self);
+/* The silvered ring, 0 to 1.  Light inside the liquid meeting the
+ * bubble past the critical angle is totally reflected, and for water
+ * against air that is the outer QUARTER of the disc --- which is why
+ * bubbles read as rings rather than as dots. */
+gdouble      gowl_config_get_fizz_mirror (GowlConfig *self);
+/* How cloudy the drink is, 0 to 1.  The bubbles lift it. */
+gdouble      gowl_config_get_fizz_fog (GowlConfig *self);
+/* The glint on each bubble, and how tight it is (the latter preset
+ * only). */
+gdouble      gowl_config_get_fizz_specular (GowlConfig *self);
+gdouble      gowl_config_get_fizz_shine (GowlConfig *self);
+/* How much darker the very edge of a bubble is.  Preset only. */
+gdouble      gowl_config_get_fizz_rim (GowlConfig *self);
+/* How fast the bubbles rise; 1.0 is the preset's own rate. */
+gdouble      gowl_config_get_fizz_speed (GowlConfig *self);
+/* How much of the tint the drink takes out of the light, and how long a
+ * clinging bubble holds on in seconds.  Both preset only. */
+gdouble      gowl_config_get_fizz_absorption (GowlConfig *self);
+gdouble      gowl_config_get_fizz_cling_life (GowlConfig *self);
+
+/* How often the pane is redrawn, 0 to 144; 0 means every frame the
+ * output offers. */
+gint         gowl_config_get_fizz_fps (GowlConfig *self);
+void         gowl_config_set_fizz_fps (GowlConfig *self, gint fps);
+/* How much smaller than the window the fizz is rendered, 1 to 4. */
+gint         gowl_config_get_fizz_scale (GowlConfig *self);
+const gchar *gowl_config_get_fizz_tint (GowlConfig *self);
+/* How much of the cloudiness a bubble lifts, 0 to 1. */
+gdouble      gowl_config_get_fizz_clarity (GowlConfig *self);
+gdouble      gowl_config_get_fizz_opacity (GowlConfig *self);
+gdouble      gowl_config_get_fizz_brightness (GowlConfig *self);
+/* Light direction in degrees: 0 straight above, positive clockwise. */
+gdouble      gowl_config_get_fizz_light (GowlConfig *self);
+/* How much smaller the cloudiness is computed, 1 to 8, and how many box
+ * passes, 1 to 6. */
+gint         gowl_config_get_fizz_frost (GowlConfig *self);
+gint         gowl_config_get_fizz_frost_passes (GowlConfig *self);
+
+/* --- Falling leaves (modules/leaves) ---
+ *
+ * `leaves-preset' names a whole tuned set --- "turning", "autumn",
+ * "peak", "blustery", "gale" --- and every getter below returns what
+ * that preset says unless the config named an override for it.
+ *
+ * `leaves-leaf' is the ruler, and it is CAPPED against both
+ * `leaves-column' and `leaves-cell' at render time: a blade wider than
+ * about a third of its own column would be sliced off at the column
+ * edge.  So asking for bigger leaves without widening the spacing
+ * quietly gets smaller ones, which is exactly why the three move
+ * together in a preset.
+ *
+ * Lengths are LOGICAL pixels, scaled by the output's scale at render
+ * time. */
+
+const gchar *gowl_config_get_leaves_preset (GowlConfig *self);
+void         gowl_config_set_leaves_preset (GowlConfig *self,
+                                            const gchar *name);
+gboolean     gowl_config_leaves_preset_valid (const gchar *name);
+/* (array zero-terminated=1) (transfer none): every preset name, for a
+ * completion list.  Static; do not free. */
+const gchar * const *gowl_config_leaves_preset_names (void);
+
+/* One knob over the whole preset, 0 to 3.  Scales how many leaves are
+ * falling, how many are stuck, how fast they come down and how hard it
+ * blows.  It leaves the LEAF SIZE alone, for the reason the rain's
+ * intensity leaves the drop size alone.  1.0 is the preset as tuned. */
+gdouble      gowl_config_get_leaves_intensity (GowlConfig *self);
+void         gowl_config_set_leaves_intensity (GowlConfig *self,
+                                               gdouble intensity);
+
+/* A leaf's radius in pixels, from the middle of the blade to the tip. */
+gdouble      gowl_config_get_leaves_leaf (GowlConfig *self);
+/* Pixels per cell of the stuck-leaf lattice, and how many of those
+ * cells hold a leaf resting on the glass. */
+gdouble      gowl_config_get_leaves_cell (GowlConfig *self);
+gdouble      gowl_config_get_leaves_stuck (GowlConfig *self);
+/* Pixels per column of the falling layer, and how many columns have a
+ * leaf coming down them. */
+gdouble      gowl_config_get_leaves_column (GowlConfig *self);
+gdouble      gowl_config_get_leaves_falling (GowlConfig *self);
+/* How far a falling leaf swings sideways, as a fraction of a column,
+ * capped at 0.45 because the three-column lookup is worked out with
+ * that number in it. */
+gdouble      gowl_config_get_leaves_flutter (GowlConfig *self);
+/* How fast a falling leaf turns over, in turns per fall.  A leaf
+ * edge-on is a LINE, and that periodic collapse to nothing is the
+ * clearest single sign that a thing on screen is a leaf. */
+gdouble      gowl_config_get_leaves_tumble (GowlConfig *self);
+/* The steady sideways drift in pixels per fall, and how far a gust
+ * throws things on top of it. */
+gdouble      gowl_config_get_leaves_wind (GowlConfig *self);
+gdouble      gowl_config_get_leaves_gust (GowlConfig *self);
+/* How hard and how often the wind gets up, 0 to 2.  Every leaf on
+ * screen reads the same gust, which is what makes one look like one
+ * gust rather than like each leaf deciding for itself. */
+gdouble      gowl_config_get_leaves_gustiness (GowlConfig *self);
+/* How much a leaf has dried and curled, 0 to 1.  A curled leaf touches
+ * the glass only in the middle, which is what its shadow says. */
+gdouble      gowl_config_get_leaves_curl (GowlConfig *self);
+/* Strength of the venation, 0 to 1.  Drawn as ABSORPTION: a vein is
+ * thicker tissue, so backlit it is darker than the blade. */
+gdouble      gowl_config_get_leaves_veins (GowlConfig *self);
+/* How much of the wallpaper comes through a leaf, 0 to 1.  A leaf on a
+ * window is BACKLIT, which is why it glows rather than sitting there as
+ * a brown shape. */
+gdouble      gowl_config_get_leaves_translucency (GowlConfig *self);
+/* How wet the leaves are; scales the specular, whose exponent is preset
+ * only. */
+gdouble      gowl_config_get_leaves_gloss (GowlConfig *self);
+gdouble      gowl_config_get_leaves_shine (GowlConfig *self);
+/* How dark the contact shadow under a stuck leaf is, 0 to 1. */
+gdouble      gowl_config_get_leaves_shadow (GowlConfig *self);
+/* How hazy the pane itself is, 0 to 1.  Low by default: the leaves are
+ * the effect here, not the glass. */
+gdouble      gowl_config_get_leaves_fog (GowlConfig *self);
+/* How fast the leaves fall; 1.0 is the preset's own rate.  And how long
+ * a leaf holds the glass in still air, in seconds. */
+gdouble      gowl_config_get_leaves_speed (GowlConfig *self);
+gdouble      gowl_config_get_leaves_tenure (GowlConfig *self);
+
+/* How often the pane is redrawn, 0 to 144; 0 means every frame the
+ * output offers. */
+gint         gowl_config_get_leaves_fps (GowlConfig *self);
+void         gowl_config_set_leaves_fps (GowlConfig *self, gint fps);
+/* How much smaller than the window the leaves are rendered, 1 to 4. */
+gint         gowl_config_get_leaves_scale (GowlConfig *self);
+/* The three points of the autumn ramp: a leaf that has just turned, one
+ * at its peak, and one that has been down a while.  Every leaf takes a
+ * blend of them, so the fall is a family rather than confetti. */
+const gchar *gowl_config_get_leaves_warm (GowlConfig *self);
+const gchar *gowl_config_get_leaves_gold (GowlConfig *self);
+const gchar *gowl_config_get_leaves_dry (GowlConfig *self);
+gdouble      gowl_config_get_leaves_opacity (GowlConfig *self);
+gdouble      gowl_config_get_leaves_brightness (GowlConfig *self);
+/* Light direction in degrees: 0 straight above, positive clockwise. */
+gdouble      gowl_config_get_leaves_light (GowlConfig *self);
+/* How much smaller the haze is computed, 1 to 8, and how many box
+ * passes, 1 to 6. */
+gint         gowl_config_get_leaves_frost (GowlConfig *self);
+gint         gowl_config_get_leaves_frost_passes (GowlConfig *self);
+
+/* --- Snow (modules/snow) ---
+ *
+ * `snow-preset' names a whole tuned set --- "flurry", "light",
+ * "steady", "heavy", "blizzard" --- and every getter below returns what
+ * that preset says unless the config named an override for it.
+ *
+ * The presets are TWO scales at once: left to right it snows harder,
+ * and left to right the pane gets colder.  `snow-melt' moves later,
+ * `snow-ice' goes up and `snow-runs' goes down, because a flurry is a
+ * warm window that turns what lands on it into water within seconds and
+ * a blizzard is a cold one that keeps its crystals.
+ *
+ * `snow-flake' is the ruler, and it is capped against `snow-column' and
+ * `snow-cell' at render time for the reason `leaves-leaf' is.
+ *
+ * Lengths are LOGICAL pixels, scaled by the output's scale at render
+ * time. */
+
+const gchar *gowl_config_get_snow_preset (GowlConfig *self);
+void         gowl_config_set_snow_preset (GowlConfig *self,
+                                          const gchar *name);
+gboolean     gowl_config_snow_preset_valid (const gchar *name);
+/* (array zero-terminated=1) (transfer none): every preset name, for a
+ * completion list.  Static; do not free. */
+const gchar * const *gowl_config_snow_preset_names (void);
+
+/* One knob over the whole preset, 0 to 3.  Scales how many flakes are
+ * falling, how many have settled and how fast they come down --- what
+ * together means "how hard is it snowing".  It leaves the FLAKE SIZE
+ * alone, for the reason the rain's intensity leaves the drop size
+ * alone.  1.0 is the preset as tuned. */
+gdouble      gowl_config_get_snow_intensity (GowlConfig *self);
+void         gowl_config_set_snow_intensity (GowlConfig *self,
+                                             gdouble intensity);
+
+/* A falling flake's radius in pixels: the one number that means "how
+ * big is the snow". */
+gdouble      gowl_config_get_snow_flake (GowlConfig *self);
+/* Pixels per cell of the settled lattice, and how many of those cells
+ * hold a flake resting on the glass. */
+gdouble      gowl_config_get_snow_cell (GowlConfig *self);
+gdouble      gowl_config_get_snow_settled (GowlConfig *self);
+/* Pixels per column of the falling layer, and how many columns have a
+ * flake coming down them. */
+gdouble      gowl_config_get_snow_column (GowlConfig *self);
+gdouble      gowl_config_get_snow_falling (GowlConfig *self);
+/* How dendritic a flake is, 0 to 1.  0 is a plain hexagonal plate, 1 a
+ * stellar dendrite with side branches on every arm. */
+gdouble      gowl_config_get_snow_arms (GowlConfig *self);
+/* The steady sideways wind in pixels per fall, how far a flake wanders
+ * on top of it as a fraction of a column (capped at 0.40, which the
+ * three-column lookup is worked out with), and how fast it turns. */
+gdouble      gowl_config_get_snow_drift (GowlConfig *self);
+gdouble      gowl_config_get_snow_flutter (GowlConfig *self);
+gdouble      gowl_config_get_snow_spin (GowlConfig *self);
+/* Where in a settled flake's life the melt begins, 0 to 0.8.  0.45 is a
+ * flake that sits for a while first; 0 is a warm pane. */
+gdouble      gowl_config_get_snow_melt (GowlConfig *self);
+/* How much smaller the water bead is than the flake it came from.  A
+ * snowflake is mostly AIR, so this is severe on purpose: 0.35 is about
+ * right and 1.0 is a flake that turns into a puddle its own size. */
+gdouble      gowl_config_get_snow_shrink (GowlConfig *self);
+/* How far the wallpaper is behind the pane, in bead radii --- the
+ * rain's meaning exactly, because a melted flake IS a rain drop. */
+gdouble      gowl_config_get_snow_depth (GowlConfig *self);
+/* How many columns have melt-water running down them, how wide a column
+ * is, and how long the trail behind a running bead is.  All smaller
+ * than the rain's: this water came from one flake. */
+gdouble      gowl_config_get_snow_runs (GowlConfig *self);
+gdouble      gowl_config_get_snow_run_width (GowlConfig *self);
+gdouble      gowl_config_get_snow_run_length (GowlConfig *self);
+/* How much of a trail is left behind as residual drops, 0 to 1. */
+gdouble      gowl_config_get_snow_beads (GowlConfig *self);
+/* How much frost grows in from the edges of the pane, how fast it
+ * creeps (0 never frosts) and how many pixels a feather is. */
+gdouble      gowl_config_get_snow_ice (GowlConfig *self);
+gdouble      gowl_config_get_snow_ice_rate (GowlConfig *self);
+gdouble      gowl_config_get_snow_ice_scale (GowlConfig *self);
+/* How much a crystal glitters, 0 to 2. */
+gdouble      gowl_config_get_snow_sparkle (GowlConfig *self);
+/* How frosted the bare pane is, 0 to 1.  Water beads lift it. */
+gdouble      gowl_config_get_snow_fog (GowlConfig *self);
+/* How much brighter a dry crystal is than the pane.  Snow does not
+ * refract, it SCATTERS: a crystal is a bright diffusing patch, and
+ * drawing it as a lens is the commonest way to get snow wrong. */
+gdouble      gowl_config_get_snow_glow (GowlConfig *self);
+/* The glint on a water bead, and how tight it is (the latter preset
+ * only). */
+gdouble      gowl_config_get_snow_specular (GowlConfig *self);
+gdouble      gowl_config_get_snow_shine (GowlConfig *self);
+/* How much darker the edge of a bead is than its middle.  Preset
+ * only. */
+gdouble      gowl_config_get_snow_rim (GowlConfig *self);
+/* How fast the flakes fall; 1.0 is the preset's own rate. */
+gdouble      gowl_config_get_snow_speed (GowlConfig *self);
+/* How much of the tint the melt-water takes out of the light, and how
+ * long a settled flake takes to land, sit, melt and run away, in
+ * seconds.  Both preset only. */
+gdouble      gowl_config_get_snow_absorption (GowlConfig *self);
+gdouble      gowl_config_get_snow_life (GowlConfig *self);
+
+/* How often the pane is redrawn, 0 to 144; 0 means every frame the
+ * output offers. */
+gint         gowl_config_get_snow_fps (GowlConfig *self);
+void         gowl_config_set_snow_fps (GowlConfig *self, gint fps);
+/* How much smaller than the window the snow is rendered, 1 to 4. */
+gint         gowl_config_get_snow_scale (GowlConfig *self);
+const gchar *gowl_config_get_snow_tint (GowlConfig *self);
+/* How much of the frost a water bead lifts, 0 to 1. */
+gdouble      gowl_config_get_snow_clarity (GowlConfig *self);
+gdouble      gowl_config_get_snow_opacity (GowlConfig *self);
+gdouble      gowl_config_get_snow_brightness (GowlConfig *self);
+/* Light direction in degrees: 0 straight above, positive clockwise. */
+gdouble      gowl_config_get_snow_light (GowlConfig *self);
+/* How much smaller the frost is computed, 1 to 8, and how many box
+ * passes, 1 to 6. */
+gint         gowl_config_get_snow_frost (GowlConfig *self);
+gint         gowl_config_get_snow_frost_passes (GowlConfig *self);
+
 /* --- HDR ---
  *
  * Two decisions, and they are not the same one.

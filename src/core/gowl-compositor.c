@@ -2663,11 +2663,19 @@ gowl_compositor_set_backdrop_style(GowlCompositor *self,
 		const gchar *label = NULL;
 
 		switch (style) {
-		case GOWL_BACKDROP_GLASS: label = "Liquid glass"; break;
-		case GOWL_BACKDROP_WATER: label = "Liquid water"; break;
-		case GOWL_BACKDROP_RAIN:  label = "Liquid rain";  break;
-		case GOWL_BACKDROP_BLUR:  label = "Blur";         break;
-		default:                  label = "No backdrop";  break;
+		case GOWL_BACKDROP_GLASS:  label = "Liquid glass";   break;
+		case GOWL_BACKDROP_WATER:  label = "Liquid water";   break;
+		case GOWL_BACKDROP_RAIN:   label = "Liquid rain";    break;
+		case GOWL_BACKDROP_SNOW:   label = "Snow";           break;
+		case GOWL_BACKDROP_LEAVES: label = "Falling leaves"; break;
+		/* Named for the thing rather than for the key: the setting is
+		   `fizz' because every one of its ninety config keys would
+		   otherwise start with eleven characters of "carbonation", but
+		   what somebody sees when they press the key is a glass of
+		   something fizzy. */
+		case GOWL_BACKDROP_FIZZ:   label = "Carbonation";    break;
+		case GOWL_BACKDROP_BLUR:   label = "Blur";           break;
+		default:                   label = "No backdrop";    break;
 		}
 		g_signal_emit_by_name(self, "toast-requested", self->selmon, label);
 	}
@@ -2685,17 +2693,27 @@ gowl_compositor_cycle_backdrop_style(GowlCompositor *self, gint direction)
 	 * The order the key steps through, written out rather than derived
 	 * from the enum -- because it is NOT the enum's order.
 	 *
-	 * The four that draw something come first and the liveliest first of
-	 * all, so from either shipped default (rain under cmacs, glass
+	 * Everything that draws something comes first and the liveliest first
+	 * of all, so from either shipped default (rain under cmacs, glass
 	 * standalone) one press lands on another LOOK rather than on nothing,
 	 * and turning the backdrop off takes the full way round rather than a
-	 * single press somebody did not mean.  The two that MOVE lead, in
-	 * that order: from the cmacs default one press is the other animated
-	 * backdrop, which is the comparison somebody pressing this key is
-	 * most often making.
+	 * single press somebody did not mean.
+	 *
+	 * The five that MOVE lead, and they are grouped by what they are:
+	 * the three weathers first, in the order somebody would flip through
+	 * them, then the two that are liquid in a pane.  So one press from
+	 * the cmacs default is snow, which is the nearest relative of the
+	 * rain and the comparison most often being made -- and the settled
+	 * ones are still only a few presses off.
+	 *
+	 * Adding to this list is the whole cost of adding a backdrop to the
+	 * key.  It is NOT derived from the enum precisely so that the order
+	 * can be a judgement rather than an accident of declaration order.
 	 */
 	static const GowlBackdropStyle order[] = {
-		GOWL_BACKDROP_RAIN,  GOWL_BACKDROP_WATER,
+		GOWL_BACKDROP_RAIN,  GOWL_BACKDROP_SNOW,
+		GOWL_BACKDROP_LEAVES, GOWL_BACKDROP_FIZZ,
+		GOWL_BACKDROP_WATER,
 		GOWL_BACKDROP_GLASS, GOWL_BACKDROP_BLUR,
 		GOWL_BACKDROP_NONE
 	};
@@ -9748,7 +9766,8 @@ run_keybind_entry(
 			gowl_compositor_set_backdrop_style(self, style);
 		} else {
 			g_warning("cycle_backdrop: unknown style '%s'; expected "
-			          "none, blur, glass, water, next or prev", kb->arg);
+			          "none, blur, glass, water, rain, snow, leaves, "
+			          "fizz, next or prev", kb->arg);
 		}
 		return TRUE;
 	}

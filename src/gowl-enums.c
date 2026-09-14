@@ -322,6 +322,9 @@ gowl_backdrop_style_get_type(void)
 			{ GOWL_BACKDROP_GLASS, "GOWL_BACKDROP_GLASS", "glass" },
 			{ GOWL_BACKDROP_WATER, "GOWL_BACKDROP_WATER", "water" },
 			{ GOWL_BACKDROP_RAIN,  "GOWL_BACKDROP_RAIN",  "rain" },
+			{ GOWL_BACKDROP_SNOW,  "GOWL_BACKDROP_SNOW",  "snow" },
+			{ GOWL_BACKDROP_LEAVES, "GOWL_BACKDROP_LEAVES", "leaves" },
+			{ GOWL_BACKDROP_FIZZ,  "GOWL_BACKDROP_FIZZ",  "fizz" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlBackdropStyle", values);

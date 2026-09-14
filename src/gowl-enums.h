@@ -260,7 +260,8 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  * @GOWL_ACTION_MOVE_STACK: Reorder the focused tiled client.
  * @GOWL_ACTION_CUSTOM: Custom action handled by a module callback.
  * @GOWL_ACTION_CYCLE_BACKDROP: Cycle what shows through translucent
- *   windows --- water, glass, blur, nothing --- or set it outright when
+ *   windows --- rain, snow, leaves, fizz, water, glass, blur, nothing
+ *   --- or set it outright when
  *   @arg names one of them.
  * @GOWL_ACTION_TOGGLE_HDR: Switch the focused output between HDR and SDR
  * @GOWL_ACTION_OUTPUT_POWER: Power every output on, off or toggle
@@ -339,6 +340,13 @@ GType gowl_action_get_type(void) G_GNUC_CONST;
  *   surface (modules/liquidwater)
  * @GOWL_BACKDROP_RAIN: the wallpaper through a rainy window --- drops
  *   that collect, run and streak (modules/liquidrain)
+ * @GOWL_BACKDROP_SNOW: snow falling past the window, settling on it,
+ *   melting into beads and running off (modules/snow)
+ * @GOWL_BACKDROP_LEAVES: autumn leaves falling past the window and
+ *   collecting on it until the wind takes them (modules/leaves)
+ * @GOWL_BACKDROP_FIZZ: the wallpaper through a glass of something
+ *   carbonated --- trains of bubbles rising from the glass
+ *   (modules/fizz)
  *
  * What shows through a translucent window.
  *
@@ -354,7 +362,10 @@ typedef enum {
 	GOWL_BACKDROP_BLUR,
 	GOWL_BACKDROP_GLASS,
 	GOWL_BACKDROP_WATER,
-	GOWL_BACKDROP_RAIN
+	GOWL_BACKDROP_RAIN,
+	GOWL_BACKDROP_SNOW,
+	GOWL_BACKDROP_LEAVES,
+	GOWL_BACKDROP_FIZZ
 } GowlBackdropStyle;
 
 #define GOWL_TYPE_BACKDROP_STYLE (gowl_backdrop_style_get_type())

@@ -610,11 +610,14 @@ void gowl_compositor_set_backdrop_style (GowlCompositor    *self,
  * @self: a #GowlCompositor
  * @direction: 1 forwards, -1 backwards
  *
- * Steps to the next style: water, glass, blur, nothing, round again.
- * That is not the enum's order --- the three that draw something come
- * first, so one press from either shipped default lands on another look
- * rather than on nothing, and turning the backdrop off takes the full way
- * round.
+ * Steps to the next style: rain, snow, leaves, fizz, water, glass, blur,
+ * nothing, round again.
+ *
+ * That is not the enum's order.  Everything that draws something comes
+ * first, grouped by what it is --- the three weathers, then the two that
+ * are liquid in a pane, then the two that settle --- so one press from
+ * either shipped default lands on another look rather than on nothing,
+ * and turning the backdrop off takes the full way round.
  */
 void gowl_compositor_cycle_backdrop_style (GowlCompositor *self,
                                            gint            direction);

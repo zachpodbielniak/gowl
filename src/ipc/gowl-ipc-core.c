@@ -267,7 +267,8 @@ static const gchar *const help_text =
 	"mode [NAME] | keybinds | keyboard-layout [next|prev|N] | "
 	"focus ID | close ID | view TAGMASK [OUTPUT] | "
 	"dispatch KEY | action NAME [ARG] | power on|off|toggle | "
-	"hdr [on|off|toggle] [OUTPUT] | backdrop [none|blur|glass|water|next|prev] | "
+	"hdr [on|off|toggle] [OUTPUT] | "
+	"backdrop [none|blur|glass|water|rain|snow|leaves|fizz|next|prev] | "
 	"lock | unlock | locked | "
 	"reload | version | ping | subscribe | help";
 
@@ -581,7 +582,8 @@ gowl_compositor_ipc_command(
 		else if (gowl_config_backdrop_style_from_name(want, &style))
 			gowl_compositor_set_backdrop_style(self, style);
 		else
-			return g_strdup("ERROR expected none, blur, glass, water, next or prev");
+			return g_strdup("ERROR expected none, blur, glass, water, "
+			                "rain, snow, leaves, fizz, next or prev");
 		return g_strdup_printf("OK %s",
 			gowl_config_backdrop_style_name(
 				gowl_compositor_get_backdrop_style(self)));

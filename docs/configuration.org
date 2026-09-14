@@ -536,36 +536,55 @@ read the panel.
 :CUSTOM_ID: window-backdrop
 :END:
 
-Two modules can fill the space behind a translucent window, and
+Seven modules can fill the space behind a translucent window, and
 =window-backdrop= says which one does.
 
 | Property           | Type   | Default   | Description |
 |--------------------+--------+-----------+-------------|
-| =window-backdrop=  | enum   | =glass=   | =glass=, =water=, =blur= or =none= |
+| =window-backdrop=  | enum   | =glass=   | =rain=, =snow=, =leaves=, =fizz=, =water=, =glass=, =blur= or =none= |
 
+- =rain= --- the wallpaper through a window left out in the rain: drops
+  that collect, run and streak ([[#liquidrain][Liquid rain]]).
+- =snow= --- flakes falling past the window, settling on it, melting into
+  beads and running off ([[#snow][Snow]]).
+- =leaves= --- autumn leaves falling past the window and collecting on it
+  until the wind takes them ([[#leaves][Falling leaves]]).
+- =fizz= --- the wallpaper through a glass of something carbonated, with
+  trains of bubbles rising from the glass ([[#fizz][Carbonation]]).
+- =water= --- refracted through a MOVING water surface ([[#liquidwater][Liquid water]]).
 - =glass= --- the wallpaper refracted through the window, as though the
   window were a slab of glass with a bevelled edge ([[#liquidglass][Liquid glass]]).
-- =water= --- refracted through a MOVING water surface ([[#liquidwater][Liquid water]]).
 - =blur= --- the wallpaper, blurred ([[#blur][Frosted glass and shadows]]).
 - =none= --- the desktop, seen straight through.
 
+=fizz= also answers to =carbonation=, =soda= and =bubbles=; =leaves= also
+answers to =autumn=, =fall= and =leaf=. The short spelling is what the
+config keys use --- =fizz-sites= rather than =carbonation-sites= --- and
+the long one is what the toast says, so both resolve.
+
 *A change says so on screen.* Switching backdrop raises the same
 =toast-requested= signal a layout change does, so the =layout-indicator=
-module draws a brief toast naming the new one --- "Liquid glass", "Liquid
-water", "Blur", "No backdrop". Without it the honest reaction to pressing
-the key over a busy wallpaper is "did that do anything?", because a calm
-water and a subtle glass can both look a great deal like the blur they
-replaced.
+module draws a brief toast naming the new one --- "Liquid rain", "Snow",
+"Falling leaves", "Carbonation", "Liquid water", "Liquid glass", "Blur",
+"No backdrop". Without it the honest reaction to pressing the key over a
+busy wallpaper is "did that do anything?", because a calm water and a
+subtle glass can both look a great deal like the blur they replaced.
 
 *They are alternatives, not layers.* Each module puts one scene node in
 the same place in the same window's tree, so two of them drawing means
 one is hidden behind the other while both still cost a capture and a blur
 on every tag switch. Loading all of them is normal and intended: the
 setting picks which one draws, and =Super+Shift+"= (=cycle_backdrop=)
-steps through them --- water, glass, blur, nothing, round again ---
-without loading anything. The three that draw something come first, so one press
-from either shipped default --- water under CMacs, glass standalone ---
-lands on another look rather than on nothing.
+steps through them without loading anything. The order is
+
+: rain -> snow -> leaves -> fizz -> water -> glass -> blur -> none -> rain
+
+--- everything that draws something first, grouped by what it is: the
+three weathers, then the two that are liquid in a pane, then the two that
+settle. So one press from either shipped default --- rain under CMacs,
+glass standalone --- lands on another LOOK rather than on nothing, and
+turning the backdrop off takes the full way round rather than a single
+press somebody did not mean.
 
 Scripts reach the same setting with =gowl-msg backdrop glass= or
 =gowl-msg backdrop next=, and a change is announced as =EVENT backdrop=
@@ -1032,6 +1051,390 @@ takes five samples of one height field; this asks nine cells of each of
 two turned lattices and three columns of running drops, so =rain-scale=
 matters more here than =water-scale= does. The shipped =2= renders a
 quarter of the pixels, which through a refracting surface is invisible.
+
+**** Snow
+:PROPERTIES:
+:CUSTOM_ID: snow
+:END:
+
+Snow falling past the window, settling on it, and melting off it.
+=window-backdrop: snow= switches it on; =modules: [snow]= loads the
+module, and CMacs loads it by default.
+
+A falling flake is a six-fold crystal that turns as it comes down and
+wanders on the wind. A flake that lands sits as a bright scattering
+crystal, rounds off as it melts, collapses into a water bead about a
+third its size --- which is a raindrop, and refracts like one --- and
+runs away down the pane leaving a beaded trail. Frost creeps in from the
+edges of the glass while it happens.
+
+***** Presets
+:PROPERTIES:
+:CUSTOM_ID: snow-presets
+:END:
+
+=snow-preset= names a whole tuned set, for the same reason the rain's
+and the water's do: the numbers only mean anything together.
+
+| Preset      | What it is |
+|-------------+------------|
+| =flurry=    | A few flakes on a warm pane. What lands melts within seconds and runs |
+| =light=     | A gentle fall; most of it still turns to water before long |
+| =steady=    | The shipped default. Flakes sit for a while, then melt and run |
+| =heavy=     | Coming down hard on a cold pane, with frost around the edges |
+| =blizzard=  | Thick, fine and cold. It settles, it stays, and the frost closes in |
+
+*The presets are two scales at once, and deliberately so.* Left to right
+it snows harder, and left to right the pane also gets COLDER ---
+=snow-melt= moves later, =snow-ice= goes up and =snow-runs= goes down.
+Picking those apart into separate knobs would be truer to the physics and
+useless in practice, because nobody wants heavy snow melting the instant
+it lands.
+
+| Property            | Type   | Default     | Description |
+|---------------------+--------+-------------+-------------|
+| =snow-preset=       | string | ="steady"=  | One of the five above |
+| =snow-intensity=    | float  | =1.0=       | How hard it snows, over and above the preset, =0= to =3= |
+| =snow-fps=          | int    | =30=        | How often the pane is redrawn; =0= is every frame |
+| =snow-scale=        | int    | =2=         | Render at 1/this of the window's size, =1= to =4= |
+| =snow-tint=         | string | ="#e0f0ff"= | What the melt-water takes out of the light |
+| =snow-clarity=      | float  | =0.92=      | How much of the frost a water bead lifts |
+| =snow-opacity=      | float  | =1.0=       | Opacity of the result |
+| =snow-brightness=   | float  | =1.0=       | =0.2= to =2.0= |
+| =snow-light=        | float  | =-140=      | Light direction in degrees: =0= straight above |
+| =snow-frost=        | int    | =3=         | How much smaller the blurred source is computed, =1= to =8= |
+| =snow-frost-passes= | int    | =2=         | Box passes for it, =1= to =6= |
+
+=snow-intensity= scales how many flakes are falling, how many have
+settled and how fast they come down. It deliberately leaves the flake
+SIZE alone --- bigger crystals are not heavier snow --- and it leaves the
+melt and the frost alone too, because those are the pane's temperature
+and turning the snow up should not also freeze the window.
+
+Every preset value can be overridden individually. An override that is
+not named leaves the preset in charge, so a config can say
+=snow-preset: blizzard= and =snow-melt: 0= and get a heavy fall on a
+window that turns everything to water the moment it lands.
+
+| Override           | Range        | Description |
+|--------------------+--------------+-------------|
+| =snow-flake=       | =4=--=400=   | A falling flake's radius in pixels: the ruler |
+| =snow-cell=        | =16=--=2000= | Pixels per cell of the settled layer |
+| =snow-settled=     | =0=--=1=     | How many of those cells hold a flake |
+| =snow-column=      | =16=--=2000= | Pixels per column of the falling layer |
+| =snow-falling=     | =0=--=1=     | How many columns have a flake coming down them |
+| =snow-arms=        | =0=--=1=     | How dendritic a flake is; =0= is a plain hexagonal plate |
+| =snow-drift=       | =-2000=--=2000= | The steady sideways wind, in pixels per fall |
+| =snow-flutter=     | =0=--=0.40=  | How far a flake wanders, as a share of a column |
+| =snow-spin=        | =0=--=8=     | Turns per fall |
+| =snow-melt=        | =0=--=0.80=  | Where in a settled flake's life the melt begins |
+| =snow-shrink=      | =0.05=--=1=  | The bead's size as a share of the flake it came from |
+| =snow-depth=       | =0=--=20=    | How far the wallpaper is behind the pane, in a bead's own RADII |
+| =snow-runs=        | =0=--=1=     | How many columns have melt-water running down them |
+| =snow-run-width=   | =10=--=600=  | Pixels per column of the melt-water layer |
+| =snow-run-length=  | =0=--=4000=  | Pixels of trail behind a running bead |
+| =snow-beads=       | =0=--=1=     | How much of a trail is left as residual drops |
+| =snow-ice=         | =0=--=1=     | How much frost grows in from the edges |
+| =snow-ice-rate=    | =0=--=1=     | How fast it creeps in; =0= never frosts |
+| =snow-ice-scale=   | =4=--=400=   | Pixels per feather of that frost |
+| =snow-sparkle=     | =0=--=2=     | How much a crystal glitters |
+| =snow-fog=         | =0=--=1=     | How frosted the bare pane is |
+| =snow-glow=        | =0=--=3=     | How much brighter a dry crystal is than the pane |
+| =snow-specular=    | =0=--=3=     | The glint on a water bead |
+| =snow-speed=       | =0=--=5=     | How fast the flakes fall |
+
+***** Snow does not refract, it scatters
+
+*This is the one thing to get right, and it is the commonest way to get
+snow wrong.* Snow is a foam of ice and air with an enormous number of
+internal surfaces, so light entering a crystal is scattered back out in
+every direction rather than bent once and passed on. What that looks like
+is a bright, flat, slightly translucent patch --- the wallpaper behind it
+survives as a faint wash and nothing more. Drawn as a lens instead, which
+is the obvious thing to reach for in a file full of lenses, it looks like
+broken glass.
+
+So the crystal is drawn AFTER the refraction and over the top of it, and
+=snow-glow= is what makes it read as ice rather than as a grey blob.
+
+***** A settled flake is three objects in succession
+:PROPERTIES:
+:CUSTOM_ID: snow-melt
+:END:
+
+It lands as a CRYSTAL, which scatters and displaces nothing. It melts
+into a BEAD, which is a raindrop and refracts exactly like one. And then
+it RUNS, because a bead of melt-water gets heavy like any other.
+
+One phase drives all of it, and that is what keeps the transitions
+honest: the shape morphs from six-fold towards a circle, the size
+collapses by =snow-shrink=, and the optics cross from scatter to lens, on
+the same parameter --- so a half-melted flake is half-rounded,
+half-collapsed and half-refracting at the same instant.
+
+*=snow-shrink= is severe on purpose.* A snowflake is mostly air, so a
+centimetre of crystal becomes a couple of millimetres of water. =0.35= is
+about right and =1.0= is a flake that turns into a puddle its own size.
+The obvious implementation --- cross-fading white to clear at a constant
+size --- reads as a flake going INVISIBLE rather than as a flake turning
+into water, and it is exactly what the shrink exists to avoid.
+
+=tests/test-weather-render.c= asserts the crossover by measuring what a
+pane of crystals and a pane of beads each do to the light: the first is
+measurably brighter than the bare wallpaper and displaces almost nothing,
+the second displaces a great deal and is barely brighter, and a bead left
+at full size refracts over half again as much area.
+
+***** The frost is a growth front, not a fade
+
+The frost clock is the one here that is not wrapped, because ice does not
+repeat. It saturates instead. What it moves is a THRESHOLD on a warped
+ridged-noise field, so lowering it is the ice advancing --- feathers
+appear at their tips and reach inwards, which is what frost does. Raising
+an alpha on a finished pattern is what it does not do, and the difference
+is obvious the moment anybody watches it for ten seconds.
+
+=snow-ice-rate: 0= is a warm pane, and turning it off melts the frost
+back rather than snapping it away between frames.
+
+**** Falling leaves
+:PROPERTIES:
+:CUSTOM_ID: leaves
+:END:
+
+Autumn leaves falling past the window and collecting on it until the wind
+takes them. =window-backdrop: leaves= switches it on; =modules: [leaves]=
+loads the module, and CMacs loads it by default.
+
+***** Presets
+:PROPERTIES:
+:CUSTOM_ID: leaves-presets
+:END:
+
+| Preset      | What it is |
+|-------------+------------|
+| =turning=   | The first few coming down, in still air. They stay on the glass a long time |
+| =autumn=    | The shipped default: a steady fall on a breezy day |
+| =peak=      | The week the tree empties |
+| =blustery=  | The same fall with the weather against it; little stays stuck |
+| =gale=      | March. Nothing holds the glass for more than a moment |
+
+| Property              | Type   | Default     | Description |
+|-----------------------+--------+-------------+-------------|
+| =leaves-preset=       | string | ="autumn"=  | One of the five above |
+| =leaves-intensity=    | float  | =1.0=       | How far into autumn, over and above the preset, =0= to =3= |
+| =leaves-fps=          | int    | =30=        | How often the pane is redrawn; =0= is every frame |
+| =leaves-scale=        | int    | =2=         | Render at 1/this of the window's size, =1= to =4= |
+| =leaves-warm=         | string | ="#dc381f"= | A leaf that has just turned |
+| =leaves-gold=         | string | ="#f29e22"= | A leaf at its peak |
+| =leaves-dry=          | string | ="#a3622b"= | A leaf that has been down a while |
+| =leaves-opacity=      | float  | =1.0=       | Opacity of the result |
+| =leaves-brightness=   | float  | =1.0=       | =0.2= to =2.0= |
+| =leaves-light=        | float  | =-140=      | Light direction in degrees: =0= straight above |
+| =leaves-frost=        | int    | =3=         | How much smaller the hazed source is computed, =1= to =8= |
+| =leaves-frost-passes= | int    | =2=         | Box passes for it, =1= to =6= |
+
+The three colours are the points of a ramp, not a set to pick from: every
+leaf takes a blend of them, so a fall is a family rather than confetti. A
+colour that will not parse falls back to the tuned value rather than to
+white, because three white tints would leave every leaf a grey silhouette
+--- which looks like a rendering bug rather than like a typo in a config.
+
+| Override                | Range           | Description |
+|-------------------------+-----------------+-------------|
+| =leaves-leaf=           | =8=--=500=      | A leaf's radius in pixels: the ruler |
+| =leaves-cell=           | =32=--=2000=    | Pixels per cell of the stuck-leaf layer |
+| =leaves-stuck=          | =0=--=1=        | How many of those cells hold a leaf |
+| =leaves-column=         | =32=--=2000=    | Pixels per column of the falling layer |
+| =leaves-falling=        | =0=--=1=        | How many columns have a leaf coming down them |
+| =leaves-flutter=        | =0=--=0.45=     | How far a leaf swings, as a share of a column |
+| =leaves-tumble=         | =0=--=12=       | Turns per fall |
+| =leaves-wind=           | =-2000=--=2000= | The steady sideways drift, in pixels per fall |
+| =leaves-gust=           | =0=--=3000=     | How far a gust throws things, in pixels |
+| =leaves-gustiness=      | =0=--=2=        | How hard and how often the wind gets up |
+| =leaves-curl=           | =0=--=1=        | How dried and curled the leaves are |
+| =leaves-veins=          | =0=--=1=        | Strength of the venation |
+| =leaves-translucency=   | =0=--=1=        | How much of the wallpaper comes through a leaf |
+| =leaves-gloss=          | =0=--=2=        | How wet the leaves are |
+| =leaves-shadow=         | =0=--=1=        | The contact shadow under a stuck leaf |
+| =leaves-fog=            | =0=--=1=        | How hazy the pane itself is |
+| =leaves-speed=          | =0=--=5=        | How fast the leaves fall |
+| =leaves-tenure=         | =1=--=600=      | Seconds a leaf holds the glass in still air |
+
+***** The odd one out of the family
+
+Every other backdrop BENDS the wallpaper. A leaf does not refract
+anything: it is an opaque object that covers what is behind it, and the
+only thing that saves it from being a brown sticker is that it is
+BACKLIT. A leaf on a window has daylight behind it, so the wallpaper
+comes through it tinted and diffused and its veins show DARK --- a vein
+is thicker tissue, so it passes less light, and drawing it as pale lines
+on top is what a diagram of a leaf looks like rather than one on a
+window.
+
+=leaves-translucency= is that whole effect in one number, and =0= is a
+flat silhouette.
+
+***** Three things that make it read as leaves
+
+*They go edge-on and back.* A falling leaf tumbles about its long axis
+and twice a turn presents its edge to you, collapsing to a LINE. Nothing
+else on a screen does that, and it is worth more than every other cue put
+together. It is also why the leaf COUNT has to be read with the tumble in
+mind: eight objects on screen is five or six visible leaves, because the
+rest are edge-on at any instant. =leaves-tumble: 0= is a window of
+stickers.
+
+*The underside is a different colour.* Since the tumble already says
+which face is towards you, the paler, duller back of the leaf is free ---
+and it is what makes the tumble legible as a TURN rather than merely as a
+narrowing.
+
+*The wind is one wind.* When it gets up, every stuck leaf shivers at once
+and every falling one is thrown the same way. A gust each leaf decided on
+for itself would be noise, not weather, so the gust lives in the clock as
+a single number the whole shader reads. It is one slow sine modulated by
+two slower ones and then SQUARED, which is what makes it calm most of the
+time and strong briefly; a raw sine would spend half its life at half
+strength, which is a fan. Measured over eleven minutes it is below a
+fifth of full strength for 58% of the time and peaks at 0.87.
+
+*And they peel rather than sliding.* A leaf leaves wet glass by lifting
+at one edge and pivoting about its stem. That is both what a leaf does
+and what FITS: a departing leaf may travel only about a third of a cell
+before the nine-cell lookup would slice it off along a straight edge, so
+the exit budget is spent on rotation and scale instead of on travel.
+
+***** =leaves-leaf= is capped, and cannot be raised alone
+
+A blade wider than about a third of its own column would be cut off at
+the column edge --- a lattice, drawn in the negative --- so the shader
+caps it against both =leaves-column= and =leaves-cell= at render time.
+Asking for bigger leaves without widening the spacing therefore quietly
+gets smaller ones, and widening the spacing gets fewer of them. The three
+move together in a preset for exactly that reason. It is also why
+=leaves-intensity= does not touch the size: an intensity knob that is
+silently ignored above 1.2 is worse than one that leaves the field alone.
+
+**** Carbonation
+:PROPERTIES:
+:CUSTOM_ID: fizz
+:END:
+
+The wallpaper through a glass of something fizzy: trains of bubbles
+streaming up from nucleation sites on the glass, loose bubbles drifting
+between them, bubbles clinging to the pane and growing until they let go,
+and a head of foam at the top. =window-backdrop: fizz= switches it on ---
+=carbonation=, =soda= and =bubbles= all resolve to the same thing ---
+and =modules: [fizz]= loads the module, which CMacs loads by default.
+
+***** Presets
+:PROPERTIES:
+:CUSTOM_ID: fizz-presets
+:END:
+
+The three in the middle are a straight scale of how carbonated the drink
+is; the other two extend it at either end.
+
+| Preset       | What it is |
+|--------------+------------|
+| =flat=       | A drink that has been sitting out. Most of what is left is stuck to the glass |
+| =sparkling=  | Lightly carbonated: a few slow trains and a thin head |
+| =soda=       | The shipped default. A glass of cola |
+| =seltzer=    | Hard-carbonated water. It will not sit still |
+| =champagne=  | Very fine, very fast, and a head that does not go down |
+
+| Property            | Type   | Default     | Description |
+|---------------------+--------+-------------+-------------|
+| =fizz-preset=       | string | ="soda"=    | One of the five above |
+| =fizz-intensity=    | float  | =1.0=       | How carbonated, over and above the preset, =0= to =3= |
+| =fizz-fps=          | int    | =30=        | How often the pane is redrawn; =0= is every frame |
+| =fizz-scale=        | int    | =2=         | Render at 1/this of the window's size, =1= to =4= |
+| =fizz-tint=         | string | ="#fff5db"= | What the drink takes out of the light |
+| =fizz-clarity=      | float  | =0.90=      | How much of the cloudiness a bubble lifts |
+| =fizz-opacity=      | float  | =1.0=       | Opacity of the result |
+| =fizz-brightness=   | float  | =1.0=       | =0.2= to =2.0= |
+| =fizz-light=        | float  | =-140=      | Light direction in degrees: =0= straight above |
+| =fizz-frost=        | int    | =3=         | How much smaller the clouded source is computed, =1= to =8= |
+| =fizz-frost-passes= | int    | =2=         | Box passes for it, =1= to =6= |
+
+=fizz-intensity= scales how many sites there are, how closely they emit,
+how many strays there are between them and how fast they rise. It
+deliberately leaves the BUBBLE SIZE alone: scaling that as well would not
+give a fizzier drink, it would give the same drink in a smaller glass.
+Champagne has more and FINER bubbles than cola, and "finer" is what the
+preset table is for.
+
+| Override            | Range        | Description |
+|---------------------+--------------+-------------|
+| =fizz-site-width=   | =12=--=600=  | Pixels per column of the train layer: the ruler |
+| =fizz-sites=        | =0=--=1=     | How many columns hold a nucleation site |
+| =fizz-spacing=      | =0=--=1=     | How closely a site emits |
+| =fizz-bubble=       | =0.01=--=0.22= | A bubble's release radius, as a share of its column |
+| =fizz-growth=       | =0=--=3=     | How much bigger a bubble is at the top than at the bottom |
+| =fizz-stray=        | =0=--=1=     | How many columns carry a loose bubble from no site |
+| =fizz-cell=         | =8=--=400=   | Pixels per cell of the clinging layer |
+| =fizz-cling=        | =0=--=1=     | How many of those cells hold a bubble stuck to the glass |
+| =fizz-wobble=       | =0=--=200=   | How far a bubble wanders sideways as it rises, in pixels |
+| =fizz-foam=         | =0=--=1=     | The head at the top of the pane |
+| =fizz-foam-depth=   | =0=--=2000=  | How far down the head reaches, in pixels |
+| =fizz-depth=        | =0=--=20=    | How far the wallpaper is behind the pane, in a bubble's own RADII |
+| =fizz-mirror=       | =0=--=1=     | The silvered ring around each bubble |
+| =fizz-fog=          | =0=--=1=     | How cloudy the drink is |
+| =fizz-specular=     | =0=--=3=     | The glint on each bubble |
+| =fizz-speed=        | =0=--=5=     | How fast the bubbles rise |
+
+***** A bubble is the inverse of a raindrop
+
+*It is a DIVERGING lens.* Gas in liquid bends the ray the other way from
+a drop of liquid in gas, so a bubble MINIFIES what is behind it --- it is
+a tiny fisheye --- and never inverts however large it gets. Written with
+the rain's sign it still looks like something, glass marbles in juice, so
+nobody reports it and the difference in the source is one character.
+=tests/test-weather-render.c= puts a ramp behind both shaders at the same
+depth and reads the sign of its slope inside the lenses: the bubbles come
+out four to one upright-and-steeper, the drops better than two to one
+reversed.
+
+*The outer quarter is a mirror.* Light inside the liquid meeting the
+bubble wall past the critical angle is totally reflected, and for water
+against air =sin(theta_c) = 1/1.333 = 0.75= --- so the silvered ring
+starts at exactly three quarters of the radius. That is arithmetic, not
+taste, and it is why bubbles in a glass read as RINGS rather than as
+dots. =fizz-mirror= is how much of it shows.
+
+***** Trains, and why they spread
+
+*Bubbles do not appear at random through a drink.* They nucleate at a
+handful of imperfections on the glass and stream upward from those points
+in files. A field of evenly-spread rising dots reads as a screensaver in
+about two seconds, so =fizz-sites= and =fizz-site-width= --- how many
+trains there are and how far apart --- are the numbers that mean "how
+carbonated is this", and the bubble size follows from them.
+
+*And a file spreads towards the top.* A bubble collects dissolved gas on
+the way up and the pressure above it drops, so it GROWS; a bigger bubble
+rises faster, because terminal velocity goes as the square of the radius.
+So successive bubbles in a train draw apart as they rise. That widening
+gap is the second thing anybody would recognise and it is not drawn ---
+the height is the closed-form solution of =dh/dt = c(1 + g*h)^2=, so
+=fizz-growth= produces the growth and the spreading and the acceleration
+from one number.
+
+*The big ones zigzag and the small ones do not.* A bubble's straight-line
+path goes unstable above a critical size. =fizz-wobble= applies only
+above it, which is why turning it up does not make the whole glass weave.
+
+***** =fizz-bubble= is capped against =fizz-growth=
+
+A bubble ends its rise =(1 + growth)= times the size it started, so the
+reach of a train is a function of both knobs --- and the column lookup is
+worked out with a fully grown bubble of at most a third of a column in
+it. Turning the growth up without turning the bubble down would have the
+large ones near the top sliced off down a straight vertical line, so the
+shader caps the release radius rather than trusting the preset. Setting
+=fizz-bubble= high and =fizz-growth= high therefore gets the same drink
+as setting one of them high.
 
 **** Per-tag wallpaper
 :PROPERTIES:

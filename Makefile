@@ -678,7 +678,10 @@ $(OUTDIR)/modules/blur.so: $(wildcard modules/blur/*.c modules/blur/*.h)
 $(OUTDIR)/modules/liquidglass.so: $(wildcard modules/liquidglass/*.c modules/liquidglass/*.h)
 $(OUTDIR)/modules/liquidwater.so: $(wildcard modules/liquidwater/*.c modules/liquidwater/*.h)
 $(OUTDIR)/modules/liquidrain.so: $(wildcard modules/liquidrain/*.c modules/liquidrain/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+$(OUTDIR)/modules/fizz.so: $(wildcard modules/fizz/*.c modules/fizz/*.h)
+$(OUTDIR)/modules/leaves.so: $(wildcard modules/leaves/*.c modules/leaves/*.h)
+$(OUTDIR)/modules/snow.so: $(wildcard modules/snow/*.c modules/snow/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
@@ -689,7 +692,7 @@ $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(absp
 # and a window the animation module resizes, claiming the placement, must
 # still have them follow it; again with the rounded borders, which draw the
 # frame through the decorator instead.
-$(OUTDIR)/test-blur-nodes: $(addprefix $(OUTDIR)/modules/,blur.so liquidglass.so liquidwater.so liquidrain.so animation.so roundcorners.so)
+$(OUTDIR)/test-blur-nodes: $(addprefix $(OUTDIR)/modules/,blur.so liquidglass.so liquidwater.so liquidrain.so fizz.so leaves.so snow.so animation.so roundcorners.so)
 $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 # Everything cmacs --gowl loads, started under a headless compositor and
@@ -698,6 +701,7 @@ $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abs
 # list as cmacs_modules[] in the test.
 TEARDOWN_MODULES := wallpaper tile monocle float scrolling animation cube \
 	expo switcher magnifier blur liquidglass liquidwater liquidrain \
+	fizz leaves snow \
 	layout-indicator alpha \
 	vanitygaps roundcorners windowrules dropdown scratchpad screenshot \
 	osd clipboard bar

@@ -65,6 +65,11 @@ static const gchar *const cmacs_modules[] = {
 	"tile", "monocle", "float", "scrolling", "animation", "cube",
 	"expo", "switcher", "magnifier", "blur", "liquidglass", "liquidwater",
 	"liquidrain",
+	/* The three weather backdrops that are not liquid.  They hold the
+	 * same shape as the rain -- a clock, a per-output throttle, a
+	 * per-client scene buffer and a GL context of their own -- so each
+	 * has its own chance to reach a freed compositor on the way out. */
+	"fizz", "leaves", "snow",
 	"layout-indicator",
 	"alpha", "vanitygaps", "roundcorners", "windowrules", "dropdown",
 	"scratchpad", "screenshot", "osd", "clipboard",

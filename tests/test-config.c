@@ -1777,6 +1777,64 @@ test_config_wallpaper_tags_rejects_bad_keys(void)
 	g_object_unref(config);
 }
 
+/*
+ * Every HDR setting is reachable through the PROPERTY system.
+ *
+ * Not a style point.  An embedder that owns its own configuration can
+ * only reach a setting that way -- cmacs deliberately never reads
+ * ~/.config/gowl/config.yaml -- so a key that lives only in the YAML
+ * parser exists for standalone gowl and for nobody else.  All five of
+ * these were exactly that, and the way it came to light was somebody
+ * being told to set one in a file that is never opened.
+ */
+static void
+test_the_hdr_settings_are_properties(void)
+{
+	static const gchar *const bools[] = {
+		"hdr-encode", "hdr-unmanaged", "hdr-advertise-pq"
+	};
+	GowlConfig *config = gowl_config_new();
+	gsize   i;
+	gint    bpc;
+	gdouble white;
+
+	for (i = 0; i < G_N_ELEMENTS(bools); i++) {
+		gboolean v = TRUE;
+
+		g_assert_nonnull(g_object_class_find_property(
+			G_OBJECT_GET_CLASS(config), bools[i]));
+		g_object_set(config, bools[i], FALSE, NULL);
+		g_object_get(config, bools[i], &v, NULL);
+		g_assert_false(v);
+		g_object_set(config, bools[i], TRUE, NULL);
+		g_object_get(config, bools[i], &v, NULL);
+		g_assert_true(v);
+	}
+
+	/* And the getters the compositor actually calls agree with what the
+	 * property system just wrote: two doors onto one field are only
+	 * useful if they open on the same room. */
+	g_object_set(config, "hdr-encode", FALSE, NULL);
+	g_assert_false(gowl_config_get_hdr_encode(config));
+
+	g_object_set(config, "hdr-bpc", 8, NULL);
+	g_object_get(config, "hdr-bpc", &bpc, NULL);
+	g_assert_cmpint(bpc, ==, 8);
+	g_assert_cmpint(gowl_config_get_hdr_bpc(config), ==, 8);
+	/* Anything that is not a depth means "ask for ten, settle for
+	 * eight", which is what 0 says. */
+	g_object_set(config, "hdr-bpc", 9, NULL);
+	g_assert_cmpint(gowl_config_get_hdr_bpc(config), ==, 0);
+
+	g_object_set(config, "hdr-sdr-white", 120.0, NULL);
+	g_object_get(config, "hdr-sdr-white", &white, NULL);
+	g_assert_cmpfloat(white, >, 119.9);
+	g_assert_cmpfloat(white, <, 120.1);
+	g_assert_cmpfloat(gowl_config_get_hdr_sdr_white(config), >, 119.9);
+
+	g_object_unref(config);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1845,6 +1903,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/config/output-profiles-from-code",
 	                test_config_output_profiles_from_code);
 	g_test_add_func("/config/rule-entry-init", test_config_rule_entry_init);
+	g_test_add_func("/config/hdr-properties",
+	                test_the_hdr_settings_are_properties);
 
 	return g_test_run();
 }

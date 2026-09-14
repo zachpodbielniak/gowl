@@ -1757,8 +1757,20 @@ hdr-encode: false     # HDR as it was before the encode: everything far
 hdr-bpc: 8            # HDR without the 10-bit link.  Gradients band.
 #+end_src
 
-Both are read live, so a reload applies them. Work through it in that
-order:
+Both are read live, so a reload applies them.
+
+*Under =cmacs --gowl= these are not YAML at all.* cmacs owns its own
+configuration and deliberately never reads =~/.config/gowl/config.yaml=
+--- so every HDR setting here is a GObject *property*, which is the only
+door an embedder has:
+
+#+begin_src emacs-lisp
+(gobject-set (gowl-config-object) "hdr-encode" nil)
+(gobject-set (gowl-config-object) "hdr-bpc" 8)
+(gobject-set (gowl-config-object) "hdr-sdr-white" 160.0)
+#+end_src
+
+Work through it in that order:
 
 - artefacts *gone* with =hdr-encode: false= --- the encode is at fault,
   and the picture you are left with is the uncorrected one;

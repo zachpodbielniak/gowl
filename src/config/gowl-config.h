@@ -328,6 +328,23 @@ typedef struct {
  *   no input before the idle manager reports the session idle; 0 never.
  * @GOWL_CONFIG_PROP_DPMS_TIMEOUT: "dpms-timeout" property.  Seconds of
  *   no input before every output is powered off; 0 never.
+ * @GOWL_CONFIG_PROP_HDR_ENCODE: "hdr-encode" property.  Encode the
+ *   desktop for PQ where the renderer cannot convert colour.
+ * @GOWL_CONFIG_PROP_HDR_BPC: "hdr-bpc" property.  0 asks for ten bits
+ *   and settles for eight; 8 never asks.
+ * @GOWL_CONFIG_PROP_HDR_SDR_WHITE: "hdr-sdr-white" property.  Where SDR
+ *   white lands in the HDR signal, in cd/m2.
+ * @GOWL_CONFIG_PROP_HDR_UNMANAGED: "hdr-unmanaged" property.  Allow HDR
+ *   where the compositor cannot convert colour for it.
+ * @GOWL_CONFIG_PROP_HDR_ADVERTISE_PQ: "hdr-advertise-pq" property.  Tell
+ *   clients PQ and BT.2020 content is accepted.
+ *
+ *   THE FIVE ABOVE ARE PROPERTIES and not merely YAML keys on purpose.
+ *   An embedder that owns its own configuration -- cmacs does, and
+ *   deliberately never reads ~/.config/gowl/config.yaml -- can only
+ *   reach a setting through the property system.  A plain field with a
+ *   getter is unreachable there, which is a setting that does not exist
+ *   for half the people who have this compositor.
  * @GOWL_CONFIG_PROP_ALLOW_TEARING: "allow-tearing" property.  Let a
  *   fullscreen window that asks for it be presented with tearing.
  * @GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE: "focus-on-activate" property.
@@ -385,6 +402,11 @@ typedef enum {
 	GOWL_CONFIG_PROP_LOG_FILE,
 	GOWL_CONFIG_PROP_EVALUATE_GOWL_CONFIG_WITH_CMACS,
 	GOWL_CONFIG_PROP_EVALUATE_C_CONFIG_WITH_CMACS,
+	GOWL_CONFIG_PROP_HDR_ENCODE,
+	GOWL_CONFIG_PROP_HDR_BPC,
+	GOWL_CONFIG_PROP_HDR_SDR_WHITE,
+	GOWL_CONFIG_PROP_HDR_UNMANAGED,
+	GOWL_CONFIG_PROP_HDR_ADVERTISE_PQ,
 	GOWL_CONFIG_PROP_LAST
 } GowlConfigProp;
 

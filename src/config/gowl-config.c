@@ -805,6 +805,25 @@ gowl_config_set_property(
 	case GOWL_CONFIG_PROP_ALLOW_TEARING:
 		self->allow_tearing = g_value_get_boolean(value);
 		break;
+	case GOWL_CONFIG_PROP_HDR_ENCODE:
+		self->hdr_encode = g_value_get_boolean(value);
+		break;
+	case GOWL_CONFIG_PROP_HDR_BPC:
+		{
+			gint v = g_value_get_int(value);
+
+			self->hdr_bpc = (v == 8 || v == 10) ? v : 0;
+		}
+		break;
+	case GOWL_CONFIG_PROP_HDR_SDR_WHITE:
+		self->hdr_sdr_white = CLAMP(g_value_get_double(value), 40.0, 600.0);
+		break;
+	case GOWL_CONFIG_PROP_HDR_UNMANAGED:
+		self->hdr_unmanaged = g_value_get_boolean(value);
+		break;
+	case GOWL_CONFIG_PROP_HDR_ADVERTISE_PQ:
+		self->hdr_advertise_pq = g_value_get_boolean(value);
+		break;
 	case GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE:
 		g_free(self->focus_on_activate);
 		self->focus_on_activate = g_value_dup_string(value);
@@ -919,6 +938,21 @@ gowl_config_get_property(
 		break;
 	case GOWL_CONFIG_PROP_ALLOW_TEARING:
 		g_value_set_boolean(value, self->allow_tearing);
+		break;
+	case GOWL_CONFIG_PROP_HDR_ENCODE:
+		g_value_set_boolean(value, self->hdr_encode);
+		break;
+	case GOWL_CONFIG_PROP_HDR_BPC:
+		g_value_set_int(value, self->hdr_bpc);
+		break;
+	case GOWL_CONFIG_PROP_HDR_SDR_WHITE:
+		g_value_set_double(value, self->hdr_sdr_white);
+		break;
+	case GOWL_CONFIG_PROP_HDR_UNMANAGED:
+		g_value_set_boolean(value, self->hdr_unmanaged);
+		break;
+	case GOWL_CONFIG_PROP_HDR_ADVERTISE_PQ:
+		g_value_set_boolean(value, self->hdr_advertise_pq);
 		break;
 	case GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE:
 		g_value_set_string(value, self->focus_on_activate);
@@ -1228,6 +1262,56 @@ gowl_config_class_init(GowlConfigClass *klass)
 		                      "tearing without waiting for vblank",
 		                      GOWL_CONFIG_DEFAULT_ALLOW_TEARING,
 		                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	/*
+	 * The HDR five, as PROPERTIES rather than plain fields.
+	 *
+	 * An embedder that owns its own configuration can only reach a
+	 * setting through the property system: cmacs deliberately never
+	 * reads ~/.config/gowl/config.yaml, so a key that exists only in
+	 * the YAML parser exists for standalone gowl and for nobody else.
+	 * These were exactly that until somebody went looking for the
+	 * switch and found the file it was documented in is never opened.
+	 */
+	properties[GOWL_CONFIG_PROP_HDR_ENCODE] =
+		g_param_spec_boolean("hdr-encode",
+		                     "HDR Encode",
+		                     "Encode the desktop for PQ where the "
+		                     "renderer cannot convert colour",
+		                     GOWL_CONFIG_DEFAULT_HDR_ENCODE,
+		                     G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_HDR_BPC] =
+		g_param_spec_int("hdr-bpc",
+		                 "HDR Bits Per Channel",
+		                 "0 asks for ten bits and settles for eight; "
+		                 "8 never asks",
+		                 0, 10, GOWL_CONFIG_DEFAULT_HDR_BPC,
+		                 G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_HDR_SDR_WHITE] =
+		g_param_spec_double("hdr-sdr-white",
+		                    "HDR SDR White",
+		                    "Where SDR white lands in the HDR signal, "
+		                    "in cd/m2",
+		                    40.0, 600.0, GOWL_CONFIG_DEFAULT_HDR_SDR_WHITE,
+		                    G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_HDR_UNMANAGED] =
+		g_param_spec_boolean("hdr-unmanaged",
+		                     "HDR Unmanaged",
+		                     "Allow HDR where the compositor cannot "
+		                     "convert colour for it",
+		                     GOWL_CONFIG_DEFAULT_HDR_UNMANAGED,
+		                     G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_HDR_ADVERTISE_PQ] =
+		g_param_spec_boolean("hdr-advertise-pq",
+		                     "HDR Advertise PQ",
+		                     "Tell clients PQ and BT.2020 content is "
+		                     "accepted, though nothing converts it",
+		                     GOWL_CONFIG_DEFAULT_HDR_ADVERTISE_PQ,
+		                     G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
 	properties[GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE] =
 		g_param_spec_string("focus-on-activate",

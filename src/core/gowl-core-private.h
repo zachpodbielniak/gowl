@@ -683,6 +683,12 @@ struct _GowlMonitor {
 	 * compositor cannot colour-manage it" is the only actionable form
 	 * of that refusal and repeating it per poll is noise. */
 	gboolean hdr_renderer_warned;
+	/* The `hdr-bpc' policy the current HDR commit was made under, so a
+	 * change to it can be noticed.  The depth is chosen inside
+	 * gowl_monitor_set_hdr() and nowhere else, so without this a
+	 * property change is a setting that silently does nothing until
+	 * somebody happens to toggle HDR. */
+	gint     hdr_bpc_committed;
 	/* Frames that did not reach the screen, in a row, and the timer
 	 * that asks for the next one once there have been a few.
 	 * wlr_output_schedule_frame() falls back to an IDLE source when no

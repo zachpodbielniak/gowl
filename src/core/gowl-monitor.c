@@ -1021,8 +1021,28 @@ gowl_monitor_set_hdr(
 	g_return_val_if_fail(self->wlr_output != NULL, FALSE);
 
 	enable = enable ? TRUE : FALSE;
-	if (self->hdr_enabled == enable)
-		return TRUE;
+	{
+		/*
+		 * Already where it was asked to be -- unless the DEPTH policy
+		 * has changed underneath, in which case fall through and
+		 * re-commit at the new one.
+		 *
+		 * The format is chosen in this function and nowhere else, so
+		 * without this `hdr-bpc' is a setting that appears to apply,
+		 * reads back as changed, and does nothing at all until
+		 * somebody happens to toggle HDR off and on.  Which is worse
+		 * than not having it: a test that quietly did not run looks
+		 * exactly like a hypothesis that was wrong.
+		 */
+		GowlConfig *cfg = self->compositor != NULL
+			? gowl_compositor_get_config(self->compositor) : NULL;
+		gint want = cfg != NULL ? gowl_config_get_hdr_bpc(cfg) : 0;
+
+		if (self->hdr_enabled == enable
+		    && (!enable || want == self->hdr_bpc_committed))
+			return TRUE;
+		self->hdr_bpc_committed = enable ? want : 0;
+	}
 	if (enable && !gowl_monitor_supports_hdr(self)) {
 		g_message("%s cannot do HDR: the output advertises no "
 		          "BT.2020 + PQ", gowl_monitor_get_name(self));

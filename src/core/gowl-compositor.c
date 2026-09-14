@@ -7081,6 +7081,13 @@ monitor_pq_wanted(GowlMonitor *m)
 		return FALSE;
 	if (!m->hdr_enabled)
 		return FALSE;
+	/* The switch, and it is a diagnostic as much as a preference: with
+	 * the encode off an HDR output shows what it showed before the
+	 * encode existed, which is the only way to tell a bad encode from a
+	 * panel making a mess of a 10-bit link. */
+	if (m->compositor->config != NULL
+	    && !gowl_config_get_hdr_encode(m->compositor->config))
+		return FALSE;
 	/* A renderer that converts colour has already done this properly and
 	 * per surface, which is better than anything done here. */
 	if (gowl_renderer_can_color_manage(m->compositor->renderer))
@@ -7115,12 +7122,33 @@ monitor_pq_prepare(GowlMonitor *m)
 	}
 
 	if (!wlr_output_configure_primary_swapchain(m->wlr_output, NULL,
-	                                            &m->pq_scene))
+	                                            &m->pq_scene)
+	    || !wlr_output_configure_primary_swapchain(m->wlr_output, NULL,
+	                                               &m->pq_out)
+	    || m->pq_scene == NULL || m->pq_out == NULL) {
+		/* Said once.  Silence here was a hole: the frame path simply
+		 * committed the scene unencoded and an HDR output came out
+		 * uncorrected with nothing anywhere to say why. */
+		if (!m->pq_warned) {
+			m->pq_warned = TRUE;
+			g_warning("%s: no swapchain for the PQ encode, so HDR is "
+			          "showing SDR content uncorrected",
+			          gowl_monitor_get_name(m));
+		}
 		return FALSE;
-	if (!wlr_output_configure_primary_swapchain(m->wlr_output, NULL,
-	                                            &m->pq_out))
-		return FALSE;
-	return m->pq_scene != NULL && m->pq_out != NULL;
+	}
+	/* Said once, on the way in: an HDR output that looks wrong is the
+	 * one case where knowing the encode RAN is the whole diagnosis. */
+	if (!m->pq_logged) {
+		m->pq_logged = TRUE;
+		g_message("%s: encoding the desktop for PQ (white at %.0f "
+		          "cd/m2, panel peak %.0f)",
+		          gowl_monitor_get_name(m),
+		          gowl_config_get_hdr_sdr_white(self->config),
+		          gowl_monitor_get_edid_hdr(m) != NULL
+		          ? gowl_monitor_get_edid_hdr(m)->max_luminance : 0.0);
+	}
+	return TRUE;
 }
 
 /*
@@ -7218,6 +7246,7 @@ gowl_compositor_drop_pq_encode(GowlCompositor *self)
 		g_clear_pointer(&m->pq_scene, wlr_swapchain_destroy);
 		g_clear_pointer(&m->pq_out, wlr_swapchain_destroy);
 		m->pq_warned = FALSE;
+		m->pq_logged = FALSE;
 	}
 	g_clear_pointer(&self->pq_gl, gowl_fx_gl_free);
 	self->pq_gl_tried = FALSE;

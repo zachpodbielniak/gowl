@@ -1164,6 +1164,22 @@ test_an_hdr_output_is_encoded(void)
 	 * by an encode that would not run. */
 	g_assert_false(m->pq_warned);
 
+	/*
+	 * And the switch takes it back out of the picture, which is what it
+	 * is for: an HDR output that comes out wrong has two causes that
+	 * look identical on the glass, and turning the encode off is how
+	 * somebody finds out whether it was this one.
+	 */
+	gowl_compositor_drop_pq_encode(r.compositor);
+	g_assert_null(m->pq_scene);
+	gowl_config_set_hdr_encode(r.config, FALSE);
+	for (i = 0; i < 20; i++) {
+		wlr_output_schedule_frame(m->wlr_output);
+		wl_event_loop_dispatch(r.compositor->event_loop, 5);
+	}
+	g_assert_null(m->pq_scene);
+	g_assert_null(m->pq_out);
+
 	m->hdr_enabled = FALSE;
 	rig_down(&r);
 }

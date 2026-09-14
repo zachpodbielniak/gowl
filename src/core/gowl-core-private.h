@@ -706,6 +706,7 @@ struct _GowlMonitor {
 	struct wlr_swapchain *pq_scene;
 	struct wlr_swapchain *pq_out;
 	gboolean              pq_warned;
+	gboolean              pq_logged;
 	guint32  hdr_prev_render_format;
 	/* The DRM fourcc HDR is actually being driven at, 0 for "whatever
 	 * the output was already using" -- which means 8 bits per channel,

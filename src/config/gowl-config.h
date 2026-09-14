@@ -1863,6 +1863,19 @@ gboolean     gowl_config_get_hdr_advertise_pq (GowlConfig *self);
  * the panel at its peak, and on an HDR output it is also the only honest
  * brightness control there is: the backlight does nothing in PQ, so this
  * is what "make the desktop dimmer" means. */
+/* Whether gowl encodes the desktop for PQ itself where the renderer
+ * cannot (default true), and what bit depth to drive HDR at -- 0 asks
+ * for ten and settles for eight, 8 never asks (default 0).
+ *
+ * Both exist to be turned off.  An HDR output that comes out wrong has
+ * two causes that look identical on the glass -- the encode getting it
+ * wrong, and the panel making a mess of a 10-bit link it nominally
+ * accepted -- and taking each out of the picture is the only way to find
+ * out which. */
+gboolean     gowl_config_get_hdr_encode (GowlConfig *self);
+void         gowl_config_set_hdr_encode (GowlConfig *self, gboolean encode);
+gint         gowl_config_get_hdr_bpc (GowlConfig *self);
+
 gdouble      gowl_config_get_hdr_sdr_white (GowlConfig *self);
 void         gowl_config_set_hdr_sdr_white (GowlConfig *self, gdouble nits);
 

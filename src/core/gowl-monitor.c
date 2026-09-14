@@ -1143,11 +1143,26 @@ gowl_monitor_set_hdr(
 				{ 0,                      FALSE },
 				{ 0,                      TRUE  }
 			};
+			/*
+			 * Ten bits is a quarter more display bandwidth, and on a
+			 * marginal link that is the difference between a picture
+			 * and a pattern of lines: the commit is ACCEPTED -- the
+			 * driver has no way to know what the cable will do with
+			 * it -- and the panel makes a mess of the signal anyway.
+			 * `hdr-bpc: 8' skips the ten-bit attempts entirely, which
+			 * bands gradients and is the only way to find out whether
+			 * the depth was the problem.
+			 */
+			gsize first = (self->compositor != NULL
+			               && gowl_config_get_hdr_bpc(
+			                    gowl_compositor_get_config(
+			                      self->compositor)) == 8)
+				? 4 : 0;
 			gsize i;
 			gboolean found = FALSE;
 			GString *refused = g_string_new(NULL);
 
-			for (i = 0; i < G_N_ELEMENTS(attempts); i++) {
+			for (i = first; i < G_N_ELEMENTS(attempts); i++) {
 				const gchar *what = attempts[i].format == 0
 					? "the current format (8-bit)"
 					: (attempts[i].format == DRM_FORMAT_XRGB2101010
@@ -1240,11 +1255,22 @@ gowl_monitor_set_hdr(
 	 */
 	if (enable && self->compositor != NULL
 	    && !gowl_monitor_hdr_color_managed(self)) {
-		g_message("%s: this renderer does not convert colour, so SDR "
-		          "windows are passed through uncorrected -- expect "
-		          "everything to look brighter, the panel to run at "
-		          "its peak, and the battery to go with it",
-		          gowl_monitor_get_name(self));
+		/*
+		 * The renderer cannot convert colour, so gowl does it itself
+		 * in a pass of its own -- unless that has been switched off,
+		 * in which case the desktop really is going out uncorrected
+		 * and somebody should be told why it is so bright.
+		 */
+		gboolean encode = gowl_config_get_hdr_encode(
+			gowl_compositor_get_config(self->compositor));
+
+		g_message("%s: this renderer does not convert colour, so gowl "
+		          "encodes the desktop for PQ itself (%s)",
+		          gowl_monitor_get_name(self),
+		          encode ? "hdr-encode on"
+		                 : "hdr-encode OFF -- SDR content is passed "
+		                   "through uncorrected, so expect everything "
+		                   "brighter and the panel at its peak");
 	}
 	if (self->compositor != NULL)
 		g_signal_emit_by_name(self->compositor, "monitor-hdr-changed",

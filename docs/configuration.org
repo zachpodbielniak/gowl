@@ -1738,8 +1738,39 @@ existed, and says so once in the log.
 | Property            | Type  | Default | Description |
 |---------------------+-------+---------+-------------|
 | =hdr-sdr-white=     | float | =203=   | Where SDR white lands in the HDR signal, in cd/m²; 40 to 600 |
+| =hdr-encode=        | bool  | =true=  | Encode the desktop for PQ; =false= passes it through uncorrected |
+| =hdr-bpc=           | int   | =0=     | =0= asks for ten bits and settles for eight; =8= never asks |
 | =hdr-unmanaged=     | bool  | =true=  | Allow HDR where the compositor cannot convert colour for it |
 | =hdr-advertise-pq=  | bool  | =false= | Also tell CLIENTS that PQ and BT.2020 content is accepted |
+
+***** When an HDR output comes out wrong
+
+Two causes look nothing alike in the code and identical on the glass:
+the *encode* getting it wrong, and the *panel* making a mess of a 10-bit
+link it nominally accepted. A commit that the driver accepts is not a
+signal the cable carries, and neither the driver nor gowl can tell.
+=hdr-encode= and =hdr-bpc= exist to take each out of the picture.
+
+#+begin_src yaml
+hdr-encode: false     # HDR as it was before the encode: everything far
+                      # too bright.  Wrong on purpose, and diagnostic.
+hdr-bpc: 8            # HDR without the 10-bit link.  Gradients band.
+#+end_src
+
+Both are read live, so a reload applies them. Work through it in that
+order:
+
+- artefacts *gone* with =hdr-encode: false= --- the encode is at fault,
+  and the picture you are left with is the uncorrected one;
+- artefacts *gone* with =hdr-bpc: 8= and the encode back on --- the
+  10-bit link is at fault, and eight bits is the setting to keep;
+- artefacts *either way* --- the panel does not like PQ at all, and the
+  answer is not to run this output in HDR.
+
+The journal says which path ran. =eDP-1: encoding the desktop for PQ=
+means the encode is live; a warning that there is =no swapchain for the
+PQ encode= means it fell back and the output is uncorrected --- which
+used to happen silently.
 
 *=hdr-sdr-white= is the brightness control an HDR output has*, and the
 only honest one: the backlight decides nothing in PQ, so a slider that

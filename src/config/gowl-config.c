@@ -254,6 +254,19 @@
  * what "make the desktop dimmer" means.
  */
 #define GOWL_CONFIG_DEFAULT_HDR_SDR_WHITE       (203.0)
+/*
+ * Whether gowl encodes the desktop for PQ itself, and at what depth.
+ *
+ * Both exist to be turned OFF, which is the point of them.  An HDR
+ * output that comes out wrong has two candidate causes that look nothing
+ * alike in the code and identical on the glass -- the encode getting it
+ * wrong, and the panel making a mess of a 10-bit link it nominally
+ * accepted -- and without a way to take each out of the picture there is
+ * no way to find out which.
+ */
+#define GOWL_CONFIG_DEFAULT_HDR_ENCODE          (TRUE)
+/* 0 asks for ten bits and settles for eight; 8 never asks. */
+#define GOWL_CONFIG_DEFAULT_HDR_BPC             (0)
 #define GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE   ("smart")
 #define GOWL_CONFIG_DEFAULT_INPUT_RECORDING     (FALSE)
 #define GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS ""
@@ -470,6 +483,8 @@ struct _GowlConfig {
 	gboolean hdr_unmanaged;
 	gboolean hdr_advertise_pq;
 	gdouble  hdr_sdr_white;
+	gboolean hdr_encode;
+	gint     hdr_bpc;
 	gchar   *focus_on_activate;
 	gboolean input_recording;
 	gchar   *input_recording_deny_apps;
@@ -1502,6 +1517,8 @@ gowl_config_init(GowlConfig *self)
 	self->hdr_unmanaged       = GOWL_CONFIG_DEFAULT_HDR_UNMANAGED;
 	self->hdr_advertise_pq    = GOWL_CONFIG_DEFAULT_HDR_ADVERTISE_PQ;
 	self->hdr_sdr_white       = GOWL_CONFIG_DEFAULT_HDR_SDR_WHITE;
+	self->hdr_encode          = GOWL_CONFIG_DEFAULT_HDR_ENCODE;
+	self->hdr_bpc             = GOWL_CONFIG_DEFAULT_HDR_BPC;
 	self->focus_on_activate   = g_strdup(GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE);
 	self->input_recording     = GOWL_CONFIG_DEFAULT_INPUT_RECORDING;
 	self->input_recording_deny_apps =
@@ -1812,6 +1829,7 @@ static const gchar *const top_level_keys[] = {
 	"ignore_yaml", "log-level", "log-file", "repeat-rate", "repeat-delay",
 	"terminal", "menu", "sloppyfocus", "manage_lid", "idle-timeout",
 	"dpms-timeout", "allow-tearing", "hdr-unmanaged", "hdr-advertise-pq", "hdr-sdr-white",
+	"hdr-encode", "hdr-bpc",
 	"focus-on-activate",
 	"input-recording", "input-recording-deny-apps",
 	"evaluate_gowl_config_with_cmacs", "evaluate-gowl-config-with-cmacs",
@@ -3004,6 +3022,17 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "hdr-advertise-pq")) {
 		self->hdr_advertise_pq = yaml_mapping_get_boolean_member(
 			mapping, "hdr-advertise-pq");
+	}
+	if (yaml_mapping_has_member(mapping, "hdr-encode")) {
+		self->hdr_encode = yaml_mapping_get_boolean_member(
+			mapping, "hdr-encode");
+	}
+	if (yaml_mapping_has_member(mapping, "hdr-bpc")) {
+		gint v = (gint)yaml_mapping_get_int_member(mapping, "hdr-bpc");
+
+		/* 8 or 10; anything else means "ask for ten, settle for
+		 * eight", which is what 0 says and what the default is. */
+		self->hdr_bpc = (v == 8 || v == 10) ? v : 0;
 	}
 	if (yaml_mapping_has_member(mapping, "hdr-sdr-white")) {
 		/* Below about 40 the desktop is unreadable and above a few
@@ -6796,6 +6825,29 @@ gowl_config_get_hdr_advertise_pq(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_HDR_ADVERTISE_PQ);
 	return self->hdr_advertise_pq;
+}
+
+gboolean
+gowl_config_get_hdr_encode(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HDR_ENCODE);
+	return self->hdr_encode;
+}
+
+void
+gowl_config_set_hdr_encode(GowlConfig *self, gboolean encode)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->hdr_encode = encode;
+}
+
+gint
+gowl_config_get_hdr_bpc(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HDR_BPC);
+	return self->hdr_bpc;
 }
 
 gdouble

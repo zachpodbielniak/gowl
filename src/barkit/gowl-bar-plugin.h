@@ -80,6 +80,8 @@ G_DECLARE_DERIVABLE_TYPE(GowlBarPlugin, gowl_bar_plugin,
  * @panel_opened: the panel just became visible
  * @panel_closed: the panel was dismissed
  * @panel_key: a key the panel's own navigation declined
+ * @signature: append whatever else decides how the plugin LOOKS; see
+ *   gowl_bar_plugin_signature()
  * @padding: reserved for ABI-compatible expansion
  *
  * The contract a bar plugin implements.
@@ -131,7 +133,11 @@ struct _GowlBarPluginClass {
 	gboolean      (*panel_key)    (GowlBarPlugin *self, guint keysym,
 	                               guint modifiers, gint focused_item);
 
-	gpointer padding[8];
+	void          (*signature)    (GowlBarPlugin *self, GString *out);
+
+	/* One slot spent on @signature, so the class stays the size it
+	   was and an already-built subclass keeps working. */
+	gpointer padding[7];
 };
 
 /* --- Identity ----------------------------------------------------- */
@@ -486,6 +492,55 @@ void gowl_bar_plugin_draw_label (GowlBarPlugin      *self,
                                   gboolean hovered, gboolean panel_open);
 
 /**
+ * gowl_bar_plugin_draw_text:
+ * @self: a plugin
+ * @cr: the target context
+ * @layout: a #PangoLayout
+ * @theme: the active theme
+ * @x: the slot's left edge
+ * @y: the slot's top edge
+ * @width: the slot's width
+ * @height: the slot's height
+ * @hovered: whether the pointer is over the slot
+ * @panel_open: whether this plugin's panel is showing
+ * @text: (nullable): what to draw in place of the plugin's label
+ *
+ * gowl_bar_plugin_draw_label() with the text supplied rather than read
+ * from the plugin.
+ *
+ * For a widget whose appearance depends on the OUTPUT it is being drawn
+ * for: one plugin object serves every screen, so a per-output reading
+ * cannot be parked in the shared label and then drawn from there ---
+ * the last screen painted would decide what all of them say.  The
+ * plugin's icon and colour are still its own.
+ */
+void gowl_bar_plugin_draw_text (GowlBarPlugin      *self,
+                                 cairo_t            *cr,
+                                 PangoLayout        *layout,
+                                 const GowlBarTheme *theme,
+                                 gint x, gint y, gint width, gint height,
+                                 gboolean hovered, gboolean panel_open,
+                                 const gchar        *text);
+
+/**
+ * gowl_bar_plugin_measure_text:
+ * @self: a plugin
+ * @layout: a #PangoLayout
+ * @theme: the active theme
+ * @height: the bar height
+ * @text: (nullable): the text that will be drawn
+ *
+ * The width gowl_bar_plugin_draw_text() would need for @text.
+ *
+ * Returns: the width, or 0 when there is nothing to show
+ */
+gint gowl_bar_plugin_measure_text (GowlBarPlugin      *self,
+                                    PangoLayout        *layout,
+                                    const GowlBarTheme *theme,
+                                    gint                height,
+                                    const gchar        *text);
+
+/**
  * gowl_bar_plugin_measure_label:
  * @self: a plugin
  * @layout: a #PangoLayout
@@ -508,7 +563,17 @@ gint gowl_bar_plugin_measure_label (GowlBarPlugin      *self,
  * Appends everything about the plugin that affects its appearance.
  * The bar skips a repaint when no plugin's signature changed, so a
  * plugin whose look depends on state beyond its label, icon and colour
- * must add that state here or it will not redraw.
+ * must add that state through the @signature vfunc or it will not
+ * redraw.
+ *
+ * The common part --- id, visibility, colour, icon, label --- is always
+ * appended first and a subclass cannot drop it; @signature only adds.
+ *
+ * Called once per OUTPUT, with gowl_bar_plugin_get_monitor() set to
+ * that output, which is what makes a per-screen widget possible: the
+ * bar compares each screen's surface against its own last signature, so
+ * a widget that states its per-output reading here repaints on the
+ * screen whose reading changed and leaves the others alone.
  */
 void gowl_bar_plugin_signature (GowlBarPlugin *self, GString *out);
 

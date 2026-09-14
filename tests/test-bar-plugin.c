@@ -246,6 +246,7 @@ static const GowlBarPluginVTable probe_vtable = {
 	probe_click, NULL,
 	probe_panel, probe_action,
 	NULL, NULL,
+	NULL,
 	NULL
 };
 
@@ -260,6 +261,7 @@ static const GowlBarPluginVTable short_vtable = {
 	probe_click, NULL,
 	probe_panel, probe_action,
 	NULL, NULL,
+	NULL,
 	NULL
 };
 
@@ -360,6 +362,105 @@ test_the_served_output(void)
 
 	g_object_unref(one);
 	g_object_unref(two);
+}
+
+/* The signature the probe adds, and the marker it adds it with. */
+#define PROBE_SIGNATURE_MARK "served-here"
+
+static void
+probe_signature(GowlBarPlugin *plugin, gpointer data, GString *out)
+{
+	(void)plugin;
+	(void)data;
+	g_string_append(out, PROBE_SIGNATURE_MARK);
+}
+
+/*
+ * A vtable that HAS a signature callback but whose declared size stops
+ * before the slot --- what a plugin built against the barkit that came
+ * before it looks like once the struct has grown past it.  The memory
+ * after the size is a real function pointer here on purpose: reading it
+ * would work, which is exactly why only the size may decide.
+ */
+static const GowlBarPluginVTable pre_signature_vtable = {
+	G_STRUCT_OFFSET(GowlBarPluginVTable, panel_key) + sizeof(gpointer),
+	probe_create, probe_destroy,
+	NULL, NULL, NULL,
+	NULL, probe_poll, NULL,
+	NULL, NULL,
+	NULL, NULL,
+	NULL, NULL,
+	NULL, NULL,
+	NULL,
+	probe_signature
+};
+
+static const GowlBarPluginVTable signature_vtable = {
+	sizeof(GowlBarPluginVTable),
+	probe_create, probe_destroy,
+	NULL, NULL, NULL,
+	NULL, probe_poll, NULL,
+	NULL, NULL,
+	NULL, NULL,
+	NULL, NULL,
+	NULL, NULL,
+	NULL,
+	probe_signature
+};
+
+/*
+ * What the bar repaints on.
+ *
+ * The common part --- id, visibility, colour, icon, label --- is the
+ * host's and a plugin cannot drop it; the vtable only ADDS.  That is
+ * what lets a widget whose appearance varies per output say so: the
+ * bar compares each screen's surface against its own last signature,
+ * and a widget that states its per-output reading here repaints the
+ * screen whose reading moved.
+ *
+ * And the slot obeys the declared size like every other one, so a
+ * plugin built before it existed is not called through a field it
+ * never had.
+ */
+static void
+test_the_signature_hook(void)
+{
+	GowlBarPlugin *plugin;
+	GString *out;
+
+	out = g_string_new(NULL);
+
+	/* No hook: the common part, and nothing else. */
+	plugin = gowl_bar_plugin_proxy_new("plain", NULL, NULL, &probe_vtable);
+	gowl_bar_plugin_set_label(plugin, "L");
+	gowl_bar_plugin_signature(plugin, out);
+	g_assert_nonnull(strstr(out->str, "plain"));
+	g_assert_nonnull(strstr(out->str, "L"));
+	g_assert_null(strstr(out->str, PROBE_SIGNATURE_MARK));
+	g_object_unref(plugin);
+
+	/* With one: both. */
+	g_string_truncate(out, 0);
+	plugin = gowl_bar_plugin_proxy_new("rich", NULL, NULL,
+	                                   &signature_vtable);
+	gowl_bar_plugin_set_label(plugin, "L");
+	gowl_bar_plugin_signature(plugin, out);
+	g_assert_nonnull(strstr(out->str, "rich"));
+	g_assert_nonnull(strstr(out->str, "L"));
+	g_assert_nonnull(strstr(out->str, PROBE_SIGNATURE_MARK));
+	g_object_unref(plugin);
+
+	/* Declared too short to carry it: not reached, even though the
+	   pointer is there. */
+	g_string_truncate(out, 0);
+	plugin = gowl_bar_plugin_proxy_new("old", NULL, NULL,
+	                                   &pre_signature_vtable);
+	gowl_bar_plugin_signature(plugin, out);
+	g_assert_nonnull(strstr(out->str, "old"));
+	g_assert_null(strstr(out->str, PROBE_SIGNATURE_MARK));
+	g_object_unref(plugin);
+
+	g_string_free(out, TRUE);
 }
 
 static void
@@ -824,6 +925,7 @@ main(int argc, char *argv[])
 	                test_a_short_vtable_still_loads);
 	g_test_add_func("/bar-plugin/settings", test_settings_accessors);
 	g_test_add_func("/bar-plugin/served-output", test_the_served_output);
+	g_test_add_func("/bar-plugin/signature-hook", test_the_signature_hook);
 
 	g_test_add_func("/bar-registry/instantiate",
 	                test_registry_instantiates_specs);

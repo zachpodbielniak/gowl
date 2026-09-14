@@ -306,7 +306,9 @@ static const GowlBarPluginVTable pomodoro_vtable = {
 	pomodoro_panel,         /* panel */
 	pomodoro_action,        /* action */
 	NULL,                   /* panel_opened */
-	NULL                    /* panel_closed */
+	NULL,                   /* panel_closed */
+	NULL,                   /* panel_key */
+	NULL                    /* signature (per-output appearance) */
 };
 
 /* One file may publish several plugins; they are then one compile and

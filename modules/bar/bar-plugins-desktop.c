@@ -503,8 +503,8 @@ static const GowlBarPluginVTable audio_vtable = {
 	audio_click, audio_scroll,
 	audio_panel, audio_action,
 	audio_panel_opened, audio_panel_closed,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -734,8 +734,8 @@ static const GowlBarPluginVTable media_vtable = {
 	media_click, media_scroll,
 	media_panel, media_action,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -956,8 +956,8 @@ static const GowlBarPluginVTable podman_vtable = {
 	NULL, NULL,
 	podman_panel, podman_action,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -1228,8 +1228,8 @@ static const GowlBarPluginVTable weather_vtable = {
 	NULL, NULL,
 	weather_panel, NULL,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -1386,8 +1386,8 @@ static const GowlBarPluginVTable git_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -1452,8 +1452,8 @@ static const GowlBarPluginVTable keymap_vtable = {
 	NULL, NULL, NULL, NULL,
 	NULL, NULL,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -2166,8 +2166,8 @@ static const GowlBarPluginVTable display_vtable = {
 	NULL, display_scroll,
 	display_panel, display_action,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 
@@ -2572,8 +2572,8 @@ static const GowlBarPluginVTable recorder_vtable = {
 	NULL, NULL,
 	recorder_panel, recorder_action,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 
@@ -3220,8 +3220,8 @@ static const GowlBarPluginVTable screenshot_vtable = {
 	NULL, NULL,
 	shot_panel, shot_action,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 
@@ -3416,8 +3416,8 @@ static const GowlBarPluginVTable notifications_vtable = {
 	NULL, NULL,
 	notif_panel, notif_action,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 
@@ -3801,7 +3801,8 @@ static const GowlBarPluginVTable clipboard_vtable = {
 	NULL, NULL,
 	clipw_panel, clipw_action,
 	NULL, NULL,
-	clipw_panel_key
+	clipw_panel_key,
+	NULL
 };
 
 

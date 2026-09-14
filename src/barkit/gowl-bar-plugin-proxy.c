@@ -249,6 +249,15 @@ proxy_panel_closed(GowlBarPlugin *plugin)
 }
 
 static void
+proxy_signature(GowlBarPlugin *plugin, GString *out)
+{
+	GowlBarPluginProxy *self = GOWL_BAR_PLUGIN_PROXY(plugin);
+
+	if (GOWL_BAR_PLUGIN_VTABLE_HAS(self->vt, signature))
+		self->vt->signature(plugin, self->data, out);
+}
+
+static void
 gowl_bar_plugin_proxy_finalize(GObject *object)
 {
 	GowlBarPluginProxy *self = GOWL_BAR_PLUGIN_PROXY(object);
@@ -294,6 +303,10 @@ gowl_bar_plugin_proxy_class_init(GowlBarPluginProxyClass *klass)
 	plugin_class->panel_opened    = proxy_panel_opened;
 	plugin_class->panel_closed    = proxy_panel_closed;
 	plugin_class->panel_key       = proxy_panel_key;
+	/* Wired unconditionally, like poll_async: the vtable is per
+	   instance and the class is not, so the emptiness of the slot is
+	   checked in the forwarder rather than here. */
+	plugin_class->signature       = proxy_signature;
 }
 
 static void

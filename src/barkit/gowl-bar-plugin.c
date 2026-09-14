@@ -1433,6 +1433,30 @@ gowl_bar_plugin_measure_label(GowlBarPlugin *self, PangoLayout *layout,
                               const GowlBarTheme *theme, gint height)
 {
 	g_autofree gchar *label = NULL;
+
+	g_return_val_if_fail(GOWL_IS_BAR_PLUGIN(self), 0);
+
+	label = gowl_bar_plugin_dup_label(self);
+	return gowl_bar_plugin_measure_text(self, layout, theme, height,
+	                                    label);
+}
+
+/**
+ * gowl_bar_plugin_measure_text:
+ * @self: a plugin
+ * @layout: a #PangoLayout
+ * @theme: the active theme
+ * @height: the bar height
+ * @text: (nullable): the text that will be drawn
+ *
+ * Returns: the width @text and the plugin's icon need
+ */
+gint
+gowl_bar_plugin_measure_text(GowlBarPlugin *self, PangoLayout *layout,
+                             const GowlBarTheme *theme, gint height,
+                             const gchar *text)
+{
+	const gchar *label = text;
 	g_autofree gchar *icon = NULL;
 	PangoFontDescription *desc;
 	PangoRectangle logical;
@@ -1443,8 +1467,7 @@ gowl_bar_plugin_measure_label(GowlBarPlugin *self, PangoLayout *layout,
 
 	(void)height;
 
-	label = gowl_bar_plugin_dup_label(self);
-	icon  = gowl_bar_plugin_dup_icon(self);
+	icon = gowl_bar_plugin_dup_icon(self);
 
 	if ((label == NULL || label[0] == '\0') &&
 	    (icon == NULL || icon[0] == '\0'))
@@ -1498,6 +1521,38 @@ gowl_bar_plugin_draw_label(GowlBarPlugin *self, cairo_t *cr,
                            gboolean hovered, gboolean panel_open)
 {
 	g_autofree gchar *label = NULL;
+
+	g_return_if_fail(GOWL_IS_BAR_PLUGIN(self));
+
+	label = gowl_bar_plugin_dup_label(self);
+	gowl_bar_plugin_draw_text(self, cr, layout, theme, x, y, width,
+	                          height, hovered, panel_open, label);
+}
+
+/**
+ * gowl_bar_plugin_draw_text:
+ * @self: a plugin
+ * @cr: the target context
+ * @layout: a #PangoLayout
+ * @theme: the active theme
+ * @x: the slot's left edge
+ * @y: the slot's top edge
+ * @width: the slot's width
+ * @height: the slot's height
+ * @hovered: whether the pointer is over the slot
+ * @panel_open: whether this plugin's panel is showing
+ * @text: (nullable): what to draw in place of the label
+ *
+ * The default drawing, with the text supplied by the caller.
+ */
+void
+gowl_bar_plugin_draw_text(GowlBarPlugin *self, cairo_t *cr,
+                          PangoLayout *layout, const GowlBarTheme *theme,
+                          gint x, gint y, gint width, gint height,
+                          gboolean hovered, gboolean panel_open,
+                          const gchar *text)
+{
+	const gchar *label = text;
 	g_autofree gchar *icon = NULL;
 	PangoFontDescription *desc;
 	PangoRectangle logical;
@@ -1508,7 +1563,6 @@ gowl_bar_plugin_draw_label(GowlBarPlugin *self, cairo_t *cr,
 	g_return_if_fail(cr != NULL);
 	g_return_if_fail(layout != NULL);
 
-	label = gowl_bar_plugin_dup_label(self);
 	icon  = gowl_bar_plugin_dup_icon(self);
 	color = gowl_bar_plugin_get_color(self);
 
@@ -1567,10 +1621,16 @@ gowl_bar_plugin_draw_label(GowlBarPlugin *self, cairo_t *cr,
  * gowl_bar_plugin_signature:
  * @self: a plugin
  * @out: a #GString to append to
+ *
+ * The common part is appended here and the subclass hook only ADDS to
+ * it: a plugin that forgot half of what decides its appearance would
+ * silently stop repainting, and the half every plugin has is the half
+ * worth taking out of its hands.
  */
 void
 gowl_bar_plugin_signature(GowlBarPlugin *self, GString *out)
 {
+	GowlBarPluginClass *klass;
 	g_autofree gchar *label = NULL;
 	g_autofree gchar *icon = NULL;
 
@@ -1580,10 +1640,17 @@ gowl_bar_plugin_signature(GowlBarPlugin *self, GString *out)
 	label = gowl_bar_plugin_dup_label(self);
 	icon  = gowl_bar_plugin_dup_icon(self);
 
-	g_string_append_printf(out, "%s|%d|%d|%s|%s;",
+	g_string_append_printf(out, "%s|%d|%d|%s|%s",
 	                       gowl_bar_plugin_get_id(self),
 	                       PRIV(self)->visible ? 1 : 0,
 	                       (gint)gowl_bar_plugin_get_color(self),
 	                       (icon != NULL) ? icon : "",
 	                       (label != NULL) ? label : "");
+
+	klass = GOWL_BAR_PLUGIN_GET_CLASS(self);
+	if (klass->signature != NULL) {
+		g_string_append_c(out, '|');
+		klass->signature(self, out);
+	}
+	g_string_append_c(out, ';');
 }

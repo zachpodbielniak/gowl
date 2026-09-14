@@ -571,7 +571,9 @@ static const GowlBarPluginVTable hello_vtable = {
 	NULL, NULL,            /* measure, draw */
 	NULL, NULL,            /* click, scroll */
 	NULL, NULL,            /* panel, action */
-	NULL, NULL             /* panel_opened, panel_closed */
+	NULL, NULL,            /* panel_opened, panel_closed */
+	NULL,                  /* panel_key */
+	NULL                   /* signature */
 };
 
 static const GowlBarPluginDesc descs[] = {
@@ -587,7 +589,7 @@ gowl_bar_plugin_query(guint *n_descs)
 }
 #+end_src
 
-Every slot may be =NULL=; the bar uses its default. The minimum viable plugin is a =poll= that calls =gowl_bar_plugin_set_label()=, and it gets measurement, drawing, hover, and the panel machinery for free.
+Every slot may be =NULL=; the bar uses its default. The minimum viable plugin is a =poll= that calls =gowl_bar_plugin_set_label()=, and it gets measurement, drawing, hover, and the panel machinery for free. =signature= is the one to reach for when the widget looks different on different screens --- see [[#per-output-signature][Saying so in the signature]].
 
 =size= must be the first member and must be =sizeof= the struct *as your file sees it*. That is what lets the vtable grow without breaking a plugin built against an older gowl: the bar checks every callback lies inside the size you declared before calling it.
 
@@ -645,11 +647,32 @@ Do not reach for =gowl_compositor_get_selected_monitor()= instead. That is the *
 
 The selected monitor is still the right *fallback* for the =NULL= case, and the shipped widgets use =bar_plugin_monitor()= for exactly that: served output first, focused output when there is genuinely no served one.
 
-**** Still session-wide
+**** Saying so in the signature
+:PROPERTIES:
+:CUSTOM_ID: per-output-signature
+:END:
 
-The =tags= and =layout= widgets read the focused output in their =poll= and put the answer in a label. That label is shared by every screen, so both bars show the focused screen's tags and layout symbol --- which is not what a dwm-style tag row should do.
+Reading the right output in =draw= is only half of it. The bar skips a screen's repaint when that screen's *signature* has not moved, and the signature is built from the plugin's label, icon and colour --- none of which vary per output. A widget that draws something else would read the right monitor and then never be asked to draw again.
 
-Fixing it means computing in =draw= rather than =poll=, and a per-output appearance has to appear in the *signature* or the surface never repaints. =GowlBarPluginClass.signature= exists; =GowlBarPluginVTable= has no slot for it yet, so a vtable plugin cannot contribute one. That slot is the missing piece.
+So a per-output widget states its reading in the =signature= slot:
+
+#+begin_src C
+static void
+hello_signature(GowlBarPlugin *plugin, gpointer data, GString *out)
+{
+	GowlMonitor *mon = gowl_bar_plugin_get_monitor(plugin);
+
+	(void)data;
+	g_string_append_printf(out, "%u",
+		(mon != NULL) ? gowl_monitor_get_tags(mon) : 0u);
+}
+#+end_src
+
+Called once per output, with =gowl_bar_plugin_get_monitor()= set to that output --- the same as =measure= and =draw=. The common part (id, visibility, colour, icon, label) is prepended by the host and a plugin cannot drop it; the slot only *adds*.
+
+This is what the shipped =tags= and =layout= widgets do. Both used to read the focused output in their =poll= and park the answer where every screen shares it --- the tag row went as far as putting its state in a label nothing draws, purely so the bar would notice a change. Two screens viewing different tags drew byte-identical bars. They now read =gowl_bar_plugin_get_monitor()= in =signature=, =measure= and =draw=, and hold no state between calls at all.
+
+What is left in the tag row's =poll= is the one thing that genuinely is session-wide: the tag *count*, which the module's hit-test divides the slot by.
 
 *** Talking to a CLI
 :PROPERTIES:

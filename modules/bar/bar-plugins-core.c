@@ -114,25 +114,62 @@ core_color_or_role(GowlBarPlugin *plugin, const GowlBarTheme *theme,
  * tags -- the dwm-style tag row
  * ---------------------------------------------------------------- */
 
+/*
+ * What the tag row shows --- for ONE output.
+ *
+ * Not stored on the plugin.  One plugin object serves every screen, so
+ * a reading taken once and kept would be whichever screen was asked
+ * last; on a two-monitor desk both bars then showed the FOCUSED
+ * screen's tags, which is not what a dwm tag row means.  It is read
+ * fresh from gowl_bar_plugin_get_monitor() in the three places that
+ * need it --- the signature, the measure and the draw --- each of which
+ * the host serves the output it is asking about.
+ */
 typedef struct {
 	guint32 selected;
 	guint32 occupied;
 	guint32 urgent;
 	gint    tag_count;
-} TagsData;
-
-static gpointer
-tags_create(GowlBarPlugin *plugin)
-{
-	(void)plugin;
-	return g_new0(TagsData, 1);
-}
+} TagsView;
 
 static void
-tags_destroy(GowlBarPlugin *plugin, gpointer data)
+tags_view(GowlBarPlugin *plugin, TagsView *out)
 {
-	(void)plugin;
-	g_free(data);
+	GowlCompositor *comp;
+	GowlMonitor *mon;
+	GowlConfig *config;
+	GList *clients, *l;
+
+	memset(out, 0, sizeof(*out));
+	out->tag_count = 9;
+
+	comp = core_compositor();
+	if (comp == NULL)
+		return;
+
+	/* Session-wide: every screen shows the same number of tags. */
+	config = gowl_compositor_get_config(comp);
+	if (config != NULL)
+		out->tag_count = gowl_config_get_tag_count(config);
+
+	mon = bar_plugin_monitor(plugin);
+	if (mon == NULL)
+		return;
+
+	out->selected = gowl_monitor_get_tags(mon);
+
+	clients = gowl_compositor_get_clients(comp);
+	for (l = clients; l != NULL; l = l->next) {
+		GowlClient *c = GOWL_CLIENT(l->data);
+		guint32 ct;
+
+		if (gowl_client_get_monitor(c) != mon)
+			continue;
+		ct = gowl_client_get_tags(c);
+		out->occupied |= ct;
+		if (gowl_client_get_urgent(c))
+			out->urgent |= ct;
+	}
 }
 
 static void
@@ -144,83 +181,71 @@ tags_configure(GowlBarPlugin *plugin, gpointer data, GHashTable *settings)
 		gowl_bar_plugin_get_setting_bool(plugin, "visible", TRUE));
 }
 
+/*
+ * The only thing left that is the same on every screen.
+ *
+ * The module's tag hit-test divides the slot by this setting, and it
+ * has to be published from somewhere; a poll is the honest place for a
+ * value that does not vary by output.
+ */
 static void
 tags_poll(GowlBarPlugin *plugin, gpointer data)
 {
-	TagsData *tags = data;
 	GowlCompositor *comp;
-	GowlMonitor *mon;
 	GowlConfig *config;
-	GList *clients, *l;
-	guint32 selected, occupied, urgent;
+	g_autofree gchar *count_str = NULL;
+	gint count;
+
+	(void)data;
 
 	comp = core_compositor();
 	if (comp == NULL)
 		return;
 
 	config = gowl_compositor_get_config(comp);
-	tags->tag_count = (config != NULL)
-		? gowl_config_get_tag_count(config) : 9;
-	{
-		g_autofree gchar *count_str = NULL;
+	count = (config != NULL) ? gowl_config_get_tag_count(config) : 9;
 
-		count_str = g_strdup_printf("%d", tags->tag_count);
-		gowl_bar_plugin_set_setting(plugin, "tag-count", count_str);
-	}
+	count_str = g_strdup_printf("%d", count);
+	gowl_bar_plugin_set_setting(plugin, "tag-count", count_str);
+}
 
-	mon = gowl_compositor_get_selected_monitor(comp);
-	selected = occupied = urgent = 0;
-	if (mon != NULL) {
-		selected = gowl_monitor_get_tags(mon);
+/*
+ * The tags of the output being asked about, as a string.
+ *
+ * This is what makes the row per-screen: the bar compares each screen's
+ * surface against its own last signature, so naming this screen's tags
+ * here repaints this screen when they move and leaves the other alone.
+ * It replaces the state-in-the-label trick this widget used to rely on,
+ * which could only ever carry one screen's answer.
+ */
+static void
+tags_signature(GowlBarPlugin *plugin, gpointer data, GString *out)
+{
+	TagsView view;
 
-		clients = gowl_compositor_get_clients(comp);
-		for (l = clients; l != NULL; l = l->next) {
-			GowlClient *c = GOWL_CLIENT(l->data);
-			guint32 ct;
+	(void)data;
 
-			if (gowl_client_get_monitor(c) != mon)
-				continue;
-			ct = gowl_client_get_tags(c);
-			occupied |= ct;
-			if (gowl_client_get_urgent(c))
-				urgent |= ct;
-		}
-	}
-
-	if (selected != tags->selected || occupied != tags->occupied ||
-	    urgent != tags->urgent) {
-		tags->selected = selected;
-		tags->occupied = occupied;
-		tags->urgent   = urgent;
-		/* The label is what the bar's change detection watches, so
-		   the state has to appear in it even though nothing draws
-		   it: without this the row would only repaint when some
-		   other widget happened to change. */
-		{
-			g_autofree gchar *state = NULL;
-
-			state = g_strdup_printf("%u/%u/%u", selected, occupied,
-			                        urgent);
-			gowl_bar_plugin_set_label(plugin, state);
-		}
-	}
+	tags_view(plugin, &view);
+	g_string_append_printf(out, "%d:%u/%u/%u", view.tag_count,
+	                       view.selected, view.occupied, view.urgent);
 }
 
 static gint
 tags_measure(GowlBarPlugin *plugin, gpointer data, PangoLayout *layout,
              const GowlBarTheme *theme, gint height)
 {
-	TagsData *tags = data;
+	TagsView view;
 
-	(void)plugin;
+	(void)data;
 	(void)layout;
 	(void)theme;
 
-	if (tags->tag_count <= 0)
+	tags_view(plugin, &view);
+	if (view.tag_count <= 0)
 		return 0;
 	/* Square boxes matching the bar height, exactly as dwm draws
 	   them; the module's tag hit-test divides the slot the same way. */
-	return tags->tag_count * height;
+	return view.tag_count * height;
 }
 
 static void
@@ -228,17 +253,19 @@ tags_draw(GowlBarPlugin *plugin, gpointer data, cairo_t *cr,
           PangoLayout *layout, const GowlBarTheme *theme, gint x, gint y,
           gint width, gint height, gboolean hovered, gboolean panel_open)
 {
-	TagsData *tags = data;
+	TagsView view;
 	PangoFontDescription *font;
 	gdouble active_bg[4], active_fg[4], occupied_fg[4];
 	gdouble urgent_bg[4], urgent_fg[4], empty_fg[4];
 	gint box_w, i;
 
+	(void)data;
 	(void)hovered;
 	(void)panel_open;
 	(void)width;
 
-	if (tags->tag_count <= 0)
+	tags_view(plugin, &view);
+	if (view.tag_count <= 0)
 		return;
 
 	core_color_or_role(plugin, theme, "active-bg", GOWL_BAR_COLOR_ACCENT,
@@ -263,11 +290,11 @@ tags_draw(GowlBarPlugin *plugin, gpointer data, cairo_t *cr,
 
 	box_w = height;
 
-	for (i = 0; i < tags->tag_count; i++) {
+	for (i = 0; i < view.tag_count; i++) {
 		guint32 bit = (guint32)1u << i;
-		gboolean sel = (tags->selected & bit) != 0;
-		gboolean urg = (tags->urgent & bit) != 0;
-		gboolean occ = (tags->occupied & bit) != 0;
+		gboolean sel = (view.selected & bit) != 0;
+		gboolean urg = (view.urgent & bit) != 0;
+		gboolean occ = (view.occupied & bit) != 0;
 		const gdouble *fg;
 		gchar label[8];
 		PangoRectangle logical;
@@ -315,15 +342,15 @@ tags_draw(GowlBarPlugin *plugin, gpointer data, cairo_t *cr,
 
 static const GowlBarPluginVTable tags_vtable = {
 	sizeof(GowlBarPluginVTable),
-	tags_create, tags_destroy,
+	NULL, NULL,
 	NULL, NULL, tags_configure,
 	NULL, tags_poll, NULL,
 	tags_measure, tags_draw,
 	NULL, NULL,
 	NULL, NULL,
 	NULL, NULL,
-	NULL
-
+	NULL,
+	tags_signature
 };
 
 /* ----------------------------------------------------------------
@@ -545,32 +572,65 @@ static const GowlBarPluginVTable title_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
  * layout -- the active layout's symbol
  * ---------------------------------------------------------------- */
 
-static void
-layout_poll(GowlBarPlugin *plugin, gpointer data)
+/*
+ * The symbol of the output being asked about.
+ *
+ * Read on demand rather than parked in the plugin's label: the label is
+ * shared by every screen, so on a second monitor the symbol was
+ * whichever layout the FOCUSED screen was running --- and clicking it
+ * cycled a layout the symbol was not describing.
+ *
+ * Borrowed from the monitor, which outlives the call.
+ */
+static const gchar *
+layout_symbol(GowlBarPlugin *plugin)
 {
-	GowlCompositor *comp;
-	GowlMonitor *mon;
+	GowlMonitor *mon = bar_plugin_monitor(plugin);
+
+	if (mon == NULL)
+		return NULL;
+	return gowl_monitor_get_layout_symbol(mon);
+}
+
+static void
+layout_signature(GowlBarPlugin *plugin, gpointer data, GString *out)
+{
 	const gchar *symbol;
 
 	(void)data;
 
-	comp = core_compositor();
-	if (comp == NULL)
-		return;
-	mon = gowl_compositor_get_selected_monitor(comp);
-	if (mon == NULL)
-		return;
+	symbol = layout_symbol(plugin);
+	g_string_append(out, (symbol != NULL) ? symbol : "");
+}
 
-	symbol = gowl_monitor_get_layout_symbol(mon);
-	gowl_bar_plugin_set_label(plugin, symbol);
+static gint
+layout_measure(GowlBarPlugin *plugin, gpointer data, PangoLayout *layout,
+               const GowlBarTheme *theme, gint height)
+{
+	(void)data;
+
+	return gowl_bar_plugin_measure_text(plugin, layout, theme, height,
+	                                    layout_symbol(plugin));
+}
+
+static void
+layout_draw(GowlBarPlugin *plugin, gpointer data, cairo_t *cr,
+            PangoLayout *layout, const GowlBarTheme *theme, gint x, gint y,
+            gint width, gint height, gboolean hovered, gboolean panel_open)
+{
+	(void)data;
+
+	gowl_bar_plugin_draw_text(plugin, cr, layout, theme, x, y, width,
+	                          height, hovered, panel_open,
+	                          layout_symbol(plugin));
 }
 
 static gboolean
@@ -607,13 +667,13 @@ static const GowlBarPluginVTable layout_vtable = {
 	sizeof(GowlBarPluginVTable),
 	NULL, NULL,
 	NULL, NULL, NULL,
-	NULL, layout_poll, NULL,
-	NULL, NULL,
+	NULL, NULL, NULL,
+	layout_measure, layout_draw,
 	layout_click, NULL,
 	NULL, NULL,
 	NULL, NULL,
-	NULL
-
+	NULL,
+	layout_signature
 };
 
 /* ----------------------------------------------------------------
@@ -882,8 +942,8 @@ static const GowlBarPluginVTable clock_vtable = {
 	NULL, clock_scroll,
 	clock_panel, clock_action,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -932,8 +992,8 @@ static const GowlBarPluginVTable spacer_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -1007,8 +1067,8 @@ static const GowlBarPluginVTable button_vtable = {
 	button_click, NULL,
 	NULL, NULL,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -1179,8 +1239,8 @@ static const GowlBarPluginVTable toggle_vtable = {
 	toggle_click, NULL,
 	NULL, NULL,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -1275,8 +1335,8 @@ static const GowlBarPluginVTable cmd_vtable = {
 	cmd_click, NULL,
 	NULL, NULL,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------
@@ -1309,8 +1369,8 @@ static const GowlBarPluginVTable label_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL, NULL,
+	NULL,
 	NULL
-
 };
 
 /* ----------------------------------------------------------------

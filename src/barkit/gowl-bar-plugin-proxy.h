@@ -46,6 +46,8 @@ G_BEGIN_DECLS
  * @action: (nullable): a panel item was activated
  * @panel_opened: (nullable): the dropdown just became visible
  * @panel_closed: (nullable): the dropdown was dismissed
+ * @panel_key: (nullable): a key the panel's navigation declined
+ * @signature: (nullable): append per-output state the bar must repaint on
  *
  * A plugin written as plain C function pointers rather than a GObject
  * subclass.
@@ -112,6 +114,20 @@ struct _GowlBarPluginVTable {
 	gboolean (*panel_key)    (GowlBarPlugin *plugin, gpointer data,
 	                          guint keysym, guint modifiers,
 	                          gint focused_item);
+
+	/*
+	 * Everything ELSE that decides how the widget looks, appended to
+	 * OUT.  The bar skips a screen's repaint when its signature has
+	 * not moved, so a widget drawing something that is not its label,
+	 * icon or colour has to say so here or it will simply not redraw.
+	 *
+	 * Called once per output with gowl_bar_plugin_get_monitor() set to
+	 * that output.  That is what a per-screen widget needs: the tag
+	 * row states the tags of the screen it is being asked about, and
+	 * only the screen whose tags moved repaints.
+	 */
+	void     (*signature)    (GowlBarPlugin *plugin, gpointer data,
+	                          GString *out);
 };
 
 /**

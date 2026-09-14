@@ -25,12 +25,21 @@
  *  - and it is cleared afterwards rather than left pointing at
  *    whichever output happened to be drawn last, which is the failure
  *    mode that would make the poll's answer look right by accident.
+ *
+ * And then the thing it is all for, against the shipped tag row rather
+ * than a probe: two screens viewing different tags must not draw the
+ * same bar.  Asserted on the painted PIXELS, because that is the only
+ * statement of the bug a user would recognise -- "both bars show the
+ * same tags" -- and it holds whatever the row is drawn with.
  */
 
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <string.h>
 #include <wayland-server-core.h>
+
+#include <wlr/types/wlr_buffer.h>
+#include <wlr/types/wlr_scene.h>
 
 #include "gowl.h"
 #include "core/gowl-core-private.h"
@@ -114,6 +123,7 @@ static const gchar *probe_source =
 	"\tNULL, NULL,\n"
 	"\tNULL, NULL,\n"
 	"\tNULL, NULL,\n"
+	"\tNULL,\n"
 	"\tNULL\n"
 	"};\n"
 	"\n"
@@ -170,8 +180,17 @@ configure_bar(Rig *r, GHashTable *bar_settings)
 	g_hash_table_destroy(outer);
 }
 
+/*
+ * @widgets is the bar's right-hand widget list, exactly as a
+ * `modules: bar: widgets:' line would spell it.  Every rig includes
+ * `probe' -- not only because two of the tests read what it records,
+ * but because it asks for a one-second interval and the bar ticks at
+ * the shortest interval any of its widgets wants.  Without it the bar
+ * idles at five seconds and a test would spend most of its time
+ * waiting for the next repaint.
+ */
 static gboolean
-rig_up(Rig *r)
+rig_up(Rig *r, const gchar *widgets)
 {
 	const gchar *parent;
 	GError      *error = NULL;
@@ -243,7 +262,7 @@ rig_up(Rig *r)
 		g_hash_table_insert(settings, g_strdup("plugin-dir"),
 		                    g_strdup(r->plugin_dir));
 		g_hash_table_insert(settings, g_strdup("widgets"),
-		                    g_strdup("probe"));
+		                    g_strdup(widgets));
 		g_hash_table_insert(settings, g_strdup("height"),
 		                    g_strdup("24"));
 		configure_bar(r, settings);
@@ -286,6 +305,59 @@ rig_down(Rig *r)
 	g_clear_pointer(&r->runtime, g_free);
 	g_clear_pointer(&r->plugin_dir, g_free);
 	g_clear_pointer(&r->log, g_free);
+}
+
+/* ── Reading what a screen actually drew ───────────────────────────
+ *
+ * The module's surface table is private, so the scene is the shared
+ * truth: a bar is a buffer node in the TOP layer sitting at its own
+ * output's origin, which is exactly how the compositor decides which
+ * screen to show it on. */
+
+static struct wlr_scene_buffer *
+bar_surface_for(Rig *r, GowlMonitor *mon)
+{
+	struct wlr_scene_tree *top;
+	struct wlr_scene_node *n;
+	gint mon_x, mon_y, mon_w, mon_h;
+
+	gowl_monitor_get_geometry(mon, &mon_x, &mon_y, &mon_w, &mon_h);
+	top = gowl_compositor_get_scene_layer(r->compositor,
+	                                      GOWL_SCENE_LAYER_TOP);
+	if (top == NULL)
+		return NULL;
+
+	wl_list_for_each(n, &top->children, link) {
+		if (n->type != WLR_SCENE_NODE_BUFFER)
+			continue;
+		if (n->x == mon_x && n->y == mon_y)
+			return wlr_scene_buffer_from_node(n);
+	}
+	return NULL;
+}
+
+/* The painted pixels as a digest: every question here is whether two
+   screens drew the same thing, never what either of them drew. */
+static gchar *
+bar_pixels_digest(struct wlr_scene_buffer *sb)
+{
+	void     *data   = NULL;
+	uint32_t  format = 0;
+	size_t    stride = 0;
+	gchar    *digest;
+
+	if (sb == NULL || sb->buffer == NULL)
+		return NULL;
+	if (!wlr_buffer_begin_data_ptr_access(sb->buffer,
+	                                      WLR_BUFFER_DATA_PTR_ACCESS_READ,
+	                                      &data, &format, &stride))
+		return NULL;
+
+	digest = g_compute_checksum_for_data(G_CHECKSUM_SHA256,
+		(const guchar *)data,
+		stride * (gsize)sb->buffer->height);
+	wlr_buffer_end_data_ptr_access(sb->buffer);
+	return digest;
 }
 
 /* How many lines of the log say `<what> <where>'. */
@@ -345,7 +417,7 @@ test_the_draw_is_served_its_own_output(void)
 	g_autoptr(GHashTable) seen = NULL;
 	GList *monitors, *l;
 
-	if (!rig_up(&r)) {
+	if (!rig_up(&r, "probe")) {
 		rig_down(&r);
 		return;
 	}
@@ -390,7 +462,7 @@ test_a_poll_is_served_no_output(void)
 	Rig r;
 	g_autofree gchar *body = NULL;
 
-	if (!rig_up(&r)) {
+	if (!rig_up(&r, "probe")) {
 		rig_down(&r);
 		return;
 	}
@@ -419,6 +491,68 @@ test_a_poll_is_served_no_output(void)
 	rig_down(&r);
 }
 
+/*
+ * The shipped tag row, on two screens viewing different tags.
+ *
+ * This is the whole point of the mechanism, stated the way the bug was:
+ * both bars used to show the FOCUSED screen's tags, because the row
+ * read the selected monitor in its poll -- which runs ONCE for every
+ * screen -- and parked the answer in a label every screen shares.  Two
+ * screens viewing different tags therefore drew byte-identical bars.
+ *
+ * The control matters as much as the assertion: put both screens back
+ * on the same tag and the two bars must be identical again, which is
+ * what says the difference above was the tags rather than anything else
+ * that varies per output.
+ */
+static void
+test_each_bar_shows_its_own_tags(void)
+{
+	Rig r;
+	GList *monitors;
+	GowlMonitor *first, *second;
+	g_autofree gchar *apart_a = NULL;
+	g_autofree gchar *apart_b = NULL;
+	g_autofree gchar *together_a = NULL;
+	g_autofree gchar *together_b = NULL;
+
+	if (!rig_up(&r, "tags probe")) {
+		rig_down(&r);
+		return;
+	}
+
+	monitors = gowl_compositor_get_monitors(r.compositor);
+	g_assert_cmpuint(g_list_length(monitors), ==, 2);
+	first  = GOWL_MONITOR(monitors->data);
+	second = GOWL_MONITOR(monitors->next->data);
+
+	/* Tag 1 on one screen, tag 4 on the other. */
+	gowl_compositor_view_tags(r.compositor, first, 1u << 0);
+	gowl_compositor_view_tags(r.compositor, second, 1u << 3);
+	settle(&r, 2500);
+
+	apart_a = bar_pixels_digest(bar_surface_for(&r, first));
+	apart_b = bar_pixels_digest(bar_surface_for(&r, second));
+	if (apart_a == NULL || apart_b == NULL) {
+		g_test_skip("the bars never drew; no bar surfaces here");
+		rig_down(&r);
+		return;
+	}
+	g_assert_cmpstr(apart_a, !=, apart_b);
+
+	/* Both back on tag 1. */
+	gowl_compositor_view_tags(r.compositor, second, 1u << 0);
+	settle(&r, 2500);
+
+	together_a = bar_pixels_digest(bar_surface_for(&r, first));
+	together_b = bar_pixels_digest(bar_surface_for(&r, second));
+	g_assert_nonnull(together_a);
+	g_assert_nonnull(together_b);
+	g_assert_cmpstr(together_a, ==, together_b);
+
+	rig_down(&r);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -427,5 +561,7 @@ main(int argc, char **argv)
 	                test_the_draw_is_served_its_own_output);
 	g_test_add_func("/bar-monitor/poll-is-served-no-output",
 	                test_a_poll_is_served_no_output);
+	g_test_add_func("/bar-monitor/each-bar-shows-its-own-tags",
+	                test_each_bar_shows_its_own_tags);
 	return g_test_run();
 }

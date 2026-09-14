@@ -715,6 +715,13 @@ $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(
 # outputs, with a plugin compiled from a `.c' file at test time: a
 # widget is told which screen each draw is for, and told nothing in a
 # poll.
+# Taking a window out of the tiling and back, driven through the keybind
+# action: the half that gets forgotten is re-arranging the windows that
+# are LEFT, and a test on the flag alone cannot see it.
+$(OUTDIR)/test-float-toggle: $(OUTDIR)/modules/tile.so
+$(OUTDIR)/test-float-toggle: TEST_LDFLAGS += -Wl,--export-dynamic
+$(OBJDIR)/tests/test-float-toggle.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
 # The hint overlay against the real .so in a headless compositor with two
 # outputs: the labels have to depend on where a window IS and on nothing
 # else, which is invisible in a screenshot and is the whole feature.

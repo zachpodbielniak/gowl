@@ -1835,7 +1835,7 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 |---------------------+----------------------------------+---------------------------------------------|
 | =spawn=             | command string                   | Spawn an external process                   |
 | =kill_client=       | --                               | Close the focused client                    |
-| =toggle_float=      | --                               | Toggle floating state on focused client     |
+| =toggle_float=      | --                               | Float / unfloat the focused window.  Floating takes it out of the tiling and re-tiles what is left; unfloating puts it back into the current tag's layout |
 | =toggle_fullscreen= | --                               | Toggle fullscreen on focused client         |
 | =focus_stack=       | ="+1"= or ="-1"=                 | Move focus forward or backward in the stack |
 | =focus_monitor=     | ="+1"= or ="-1"=                 | Move focus to next or previous monitor      |

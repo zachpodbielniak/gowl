@@ -874,6 +874,32 @@ gowl_monitor_hdr_display_capable(GowlMonitor *self)
 }
 
 /**
+ * gowl_monitor_hdr_color_managed:
+ * @self: a #GowlMonitor
+ *
+ * Whether HDR on this output would be COLOUR MANAGED -- that is, whether
+ * the renderer can re-encode SDR content into the PQ signal rather than
+ * passing its code values straight through.
+ *
+ * The other half of gowl_monitor_supports_hdr(), and the half nobody can
+ * do anything about from a config file: wlroots implements colour
+ * transforms in its Vulkan renderer alone.  A caller wants this to say
+ * what to EXPECT once HDR is on -- everything brighter, the panel at its
+ * peak -- rather than to decide whether to offer it.
+ *
+ * Returns: %TRUE if the renderer converts colour
+ */
+gboolean
+gowl_monitor_hdr_color_managed(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+
+	if (self->compositor == NULL)
+		return FALSE;
+	return gowl_renderer_can_color_manage(self->compositor->renderer);
+}
+
+/**
  * gowl_monitor_supports_hdr:
  * @self: a #GowlMonitor
  *
@@ -895,7 +921,12 @@ gowl_monitor_hdr_display_capable(GowlMonitor *self)
  * 203 cd/m2 reference white and so appears dim beside everything that
  * did not.  All three of those read as separate bugs and are one.
  *
- * `hdr-unmanaged: true' says "give it to me anyway".
+ * `hdr-unmanaged' decides what to do about the second, and it is TRUE
+ * by default: the KMS half of HDR genuinely works -- the panel really
+ * does go into PQ -- and what is missing is a thing to be told about
+ * rather than prevented from having.  gowl_monitor_set_hdr() says so in
+ * the log, and the bar says so in its toast.  Set it false to have this
+ * refuse instead.
  *
  * Returns: %TRUE if HDR can be switched on for this output
  */
@@ -914,17 +945,15 @@ gowl_monitor_supports_hdr(GowlMonitor *self)
 	config = gowl_compositor_get_config(self->compositor);
 	if (config != NULL && gowl_config_get_hdr_unmanaged(config))
 		return TRUE;
-	if (gowl_renderer_can_color_manage(self->compositor->renderer))
+	if (gowl_monitor_hdr_color_managed(self))
 		return TRUE;
 
 	if (!self->hdr_renderer_warned) {
 		self->hdr_renderer_warned = TRUE;
 		g_message("%s advertises BT.2020 and PQ, but this renderer "
-		          "cannot convert colour -- HDR is not offered, because "
-		          "SDR windows would reach the panel unconverted inside "
-		          "a PQ signal.  WLR_RENDERER=vulkan can convert it (and "
-		          "turns off every visual effect); `hdr-unmanaged: true' "
-		          "takes it uncorrected.",
+		          "cannot convert colour and `hdr-unmanaged' is off, so "
+		          "HDR is not offered.  WLR_RENDERER=vulkan converts it "
+		          "properly and turns off every visual effect.",
 		          gowl_monitor_get_name(self));
 	}
 	return FALSE;
@@ -1202,6 +1231,21 @@ gowl_monitor_set_hdr(
 	else
 		g_message("%s: HDR %s", gowl_monitor_get_name(self),
 		          enable ? "on (BT.2020, PQ, 10-bit)" : "off");
+	/*
+	 * And say what is missing, because from here on the screen will not
+	 * look the way somebody expects and the reason is not on screen.
+	 * The KMS half of HDR works; the conversion of SDR content INTO it
+	 * does not, so ordinary white is emitted as a request for ten
+	 * thousand candelas and the panel runs at its peak.
+	 */
+	if (enable && self->compositor != NULL
+	    && !gowl_monitor_hdr_color_managed(self)) {
+		g_message("%s: this renderer does not convert colour, so SDR "
+		          "windows are passed through uncorrected -- expect "
+		          "everything to look brighter, the panel to run at "
+		          "its peak, and the battery to go with it",
+		          gowl_monitor_get_name(self));
+	}
 	if (self->compositor != NULL)
 		g_signal_emit_by_name(self->compositor, "monitor-hdr-changed",
 		                      self, enable);

@@ -2054,10 +2054,17 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 			return;
 		}
 		if (gowl_monitor_set_hdr(mon, want)) {
+			/* Honest about what is missing, because from here on
+			 * the screen does not look the way anybody expects and
+			 * the reason is not on screen. */
 			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW, "HDR",
-				want ? "On: BT.2020, PQ, 10-bit. SDR content is "
-				       "passed through, not tone-mapped."
-				     : "Off: back to sRGB.");
+				!want ? "Off: back to sRGB."
+				: gowl_monitor_hdr_color_managed(mon)
+				? "On: BT.2020, PQ, 10-bit. SDR content is "
+				  "passed through, not tone-mapped."
+				: "On: BT.2020, PQ, 10-bit. This renderer does "
+				  "not convert colour, so everything will look "
+				  "brighter and the panel runs at its peak.");
 			/*
 			 * Leaving HDR gives the backlight back, so the software
 			 * dimming that stood in for it while there goes -- or

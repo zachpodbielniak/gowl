@@ -222,17 +222,27 @@
 #define GOWL_CONFIG_DEFAULT_DPMS_TIMEOUT        (0)
 #define GOWL_CONFIG_DEFAULT_ALLOW_TEARING       (FALSE)
 /*
- * Whether HDR may be switched on where the compositor cannot convert
- * colour for it.
+ * TWO decisions, and they were one key to begin with, which was wrong.
  *
- * FALSE, because the result is not HDR.  A PQ signal carries ABSOLUTE
- * luminance, so SDR content has to be re-encoded into it; wlroots does
- * that in the renderer, and only its Vulkan renderer implements it.
- * Under the GLES2 renderer gowl uses, sRGB code values reach the panel
- * unconverted inside a PQ signal, and every white pixel on the desktop
- * becomes a request for ten thousand candelas.
+ * `hdr-unmanaged' is whether HDR may be switched ON where the compositor
+ * cannot convert colour for it.  TRUE: the KMS half of HDR works -- the
+ * panel really does go into PQ -- and what is missing is the conversion
+ * of SDR content into it, which is a thing to be told about rather than
+ * prevented from having.  gowl says so in the log and in the toast.
+ *
+ * `hdr-advertise-pq' is whether to also tell CLIENTS that PQ and BT.2020
+ * content is accepted.  FALSE, and that is the one that has to stay off
+ * by default: a client that believes it encodes itself correctly for the
+ * output -- Chromium does -- and is then the only correctly scaled thing
+ * on a screen where everything else is being passed through at the
+ * panel's peak.  Which is not a dim client, it is a bright everything
+ * else, and it was reported as "Electron goes dark in HDR".
+ *
+ * Turn it on for a player that encodes PQ itself, and accept that it
+ * will look darker than the desktop around it.
  */
-#define GOWL_CONFIG_DEFAULT_HDR_UNMANAGED       (FALSE)
+#define GOWL_CONFIG_DEFAULT_HDR_UNMANAGED       (TRUE)
+#define GOWL_CONFIG_DEFAULT_HDR_ADVERTISE_PQ    (FALSE)
 #define GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE   ("smart")
 #define GOWL_CONFIG_DEFAULT_INPUT_RECORDING     (FALSE)
 #define GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS ""
@@ -447,6 +457,7 @@ struct _GowlConfig {
 	gint     dpms_timeout;
 	gboolean allow_tearing;
 	gboolean hdr_unmanaged;
+	gboolean hdr_advertise_pq;
 	gchar   *focus_on_activate;
 	gboolean input_recording;
 	gchar   *input_recording_deny_apps;
@@ -1477,6 +1488,7 @@ gowl_config_init(GowlConfig *self)
 	self->dpms_timeout        = GOWL_CONFIG_DEFAULT_DPMS_TIMEOUT;
 	self->allow_tearing       = GOWL_CONFIG_DEFAULT_ALLOW_TEARING;
 	self->hdr_unmanaged       = GOWL_CONFIG_DEFAULT_HDR_UNMANAGED;
+	self->hdr_advertise_pq    = GOWL_CONFIG_DEFAULT_HDR_ADVERTISE_PQ;
 	self->focus_on_activate   = g_strdup(GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE);
 	self->input_recording     = GOWL_CONFIG_DEFAULT_INPUT_RECORDING;
 	self->input_recording_deny_apps =
@@ -1786,7 +1798,8 @@ gowl_config_apply_palette_mapping(GowlConfig *self, YamlMapping *mapping)
 static const gchar *const top_level_keys[] = {
 	"ignore_yaml", "log-level", "log-file", "repeat-rate", "repeat-delay",
 	"terminal", "menu", "sloppyfocus", "manage_lid", "idle-timeout",
-	"dpms-timeout", "allow-tearing", "hdr-unmanaged", "focus-on-activate",
+	"dpms-timeout", "allow-tearing", "hdr-unmanaged", "hdr-advertise-pq",
+	"focus-on-activate",
 	"input-recording", "input-recording-deny-apps",
 	"evaluate_gowl_config_with_cmacs", "evaluate-gowl-config-with-cmacs",
 	"evaluate_c_config_with_cmacs", "evaluate-c-config-with-cmacs",
@@ -2974,6 +2987,10 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "hdr-unmanaged")) {
 		self->hdr_unmanaged = yaml_mapping_get_boolean_member(
 			mapping, "hdr-unmanaged");
+	}
+	if (yaml_mapping_has_member(mapping, "hdr-advertise-pq")) {
+		self->hdr_advertise_pq = yaml_mapping_get_boolean_member(
+			mapping, "hdr-advertise-pq");
 	}
 	if (yaml_mapping_has_member(mapping, "allow-tearing")) {
 		gboolean val = yaml_mapping_get_boolean_member(mapping, "allow-tearing");
@@ -6752,6 +6769,14 @@ gowl_config_get_hdr_unmanaged(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_HDR_UNMANAGED);
 	return self->hdr_unmanaged;
+}
+
+gboolean
+gowl_config_get_hdr_advertise_pq(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_HDR_ADVERTISE_PQ);
+	return self->hdr_advertise_pq;
 }
 
 gint

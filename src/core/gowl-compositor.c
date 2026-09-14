@@ -3918,8 +3918,13 @@ gowl_compositor_start(
 		size_t n_prims = 0;
 		struct wlr_color_manager_v1_options opts;
 
+		/* The ADVERTISEMENT is its own setting, not a consequence of
+		 * HDR being allowed.  Telling clients we take PQ on a renderer
+		 * that cannot encode it is what makes a colour-managed one the
+		 * odd window out, and that is true whether or not anybody has
+		 * switched HDR on. */
 		unmanaged = self->config != NULL
-			&& gowl_config_get_hdr_unmanaged(self->config);
+			&& gowl_config_get_hdr_advertise_pq(self->config);
 		fallback_tfs   = unmanaged ? unmanaged_tfs : passthrough_tfs;
 		fallback_prims = unmanaged ? unmanaged_prims : passthrough_prims;
 		n_fallback_tfs = unmanaged ? G_N_ELEMENTS(unmanaged_tfs)
@@ -4011,7 +4016,7 @@ gowl_compositor_start(
 			        (tfs != NULL && n_tfs > 0)
 			        ? " (from the renderer, which converts colour)"
 			        : unmanaged
-			        ? " (pass-through, hdr-unmanaged)"
+			        ? " (pass-through, hdr-advertise-pq)"
 			        : " (pass-through: this renderer converts no "
 			          "colour, so PQ and BT.2020 are not offered)");
 		}

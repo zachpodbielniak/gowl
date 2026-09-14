@@ -1702,9 +1702,42 @@ complaints come out of that one fact:
   genuinely unrouted Settings portal does this too and is a separate bug;
   see [[file:building.org][building]].)
 
-gowl therefore reports =hdr_capable: false= on an output whose display
-can do HDR when the renderer cannot convert colour for it, logs why once,
-and refuses =hdr: true=, =toggle_hdr= and =gowl-msg hdr on=.
+*What is missing is exactly one thing*, and it is worth being precise
+about because the rest of HDR works. The KMS half is fine: gowl sets the
+connector's colorspace to BT.2020, attaches an =HDR_OUTPUT_METADATA=
+blob built from the panel's own EDID, and commits a 10-bit framebuffer.
+The panel really does switch into HDR mode. What does not happen is the
+*colour conversion*: taking each SDR surface and re-encoding it into the
+PQ signal at the reference white an HDR signal uses. In wlroots that
+lives behind two renderer flags --- =input_color_transform= and
+=output_color_transform= --- and only the Vulkan renderer sets them, so
+=wlr_scene_output_build_state= skips the entire output-transform
+construction and the GLES2 render pass never reads a surface's transfer
+function, primaries or luminance multiplier at all.
+
+So gowl OFFERS HDR anyway, and says what is missing rather than
+preventing it: the toggle works, the log says the renderer does not
+convert colour, and the bar's toast says to expect everything brighter
+and the panel at its peak.
+
+| Property            | Type | Default | Description |
+|---------------------+------+---------+-------------|
+| =hdr-unmanaged=     | bool | =true=  | Allow HDR where the compositor cannot convert colour for it |
+| =hdr-advertise-pq=  | bool | =false= | Also tell CLIENTS that PQ and BT.2020 content is accepted |
+
+*Those are two decisions and not one.* =hdr-unmanaged: false= makes gowl
+refuse HDR on such a renderer, reporting =hdr_capable: false=; that is
+for somebody who would rather not have the option than have it
+uncorrected.
+
+=hdr-advertise-pq= is the one that has to stay off by default. A client
+that believes the advertisement encodes itself correctly for the output
+--- Chromium does, at the protocol's 203 cd/m² reference white --- and is
+then the only correctly scaled thing on a screen where everything else
+is passed through at the panel's peak. Which is not a dim client, it is
+a bright everything else, and it is what gets reported as "Electron goes
+dark in HDR". Turn it on for a player that encodes PQ itself, and expect
+that player to look darker than the desktop around it.
 
 *Which end refused is reported separately*, because the two want quite
 different reactions: a display that does not advertise BT.2020 and PQ is
@@ -1722,27 +1755,21 @@ gowl-msg monitors | jq '.[] | {name, hdr, hdr_capable, hdr_display_capable}'
 |------------------+------+---------+-------------|
 | =hdr-unmanaged=  | bool | =false= | Allow HDR where the compositor cannot convert colour for it |
 
-Two ways out, and they are a real choice rather than a fix:
+One way to have it properly, and it is a real trade rather than a fix:
 
 #+begin_src sh
 WLR_RENDERER=vulkan gowl      # converts colour correctly; every visual
                               # effect declines to run under it
 #+end_src
 
-#+begin_src yaml
-hdr-unmanaged: true           # HDR as it was: wider gamut, uncorrected
-                              # luminance, and the three symptoms above
-#+end_src
-
-=hdr-unmanaged= is read live, so a reload is enough to get the toggle
-back. What a RELOAD cannot change is what clients were told: the colour
-manager is created once at startup, so the PQ and BT.2020 advertisement
-that goes with this setting needs the session restarted. Set it in the
-config file rather than at runtime and both agree from the first frame.
+Both keys are read where they are used, so =hdr-unmanaged= takes effect
+on a reload. =hdr-advertise-pq= does not: the colour manager is created
+once at startup, so what clients were told about PQ and BT.2020 needs
+the session restarted. Set it in the config file rather than at runtime.
 
 Under =cmacs --gowl= the effects are most of the point, so the honest
-summary is: on this renderer, HDR is a thing to turn on for a film and
-off afterwards, and =hdr-unmanaged= is how.
+summary is: on this renderer HDR is a thing to turn on for a film and
+off afterwards, and it costs battery for as long as it is on.
 
 ***** The mastering display
 

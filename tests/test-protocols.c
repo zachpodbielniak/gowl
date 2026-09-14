@@ -691,65 +691,62 @@ test_hdr_refused_without_support(Fixture *f, gconstpointer data)
 }
 
 /*
- * An output that CAN do HDR is still refused when the renderer cannot
- * convert colour for it, and `hdr-unmanaged' is what overrides that.
+ * HDR is OFFERED on a renderer that cannot convert colour, and says so.
  *
- * This is the case the test above cannot reach: there the headless
- * output advertises neither BT.2020 nor PQ, so the refusal comes from
- * the display and the renderer is never consulted.  Widening the
- * output's own capabilities -- both are public members of
- * struct wlr_output -- leaves the renderer as the only thing that can
- * still say no, which is the check being pinned.
+ * The two halves of the question are separate, and conflating them was a
+ * bug in both directions.  The DISPLAY offering BT.2020 and PQ is one
+ * thing; the RENDERER being able to re-encode SDR content into that
+ * signal is another, and wlroots implements the second in its Vulkan
+ * renderer alone.  Under the pixman renderer this fixture uses -- and
+ * the GLES2 one gowl needs for its effects -- SDR windows reach the
+ * panel unconverted, so everything looks brighter and the panel runs at
+ * its peak.
  *
- * What it pins is not a preference.  wlroots implements colour
- * conversion in its Vulkan renderer alone; under the pixman renderer
- * this fixture uses (and the GLES2 one gowl uses for its effects) a PQ
- * signal is fed raw sRGB code values, so ordinary white asks the panel
- * for 10,000 cd/m2 while a client that honestly encodes PQ lands at 203
- * and looks dim beside it.  Three bug reports -- Electron apps too dark,
- * the battery gone, the panel pinned at full brightness -- and one
- * cause.
+ * That is a thing to be TOLD about rather than prevented from having:
+ * the KMS half genuinely works.  So `hdr-unmanaged' is true by default
+ * and `hdr-advertise-pq' is not -- the advertisement is what makes a
+ * colour-managed client encode itself correctly and become the only
+ * correctly scaled window on the screen, which is what "Electron goes
+ * dark in HDR" actually was.
+ *
+ * The headless output advertises neither primaries nor transfer
+ * function, so they are widened here: both are public members of
+ * struct wlr_output, and without them the display half refuses first and
+ * the renderer half is never reached.
  */
 static void
-test_hdr_refused_without_a_color_managing_renderer(Fixture *f,
-                                                   gconstpointer data)
+test_hdr_is_offered_but_not_colour_managed(Fixture *f, gconstpointer data)
 {
 	(void)data;
-
-	g_assert_false(gowl_renderer_can_color_manage(f->compositor->renderer));
 
 	f->monitor->wlr_output->supported_primaries |=
 		WLR_COLOR_NAMED_PRIMARIES_BT2020;
 	f->monitor->wlr_output->supported_transfer_functions |=
 		WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ;
 
-	/* The display says yes and the renderer says no, and the two are
-	 * distinguishable -- a refusal that cannot say which end refused
-	 * sends somebody to check their cable for an afternoon. */
+	/* Offered, and honest about what is missing. */
 	g_assert_true(gowl_monitor_hdr_display_capable(f->monitor));
-	g_assert_false(gowl_monitor_supports_hdr(f->monitor));
-	g_assert_false(gowl_monitor_set_hdr(f->monitor, TRUE));
-	g_assert_false(gowl_monitor_get_hdr(f->monitor));
+	g_assert_false(gowl_monitor_hdr_color_managed(f->monitor));
+	g_assert_true(gowl_config_get_hdr_unmanaged(f->config));
+	g_assert_false(gowl_config_get_hdr_advertise_pq(f->config));
+	g_assert_true(gowl_monitor_supports_hdr(f->monitor));
 
-	/* And the escape hatch is a real one: somebody who wants the wider
-	 * gamut and will accept the luminance can still have it. */
+	/* And refused for anybody who would rather it were. */
 	{
 		g_autofree gchar *path = NULL;
 		gint fd;
 
-		g_assert_nonnull(f->config);
-		g_assert_false(gowl_config_get_hdr_unmanaged(f->config));
-
 		fd = g_file_open_tmp("gowl-hdr-XXXXXX.yaml", &path, NULL);
 		g_assert_cmpint(fd, >=, 0);
-		g_assert_true(g_file_set_contents(path, "hdr-unmanaged: true\n",
+		g_assert_true(g_file_set_contents(path, "hdr-unmanaged: false\n",
 		                                  -1, NULL));
 		close(fd);
 		g_assert_true(gowl_config_load_yaml(f->config, path, NULL));
 		g_unlink(path);
 
-		g_assert_true(gowl_config_get_hdr_unmanaged(f->config));
-		g_assert_true(gowl_monitor_supports_hdr(f->monitor));
+		g_assert_false(gowl_config_get_hdr_unmanaged(f->config));
+		g_assert_false(gowl_monitor_supports_hdr(f->monitor));
+		/* Still distinguishable: the display was willing. */
 		g_assert_true(gowl_monitor_hdr_display_capable(f->monitor));
 	}
 }
@@ -913,9 +910,9 @@ main(int argc, char *argv[])
 	g_test_add("/protocols/hdr/refused-without-support", Fixture, NULL,
 	           fixture_setup, test_hdr_refused_without_support,
 	           fixture_teardown);
-	g_test_add("/protocols/hdr/refused-without-color-management", Fixture,
+	g_test_add("/protocols/hdr/offered-without-color-management", Fixture,
 	           NULL, fixture_setup,
-	           test_hdr_refused_without_a_color_managing_renderer,
+	           test_hdr_is_offered_but_not_colour_managed,
 	           fixture_teardown);
 	g_test_add("/protocols/output-profiles", Fixture, NULL,
 	           fixture_setup, test_output_profiles, fixture_teardown);

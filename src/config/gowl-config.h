@@ -1830,21 +1830,31 @@ gint         gowl_config_get_rain_frost_passes (GowlConfig *self);
 
 /* --- HDR ---
  *
- * Whether HDR may be switched on where the compositor cannot convert
- * colour for it.  FALSE by default, because the result is not HDR.
+ * Two decisions, and they are not the same one.
  *
  * A PQ signal carries ABSOLUTE luminance, so SDR content has to be
  * re-encoded into it -- wlroots does that in the renderer, and only its
- * Vulkan renderer implements it.  Under the GLES2 renderer gowl uses,
- * sRGB code values reach the panel unconverted inside a PQ signal: every
- * white pixel becomes a request for ten thousand candelas, the panel
- * runs at its peak, and any client that DOES honour the colour-management
- * protocol encodes itself correctly at 203 cd/m2 and so looks dim beside
- * everything that did not.
+ * Vulkan renderer implements it.  Under the GLES2 renderer gowl needs
+ * for its effects, sRGB code values reach the panel unconverted inside a
+ * PQ signal: every white pixel becomes a request for ten thousand
+ * candelas, and the panel runs at its peak.
  *
- * Setting it true restores the old behaviour for anyone who wants the
- * wider gamut and will accept the luminance. */
+ * `hdr-unmanaged' is whether HDR may be switched ON anyway.  TRUE by
+ * default: the KMS half really does work, the panel really does go into
+ * PQ, and what is missing is worth being told about rather than being
+ * prevented from having.  Set it false to have gowl refuse instead. */
 gboolean     gowl_config_get_hdr_unmanaged (GowlConfig *self);
+
+/* `hdr-advertise-pq' is whether to also tell CLIENTS that PQ and BT.2020
+ * content is accepted.  FALSE by default, and this is the one that has
+ * to stay off: a client that believes it encodes itself correctly for
+ * the output -- Chromium does -- is then the only correctly scaled thing
+ * on a screen where everything else is passed through at the panel's
+ * peak, which reads as that client having gone dark.
+ *
+ * Turn it on for a player that encodes PQ itself, and expect it to look
+ * darker than the desktop around it. */
+gboolean     gowl_config_get_hdr_advertise_pq (GowlConfig *self);
 
 /* Drop shadows under windows. */
 gboolean     gowl_config_get_shadow (GowlConfig *self);

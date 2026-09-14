@@ -91,6 +91,19 @@ guint32        gowl_monitor_get_tags          (GowlMonitor *self);
 gboolean       gowl_monitor_hdr_display_capable (GowlMonitor *self);
 
 /**
+ * gowl_monitor_hdr_color_managed:
+ * @self: a #GowlMonitor
+ *
+ * Whether HDR on this output would be colour managed, which wlroots does
+ * in its Vulkan renderer alone.  Says what to EXPECT once HDR is on --
+ * %FALSE means SDR windows are passed through uncorrected, so everything
+ * looks brighter and the panel runs at its peak.
+ *
+ * Returns: %TRUE if the renderer converts colour
+ */
+gboolean       gowl_monitor_hdr_color_managed (GowlMonitor *self);
+
+/**
  * gowl_monitor_supports_hdr:
  * @self: a #GowlMonitor
  *

@@ -810,7 +810,7 @@ sea has none and lives entirely in the swell.
 |----------------------+--------+-----------+-------------|
 | =water-preset=       | string | ="sea"=   | One of the five above |
 | =water-intensity=    | float  | =0.4=     | How rough, over and above the preset, =0= to =3= |
-| =water-fps=          | int    | =30=      | How often the surface is redrawn; =0= is every frame |
+| =water-fps=          | int    | =30=      | How often the surface is redrawn; =0= is every frame.  Also settable at runtime, see below |
 | =water-scale=        | int    | =2=       | Render at 1/this of the window's size, =1= to =4= |
 | =water-tint=         | string | ="#9edbff"= | What the water takes out of the light |
 | =water-clarity=      | float  | =0.45=    | How much of the UNFROSTED wallpaper shows |
@@ -921,7 +921,7 @@ condensation, a storm is water going down the glass.
 |---------------------+--------+-------------+-------------|
 | =rain-preset=       | string | ="shower"=  | One of the five above |
 | =rain-intensity=    | float  | =1.0=       | How hard it rains, over and above the preset, =0= to =3= |
-| =rain-fps=          | int    | =30=        | How often the pane is redrawn; =0= is every frame |
+| =rain-fps=          | int    | =30=        | How often the pane is redrawn; =0= is every frame.  Also settable at runtime, see below |
 | =rain-scale=        | int    | =2=         | Render at 1/this of the window's size, =1= to =4= |
 | =rain-tint=         | string | ="#dceeff"= | What the water takes out of the light |
 | =rain-clarity=      | float  | =0.95=      | How much of the frost a drop lifts |

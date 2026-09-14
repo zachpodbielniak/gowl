@@ -146,6 +146,13 @@ add_monitor(GowlCompositor *self, JsonBuilder *b, GowlMonitor *m)
 	json_builder_add_boolean_value(b, gowl_monitor_get_hdr(m));
 	json_builder_set_member_name(b, "hdr_capable");
 	json_builder_add_boolean_value(b, gowl_monitor_supports_hdr(m));
+	/* Both, because a false `hdr_capable' has two quite different
+	 * causes: the display not offering BT.2020 and PQ, which is a cable
+	 * or a refresh rate, and this renderer not being able to convert
+	 * colour for it, which is a build.  With only the first reported
+	 * there is no way to tell them apart from outside. */
+	json_builder_set_member_name(b, "hdr_display_capable");
+	json_builder_add_boolean_value(b, gowl_monitor_hdr_display_capable(m));
 	/* What the display says about its own brightness, from its EDID.
 	 * Reported because it is what gowl declares as the mastering
 	 * display when HDR goes on, and because "HDR looks dim" is

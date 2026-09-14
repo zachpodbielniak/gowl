@@ -723,7 +723,10 @@ test_hdr_refused_without_a_color_managing_renderer(Fixture *f,
 	f->monitor->wlr_output->supported_transfer_functions |=
 		WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ;
 
-	/* The display says yes and the renderer says no. */
+	/* The display says yes and the renderer says no, and the two are
+	 * distinguishable -- a refusal that cannot say which end refused
+	 * sends somebody to check their cable for an afternoon. */
+	g_assert_true(gowl_monitor_hdr_display_capable(f->monitor));
 	g_assert_false(gowl_monitor_supports_hdr(f->monitor));
 	g_assert_false(gowl_monitor_set_hdr(f->monitor, TRUE));
 	g_assert_false(gowl_monitor_get_hdr(f->monitor));
@@ -747,6 +750,7 @@ test_hdr_refused_without_a_color_managing_renderer(Fixture *f,
 
 		g_assert_true(gowl_config_get_hdr_unmanaged(f->config));
 		g_assert_true(gowl_monitor_supports_hdr(f->monitor));
+		g_assert_true(gowl_monitor_hdr_display_capable(f->monitor));
 	}
 }
 

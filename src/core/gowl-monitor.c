@@ -842,6 +842,38 @@ static const struct wlr_color_primaries gowl_bt2020_primaries = {
 };
 
 /**
+ * gowl_monitor_hdr_display_capable:
+ * @self: a #GowlMonitor
+ *
+ * Whether the DISPLAY end of the chain can do HDR -- that is, whether it
+ * advertises BT.2020 and the PQ transfer function.
+ *
+ * Half of gowl_monitor_supports_hdr(), and the half a person can do
+ * something about: it is a property of the whole chain rather than of
+ * the panel, so an HDR monitor on a cable or at a refresh rate that
+ * cannot carry ten bits reports neither.
+ *
+ * It exists separately so that a refusal can say WHICH end refused.
+ * Reporting "this output does not offer BT.2020 and PQ" when the output
+ * offers both and the renderer is the problem sends somebody to check
+ * their cable for an afternoon.
+ *
+ * Returns: %TRUE if the display advertises BT.2020 and PQ
+ */
+gboolean
+gowl_monitor_hdr_display_capable(GowlMonitor *self)
+{
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+
+	if (self->wlr_output == NULL)
+		return FALSE;
+	return (self->wlr_output->supported_primaries
+	        & WLR_COLOR_NAMED_PRIMARIES_BT2020) != 0
+	    && (self->wlr_output->supported_transfer_functions
+	        & WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ) != 0;
+}
+
+/**
  * gowl_monitor_supports_hdr:
  * @self: a #GowlMonitor
  *
@@ -874,12 +906,7 @@ gowl_monitor_supports_hdr(GowlMonitor *self)
 
 	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
 
-	if (self->wlr_output == NULL)
-		return FALSE;
-	if ((self->wlr_output->supported_primaries
-	     & WLR_COLOR_NAMED_PRIMARIES_BT2020) == 0
-	    || (self->wlr_output->supported_transfer_functions
-	        & WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ) == 0)
+	if (!gowl_monitor_hdr_display_capable(self))
 		return FALSE;
 
 	if (self->compositor == NULL)

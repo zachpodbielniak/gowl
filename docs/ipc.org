@@ -30,7 +30,7 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 |-------------------------------+----------------------------------------------------|
 | =clients=                     | JSON array: id, app_id, title, pid, tags, monitor, floating, fullscreen, urgent, sticky, xwayland, x, y, width, height |
 | =focused=                     | The focused window as above, or =null=            |
-| =monitors=                    | JSON array: name, make, model, serial, focused, enabled, powered_off, hdr, hdr_capable, hdr_max_luminance, hdr_min_luminance, hdr_max_frame_average, hdr_bpc, x, y, width, height, tags, occupied, urgent, layout, mfact, nmaster |
+| =monitors=                    | JSON array: name, make, model, serial, focused, enabled, powered_off, hdr, hdr_capable, hdr_display_capable, hdr_max_luminance, hdr_min_luminance, hdr_max_frame_average, hdr_bpc, x, y, width, height, tags, occupied, urgent, layout, mfact, nmaster |
 | =profile=                     | ={"active": NAME or null, "profiles": [{"name", "outputs"}]}= -- the output profile in force |
 | =tags [OUTPUT]=               | ={"active", "occupied", "urgent"}= bitmasks for an output (the focused one by default) |
 | =layouts=                     | JSON array of layout names                        |

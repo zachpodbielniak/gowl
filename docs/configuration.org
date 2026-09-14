@@ -1706,6 +1706,18 @@ gowl therefore reports =hdr_capable: false= on an output whose display
 can do HDR when the renderer cannot convert colour for it, logs why once,
 and refuses =hdr: true=, =toggle_hdr= and =gowl-msg hdr on=.
 
+*Which end refused is reported separately*, because the two want quite
+different reactions: a display that does not advertise BT.2020 and PQ is
+a cable, a port or a refresh rate, and a renderer that cannot convert
+colour is this build. =gowl-msg monitors= carries both --- a
+=hdr_display_capable= of =true= with =hdr_capable= of =false= is the
+renderer --- and the bar's display panel and =cmacs-gowl-toggle-hdr= each
+say which.
+
+#+begin_src sh
+gowl-msg monitors | jq '.[] | {name, hdr, hdr_capable, hdr_display_capable}'
+#+end_src
+
 | Property         | Type | Default | Description |
 |------------------+------+---------+-------------|
 | =hdr-unmanaged=  | bool | =false= | Allow HDR where the compositor cannot convert colour for it |

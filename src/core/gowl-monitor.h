@@ -79,6 +79,18 @@ gowl_monitor_emit_usable_area_changed(GowlMonitor *self,
 guint32        gowl_monitor_get_tags          (GowlMonitor *self);
 
 /**
+ * gowl_monitor_hdr_display_capable:
+ * @self: a #GowlMonitor
+ *
+ * Whether the DISPLAY advertises BT.2020 and PQ, without asking whether
+ * the compositor can convert colour for it.  Use it to say WHICH end
+ * refused when gowl_monitor_supports_hdr() says no.
+ *
+ * Returns: %TRUE if the display can do HDR
+ */
+gboolean       gowl_monitor_hdr_display_capable (GowlMonitor *self);
+
+/**
  * gowl_monitor_supports_hdr:
  * @self: a #GowlMonitor
  *

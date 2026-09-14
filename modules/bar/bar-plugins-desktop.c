@@ -1745,16 +1745,28 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 		if (mon != NULL) {
 			gowl_bar_panel_add_separator(panel);
 			gowl_bar_panel_add_section(panel, "Colour");
+			/*
+			 * Two ways to be refused, and they want different
+			 * words.  The DISPLAY not offering BT.2020 and PQ is
+			 * a cable, a port or a refresh rate; the RENDERER not
+			 * being able to convert colour is this build, and
+			 * saying "not offered" for it sends somebody to check
+			 * their cable for an afternoon.
+			 */
 			if (gowl_monitor_supports_hdr(mon)) {
 				item = gowl_bar_panel_add_toggle(panel, "hdr",
 					"HDR (BT.2020, PQ)",
 					gowl_monitor_get_hdr(mon));
 				gowl_bar_panel_item_set_color(item,
 					GOWL_BAR_COLOR_MAUVE);
+			} else if (gowl_monitor_hdr_display_capable(mon)) {
+				gowl_bar_panel_add_field_pair(panel, "HDR",
+					"Renderer cannot convert colour",
+					"Anyway", "hdr-unmanaged: true");
 			} else {
 				gowl_bar_panel_add_field_pair(panel, "HDR",
-					"Not offered", "Output",
-					gowl_monitor_get_name(mon));
+					"Display does not offer BT.2020 and PQ",
+					"Output", gowl_monitor_get_name(mon));
 			}
 		}
 	}
@@ -2032,7 +2044,13 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 
 		if (want && !gowl_monitor_supports_hdr(mon)) {
 			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
-				"HDR", "This output does not offer BT.2020 and PQ.");
+				"HDR",
+				gowl_monitor_hdr_display_capable(mon)
+				? "This renderer cannot convert colour, so SDR "
+				  "windows would reach the panel unconverted "
+				  "inside a PQ signal.  Set `hdr-unmanaged: "
+				  "true' to have it anyway."
+				: "This output does not offer BT.2020 and PQ.");
 			return;
 		}
 		if (gowl_monitor_set_hdr(mon, want)) {

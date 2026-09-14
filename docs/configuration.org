@@ -1536,6 +1536,32 @@ preset table is for.
 | =fizz-specular=     | =0=--=3=     | The glint on each bubble |
 | =fizz-speed=        | =0=--=5=     | How fast the bubbles rise |
 
+***** The bubbles are drawn much larger than real ones
+
+A bubble in a glass is a couple of millimetres across. The first version
+of this was sized from that, and it was the right answer to the wrong
+question: this is not a photograph of a drink, it is a backdrop seen
+THROUGH a translucent window, at whatever alpha that window has, behind
+whatever the application is drawing. At that size the one thing that
+identifies a bubble --- the silvered ring around its outer quarter ---
+was a pixel wide, and the whole effect read as a slightly grubby pane.
+
+A seltzer's release radius is seventeen logical pixels, half as much
+again by the time it reaches the top. =fizz-bubble= and =fizz-site-width=
+move it if you want them smaller.
+
+*=fizz-depth= went up with them,* because a bubble that minifies only
+slightly is a disc with a dim ring: what says LENS is seeing a visibly
+wider field squeezed into it.
+
+Past about twofold, though, the shader starts reading from the BLURRED
+copy of the wallpaper in proportion to the squeeze --- the source is one
+texture at one resolution with no mipmaps, so beyond that the sharp copy
+is not a better answer but an aliased one, and a busy wallpaper turns
+into coloured stripes that crawl as the bubble rises. It is also the
+honest answer: a wide-angle view through a millimetre of gas does not
+resolve fine detail either.
+
 ***** A bubble is the inverse of a raindrop
 
 *It is a DIVERGING lens.* Gas in liquid bends the ray the other way from
@@ -1554,6 +1580,13 @@ against air =sin(theta_c) = 1/1.333 = 0.75= --- so the silvered ring
 starts at exactly three quarters of the radius. That is arithmetic, not
 taste, and it is why bubbles in a glass read as RINGS rather than as
 dots. =fizz-mirror= is how much of it shows.
+
+*Total means total*, and the first version did not draw it that way: it
+lifted the drink behind the ring by eighteen per cent, which at any size
+the effect actually runs at was invisible. The ring is near white
+against a dark drink now, with the light glancing off one side of it so
+it reads as a reflection rather than as a drawn outline. It is =1.0= in
+every preset --- how bright a mirror is is not a property of the drink.
 
 ***** Trains, and why they spread
 

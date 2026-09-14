@@ -577,7 +577,11 @@ static const gchar fizz_frag_src[] =
 	"  cling_layer(p, u_cell,        u_cling,        0.00, 5.0, best, halo);\n"
 	"  cling_layer(p, u_cell * 1.67, u_cling * 0.5,  0.74, 6.0, best, halo);\n"
 	"\n"
-	"  foam_layer(p, u_cell * 0.20, 7.0, best, halo);\n"
+	/* Bigger cells than the first version, which made the head a mat of
+	   pinpricks -- and a bright ring on a five-pixel bubble is a bright
+	   DOT, so the raft read as static the moment the ring got brighter.
+	   Fewer, larger bubbles read as foam. */
+	"  foam_layer(p, u_cell * 0.30, 7.0, best, halo);\n"
 	"\n"
 	"  /*\n"
 	"   * THE BUBBLE IS A DIVERGING LENS, WHICH IS THE WHOLE POINT.\n"
@@ -612,6 +616,26 @@ static const gchar fizz_frag_src[] =
 	"     clear; a bubble is a clean gas lens and lifts most of it. */\n"
 	"  float clear = clamp(max(best.w, halo) * u_clarity, 0.0, 1.0);\n"
 	"  float fog   = u_fog * (1.0 - clear);\n"
+	"\n"
+	"  /*\n"
+	"   * A BUBBLE CANNOT BE SHARPER THAN ITS OWN COMPRESSION.\n"
+	"   *\n"
+	"   * Lifting the fog inside a bubble is right -- it is clean gas, it\n"
+	"   * scatters nothing -- but it fights the other thing a diverging\n"
+	"   * lens does, which is squeeze a wide field into a small disc.  The\n"
+	"   * wallpaper is one texture at one resolution with no mipmaps, so\n"
+	"   * past about twofold the sharp copy is not a better answer, it is\n"
+	"   * an ALIASED one: the fine detail of a busy wallpaper turns into a\n"
+	"   * field of coloured stripes that crawl as the bubble rises.\n"
+	"   *\n"
+	"   * Reading from the blurred copy in proportion to the squeeze is\n"
+	"   * both the cheap fix and the honest one.  A wide-angle view\n"
+	"   * through a millimetre of gas does not resolve fine detail either.\n"
+	"   */\n"
+	"  if (best.w > 0.0) {\n"
+	"    float squeeze = clamp((u_depth * 0.5 - 1.0) * 0.42, 0.0, 0.7);\n"
+	"    fog = max(fog, squeeze * best.w);\n"
+	"  }\n"
 	"  vec2  sp    = p + disp;\n"
 	"  vec3  col;\n"
 	"\n"
@@ -644,8 +668,27 @@ static const gchar fizz_frag_src[] =
 	"   * rim its colour from the surroundings instead of painting it white.\n"
 	"   */\n"
 	"  if (u_mirror > 0.001 && tir > 0.0) {\n"
-	"    vec3 refl = tap(p - best.xy * best.z * 1.9, u_fog * 0.4);\n"
-	"    col = mix(col, refl * 1.18 + vec3(0.10), tir * u_mirror);\n"
+	"    vec3 refl = tap(p - best.xy * best.z * 1.9, u_fog * 0.35);\n"
+	"    /*\n"
+	"     * LIFTED HARD, and that is the whole difference between a\n"
+	"     * bubble and a smudge.  Past the critical angle the wall\n"
+	"     * reflects EVERYTHING -- that is what total means -- so the\n"
+	"     * ring is near white against a dark drink, not a ten per cent\n"
+	"     * brightening of whatever happens to be beside it.  The first\n"
+	"     * version of this multiplied by 1.18 and was invisible at any\n"
+	"     * size the effect actually runs at.\n"
+	"     */\n"
+	"    refl = refl * 1.45 + vec3(0.26);\n"
+	"    /*\n"
+	"     * And the light GLANCES off it: one side of the ring catches\n"
+	"     * the source and the other does not, which is what stops a\n"
+	"     * bright annulus reading as a drawn outline.  The normal at the\n"
+	"     * rim is nearly in the plane of the pane, so the offset from\n"
+	"     * the centre is its direction to within what anyone can see.\n"
+	"     */\n"
+	"    float glance = max(dot(normalize(vec3(best.xy, 0.45)), u_light), 0.0);\n"
+	"    refl += vec3(glance * glance * 0.7 * u_specular);\n"
+	"    col = mix(col, refl, tir * u_mirror);\n"
 	"  }\n"
 	"\n"
 	"  /* And the very edge is still darker than the ring: the wall is thin\n"
@@ -751,10 +794,13 @@ gowl_fx_fizz_params_init(GowlFxFizzParams *params)
 	 *
 	 * `site_width' is the ruler and `bubble' is a FRACTION of it, so the
 	 * two move together and a narrower column does not merely crowd the
-	 * same bubbles.  At 72 px with a bubble fraction of 0.068 the release
-	 * radius is about five pixels, growing to eight and a half by the
-	 * top -- small, fast and numerous, which is what hard-carbonated
-	 * water looks like and what a cola's larger, lazier bubbles do not.
+	 * same bubbles.  At 118 px with a bubble fraction of 0.145 the
+	 * release radius is seventeen pixels, half as much again by the time
+	 * it reaches the top -- big enough that the silvered ring around the
+	 * outer quarter is several pixels wide, which is the whole
+	 * difference between a bubble and a smudge.  See the preset table in
+	 * gowl-config.c for why these are so much larger than a real bubble
+	 * in a real glass.
 	 *
 	 * The trains are what carry the effect, so `sites' is generous and
 	 * `stray' is not: a drink that is mostly loose bubbles is a drink
@@ -767,25 +813,25 @@ gowl_fx_fizz_params_init(GowlFxFizzParams *params)
 	 * narrower column with the same site fraction is more trains, and
 	 * more trains is the thing the eye is actually counting.
 	 */
-	params->cell       = 92.0f;
-	params->bubble     = 0.068f;
+	params->cell       = 126.0f;
+	params->bubble     = 0.145f;
 	params->growth     = 0.72f;
-	params->sites      = 0.64f;
-	params->site_width = 72.0f;
+	params->sites      = 0.85f;
+	params->site_width = 118.0f;
 	params->spacing    = 0.90f;
-	params->stray      = 0.42f;
-	params->cling      = 0.22f;
-	params->wobble     = 18.0f;
-	params->foam       = 0.72f;
-	params->foam_depth = 200.0f;
-	params->depth      = 3.0f;
+	params->stray      = 0.44f;
+	params->cling      = 0.24f;
+	params->wobble     = 20.0f;
+	params->foam       = 0.50f;
+	params->foam_depth = 130.0f;
+	params->depth      = 4.5f;
 	params->dispersion = 0.6f;
-	params->mirror     = 0.74f;
-	params->fog        = 0.50f;
+	params->mirror     = 1.00f;
+	params->fog        = 0.52f;
 	params->clarity    = 0.90f;
-	params->specular   = 0.62f;
+	params->specular   = 1.60f;
 	params->shine      = 64.0f;
-	params->rim        = 0.26f;
+	params->rim        = 0.29f;
 	params->absorption = 0.10f;
 	params->brightness = 1.0f;
 	params->alpha      = 1.0f;

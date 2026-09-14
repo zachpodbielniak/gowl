@@ -7825,13 +7825,42 @@ typedef struct {
 	gdouble      cling_life;  /* seconds a stuck bubble holds on */
 } GowlFizzPreset;
 
+/*
+ * THE BUBBLES ARE MUCH BIGGER THAN THE FIRST SET, and the first set was
+ * simply wrong.
+ *
+ * They were sized from what a bubble in a glass measures -- a couple of
+ * millimetres, ten or twenty pixels -- which is the right answer to the
+ * wrong question.  This is not a photograph of a drink; it is a backdrop
+ * seen THROUGH a translucent window, at whatever alpha that window has,
+ * behind whatever the application is drawing.  At that size the one
+ * thing that identifies a bubble -- the silvered ring around the outer
+ * quarter -- was a pixel wide, and the whole effect read as a slightly
+ * grubby pane.  A seltzer's release radius is seventeen logical pixels
+ * now and half as much again by the time it reaches the top.
+ *
+ * `depth' moved with them for the same reason: a bubble that minifies
+ * only slightly is a disc with a dim ring, and what says LENS is seeing
+ * a visibly wider field squeezed into it.
+ *
+ * `mirror' is 1.0 across the whole table, and that is not laziness.  How
+ * bright the ring is is not a property of the drink -- every bubble
+ * reflects everything past the critical angle -- so it is the one column
+ * with nothing to vary.  `fizz-mirror' is there for anyone who wants it
+ * quieter.
+ *
+ * The ORDERING is what the table is really for and it is unchanged:
+ * left to right the bubbles get finer and more numerous, because that is
+ * what more carbonation means.  A champagne's bubble at a flat drink's
+ * size is neither.
+ */
 static const GowlFizzPreset fizz_presets[] = {
-	/* name         cell  bub   grow  site  sw    spc   stray cling wob   foam  fdep  dep   mir   fog   spec shine rim   abs   spd   life */
-	{ "flat",       140.0, 0.11, 0.35, 0.20, 132.0, 0.26, 0.10, 0.44, 6.0,  0.18,  50.0, 3.6, 0.62, 0.62, 0.42, 80.0, 0.30, 0.16, 0.55, 30.0 },
-	{ "sparkling",  130.0, 0.10, 0.48, 0.28, 118.0, 0.46, 0.20, 0.30, 10.0, 0.30,  90.0, 3.4, 0.66, 0.58, 0.48, 74.0, 0.29, 0.15, 0.80, 22.0 },
-	{ "soda",       110.0, 0.085, 0.60, 0.46, 92.0, 0.72, 0.30, 0.26, 14.0, 0.55, 150.0, 3.2, 0.70, 0.55, 0.55, 70.0, 0.28, 0.14, 1.00, 14.0 },
-	{ "seltzer",     92.0, 0.068, 0.72, 0.64, 72.0, 0.90, 0.42, 0.22, 18.0, 0.72, 200.0, 3.0, 0.74, 0.50, 0.62, 64.0, 0.26, 0.10, 1.30,  9.0 },
-	{ "champagne",   74.0, 0.048, 0.85, 0.82, 54.0, 1.00, 0.52, 0.18, 21.0, 0.86, 250.0, 2.8, 0.80, 0.44, 0.72, 58.0, 0.24, 0.07, 1.70,  6.0 }
+	/* name         cell   bub    grow  site  sw     spc   stray cling wob   foam  fdep   dep  mir   fog   spec  shine rim   abs   spd   life */
+	{ "flat",       200.0, 0.190, 0.35, 0.22, 190.0, 0.26, 0.10, 0.46,  8.0, 0.14,  60.0, 5.2, 1.00, 0.60, 1.20, 80.0, 0.34, 0.16, 0.55, 30.0 },
+	{ "sparkling",  175.0, 0.170, 0.48, 0.40, 160.0, 0.48, 0.22, 0.34, 12.0, 0.26,  90.0, 5.0, 1.00, 0.58, 1.35, 74.0, 0.32, 0.15, 0.80, 22.0 },
+	{ "soda",       150.0, 0.158, 0.60, 0.62, 138.0, 0.72, 0.32, 0.28, 16.0, 0.38, 110.0, 4.7, 1.00, 0.55, 1.50, 70.0, 0.30, 0.14, 1.00, 14.0 },
+	{ "seltzer",    126.0, 0.145, 0.72, 0.85, 118.0, 0.90, 0.44, 0.24, 20.0, 0.50, 130.0, 4.5, 1.00, 0.52, 1.60, 64.0, 0.29, 0.10, 1.30,  9.0 },
+	{ "champagne",  104.0, 0.120, 0.85, 1.00,  94.0, 1.00, 0.55, 0.20, 24.0, 0.62, 160.0, 4.2, 1.00, 0.48, 1.75, 58.0, 0.27, 0.07, 1.70,  6.0 }
 };
 
 static const GowlFizzPreset *

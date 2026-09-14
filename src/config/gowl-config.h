@@ -1854,7 +1854,10 @@ gint         gowl_config_get_rain_frost_passes (GowlConfig *self);
  *
  * `fizz-preset' names a whole tuned set --- "flat", "sparkling", "soda",
  * "seltzer", "champagne" --- and every getter below returns what that
- * preset says unless the config named an override for it.
+ * preset says unless the config named an override for it.  "seltzer" is
+ * the shipped default, which is NOT the middle of that scale: a cola's
+ * worth of bubbles reads as a slightly grubby pane until you know what
+ * you are looking at.
  *
  * `fizz-site-width' is the ruler, not the cell.  What the eye counts in
  * a fizzy drink is TRAINS: files of bubbles streaming up from one point

@@ -1487,13 +1487,18 @@ is; the other two extend it at either end.
 |--------------+------------|
 | =flat=       | A drink that has been sitting out. Most of what is left is stuck to the glass |
 | =sparkling=  | Lightly carbonated: a few slow trains and a thin head |
-| =soda=       | The shipped default. A glass of cola |
-| =seltzer=    | Hard-carbonated water. It will not sit still |
+| =soda=       | A glass of cola |
+| =seltzer=    | The shipped default. Hard-carbonated water; it will not sit still |
 | =champagne=  | Very fine, very fast, and a head that does not go down |
+
+The default is =seltzer= rather than the middle of the scale, because
+the effect is worth switching on for the bubbles and a cola's worth of
+them reads as a slightly grubby pane until you know what you are looking
+at. =fizz-preset: soda= is a glass of cola.
 
 | Property            | Type   | Default     | Description |
 |---------------------+--------+-------------+-------------|
-| =fizz-preset=       | string | ="soda"=    | One of the five above |
+| =fizz-preset=       | string | ="seltzer"= | One of the five above |
 | =fizz-intensity=    | float  | =1.0=       | How carbonated, over and above the preset, =0= to =3= |
 | =fizz-fps=          | int    | =30=        | How often the pane is redrawn; =0= is every frame |
 | =fizz-scale=        | int    | =2=         | Render at 1/this of the window's size, =1= to =4= |

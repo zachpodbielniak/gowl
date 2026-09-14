@@ -215,7 +215,10 @@
  * whole tuned set and the individual keys are overrides on top of it --
  * and here the presets are literally a scale, which is what the effect
  * is for: `sparkling' barely moves, `soda' is a glass of cola, `seltzer'
- * is a hard-carbonated water that will not sit still.
+ * is a hard-carbonated water that will not sit still.  `seltzer' is the
+ * shipped default rather than the middle one, because the effect is
+ * worth turning on for the bubbles and a cola's worth of them reads as
+ * a slightly grubby pane until you know what you are looking at.
  *
  * `fizz-site-width' is the ruler, not the cell.  What the eye counts in
  * a fizzy drink is TRAINS -- files of bubbles streaming from one point
@@ -225,7 +228,7 @@
  * columns gives bigger bubbles rather than more of them, which is a
  * different drink and usually a worse one.
  */
-#define GOWL_CONFIG_DEFAULT_FIZZ_PRESET          "soda"
+#define GOWL_CONFIG_DEFAULT_FIZZ_PRESET          "seltzer"
 #define GOWL_CONFIG_DEFAULT_FIZZ_INTENSITY       (1.0)
 #define GOWL_CONFIG_DEFAULT_FIZZ_FPS             (30)
 #define GOWL_CONFIG_DEFAULT_FIZZ_SCALE           (2)
@@ -7840,8 +7843,14 @@ fizz_preset_by_name(const gchar *name)
 		if (g_strcmp0(fizz_presets[i].name, name) == 0)
 			return &fizz_presets[i];
 	}
-	/* The soda: the one in the middle, and the shipped default. */
-	return &fizz_presets[2];
+	/*
+	 * The seltzer, which is the shipped default -- NOT the middle of the
+	 * table, which is where the water's and the rain's fallbacks land.
+	 * What this answers for an unrecognised name should be what a config
+	 * that named nothing gets, and for this one those stopped being the
+	 * same entry.
+	 */
+	return &fizz_presets[3];
 }
 
 /* An override wins unless it is the sentinel, in which case the preset

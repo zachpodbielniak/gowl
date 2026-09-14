@@ -745,14 +745,16 @@ gowl_fx_fizz_params_init(GowlFxFizzParams *params)
 
 	memset(params, 0, sizeof(*params));
 	/*
-	 * A soda: the middle preset's numbers, so a caller that sets only a
-	 * size gets a fizzy drink rather than a flat one.
+	 * A seltzer: the SHIPPED DEFAULT's numbers, so a caller that sets
+	 * only a size gets exactly what a config naming nothing gets rather
+	 * than a second, quieter opinion about what fizz looks like.
 	 *
-	 * `cell' is the ruler and `bubble' is a FRACTION of it, so the two
-	 * move together and a bigger cell does not merely spread the same
-	 * bubbles further apart.  At 120 px with a bubble fraction of 0.085
-	 * the release radius is about ten pixels, growing to sixteen at the
-	 * top -- which on a HiDPI panel is a bubble you can see is a ring.
+	 * `site_width' is the ruler and `bubble' is a FRACTION of it, so the
+	 * two move together and a narrower column does not merely crowd the
+	 * same bubbles.  At 72 px with a bubble fraction of 0.068 the release
+	 * radius is about five pixels, growing to eight and a half by the
+	 * top -- small, fast and numerous, which is what hard-carbonated
+	 * water looks like and what a cola's larger, lazier bubbles do not.
 	 *
 	 * The trains are what carry the effect, so `sites' is generous and
 	 * `stray' is not: a drink that is mostly loose bubbles is a drink
@@ -765,26 +767,26 @@ gowl_fx_fizz_params_init(GowlFxFizzParams *params)
 	 * narrower column with the same site fraction is more trains, and
 	 * more trains is the thing the eye is actually counting.
 	 */
-	params->cell       = 110.0f;
-	params->bubble     = 0.085f;
-	params->growth     = 0.60f;
-	params->sites      = 0.46f;
-	params->site_width = 92.0f;
-	params->spacing    = 0.72f;
-	params->stray      = 0.30f;
-	params->cling      = 0.26f;
-	params->wobble     = 14.0f;
-	params->foam       = 0.55f;
-	params->foam_depth = 150.0f;
-	params->depth      = 3.2f;
+	params->cell       = 92.0f;
+	params->bubble     = 0.068f;
+	params->growth     = 0.72f;
+	params->sites      = 0.64f;
+	params->site_width = 72.0f;
+	params->spacing    = 0.90f;
+	params->stray      = 0.42f;
+	params->cling      = 0.22f;
+	params->wobble     = 18.0f;
+	params->foam       = 0.72f;
+	params->foam_depth = 200.0f;
+	params->depth      = 3.0f;
 	params->dispersion = 0.6f;
-	params->mirror     = 0.70f;
-	params->fog        = 0.55f;
+	params->mirror     = 0.74f;
+	params->fog        = 0.50f;
 	params->clarity    = 0.90f;
-	params->specular   = 0.55f;
-	params->shine      = 70.0f;
-	params->rim        = 0.28f;
-	params->absorption = 0.14f;
+	params->specular   = 0.62f;
+	params->shine      = 64.0f;
+	params->rim        = 0.26f;
+	params->absorption = 0.10f;
 	params->brightness = 1.0f;
 	params->alpha      = 1.0f;
 	params->src_scale  = 1.0f;
@@ -831,7 +833,7 @@ gowl_fx_fizz_advance(GowlFxFizzClock *clock, gdouble dt, gdouble speed,
 	if (dt > 0.25)
 		dt = 0.25;   /* a long stall is not a long pour */
 	if (!(cling_seconds > 0.1))
-		cling_seconds = 14.0;
+		cling_seconds = 9.0;
 
 	/*
 	 * Cycles, wrapped into [0, GOWL_FX_FIZZ_CYCLES), exactly as the rain:

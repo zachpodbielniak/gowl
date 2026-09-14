@@ -1734,6 +1734,12 @@ hdr-unmanaged: true           # HDR as it was: wider gamut, uncorrected
                               # luminance, and the three symptoms above
 #+end_src
 
+=hdr-unmanaged= is read live, so a reload is enough to get the toggle
+back. What a RELOAD cannot change is what clients were told: the colour
+manager is created once at startup, so the PQ and BT.2020 advertisement
+that goes with this setting needs the session restarted. Set it in the
+config file rather than at runtime and both agree from the first frame.
+
 Under =cmacs --gowl= the effects are most of the point, so the honest
 summary is: on this renderer, HDR is a thing to turn on for a film and
 off afterwards, and =hdr-unmanaged= is how.

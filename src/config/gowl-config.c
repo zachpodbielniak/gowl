@@ -6517,11 +6517,11 @@ typedef struct {
 
 static const GowlRainPreset rain_presets[] = {
 	/* name       cell dens bulge depth runs  rw    rlen beads fog  spec shine rim  imp  abs  spd  life */
-	{ "mist",     48.0, 0.46, 0.75, 5.00, 0.05, 240.0, 300.0, 0.25, 0.94, 0.30, 80.0, 0.22, 0.15, 0.06, 0.50, 16.0 },
-	{ "drizzle",  70.0, 0.34, 0.90, 5.50, 0.18, 210.0, 480.0, 0.40, 0.91, 0.38, 70.0, 0.26, 0.35, 0.08, 0.70, 12.0 },
-	{ "shower",   95.0, 0.30, 1.00, 6.00, 0.45, 170.0, 700.0, 0.55, 0.88, 0.42, 60.0, 0.30, 0.50, 0.10, 1.00,  8.0 },
-	{ "downpour",118.0, 0.34, 1.05, 6.50, 0.70, 140.0, 900.0, 0.68, 0.84, 0.50, 52.0, 0.32, 0.70, 0.12, 1.50,  5.0 },
-	{ "storm",   142.0, 0.40, 1.10, 7.00, 0.90, 115.0,1150.0, 0.78, 0.78, 0.58, 46.0, 0.34, 0.85, 0.14, 2.20,  3.5 }
+	{ "mist",     48.0, 0.46, 0.75, 5.00, 0.05, 240.0, 240.0, 0.30, 0.94, 0.30, 80.0, 0.22, 0.15, 0.06, 0.50, 16.0 },
+	{ "drizzle",  70.0, 0.34, 0.90, 5.50, 0.18, 210.0, 360.0, 0.45, 0.91, 0.38, 70.0, 0.26, 0.35, 0.08, 0.70, 12.0 },
+	{ "shower",   95.0, 0.30, 1.00, 6.00, 0.45, 170.0, 520.0, 0.60, 0.88, 0.42, 60.0, 0.30, 0.50, 0.10, 1.00,  8.0 },
+	{ "downpour",118.0, 0.34, 1.05, 6.50, 0.70, 140.0, 680.0, 0.72, 0.84, 0.50, 52.0, 0.32, 0.70, 0.12, 1.50,  5.0 },
+	{ "storm",   142.0, 0.40, 1.10, 7.00, 0.90, 115.0, 860.0, 0.82, 0.78, 0.58, 46.0, 0.34, 0.85, 0.14, 2.20,  3.5 }
 };
 
 static const GowlRainPreset *
@@ -6675,6 +6675,13 @@ gowl_config_get_rain_fps(GowlConfig *self)
 	return self->rain_fps;
 }
 
+void
+gowl_config_set_rain_fps(GowlConfig *self, gint fps)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->rain_fps = CLAMP(fps, 0, 144);
+}
+
 gint
 gowl_config_get_rain_scale(GowlConfig *self)
 {
@@ -6753,6 +6760,13 @@ gowl_config_get_water_fps(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_WATER_FPS);
 	return self->water_fps;
+}
+
+void
+gowl_config_set_water_fps(GowlConfig *self, gint fps)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->water_fps = CLAMP(fps, 0, 144);
 }
 
 gint

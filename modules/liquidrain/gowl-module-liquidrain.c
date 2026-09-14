@@ -571,7 +571,7 @@ rain_acquire_buffer(GowlCompositor *self, GowlRainNodes *nodes,
 
 static void
 rain_fill_params(const GowlRainStyle *style, const GowlBackdropPlan *plan,
-                 gdouble radius, GowlFxRainParams *out)
+                 gdouble radius, guint seed, GowlFxRainParams *out)
 {
 	gdouble scale = (plan->scale_x + plan->scale_y) * 0.5;
 	gdouble rad   = style->light * G_PI / 180.0;
@@ -629,6 +629,22 @@ rain_fill_params(const GowlRainStyle *style, const GowlBackdropPlan *plan,
 	 * is nearly always 2 -- and without it the drops would magnify a
 	 * quarter of the wallpaper rather than the piece behind them. */
 	out->src_scale = (gfloat)plan->src_scale;
+
+	/*
+	 * Which crop of the rain this window shows.
+	 *
+	 * The pattern is anchored to the WINDOW, because the drops are on
+	 * that pane rather than on the screen behind it -- so they stay put
+	 * when it moves, which is what water on glass does.  The cost of
+	 * that is every window starting its field at its own corner, which
+	 * means every window shows the SAME drops in the same places; two
+	 * terminals side by side make it obvious in a second.
+	 *
+	 * The client's id is stable for its lifetime and never reused, so a
+	 * window keeps its own weather for as long as it is open and gets
+	 * different weather next time.
+	 */
+	out->seed = (gfloat)(seed % 9973u) * 0.0016f;
 }
 
 /*
@@ -712,7 +728,8 @@ rain_update_client(GowlModuleLiquidRain *mod, GowlCompositor *self,
 			wlr_buffer_unlock(buf);
 			return TRUE;
 		}
-		rain_fill_params(&mod->style, &plan, radius, &params);
+		rain_fill_params(&mod->style, &plan, radius,
+		                 gowl_client_get_id(c), &params);
 		gowl_fx_pass_clear(pass, clear);
 		ok = gowl_fx_pass_rain(pass, &src->soft, &src->sharp, &params,
 		                        &mod->clock);

@@ -952,11 +952,46 @@ not named leaves the preset in charge, so a config can say
 | =rain-runs=         | =0=--=1=    | How many columns have a drop running down them |
 | =rain-run-width=    | =10=--=600= | Pixels per column of the fine running layer |
 | =rain-run-length=   | =0=--=4000= | Pixels of trail behind a running head |
+| =rain-speed=        | =0=--=5=    | How fast the running drops fall; 1 is about five seconds to cross |
 | =rain-beads=        | =0=--=1=    | How much of a trail is left behind as residual drops |
 | =rain-fog=          | =0=--=1=    | How frosted the DRY pane is |
 | =rain-specular=     | =0=--=3=    | The glint on each drop |
 | =rain-impact=       | =0=--=1=    | The ring a landing drop throws |
-| =rain-speed=        | =0=--=5=    | How fast the running drops fall |
+
+***** Nothing here stays where it is
+
+*A track is not a permanent feature, and a cell is not a permanent
+drop.* Only the CYCLE belongs to a column --- how fast it runs and where
+in the cycle it starts. Whether it runs at all this time round, where
+across its width, how big, how long a trail and which way it wanders are
+all decided per RUN; the resting drops work the same way, with only the
+phase belonging to the cell and everything else to the life.
+
+This is not a refinement. Pinning those to the column and the cell
+instead, which is what the first version did, gives a field that never
+changes: the same handful of columns running the same drop down the same
+line for as long as the session lasts, and the columns that drew a bad
+hand at startup never get a drop at all. Measured across eighty seconds
+of a real window, a third of it had no running drop in it at any
+instant, and the emptiest strip had one seventy-third of the fullest
+one's rain.
+
+Half of that was the hash. It took two inputs where one of them was a
+per-layer constant, which collapses it to a one-dimensional sequence of
+=sin= stepped by a fixed angle --- and such a sequence *aliases*. The
+presence test came out bimodal: two live columns out of eighteen where
+the density asked for six, and three columns towards the right dry in
+every layer at once. It takes three inputs now, and the distribution was
+checked before the shader was written rather than after.
+
+The clocks are what make the other half work. They count whole cycles
+rather than a fraction of one: the fractional part is where a drop has
+got to, and the WHOLE part is which drop it is. Wrapping at a whole
+number of cycles keeps both continuous --- the fraction is unchanged
+across the wrap, and the index changes by a multiple of the number it is
+taken mod. =tests/test-rain-render.c= asserts the result across a
+couple of minutes and across the width at once, because no single frame
+shows it.
 
 ***** Three numbers that are not what they look like
 

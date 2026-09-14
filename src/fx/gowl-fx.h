@@ -540,22 +540,42 @@ gboolean gowl_fx_pass_water (GowlFxPass              *pass,
 /* ── Liquid rain ─────────────────────────────────────────────────── */
 
 /**
+ * GOWL_FX_RAIN_CYCLES:
+ *
+ * How many runs, and how many drop lives, before the rain repeats.
+ *
+ * The clocks are wrapped at this and the shader takes its run and life
+ * indexes mod it, which is what makes both continuous across the wrap.
+ * Larger repeats later and quantises the head position more coarsely,
+ * because a float has to hold the clock; at 256 a given column sees a
+ * run come round again after tens of minutes, and the head steps to
+ * within a fifth of a pixel.
+ */
+#define GOWL_FX_RAIN_CYCLES (256.0)
+
+/**
  * GowlFxRainClock:
- * @life: the resting drops' lifecycle clock, in [0, 1)
- * @run: the three running-drop clocks, each in [0, 1)
+ * @life: the resting drops' lifecycle clock, in [0, %GOWL_FX_RAIN_CYCLES)
+ * @run: the three running-drop clocks, each in the same range
  *
  * Where the rain has got to.
  *
- * Fractions of a cycle rather than a time, and rather than the water's
- * radians: everything the rain shader does with these is `fract(clock +
- * something)', which is continuous across a wrap at 1.0, so a double
- * wrapped into [0, 1) hands a float a value it represents exactly and
- * keeps doing so forever.  A seconds-since-start float instead loses its
- * mantissa and the drops visibly step.
+ * CYCLES rather than a time, and rather than the water's radians.  The
+ * fractional part is where a drop has got to; the WHOLE part is which
+ * drop it is -- which run is going down this column, which life this
+ * cell is on -- and the shader hashes against that, so a track is not
+ * used by the same drop forever.  Without it the rain is a screensaver:
+ * the same handful of columns running the same drop down the same line,
+ * and a third of the window that never has one at all.
+ *
+ * Wrapping at a whole number of cycles is what keeps both halves
+ * continuous there: the fraction is unchanged across the wrap, and the
+ * whole part changes by a multiple of %GOWL_FX_RAIN_CYCLES, which is
+ * zero once the shader has taken it mod the same number.
  *
  * The one rule this brings with it: any multiplier applied to one of
  * these INSIDE the shader must be a whole number, or that layer snaps at
- * every wrap.  The per-column speed there is 1 or 2 for exactly this
+ * every wrap.  The per-column speed there is 1, 2 or 3 for exactly this
  * reason.
  *
  * Advance it with gowl_fx_rain_advance(); a zeroed clock is a pane that
@@ -626,6 +646,11 @@ void gowl_fx_rain_advance (GowlFxRainClock *clock,
  *   drawing at full resolution; a rect rendered smaller than the window
  *   it covers is still looking at ALL of that window's wallpaper, and
  *   this is what says so.  0 is read as 1
+ * @seed: which crop of the rain this rect shows.  Any number; it is
+ *   wrapped.  The pattern is anchored to the RECT, because the drops are
+ *   on that window rather than on the screen behind it -- so without a
+ *   seed every window shows the same drops in the same places, which two
+ *   windows side by side make obvious at once
  *
  * One rainy pane.  gowl_fx_rain_params_init() fills in a steady shower.
  */
@@ -654,6 +679,7 @@ typedef struct {
 	gfloat alpha;
 	gfloat src_origin[2];
 	gfloat src_scale;
+	gfloat seed;
 } GowlFxRainParams;
 
 /**

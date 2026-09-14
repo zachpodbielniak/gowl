@@ -462,12 +462,12 @@ test_the_drops_run_downwards(void)
 	/*
 	 * A short step, and how short is arithmetic.  A head crosses the
 	 * window plus two trail lengths in one turn of its clock, so at these
-	 * numbers this step moves the slow columns about nine pixels and the
-	 * doubled ones twice that.  The search has to reach past BOTH: a
+	 * numbers this step moves the slowest columns about nine pixels and
+	 * the tripled ones three times that.  The search has to reach past BOTH: a
 	 * step that outruns it matches at zero, and a test whose answer is
 	 * zero whatever the shader does is not a test.
 	 */
-	gowl_fx_rain_advance(&b, 0.02, 1.0, 8.0);
+	gowl_fx_rain_advance(&b, 0.10, 1.0, 8.0);
 
 	fa = render(&f, &p, &a);
 	fb = render(&f, &p, &b);
@@ -656,6 +656,129 @@ test_the_drops_are_not_a_lattice(void)
 	fixture_close(&f);
 }
 
+/*
+ * THE RAIN REACHES THE WHOLE WINDOW, and keeps moving about.
+ *
+ * This is the failure that was actually reported, and it is the one this
+ * file exists for.  Whether a column ran, how fast, how wide and where
+ * across its width were all hashed against the COLUMN alone, so the
+ * answer never changed: the columns that ran, ran every cycle for as
+ * long as the session lasted, and the columns that did not never would.
+ * Measured on a real window, a third of it had no running drop in it at
+ * any instant of eighty seconds, while one strip had five times the
+ * average.  Seventy-three to one between the emptiest strip and the
+ * fullest.
+ *
+ * The hash was half of it.  Two inputs, one of them a per-layer
+ * constant, collapses to a one-dimensional sin sequence stepped by a
+ * fixed angle -- which aliases, and came out bimodal: two live columns
+ * out of eighteen where the density asked for six.
+ *
+ * Neither of those is visible in a single frame, which is why this looks
+ * across a couple of minutes and across the width at once.  A picture
+ * cannot be asserted; a distribution can.
+ */
+static void
+test_the_rain_reaches_the_whole_window(void)
+{
+#define STRIPS 8
+	Fixture f;
+	GowlFxRainParams p;
+	GowlFxRainClock clock;
+	guint8  *dry;
+	gdouble  total[STRIPS];
+	gdouble  seen[STRIPS];
+	gdouble  mean = 0.0, lo, hi;
+	gint     s, frame, i;
+
+	if (!fixture_open(&f)) {
+		fixture_close(&f);
+		g_test_skip("no GLES2 render node");
+		return;
+	}
+
+	/* The running drops alone: they are the ones that were starved, and
+	 * a narrow column so there are ten of them across to speak about. */
+	plain_rain(&p);
+	p.density   = 0.0f;
+	p.runs      = 0.5f;
+	p.run_width = 26.0f;
+	p.run_len   = 90.0f;
+
+	memset(&clock, 0, sizeof(clock));
+	memset(total, 0, sizeof(total));
+	memset(seen, 0, sizeof(seen));
+
+	p.runs = 0.0f;
+	dry = render(&f, &p, &clock);
+	g_assert_nonnull(dry);
+	p.runs = 0.5f;
+
+	for (frame = 0; frame < 24; frame++) {
+		guint8 *wet;
+		gint    x, y;
+
+		/* Five seconds a sample, in quarter-second steps because a
+		 * longer one is clamped -- a stall is not a cloudburst. */
+		for (i = 0; i < 20; i++)
+			gowl_fx_rain_advance(&clock, 0.25, 1.0, 8.0);
+
+		wet = render(&f, &p, &clock);
+		g_assert_nonnull(wet);
+		for (y = 0; y < TEST_H; y++) {
+			for (x = 0; x < TEST_W; x++) {
+				gsize i2 = (gsize)y * TEST_W + x;
+				const guint8 *a = dry + i2 * 4;
+				const guint8 *b = wet + i2 * 4;
+
+				if (ABS((gint)a[0] - (gint)b[0]) > 6
+				    || ABS((gint)a[1] - (gint)b[1]) > 6
+				    || ABS((gint)a[2] - (gint)b[2]) > 6) {
+					gint k = x * STRIPS / TEST_W;
+
+					total[k] += 1.0;
+					seen[k] = 1.0;
+				}
+			}
+		}
+		g_free(wet);
+	}
+	g_free(dry);
+
+	lo = total[0];
+	hi = total[0];
+	for (s = 0; s < STRIPS; s++) {
+		mean += total[s] / (gdouble)STRIPS;
+		lo = MIN(lo, total[s]);
+		hi = MAX(hi, total[s]);
+	}
+	if (g_test_verbose()) {
+		g_print("strip totals:");
+		for (s = 0; s < STRIPS; s++)
+			g_print(" %.0f", total[s]);
+		g_print("   mean %.0f  min/mean %.2f  max/min %.1fx\n",
+		        mean, lo / mean, hi / MAX(lo, 1.0));
+	}
+
+	/* Something happened at all, or the rest measures nothing. */
+	g_assert_cmpfloat(mean, >, 200.0);
+
+	/* Every strip saw rain.  The old code had one that never did. */
+	for (s = 0; s < STRIPS; s++)
+		g_assert_cmpfloat(seen[s], >, 0.0);
+
+	/*
+	 * And no strip is starved.  A third of the mean is generous -- the
+	 * measured spread across a real window is now about two to one,
+	 * against seventy-three before -- because this is a guard against
+	 * the field FREEZING again, not a tolerance on the distribution.
+	 */
+	g_assert_cmpfloat(lo, >, mean / 3.0);
+
+	fixture_close(&f);
+#undef STRIPS
+}
+
 static void
 test_the_corners_are_cut_out(void)
 {
@@ -706,15 +829,19 @@ test_the_clock_stays_where_a_float_can_hold_it(void)
 		gowl_fx_rain_advance(&clock, 1.0 / 60.0, 1.5, 5.0);
 
 	g_assert_cmpfloat(clock.life, >=, 0.0);
-	g_assert_cmpfloat(clock.life, <, 1.0);
+	g_assert_cmpfloat(clock.life, <, GOWL_FX_RAIN_CYCLES);
+	/* Representable, so the shader sees the clock that was computed.
+	 * The bound is the float ULP at the top of the range rather than a
+	 * fixed 1e-6: the clock counts whole cycles now, not a fraction of
+	 * one, and a number near 256 cannot be held to a millionth. */
 	g_assert_cmpfloat(fabs((gdouble)(gfloat)clock.life - clock.life),
-	                  <, 1e-6);
+	                  <, 1e-4);
 
 	for (i = 0; i < 3; i++) {
 		g_assert_cmpfloat(clock.run[i], >=, 0.0);
-		g_assert_cmpfloat(clock.run[i], <, 1.0);
+		g_assert_cmpfloat(clock.run[i], <, GOWL_FX_RAIN_CYCLES);
 		g_assert_cmpfloat(fabs((gdouble)(gfloat)clock.run[i]
-		                       - clock.run[i]), <, 1e-6);
+		                       - clock.run[i]), <, 1e-4);
 	}
 
 	/* The three run at different rates, or the three column layers fall
@@ -767,6 +894,8 @@ main(int argc, char **argv)
 	                test_the_lattice_measure_catches_a_lattice);
 	g_test_add_func("/rain-render/not-a-lattice",
 	                test_the_drops_are_not_a_lattice);
+	g_test_add_func("/rain-render/whole-window",
+	                test_the_rain_reaches_the_whole_window);
 	g_test_add_func("/rain-render/corners", test_the_corners_are_cut_out);
 	g_test_add_func("/rain-render/clock",
 	                test_the_clock_stays_where_a_float_can_hold_it);

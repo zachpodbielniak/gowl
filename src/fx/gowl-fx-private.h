@@ -180,6 +180,7 @@ typedef struct {
 	GLint  u_absorb;
 	GLint  u_brightness;
 	GLint  u_alpha;
+	GLint  u_seed;
 	GLint  a_pos;
 	GLint  a_uv;
 } GowlFxRainProg;

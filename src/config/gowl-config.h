@@ -1720,6 +1720,7 @@ gdouble      gowl_config_get_water_absorption (GowlConfig *self);
  * output offers.  This is the one effect that never settles, so it is
  * also the one with a frame rate. */
 gint         gowl_config_get_water_fps (GowlConfig *self);
+void         gowl_config_set_water_fps (GowlConfig *self, gint fps);
 /* How much smaller than the window the surface is rendered, 1 to 4. */
 gint         gowl_config_get_water_scale (GowlConfig *self);
 const gchar *gowl_config_get_water_tint (GowlConfig *self);
@@ -1812,6 +1813,7 @@ gdouble      gowl_config_get_rain_life (GowlConfig *self);
 /* How often the pane is redrawn, 0 to 144; 0 means every frame the
  * output offers. */
 gint         gowl_config_get_rain_fps (GowlConfig *self);
+void         gowl_config_set_rain_fps (GowlConfig *self, gint fps);
 /* How much smaller than the window the rain is rendered, 1 to 4. */
 gint         gowl_config_get_rain_scale (GowlConfig *self);
 const gchar *gowl_config_get_rain_tint (GowlConfig *self);

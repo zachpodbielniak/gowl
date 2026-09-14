@@ -689,15 +689,15 @@ $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(absp
 $(OUTDIR)/test-blur-nodes: $(addprefix $(OUTDIR)/modules/,blur.so liquidglass.so liquidwater.so liquidrain.so animation.so roundcorners.so)
 $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
-# Everything cmacs --gowl loads but the bar, started under a headless
-# compositor and released after it, the way main() tears down: the
-# manager's dispose deactivates each module with the compositor already
-# gone.  The same list as cmacs_modules[] in the test.
+# Everything cmacs --gowl loads, started under a headless compositor and
+# released after it, the way main() tears down: the manager's dispose
+# deactivates each module with the compositor already gone.  The same
+# list as cmacs_modules[] in the test.
 TEARDOWN_MODULES := wallpaper tile monocle float scrolling animation cube \
 	expo switcher magnifier blur liquidglass liquidwater liquidrain \
 	layout-indicator alpha \
 	vanitygaps roundcorners windowrules dropdown scratchpad screenshot \
-	osd clipboard
+	osd clipboard bar
 $(OUTDIR)/test-compositor-teardown: $(patsubst %,$(OUTDIR)/modules/%.so,$(TEARDOWN_MODULES))
 $(OBJDIR)/tests/test-compositor-teardown.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 

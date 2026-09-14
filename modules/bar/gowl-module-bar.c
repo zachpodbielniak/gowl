@@ -4236,12 +4236,102 @@ bar_disconnect_signals(GowlModuleBar *self)
 	}
 }
 
+/*
+ * Drop every pointer into the compositor WITHOUT touching any of it.
+ *
+ * Reached only when the compositor was finalized first --- an embedder
+ * releasing it before the module manager, which is the order a test
+ * writes by accident and a shutdown path can reach for real.  By then
+ * the wl_display has gone, and the event loop and every source on it
+ * with it; the scene has gone, and every node below the root with it.
+ * So removing the timers or destroying the scene buffers is a
+ * use-after-free, and keeping them is the same bug one tick later.
+ * Forgetting them is the only correct answer.
+ *
+ * Nulling each scene pointer first is what makes that cheap: every
+ * destroy helper in this file is guarded on its pointer, so the
+ * ordinary teardown below turns into a plain free with no second code
+ * path to keep in step.
+ *
+ * The two wl_event_sources are leaked, because libwayland frees only
+ * the sources already removed when a loop is destroyed.  Two structs,
+ * once, on the way out of the process -- which is the whole of when
+ * this runs.
+ */
 static void
-bar_deactivate(GowlModule *mod)
+bar_forget_compositor(GowlModuleBar *self)
 {
-	GowlModuleBar *self = GOWL_MODULE_BAR(mod);
+	gint bi;
 
-	bar_disconnect_signals(self);
+	/* The handlers died with the object that carried them, so the ids
+	   name nothing and must never be disconnected. */
+	self->focus_handler_id     = 0;
+	self->client_added_id      = 0;
+	self->client_removed_id    = 0;
+	self->renderer_replaced_id = 0;
+
+	self->tick_timer = NULL;
+	self->tip.timer  = NULL;
+
+	self->panel.scene_buf       = NULL;
+	self->toast_layer.scene_buf = NULL;
+	self->tip.scene_buf         = NULL;
+
+	for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++) {
+		GowlBarInstance *bar = &self->bars[bi];
+		GHashTableIter   iter;
+		gpointer         value;
+
+		if (bar->surfaces == NULL)
+			continue;
+		g_hash_table_iter_init(&iter, bar->surfaces);
+		while (g_hash_table_iter_next(&iter, NULL, &value)) {
+			BarSurface *surface = value;
+
+			surface->scene_buf = NULL;
+		}
+	}
+
+	self->compositor     = NULL;
+	self->env.compositor = NULL;
+}
+
+/*
+ * The compositor is being finalized.
+ *
+ * A weak REF rather than a weak pointer: a weak pointer can only null
+ * one location, and the bar holds the compositor twice --- once for
+ * itself and once in the BarEnv every shipped plugin reads through
+ * bar_env().  A plugin left pointing at a freed compositor is the same
+ * crash one poll later.
+ */
+static void
+bar_on_compositor_gone(gpointer data, GObject *where)
+{
+	GowlModuleBar *self = data;
+
+	(void)where;
+
+	bar_forget_compositor(self);
+	bar_env_set(NULL);
+}
+
+/*
+ * Give back everything the compositor lent us.
+ *
+ * One body for deactivate and for shutdown: the two used to differ only
+ * in that shutdown also cleared the BarEnv, which meant a deactivate
+ * reached without a shutdown left every shipped plugin holding a
+ * compositor this module had already let go of.
+ */
+static void
+bar_teardown(GowlModuleBar *self)
+{
+	if (self->compositor != NULL) {
+		g_object_weak_unref(G_OBJECT(self->compositor),
+		                    bar_on_compositor_gone, self);
+		bar_disconnect_signals(self);
+	}
 
 	if (self->tick_timer != NULL) {
 		wl_event_source_remove(self->tick_timer);
@@ -4257,7 +4347,16 @@ bar_deactivate(GowlModule *mod)
 	bar_panel_clear_state(self);
 	bar_toast_destroy_surface(self);
 	bar_destroy_all_surfaces(self);
-	self->compositor = NULL;
+
+	bar_env_set(NULL);
+	self->compositor     = NULL;
+	self->env.compositor = NULL;
+}
+
+static void
+bar_deactivate(GowlModule *mod)
+{
+	bar_teardown(GOWL_MODULE_BAR(mod));
 }
 
 static const gchar *
@@ -4367,6 +4466,16 @@ bar_on_startup(GowlStartupHandler *handler, gpointer compositor)
 	struct wl_event_loop *loop;
 	g_autofree gchar *culprit = NULL;
 
+	/* Held weakly, so a compositor released before this module takes
+	   both of these with it rather than leaving them dangling --- see
+	   bar_on_compositor_gone(). */
+	if (self->compositor != compositor) {
+		if (self->compositor != NULL)
+			g_object_weak_unref(G_OBJECT(self->compositor),
+			                    bar_on_compositor_gone, self);
+		g_object_weak_ref(G_OBJECT(compositor),
+		                  bar_on_compositor_gone, self);
+	}
 	self->compositor     = compositor;
 	self->env.compositor = compositor;
 	bar_env_set(&self->env);
@@ -4427,25 +4536,7 @@ bar_on_shutdown(GowlShutdownHandler *handler, gpointer compositor)
 
 	(void)compositor;
 
-	bar_disconnect_signals(self);
-
-	if (self->tick_timer != NULL) {
-		wl_event_source_remove(self->tick_timer);
-		self->tick_timer = NULL;
-	}
-
-	bar_tip_hide(self);
-	if (self->tip.timer != NULL) {
-		wl_event_source_remove(self->tip.timer);
-		self->tip.timer = NULL;
-	}
-
-	bar_panel_clear_state(self);
-	bar_toast_destroy_surface(self);
-	bar_destroy_all_surfaces(self);
-	bar_env_set(NULL);
-	self->compositor     = NULL;
-	self->env.compositor = NULL;
+	bar_teardown(self);
 }
 
 static void
@@ -4470,6 +4561,11 @@ gowl_module_bar_finalize(GObject *object)
 		g_thread_pool_free(self->worker_pool, FALSE, TRUE);
 		self->worker_pool = NULL;
 	}
+
+	/* Idempotent, and the only thing that drops the weak ref when the
+	   module is released without ever being deactivated --- a weak ref
+	   left on a live compositor would fire into freed memory. */
+	bar_teardown(self);
 
 	bar_panel_clear_state(self);
 	bar_toast_destroy_surface(self);

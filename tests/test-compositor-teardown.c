@@ -32,6 +32,15 @@
  * --gowl loads, start a compositor under it, and tear it down both ways;
  * a critical anywhere fails them.  No client is mapped, so what a module
  * keeps per client is out of their reach.
+ *
+ * The bar was the last one held out, and held out for the wrong reason:
+ * its shipped widgets read the machine the test runs on, but only from
+ * a POLL, and a poll only happens on the bar's tick.  Nothing here
+ * dispatches the event loop, so the tick never comes.  What the bar does
+ * do at startup is take four handlers on the compositor and two event
+ * sources on its display, which is exactly what this is for -- and it
+ * held all of them through a raw pointer, so releasing the compositor
+ * first left deactivate disconnecting from freed memory.
  */
 
 #include <glib.h>
@@ -48,10 +57,9 @@
 #endif
 
 /* What cmacs --gowl loads: the wallpaper, then names[] in
- * cmacs/gowl/cmacs-gowl.c, in that order.  The bar, which cmacs enables
- * on its own, cannot be loaded in a test: its shipped widgets poll the
- * machine the test runs on.  The Makefile's TEARDOWN_MODULES names the
- * same modules, so that they are built before this runs. */
+ * cmacs/gowl/cmacs-gowl.c, in that order, then the bar, which cmacs
+ * enables on its own.  The Makefile's TEARDOWN_MODULES names the same
+ * modules, so that they are built before this runs. */
 static const gchar *const cmacs_modules[] = {
 	"wallpaper",
 	"tile", "monocle", "float", "scrolling", "animation", "cube",
@@ -59,7 +67,8 @@ static const gchar *const cmacs_modules[] = {
 	"liquidrain",
 	"layout-indicator",
 	"alpha", "vanitygaps", "roundcorners", "windowrules", "dropdown",
-	"scratchpad", "screenshot", "osd", "clipboard"
+	"scratchpad", "screenshot", "osd", "clipboard",
+	"bar"
 };
 
 /* How a module case tears down. */
@@ -102,6 +111,12 @@ isolate(void)
 	g_setenv("GOWL_DISABLE_SYSTEMD", "1", TRUE);
 	g_setenv("XDG_RUNTIME_DIR", runtime, TRUE);
 	g_setenv("XDG_STATE_HOME", state, TRUE);
+	/* A module that reads the user's directories must read an empty
+	 * one: the bar auto-loads and COMPILES every plugin it finds under
+	 * them, and a teardown test that builds whatever the developer
+	 * happens to have installed is testing the machine. */
+	g_setenv("XDG_CONFIG_HOME", state, TRUE);
+	g_setenv("XDG_DATA_HOME", state, TRUE);
 	g_setenv("WLR_BACKENDS", "headless", TRUE);
 	g_setenv("WLR_HEADLESS_OUTPUTS", "1", TRUE);
 	g_setenv("WLR_RENDERER", "pixman", TRUE);

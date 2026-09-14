@@ -1490,7 +1490,7 @@ typedef struct {
 #define DISPLAY_GAMMA_MIN_BRIGHTNESS (0.1)
 #define DISPLAY_NEUTRAL_TEMP         (6500)
 
-static gboolean display_backlight_governs (void);
+static gboolean display_backlight_governs (GowlBarPlugin *plugin);
 static void     display_apply_gamma (GowlBarPlugin *plugin, DisplayData *dd);
 static void     display_gamma_stop (DisplayData *dd);
 static void     display_gamma_reap (DisplayData *dd);
@@ -1632,14 +1632,14 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 	DisplayData *dd = data;
 	GowlBarPanel *panel;
 	GowlBarPanelItem *item;
-	const BarEnv *env = bar_env();
+	GowlMonitor *mon = bar_plugin_monitor(plugin);
 	gchar buf[32];
 
 	panel = gowl_bar_panel_new();
 	gowl_bar_panel_set_width(panel, 420);
 
 	gowl_bar_panel_add_hero(panel, "\xef\x84\x88", "Display",
-		!display_backlight_governs() ? "HDR: dimmed in software"
+		!display_backlight_governs(plugin) ? "HDR: dimmed in software"
 		: (dd->brightness >= 0) ? "Adjustable brightness"
 		                        : "Fixed brightness");
 
@@ -1654,7 +1654,7 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 	 * file already refuses to ship for the HDR toggle below -- so in HDR
 	 * it drives the gamma ramp instead, and says so.
 	 */
-	if (!display_backlight_governs()) {
+	if (!display_backlight_governs(plugin)) {
 		if (bar_have_command("gammastep")) {
 			g_snprintf(buf, sizeof(buf), "%d%%",
 			           (gint)(dd->gamma_brightness * 100.0 + 0.5));
@@ -1678,19 +1678,13 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 		gowl_bar_panel_item_set_color(item, GOWL_BAR_COLOR_YELLOW);
 	}
 
-	if (env != NULL && env->compositor != NULL) {
-		GowlMonitor *mon;
+	if (mon != NULL) {
+		gint mx, my, mw, mh;
 
-		mon = gowl_compositor_get_selected_monitor(
-			GOWL_COMPOSITOR(env->compositor));
-		if (mon != NULL) {
-			gint mx, my, mw, mh;
-
-			gowl_monitor_get_geometry(mon, &mx, &my, &mw, &mh);
-			g_snprintf(buf, sizeof(buf), "%dx%d", mw, mh);
-			gowl_bar_panel_add_field_pair(panel, "Output",
-				gowl_monitor_get_name(mon), "Size", buf);
-		}
+		gowl_monitor_get_geometry(mon, &mx, &my, &mw, &mh);
+		g_snprintf(buf, sizeof(buf), "%dx%d", mw, mh);
+		gowl_bar_panel_add_field_pair(panel, "Output",
+			gowl_monitor_get_name(mon), "Size", buf);
 	}
 
 	gowl_bar_panel_add_separator(panel);
@@ -1707,23 +1701,17 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 	 * the action reads, so the button that is lit is the scale the
 	 * output is actually running at rather than a guess.
 	 */
-	if (env != NULL && env->compositor != NULL) {
-		GowlMonitor *mon;
+	if (mon != NULL) {
+		gdouble cur = gowl_monitor_get_scale(mon);
+		gsize   i;
 
-		mon = gowl_compositor_get_selected_monitor(
-			GOWL_COMPOSITOR(env->compositor));
-		if (mon != NULL) {
-			gdouble cur = gowl_monitor_get_scale(mon);
-			gsize   i;
-
-			gowl_bar_panel_add_separator(panel);
-			gowl_bar_panel_add_section(panel, "Scale");
-			item = gowl_bar_panel_add_buttons(panel, "scale");
-			for (i = 0; i < G_N_ELEMENTS(display_scales); i++) {
-				gowl_bar_panel_add_button(item,
-					display_scales[i].label,
-					ABS(cur - display_scales[i].value) < 0.01);
-			}
+		gowl_bar_panel_add_separator(panel);
+		gowl_bar_panel_add_section(panel, "Scale");
+		item = gowl_bar_panel_add_buttons(panel, "scale");
+		for (i = 0; i < G_N_ELEMENTS(display_scales); i++) {
+			gowl_bar_panel_add_button(item,
+				display_scales[i].label,
+				ABS(cur - display_scales[i].value) < 0.01);
 		}
 	}
 
@@ -1737,37 +1725,31 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 	 * surfacing (it is usually the cable, or a mode the display only
 	 * offers at a lower refresh rate).
 	 */
-	if (env != NULL && env->compositor != NULL) {
-		GowlMonitor *mon;
-
-		mon = gowl_compositor_get_selected_monitor(
-			GOWL_COMPOSITOR(env->compositor));
-		if (mon != NULL) {
-			gowl_bar_panel_add_separator(panel);
-			gowl_bar_panel_add_section(panel, "Colour");
-			/*
-			 * Two ways to be refused, and they want different
-			 * words.  The DISPLAY not offering BT.2020 and PQ is
-			 * a cable, a port or a refresh rate; the RENDERER not
-			 * being able to convert colour is this build, and
-			 * saying "not offered" for it sends somebody to check
-			 * their cable for an afternoon.
-			 */
-			if (gowl_monitor_supports_hdr(mon)) {
-				item = gowl_bar_panel_add_toggle(panel, "hdr",
-					"HDR (BT.2020, PQ)",
-					gowl_monitor_get_hdr(mon));
-				gowl_bar_panel_item_set_color(item,
-					GOWL_BAR_COLOR_MAUVE);
-			} else if (gowl_monitor_hdr_display_capable(mon)) {
-				gowl_bar_panel_add_field_pair(panel, "HDR",
-					"Renderer cannot convert colour",
-					"Anyway", "hdr-unmanaged: true");
-			} else {
-				gowl_bar_panel_add_field_pair(panel, "HDR",
-					"Display does not offer BT.2020 and PQ",
-					"Output", gowl_monitor_get_name(mon));
-			}
+	if (mon != NULL) {
+		gowl_bar_panel_add_separator(panel);
+		gowl_bar_panel_add_section(panel, "Colour");
+		/*
+		 * Two ways to be refused, and they want different words.
+		 * The DISPLAY not offering BT.2020 and PQ is a cable, a
+		 * port or a refresh rate; the RENDERER not being able to
+		 * convert colour is this build, and saying "not offered"
+		 * for it sends somebody to check their cable for an
+		 * afternoon.
+		 */
+		if (gowl_monitor_supports_hdr(mon)) {
+			item = gowl_bar_panel_add_toggle(panel, "hdr",
+				"HDR (BT.2020, PQ)",
+				gowl_monitor_get_hdr(mon));
+			gowl_bar_panel_item_set_color(item,
+				GOWL_BAR_COLOR_MAUVE);
+		} else if (gowl_monitor_hdr_display_capable(mon)) {
+			gowl_bar_panel_add_field_pair(panel, "HDR",
+				"Renderer cannot convert colour",
+				"Anyway", "hdr-unmanaged: true");
+		} else {
+			gowl_bar_panel_add_field_pair(panel, "HDR",
+				"Display does not offer BT.2020 and PQ",
+				"Output", gowl_monitor_get_name(mon));
 		}
 	}
 
@@ -1786,17 +1768,18 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
  * which carries absolute luminance, and the SDR backlight no longer
  * decides anything.  Nothing reports this -- the write succeeds -- so it
  * has to be inferred from the output's state.
+ *
+ * The output's, not the session's: with one screen in HDR and one not,
+ * this answers differently for the two bars, and answering from the
+ * focused screen put a software slider on the SDR panel whenever the
+ * pointer wandered onto the HDR one.
  */
 static gboolean
-display_backlight_governs(void)
+display_backlight_governs(GowlBarPlugin *plugin)
 {
-	const BarEnv *env = bar_env();
-	GowlMonitor  *mon;
+	GowlMonitor *mon;
 
-	if (env == NULL || env->compositor == NULL)
-		return TRUE;
-	mon = gowl_compositor_get_selected_monitor(
-		GOWL_COMPOSITOR(env->compositor));
+	mon = bar_plugin_monitor(plugin);
 	if (mon == NULL)
 		return TRUE;
 	return !gowl_monitor_get_hdr(mon);
@@ -1961,7 +1944,7 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	(void)theme;
 
 	if (g_strcmp0(item_id, "brightness") == 0) {
-		if (display_backlight_governs()) {
+		if (display_backlight_governs(plugin)) {
 			display_set_brightness(dd, value);
 		} else {
 			/*
@@ -2020,14 +2003,13 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	}
 
 	if (g_strcmp0(item_id, "hdr") == 0) {
-		const BarEnv *e = bar_env();
 		GowlMonitor  *mon;
 		gboolean      want;
 
-		if (e == NULL || e->compositor == NULL)
-			return;
-		mon = gowl_compositor_get_selected_monitor(
-			GOWL_COMPOSITOR(e->compositor));
+		/* The output the panel was built for -- the switch says
+		   what it is going to do to THAT screen, so it has to do
+		   it to that one. */
+		mon = bar_plugin_monitor(plugin);
 		if (mon == NULL)
 			return;
 		/* The switch carries the state it was flipped INTO.  A host
@@ -2086,15 +2068,11 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	}
 
 	if (g_strcmp0(item_id, "scale") == 0) {
-		const BarEnv *e = bar_env();
 		GowlMonitor  *mon;
 
 		if (index < 0 || (gsize)index >= G_N_ELEMENTS(display_scales))
 			return;
-		if (e == NULL || e->compositor == NULL)
-			return;
-		mon = gowl_compositor_get_selected_monitor(
-			GOWL_COMPOSITOR(e->compositor));
+		mon = bar_plugin_monitor(plugin);
 		if (mon == NULL)
 			return;
 		if (gowl_monitor_set_scale(mon, display_scales[index].value)) {
@@ -2159,7 +2137,7 @@ display_scroll(GowlBarPlugin *plugin, gpointer data, gdouble delta,
 	 * are no longer the same thing -- so it moves the ramp instead,
 	 * rather than turning a knob that is not connected to anything.
 	 */
-	if (!display_backlight_governs()) {
+	if (!display_backlight_governs(plugin)) {
 		gdouble want;
 
 		want = CLAMP(dd->gamma_brightness + steps * 0.05,
@@ -2459,8 +2437,10 @@ recorder_start_native(GowlBarPlugin *plugin, gint index, gchar **scope_out)
 		*scope_out = g_strdup("Region");
 		break;
 	default:
+		/* THE screen, singular, meaning the one whose bar this
+		   button is in -- not whichever one has the focus. */
 		mode = GOWL_CAPTURE_MODE_DESKTOP;
-		mon = gowl_compositor_get_selected_monitor(comp);
+		mon = bar_plugin_monitor(plugin);
 		if (mon != NULL)
 			mon_name = gowl_monitor_get_name(mon);
 		*scope_out = g_strdup("Whole screen");
@@ -2979,7 +2959,6 @@ shot_capture_native(GowlBarPlugin *plugin, gint index)
 {
 	GowlScreenshotProvider *prov = shot_provider();
 	const BarEnv           *env = bar_env();
-	GowlCompositor         *comp;
 	GowlClient             *client = NULL;
 	GowlMonitor            *mon;
 	GowlCaptureMode         mode;
@@ -2988,7 +2967,6 @@ shot_capture_native(GowlBarPlugin *plugin, gint index)
 
 	if (prov == NULL || env == NULL || env->compositor == NULL)
 		return FALSE;
-	comp = GOWL_COMPOSITOR(env->compositor);
 
 	switch (index) {
 	case 1:
@@ -3002,8 +2980,9 @@ shot_capture_native(GowlBarPlugin *plugin, gint index)
 		mode = GOWL_CAPTURE_MODE_AREA;
 		break;
 	default:
+		/* The screen this widget is on, as above. */
 		mode = GOWL_CAPTURE_MODE_DESKTOP;
-		mon = gowl_compositor_get_selected_monitor(comp);
+		mon = bar_plugin_monitor(plugin);
 		if (mon != NULL)
 			mon_name = gowl_monitor_get_name(mon);
 		break;

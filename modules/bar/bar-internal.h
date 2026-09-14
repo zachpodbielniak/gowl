@@ -73,6 +73,30 @@ void bar_register_system_plugins  (GowlBarRegistry *registry);
 void bar_register_net_plugins     (GowlBarRegistry *registry);
 void bar_register_desktop_plugins (GowlBarRegistry *registry);
 
+/* --- The output a widget is being run for -------------------------- */
+
+/**
+ * bar_plugin_monitor:
+ * @plugin: the plugin the current call is for
+ *
+ * The output this call belongs to, falling back to the focused one.
+ *
+ * The bar is drawn once per screen from ONE set of plugin objects, so a
+ * widget that wants an output has to be told which one rather than ask:
+ * gowl_bar_plugin_get_monitor() is the host saying so, and it is set
+ * around every draw, click, scroll and panel.  It is %NULL in a poll,
+ * which runs once for every screen at once, and the selected monitor is
+ * then the only answer available.
+ *
+ * Typed as a pointer, like BarEnv.compositor, so this header stays
+ * clear of the compositor's own.  It assigns straight into a
+ * #GowlMonitor pointer with no cast.
+ *
+ * Returns: (transfer none) (nullable): the #GowlMonitor, or %NULL when
+ *   there is no compositor and nothing was served
+ */
+gpointer bar_plugin_monitor (GowlBarPlugin *plugin);
+
 /* --- Subprocess helpers ------------------------------------------- */
 
 /**

@@ -327,7 +327,10 @@ Membership is read from =HaveNodeKey= in =tailscale status --json=, which stays 
 **** Display
 
 The brightness slider is not always the backlight, and the panel says
-which one it is.
+which one it is --- for *this* screen. Every row in this panel is about
+the output the bar is drawn on, not the focused one, so with one display
+in HDR and one not the two bars answer differently. See
+[[#which-output][Which output you are on]].
 
 On an output in HDR it cannot be.  The panel takes its luminance from
 the PQ signal, so the backlight write still succeeds, =actual_brightness=
@@ -622,6 +625,31 @@ worker builds a *fresh* array and swaps it in under a =GMutex=, and
 every reader takes the same lock. A key handler copies the strings it
 needs out from under the lock before running anything slow, so the
 worker is never blocked on a file read.
+
+*** Which output you are on
+:PROPERTIES:
+:CUSTOM_ID: which-output
+:END:
+
+There is *one* set of plugin objects, not one per screen. The bar is measured and drawn once per output from the same widgets, and a click or a panel belongs to whichever screen it happened on. So a widget that wants an output has to be *told* which one:
+
+#+begin_src c
+GowlMonitor *mon = gowl_bar_plugin_get_monitor(plugin);
+#+end_src
+
+The host sets it around every call that belongs to one output --- the signature, the measure and the draw of one screen's copy of the bar; a click; a scroll; and the whole of a panel's build, actions, keys, open and close --- and restores it afterwards.
+
+It is =NULL= in =poll= and =poll_async=, because a poll runs once for *every* screen at once and there is no honest answer. It must not be read from a worker thread at all.
+
+Do not reach for =gowl_compositor_get_selected_monitor()= instead. That is the *focused* output, which on a desk with two screens is routinely not the one your bar is sitting on. It was how the shipped widgets used to do it, and the results were wrong in ways nobody would connect to the cause: the display widget chose between the backlight and a software gamma ramp from the other screen's HDR state, so the bar on the SDR panel offered a software slider whenever the pointer wandered onto the HDR one; the recorder's *Whole screen* photographed the screen nobody was pointing at; and clicking the layout symbol on the second bar cycled the first screen's layout, so the symbol under the pointer did not change and a window somewhere else moved.
+
+The selected monitor is still the right *fallback* for the =NULL= case, and the shipped widgets use =bar_plugin_monitor()= for exactly that: served output first, focused output when there is genuinely no served one.
+
+**** Still session-wide
+
+The =tags= and =layout= widgets read the focused output in their =poll= and put the answer in a label. That label is shared by every screen, so both bars show the focused screen's tags and layout symbol --- which is not what a dwm-style tag row should do.
+
+Fixing it means computing in =draw= rather than =poll=, and a per-output appearance has to appear in the *signature* or the surface never repaints. =GowlBarPluginClass.signature= exists; =GowlBarPluginVTable= has no slot for it yet, so a vtable plugin cannot contribute one. That slot is the missing piece.
 
 *** Talking to a CLI
 :PROPERTIES:

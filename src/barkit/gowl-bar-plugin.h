@@ -233,6 +233,52 @@ void         gowl_bar_plugin_set_host (GowlBarPlugin *self,
                                         GowlBarHost   *host);
 GowlBarHost *gowl_bar_plugin_get_host (GowlBarPlugin *self);
 
+/* --- The output ---------------------------------------------------- */
+
+/**
+ * gowl_bar_plugin_set_monitor:
+ * @self: a plugin
+ * @monitor: (nullable): the #GowlMonitor being served, as an untyped
+ *   pointer so barkit need not depend on the compositor, or %NULL
+ *
+ * Says which output the plugin is being run for.  The HOST calls this;
+ * a plugin only ever reads it.
+ *
+ * Set around every call that belongs to one output --- the measure,
+ * the signature and the draw of one screen's copy of the bar, a click
+ * or a scroll, and the whole of a panel's build and actions --- and
+ * restored afterwards, so it is %NULL again by the time an ordinary
+ * poll runs.
+ */
+void gowl_bar_plugin_set_monitor (GowlBarPlugin *self, gpointer monitor);
+
+/**
+ * gowl_bar_plugin_get_monitor:
+ * @self: a plugin
+ *
+ * The output this call is FOR, which on a desk with two screens is not
+ * the output that happens to be focused.
+ *
+ * One set of plugin objects serves every screen: the bar is drawn once
+ * per output from the same plugins, so a plugin asking the compositor
+ * for the selected monitor answers about whichever screen the pointer
+ * was last on rather than the one its own bar is sitting on.  That is a
+ * wrong reading in a widget and a wrong ACTION in a panel --- the
+ * display widget's brightness slider chose between the backlight and a
+ * software ramp from the other screen's HDR state.
+ *
+ * %NULL when there is no one output the call belongs to, which is the
+ * case in @poll and @poll_async: a poll runs once for all screens.  A
+ * plugin that needs an output there has to pick one itself, and the
+ * selected monitor is then the right guess.
+ *
+ * Only valid on the compositor thread, for the duration of the call
+ * the host set it for.  A worker thread must not read it.
+ *
+ * Returns: (transfer none) (nullable): the #GowlMonitor, or %NULL
+ */
+gpointer gowl_bar_plugin_get_monitor (GowlBarPlugin *self);
+
 /* Shorthands over the host, safe to call with no host attached. */
 void gowl_bar_plugin_request_redraw (GowlBarPlugin *self);
 

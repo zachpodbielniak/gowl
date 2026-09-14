@@ -42,6 +42,11 @@ typedef struct {
 	gchar        *id;
 	GowlBarHost  *host;        /* weak */
 
+	/* The output the current call belongs to, or NULL outside one.
+	   Borrowed, compositor thread only --- see
+	   gowl_bar_plugin_get_monitor(). */
+	gpointer      monitor;
+
 	GHashTable   *settings;    /* gchar* -> gchar* */
 
 	/* Presentation state.  Written from worker threads, read from the
@@ -648,6 +653,41 @@ gowl_bar_plugin_get_host(GowlBarPlugin *self)
 {
 	g_return_val_if_fail(GOWL_IS_BAR_PLUGIN(self), NULL);
 	return PRIV(self)->host;
+}
+
+/* ----------------------------------------------------------------
+ * The output
+ * ---------------------------------------------------------------- */
+
+/**
+ * gowl_bar_plugin_set_monitor:
+ * @self: a plugin
+ * @monitor: (nullable): the output being served, or %NULL
+ *
+ * Borrowed, and deliberately not reference counted: this is set and
+ * cleared around a single call that the host is already inside, and a
+ * monitor cannot go away underneath it there.  Holding a reference
+ * would instead keep an unplugged output alive for as long as some
+ * plugin happened to be the last thing drawn on it.
+ */
+void
+gowl_bar_plugin_set_monitor(GowlBarPlugin *self, gpointer monitor)
+{
+	g_return_if_fail(GOWL_IS_BAR_PLUGIN(self));
+	PRIV(self)->monitor = monitor;
+}
+
+/**
+ * gowl_bar_plugin_get_monitor:
+ * @self: a plugin
+ *
+ * Returns: (transfer none) (nullable): the output this call is for
+ */
+gpointer
+gowl_bar_plugin_get_monitor(GowlBarPlugin *self)
+{
+	g_return_val_if_fail(GOWL_IS_BAR_PLUGIN(self), NULL);
+	return PRIV(self)->monitor;
 }
 
 /**

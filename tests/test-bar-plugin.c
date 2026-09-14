@@ -321,6 +321,47 @@ test_a_short_vtable_still_loads(void)
 	g_object_unref(plugin);
 }
 
+/*
+ * The output a plugin is being run for.
+ *
+ * Nothing by default, which is the honest answer: a plugin exists
+ * before it has been drawn anywhere, and a poll runs once for every
+ * screen at once.  It is the HOST that says which output a draw, a
+ * click or a panel belongs to, and it is per instance -- two copies of
+ * one widget can be serving two screens.
+ *
+ * The end-to-end behaviour, that the bar module really does say so once
+ * per output, is in test-bar-monitor.c against a real compositor with
+ * two of them.
+ */
+static void
+test_the_served_output(void)
+{
+	GowlBarPlugin *one;
+	GowlBarPlugin *two;
+	gint           first;
+	gint           second;
+
+	one = gowl_bar_plugin_proxy_new("one", NULL, NULL, &probe_vtable);
+	two = gowl_bar_plugin_proxy_new("two", NULL, NULL, &probe_vtable);
+
+	g_assert_null(gowl_bar_plugin_get_monitor(one));
+
+	/* Opaque to barkit, which never dereferences it: the compositor's
+	   own headers are not part of the plugin contract. */
+	gowl_bar_plugin_set_monitor(one, &first);
+	gowl_bar_plugin_set_monitor(two, &second);
+	g_assert_true(gowl_bar_plugin_get_monitor(one) == &first);
+	g_assert_true(gowl_bar_plugin_get_monitor(two) == &second);
+
+	gowl_bar_plugin_set_monitor(one, NULL);
+	g_assert_null(gowl_bar_plugin_get_monitor(one));
+	g_assert_true(gowl_bar_plugin_get_monitor(two) == &second);
+
+	g_object_unref(one);
+	g_object_unref(two);
+}
+
 static void
 test_settings_accessors(void)
 {
@@ -782,6 +823,7 @@ main(int argc, char *argv[])
 	g_test_add_func("/bar-plugin/short-vtable",
 	                test_a_short_vtable_still_loads);
 	g_test_add_func("/bar-plugin/settings", test_settings_accessors);
+	g_test_add_func("/bar-plugin/served-output", test_the_served_output);
 
 	g_test_add_func("/bar-registry/instantiate",
 	                test_registry_instantiates_specs);

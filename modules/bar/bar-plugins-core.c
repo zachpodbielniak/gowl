@@ -580,7 +580,6 @@ layout_click(GowlBarPlugin *plugin, gpointer data, guint button, gint x,
 	GowlCompositor *comp;
 	GowlMonitor *mon;
 
-	(void)plugin;
 	(void)data;
 	(void)x;
 	(void)y;
@@ -590,7 +589,11 @@ layout_click(GowlBarPlugin *plugin, gpointer data, guint button, gint x,
 	if (comp == NULL)
 		return FALSE;
 
-	mon = gowl_compositor_get_selected_monitor(comp);
+	/* The output the click landed on.  Clicking the layout symbol in
+	   the second screen's bar used to cycle the FOCUSED screen's
+	   layout, so the symbol you clicked did not change and a window
+	   somewhere else moved. */
+	mon = bar_plugin_monitor(plugin);
 	if (mon == NULL)
 		return FALSE;
 

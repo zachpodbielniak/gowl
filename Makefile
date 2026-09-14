@@ -703,6 +703,13 @@ $(OBJDIR)/tests/test-compositor-teardown.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DI
 
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
+# The bar module against the real .so in a headless compositor with two
+# outputs, with a plugin compiled from a `.c' file at test time: a
+# widget is told which screen each draw is for, and told nothing in a
+# poll.
+$(OUTDIR)/test-bar-monitor: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-monitor.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
 # The wallpaper against the real .so in a headless compositor, with
 # outputs plugged and unplugged underneath it.
 $(OUTDIR)/test-wallpaper-hotplug: $(OUTDIR)/modules/wallpaper.so

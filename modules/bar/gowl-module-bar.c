@@ -887,6 +887,95 @@ bar_surface_free(gpointer data)
 	g_free(surface);
 }
 
+/* ----------------------------------------------------------------
+ * Which output a plugin is being run for
+ * ---------------------------------------------------------------- */
+
+/*
+ * One set of plugin objects serves every screen.
+ *
+ * The bar is laid out, measured and drawn once per output from the
+ * SAME plugins, and a click or a panel belongs to whichever output it
+ * happened on.  A plugin with no way to ask therefore asked the
+ * compositor for the selected monitor, which answers about the focused
+ * screen -- so the display widget on the laptop panel chose between the
+ * backlight and a software ramp from the OTHER screen's HDR state, and
+ * the recorder's "whole screen" photographed the screen you were not
+ * pointing at.
+ *
+ * So the host says, around every call that belongs to one output, and
+ * puts back what was there before rather than clearing: these nest.  A
+ * panel action draws the bar again before it returns, and the draw runs
+ * once per monitor.
+ */
+static gpointer
+bar_plugin_serve(GowlBarPlugin *plugin, gpointer monitor)
+{
+	gpointer previous;
+
+	previous = gowl_bar_plugin_get_monitor(plugin);
+	gowl_bar_plugin_set_monitor(plugin, monitor);
+	return previous;
+}
+
+/* The same, for every widget in one bar: a draw pass serves them all
+   for the same output. */
+static void
+bar_items_serve(GowlBarInstance *bar, gpointer monitor)
+{
+	guint i;
+
+	for (i = 0; i < bar->items->len; i++) {
+		BarItem *item = g_ptr_array_index(bar->items, i);
+
+		gowl_bar_plugin_set_monitor(item->plugin, monitor);
+	}
+}
+
+/* bar_items_serve() with the previous value handed back, for a render
+   that may be nested inside another one's serve.  One item speaks for
+   all of them: they are only ever set together. */
+static gpointer
+bar_plugin_serve_all(GowlBarInstance *bar, gpointer monitor)
+{
+	gpointer previous = NULL;
+
+	if (bar->items->len > 0) {
+		BarItem *first = g_ptr_array_index(bar->items, 0);
+
+		previous = gowl_bar_plugin_get_monitor(first->plugin);
+	}
+	bar_items_serve(bar, monitor);
+	return previous;
+}
+
+/**
+ * bar_plugin_monitor:
+ * @plugin: the plugin the current call is for
+ *
+ * What the shipped widgets ask.  The served output when there is one,
+ * and otherwise the focused one --- which is a guess, but the only
+ * answer available in a poll.
+ *
+ * Returns: (transfer none) (nullable): the output
+ */
+gpointer
+bar_plugin_monitor(GowlBarPlugin *plugin)
+{
+	const BarEnv *env;
+	gpointer      served;
+
+	served = gowl_bar_plugin_get_monitor(plugin);
+	if (served != NULL)
+		return served;
+
+	env = bar_env();
+	if (env == NULL || env->compositor == NULL)
+		return NULL;
+	return gowl_compositor_get_selected_monitor(
+		GOWL_COMPOSITOR(env->compositor));
+}
+
 static void
 bar_create_surface(GowlModuleBar *self, GowlBarInstance *bar,
                    GowlMonitor *monitor)
@@ -916,7 +1005,16 @@ bar_create_surface(GowlModuleBar *self, GowlBarInstance *bar,
 	if (top_layer == NULL)
 		return;
 
-	buf    = bar_render_slot(self, bar, mon_w, bar->bar_height);
+	/* Served here as well as in bar_redraw_all(): startup creates
+	   every surface directly, and a per-output widget painted before
+	   anything told it which output would show the focused screen's
+	   state until the first tick corrected it. */
+	{
+		gpointer previous = bar_plugin_serve_all(bar, monitor);
+
+		buf = bar_render_slot(self, bar, mon_w, bar->bar_height);
+		bar_items_serve(bar, previous);
+	}
 	surf_y = bar_surface_y(bar, mon_y, mon_h);
 
 	surface = g_new0(BarSurface, 1);
@@ -1059,6 +1157,12 @@ bar_redraw_all(GowlModuleBar *self)
 				continue;
 			}
 
+			/* Everything below -- the signature, the measure
+			   and the draw -- is this output's copy of the bar,
+			   so the widgets are told so for all of it.  Cleared
+			   once the monitor loop is done. */
+			bar_items_serve(bar, mon);
+
 			surface = g_hash_table_lookup(bar->surfaces, name);
 			if (surface == NULL || surface->scene_buf == NULL) {
 				bar_create_surface(self, bar, mon);
@@ -1098,6 +1202,8 @@ bar_redraw_all(GowlModuleBar *self)
 			                            &buf->base);
 			wlr_buffer_drop(&buf->base);
 		}
+
+		bar_items_serve(bar, NULL);
 	}
 
 	self->in_render = FALSE;
@@ -1344,14 +1450,21 @@ bar_panel_clear_state(GowlModuleBar *self)
 static void
 bar_panel_close(GowlModuleBar *self)
 {
-	BarItem *item;
+	BarItem  *item;
+	gpointer  monitor;
+	gpointer  previous;
 
 	if (self->panel.item == NULL)
 		return;
 
 	item = self->panel.item;
+	monitor = self->panel.monitor;
 	bar_panel_clear_state(self);
+
+	previous = bar_plugin_serve(item->plugin, monitor);
 	gowl_bar_plugin_panel_closed(item->plugin);
+	gowl_bar_plugin_set_monitor(item->plugin, previous);
+
 	bar_redraw_all(self);
 }
 
@@ -1370,17 +1483,29 @@ bar_build_panel_body(gpointer data)
 	ctx->result = gowl_bar_plugin_build_panel(ctx->plugin);
 }
 
+/*
+ * @monitor is passed rather than read from self->panel: the first build
+ * happens before bar_panel_open() has committed the panel state, and a
+ * panel whose rows describe the wrong output is the bug this exists to
+ * stop.
+ */
 static GowlBarPanel *
-bar_build_panel_guarded(GowlModuleBar *self, BarItem *item)
+bar_build_panel_guarded(GowlModuleBar *self, BarItem *item, gpointer monitor)
 {
 	BuildCtx ctx;
+	gpointer previous;
+	gboolean ok;
 	gint signo = 0;
 
 	ctx.plugin = item->plugin;
 	ctx.result = NULL;
 
-	if (!gowl_bar_guard_call(bar_build_panel_body, &ctx, &signo,
-	                         gowl_bar_plugin_get_id(item->plugin))) {
+	previous = bar_plugin_serve(item->plugin, monitor);
+	ok = gowl_bar_guard_call(bar_build_panel_body, &ctx, &signo,
+	                         gowl_bar_plugin_get_id(item->plugin));
+	gowl_bar_plugin_set_monitor(item->plugin, previous);
+
+	if (!ok) {
 		const gchar *name;
 
 		name = gowl_bar_plugin_get_setting(item->plugin, "name");
@@ -1412,7 +1537,7 @@ bar_panel_open(GowlModuleBar *self, GowlBarInstance *bar, BarItem *item,
 	if (self->panel.item != NULL)
 		bar_panel_close(self);
 
-	panel = bar_build_panel_guarded(self, item);
+	panel = bar_build_panel_guarded(self, item, monitor);
 	if (panel == NULL)
 		return;
 
@@ -1432,7 +1557,13 @@ bar_panel_open(GowlModuleBar *self, GowlBarInstance *bar, BarItem *item,
 		                       gowl_bar_hit_rect_clear);
 	}
 
-	gowl_bar_plugin_panel_opened(item->plugin);
+	{
+		gpointer previous;
+
+		previous = bar_plugin_serve(item->plugin, monitor);
+		gowl_bar_plugin_panel_opened(item->plugin);
+		gowl_bar_plugin_set_monitor(item->plugin, previous);
+	}
 	bar_panel_render(self);
 	bar_redraw_all(self);
 }
@@ -1445,7 +1576,8 @@ bar_panel_rebuild(GowlModuleBar *self)
 	if (self->panel.item == NULL)
 		return;
 
-	panel = bar_build_panel_guarded(self, self->panel.item);
+	panel = bar_build_panel_guarded(self, self->panel.item,
+	                                self->panel.monitor);
 	if (panel == NULL) {
 		bar_panel_close(self);
 		return;
@@ -1744,8 +1876,10 @@ static gboolean
 bar_guard_call_key(GowlModuleBar *self, GowlBarPlugin *plugin, guint keysym,
                    guint modifiers, gint focused, gboolean *claimed)
 {
-	KeyCtx ctx;
-	gint   signo = 0;
+	KeyCtx   ctx;
+	gpointer previous;
+	gboolean ok;
+	gint     signo = 0;
 
 	ctx.plugin    = plugin;
 	ctx.keysym    = keysym;
@@ -1753,8 +1887,12 @@ bar_guard_call_key(GowlModuleBar *self, GowlBarPlugin *plugin, guint keysym,
 	ctx.focused   = focused;
 	ctx.claimed   = FALSE;
 
-	if (!gowl_bar_guard_call(bar_panel_key_body, &ctx, &signo,
-	                         gowl_bar_plugin_get_id(plugin))) {
+	previous = bar_plugin_serve(plugin, self->panel.monitor);
+	ok = gowl_bar_guard_call(bar_panel_key_body, &ctx, &signo,
+	                         gowl_bar_plugin_get_id(plugin));
+	gowl_bar_plugin_set_monitor(plugin, previous);
+
+	if (!ok) {
 		const gchar *name;
 
 		name = gowl_bar_plugin_get_setting(plugin, "name");
@@ -1810,6 +1948,8 @@ bar_panel_deliver(GowlModuleBar *self, const gchar *item_id, gint index,
 {
 	ActionCtx ctx;
 	g_autofree gchar *owned_id = NULL;
+	gpointer  previous;
+	gboolean  ok;
 	gint signo = 0;
 	BarItem *item;
 
@@ -1830,8 +1970,12 @@ bar_panel_deliver(GowlModuleBar *self, const gchar *item_id, gint index,
 	ctx.value   = value;
 	ctx.button  = button;
 
-	if (!gowl_bar_guard_call(bar_panel_action_body, &ctx, &signo,
-	                         gowl_bar_plugin_get_id(item->plugin))) {
+	previous = bar_plugin_serve(item->plugin, self->panel.monitor);
+	ok = gowl_bar_guard_call(bar_panel_action_body, &ctx, &signo,
+	                         gowl_bar_plugin_get_id(item->plugin));
+	gowl_bar_plugin_set_monitor(item->plugin, previous);
+
+	if (!ok) {
 		const gchar *name;
 
 		name = gowl_bar_plugin_get_setting(item->plugin, "name");
@@ -3409,6 +3553,8 @@ bar_handle_button(GowlBarProvider *provider, gpointer monitor, gint x, gint y,
 
 	{
 		BarClickCtx ctx;
+		gpointer previous;
+		gboolean ok;
 		gint signo = 0;
 
 		ctx.plugin    = item->plugin;
@@ -3421,8 +3567,12 @@ bar_handle_button(GowlBarProvider *provider, gpointer monitor, gint x, gint y,
 		/* Guarded like everything else a plugin exposes: a null
 		   dereference in somebody's button handler must not be a
 		   logout. */
-		if (!gowl_bar_guard_call(bar_click_body, &ctx, &signo,
-		                         gowl_bar_plugin_get_id(item->plugin))) {
+		previous = bar_plugin_serve(item->plugin, monitor);
+		ok = gowl_bar_guard_call(bar_click_body, &ctx, &signo,
+		                         gowl_bar_plugin_get_id(item->plugin));
+		gowl_bar_plugin_set_monitor(item->plugin, previous);
+
+		if (!ok) {
 			const gchar *name;
 
 			name = gowl_bar_plugin_get_setting(item->plugin,
@@ -3581,10 +3731,19 @@ bar_handle_axis(GowlBarProvider *provider, gpointer monitor, gint x, gint y,
 	if (item == NULL)
 		return FALSE;
 
-	if (gowl_bar_plugin_on_scroll(item->plugin, delta, discrete,
-	                              modifiers)) {
-		bar_redraw_all(self);
-		return TRUE;
+	{
+		gpointer previous;
+		gboolean consumed;
+
+		previous = bar_plugin_serve(item->plugin, monitor);
+		consumed = gowl_bar_plugin_on_scroll(item->plugin, delta,
+		                                     discrete, modifiers);
+		gowl_bar_plugin_set_monitor(item->plugin, previous);
+
+		if (consumed) {
+			bar_redraw_all(self);
+			return TRUE;
+		}
 	}
 	return FALSE;
 }

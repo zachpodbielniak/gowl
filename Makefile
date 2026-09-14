@@ -102,6 +102,9 @@ LIB_SRCS := \
 	src/fx/gowl-fx-glass.c \
 	src/fx/gowl-fx-water.c \
 	src/fx/gowl-fx-rain.c \
+	src/fx/gowl-fx-fizz.c \
+	src/fx/gowl-fx-leaves.c \
+	src/fx/gowl-fx-snow.c \
 	src/fx/gowl-fx-pq.c \
 	src/util/gowl-systemd.c \
 	src/util/gowl-wayland-socket.c \

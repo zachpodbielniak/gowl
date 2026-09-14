@@ -719,6 +719,550 @@ gboolean gowl_fx_pass_rain (GowlFxPass             *pass,
                             const GowlFxRainParams *params,
                             const GowlFxRainClock  *clock);
 
+/* ── Carbonation ─────────────────────────────────────────────────── */
+
+/**
+ * GOWL_FX_FIZZ_CYCLES:
+ *
+ * How many bubble trains, and how many clinging lives, before the fizz
+ * repeats.
+ *
+ * Smaller than the rain's 256 and for a reason the rain does not have: a
+ * train is indexed by EMISSION NUMBER, which is the clock times the
+ * column's rate times its bubbles-per-cycle -- so the integer the shader
+ * hashes against is up to @GOWL_FX_FIZZ_CYCLES * 3 * 8 rather than the
+ * clock itself.  At 64 that tops out around 1500, where a float still
+ * separates neighbouring emissions by twenty thousand times the
+ * arithmetic's own step.  At 256 it would not.
+ */
+#define GOWL_FX_FIZZ_CYCLES (64.0)
+
+/**
+ * GowlFxFizzClock:
+ * @cling: the clinging bubbles' lifecycle clock, in
+ *   [0, %GOWL_FX_FIZZ_CYCLES)
+ * @rise: the three rising-bubble clocks, each in the same range
+ *
+ * Where the fizz has got to.
+ *
+ * Cycles rather than seconds, exactly as #GowlFxRainClock: the
+ * fractional part is how far up a bubble has got and the whole part is
+ * WHICH bubble it is, so a nucleation site does not emit the same bubble
+ * forever.  The same one rule comes with it -- any multiplier applied to
+ * one of these inside the shader must be a whole number, or that layer
+ * snaps at every wrap -- and the same two places obey it: the per-column
+ * rise rate is 1, 2 or 3, and the bubbles-per-cycle of a train is an
+ * integer from 1 to 8.
+ *
+ * Advance it with gowl_fx_fizz_advance(); a zeroed clock is a drink
+ * that has only just been poured.
+ */
+typedef struct {
+	gdouble cling;
+	gdouble rise[3];
+} GowlFxFizzClock;
+
+/**
+ * gowl_fx_fizz_advance:
+ * @clock: (inout): the clock
+ * @dt: seconds since the last advance
+ * @speed: how fast the bubbles rise; 1.0 is the tuned rate
+ * @cling_seconds: how long a bubble clings to the glass before it
+ *   detaches
+ *
+ * Moves the fizz on.  A @dt over a quarter of a second is treated as a
+ * quarter of a second, for the reason gowl_fx_rain_advance() gives: a
+ * stall is not a reason for every bubble to teleport to the top.
+ */
+void gowl_fx_fizz_advance (GowlFxFizzClock *clock,
+                           gdouble          dt,
+                           gdouble          speed,
+                           gdouble          cling_seconds);
+
+/**
+ * GowlFxFizzParams:
+ * @width: the rect's width in pixels
+ * @height: the rect's height in pixels
+ * @radius: corner radius in pixels
+ * @cell: pixels per cell of the clinging-bubble layer, and the ruler
+ *   every bubble radius is a fraction of
+ * @bubble: bubble radius as a fraction of @cell at the moment of
+ *   release, before it has grown
+ * @growth: how much bigger a bubble is at the top of the pane than at
+ *   the bottom.  0 is a bubble that does not grow, 1 doubles it.  This
+ *   is also what makes a train SPREAD as it rises, because the rise rate
+ *   goes as the square of the radius
+ * @sites: how many columns hold a nucleation site, 0 to 1
+ * @site_width: pixels per column of the fine train layer
+ * @spacing: how closely a site emits, 0 to 1.  Quantised inside the
+ *   shader to a whole number of bubbles per cycle
+ * @stray: how many columns carry a loose bubble that did not come from a
+ *   site, 0 to 1
+ * @cling: how many cells hold a bubble stuck to the glass, 0 to 1
+ * @wobble: how far a bubble wanders sideways as it rises, in pixels.
+ *   Applied only above the size at which a real bubble's path goes
+ *   unstable, so the small ones go straight up and the big ones zigzag
+ * @foam: the head at the top of the pane, 0 to 1
+ * @foam_depth: how far down the pane the head reaches, in pixels
+ * @depth: how far the wallpaper is behind the pane, in multiples of a
+ *   bubble's OWN RADIUS.  A gas bubble in liquid is a DIVERGING lens, so
+ *   unlike the rain's drops this never inverts however large it is --- it
+ *   minifies, which is what a bubble in a glass actually does
+ * @dispersion: chromatic separation through a bubble
+ * @mirror: strength of the silvered ring around a bubble.  Light inside
+ *   the liquid meeting the bubble past the critical angle is totally
+ *   reflected, and for water against air that is the outer QUARTER of the
+ *   disc.  It is the most recognisable thing about a bubble and the first
+ *   thing a naive implementation leaves out
+ * @fog: how cloudy the drink is, 0 to 1
+ * @clarity: how much of that a bubble lifts, 0 to 1
+ * @specular: strength of the glint on each bubble
+ * @shine: specular exponent; higher is a tighter, harder glint
+ * @rim: how much darker the very edge of a bubble is
+ * @light: direction to the light, as a 3-vector
+ * @tint: what the drink takes out of the light
+ * @absorption: how much of @tint is applied, 0 to 1
+ * @brightness: multiplied into the result
+ * @alpha: overall opacity
+ * @src_origin: where this rect's top-left sits in the source textures,
+ *   in pixels
+ * @src_scale: how many SOURCE pixels one pixel of this rect is; 0 is
+ *   read as 1
+ * @seed: which crop of the fizz this rect shows.  Any number; it is
+ *   wrapped
+ *
+ * One glass of something carbonated.  gowl_fx_fizz_params_init() fills
+ * in a soda.
+ */
+typedef struct {
+	gint   width, height;
+	gfloat radius;
+	gfloat cell;
+	gfloat bubble;
+	gfloat growth;
+	gfloat sites;
+	gfloat site_width;
+	gfloat spacing;
+	gfloat stray;
+	gfloat cling;
+	gfloat wobble;
+	gfloat foam;
+	gfloat foam_depth;
+	gfloat depth;
+	gfloat dispersion;
+	gfloat mirror;
+	gfloat fog;
+	gfloat clarity;
+	gfloat specular;
+	gfloat shine;
+	gfloat rim;
+	gfloat light[3];
+	gfloat tint[3];
+	gfloat absorption;
+	gfloat brightness;
+	gfloat alpha;
+	gfloat src_origin[2];
+	gfloat src_scale;
+	gfloat seed;
+} GowlFxFizzParams;
+
+/**
+ * gowl_fx_fizz_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_fizz_params_init (GowlFxFizzParams *params);
+
+/**
+ * gowl_fx_pass_fizz:
+ * @pass: a pass, begun on the buffer the fizz is drawn into
+ * @soft: the clouded wallpaper, covering the whole output
+ * @sharp: (nullable): the same wallpaper unblurred
+ * @params: the fizz to draw
+ * @clock: (nullable): where the fizz has got to; %NULL is a drink just
+ *   poured
+ *
+ * Draws the wallpaper through a glass of something carbonated: trains of
+ * bubbles streaming from nucleation sites on the glass, loose bubbles
+ * drifting up between them, bubbles clinging to the pane and growing
+ * until they let go, and a head of foam at the top.
+ *
+ * Each bubble is a gas sphere in liquid, which is a diverging lens with a
+ * totally-internally-reflecting outer quarter --- it minifies rather than
+ * inverting, and it is ringed in silver.  All of it is a function of the
+ * clock and the pixel; there is no simulation state anywhere.
+ *
+ * Like the water and the rain, this is NEVER up to date: the caller is
+ * expected to draw it again next frame.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller shows no fizz and the desktop is as it was.
+ */
+gboolean gowl_fx_pass_fizz (GowlFxPass             *pass,
+                            const GowlFxTexture    *soft,
+                            const GowlFxTexture    *sharp,
+                            const GowlFxFizzParams *params,
+                            const GowlFxFizzClock  *clock);
+
+/* ── Falling leaves ──────────────────────────────────────────────── */
+
+/**
+ * GOWL_FX_LEAF_CYCLES:
+ *
+ * How many falls, and how many tenures on the glass, before the leaves
+ * repeat.
+ *
+ * The same trade as the rain's: larger repeats later and quantises a
+ * leaf's position more coarsely.  128 puts a given column's next leaf
+ * some minutes away and still steps a leaf to well inside a pixel.
+ */
+#define GOWL_FX_LEAF_CYCLES (128.0)
+
+/**
+ * GowlFxLeafClock:
+ * @stick: the stuck leaves' tenure clock, in [0, %GOWL_FX_LEAF_CYCLES)
+ * @fall: the three falling layers' clocks, each in the same range
+ * @gust: how hard the wind is blowing right now, 0 to 1
+ * @sway: the shiver phase, in radians, that everything already on the
+ *   glass moves to
+ * @breeze: the three phases the gust is built from, in radians
+ *
+ * Where the wind has got to.
+ *
+ * @gust is the reason this struct is not just three more cycle clocks.
+ * The wind is a CONTINUOUS quantity that every leaf on every screen
+ * reads at once, and that is exactly what makes a gust look like ONE
+ * gust rather than like every leaf independently deciding to leave.  It
+ * is derived, not integrated: @breeze and @sway are what advance, and
+ * @gust is read off them.
+ *
+ * Those are kept in RADIANS and wrapped at 2*pi individually, which is
+ * the only wrapping that is exact for them --- a single phase scaled by
+ * three different factors would jump at every wrap, because the scaled
+ * values do not land on a whole turn together.  Wrapping each on its own
+ * costs two doubles and is correct forever.
+ *
+ * Advance it with gowl_fx_leaf_advance(); a zeroed clock is a still
+ * morning with a clean window.
+ */
+typedef struct {
+	gdouble stick;
+	gdouble fall[3];
+	gdouble gust;
+	gdouble sway;
+	gdouble breeze[3];
+} GowlFxLeafClock;
+
+/**
+ * gowl_fx_leaf_advance:
+ * @clock: (inout): the clock
+ * @dt: seconds since the last advance
+ * @speed: how fast the leaves fall; 1.0 is the tuned rate
+ * @tenure_seconds: how long a leaf stays on the glass in still air
+ * @gustiness: how hard and how often the wind gets up, 0 to 2
+ *
+ * Moves the leaves on, and blows the wind.
+ *
+ * The gust is one slow sine modulated by two slower ones and then
+ * squared, so it is calm most of the time and strong briefly --- wind
+ * that spends half its life at half strength is not wind, it is a fan.
+ * A @dt over a quarter of a second is treated as a quarter of a second.
+ */
+void gowl_fx_leaf_advance (GowlFxLeafClock *clock,
+                           gdouble          dt,
+                           gdouble          speed,
+                           gdouble          tenure_seconds,
+                           gdouble          gustiness);
+
+/**
+ * GowlFxLeafParams:
+ * @width: the rect's width in pixels
+ * @height: the rect's height in pixels
+ * @radius: corner radius in pixels
+ * @leaf: a leaf's radius in pixels, from the middle of the blade to the
+ *   tip.  The one number that means "how big are the leaves"
+ * @cell: pixels per cell of the stuck-leaf layer
+ * @stuck: how many cells hold a leaf resting on the glass, 0 to 1
+ * @column: pixels per column of the fine falling layer
+ * @falling: how many columns have a leaf coming down them, 0 to 1
+ * @flutter: how far a falling leaf swings sideways, as a fraction of a
+ *   column
+ * @tumble: how fast a falling leaf turns over.  A leaf edge-on is a
+ *   line, and that periodic collapse to nothing is the single clearest
+ *   sign that a thing on screen is a leaf and not a sticker
+ * @wind: the steady sideways drift, in pixels per fall
+ * @gust_push: how far a gust throws things, in pixels
+ * @curl: how much a leaf has dried and curled, 0 to 1.  A curled leaf
+ *   touches the glass only in the middle, which is what its shadow says
+ * @veins: strength of the venation, 0 to 1
+ * @translucency: how much of the wallpaper comes through a leaf, 0 to 1.
+ *   A leaf on a window is BACKLIT, which is why it glows rather than
+ *   sitting there as a brown shape
+ * @gloss: how wet the leaves are; scales the specular
+ * @shadow: how dark the contact shadow under a stuck leaf is, 0 to 1
+ * @fog: how hazy the pane itself is, 0 to 1
+ * @clarity: how much of that haze a leaf's wet contact patch lifts
+ * @shine: specular exponent
+ * @tint_warm: the colour of a freshly-turned leaf (reds)
+ * @tint_gold: the colour of a leaf at its peak (oranges and yellows)
+ * @tint_dry: the colour of a leaf that has been down a while (browns)
+ * @light: direction to the light, as a 3-vector
+ * @brightness: multiplied into the result
+ * @alpha: overall opacity
+ * @src_origin: where this rect's top-left sits in the source textures
+ * @src_scale: how many SOURCE pixels one pixel of this rect is
+ * @seed: which crop of the fall this rect shows
+ *
+ * One window in autumn.  gowl_fx_leaf_params_init() fills in a steady
+ * fall on a breezy day.
+ */
+typedef struct {
+	gint   width, height;
+	gfloat radius;
+	gfloat leaf;
+	gfloat cell;
+	gfloat stuck;
+	gfloat column;
+	gfloat falling;
+	gfloat flutter;
+	gfloat tumble;
+	gfloat wind;
+	gfloat gust_push;
+	gfloat curl;
+	gfloat veins;
+	gfloat translucency;
+	gfloat gloss;
+	gfloat shadow;
+	gfloat fog;
+	gfloat clarity;
+	gfloat shine;
+	gfloat tint_warm[3];
+	gfloat tint_gold[3];
+	gfloat tint_dry[3];
+	gfloat light[3];
+	gfloat brightness;
+	gfloat alpha;
+	gfloat src_origin[2];
+	gfloat src_scale;
+	gfloat seed;
+} GowlFxLeafParams;
+
+/**
+ * gowl_fx_leaf_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_leaf_params_init (GowlFxLeafParams *params);
+
+/**
+ * gowl_fx_pass_leaves:
+ * @pass: a pass, begun on the buffer the leaves are drawn into
+ * @soft: the hazed wallpaper, covering the whole output
+ * @sharp: (nullable): the same wallpaper unblurred
+ * @params: the fall to draw
+ * @clock: (nullable): where the wind has got to; %NULL is a still
+ *   morning
+ *
+ * Draws autumn leaves falling past a window and collecting on it.
+ *
+ * A falling leaf flutters, tumbles edge-on and back, and drifts with the
+ * wind.  A leaf that has landed lies flat against the glass with a
+ * contact shadow under it and shivers when the wind gets up; when a gust
+ * is strong enough it peels from one edge, pivots about its stem and
+ * goes.  Leaves are backlit, so the wallpaper comes through them tinted
+ * and the venation shows dark.
+ *
+ * Like the water and the rain, this is NEVER up to date.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller shows no leaves and the desktop is as it was.
+ */
+gboolean gowl_fx_pass_leaves (GowlFxPass             *pass,
+                              const GowlFxTexture    *soft,
+                              const GowlFxTexture    *sharp,
+                              const GowlFxLeafParams *params,
+                              const GowlFxLeafClock  *clock);
+
+/* ── Snow ────────────────────────────────────────────────────────── */
+
+/**
+ * GOWL_FX_SNOW_CYCLES:
+ *
+ * How many falls, how many settled lives and how many melt-water runs
+ * before the snow repeats.  The rain's trade, and the rain's number.
+ */
+#define GOWL_FX_SNOW_CYCLES (256.0)
+
+/**
+ * GowlFxSnowClock:
+ * @settle: the settled flakes' lifecycle clock --- land, sit, melt, run
+ *   --- in [0, %GOWL_FX_SNOW_CYCLES)
+ * @fall: the three falling layers' clocks, each in the same range
+ * @run: the two melt-water running clocks, each in the same range
+ * @frost: how far the frost has grown, 0 upwards; unwrapped and used
+ *   only as a smooth parameter
+ *
+ * Where the snow has got to.
+ *
+ * Cycles for the same reason as the rain: the fraction is where a flake
+ * has got to and the whole part is which flake it is.  @frost is not a
+ * cycle clock --- frost grows and does not repeat --- so it is a plain
+ * parameter that the shader only ever uses smoothly, and the advance
+ * holds it inside a range a float can still resolve.
+ *
+ * Advance it with gowl_fx_snow_advance(); a zeroed clock is a warm pane
+ * in still air.
+ */
+typedef struct {
+	gdouble settle;
+	gdouble fall[3];
+	gdouble run[2];
+	gdouble frost;
+} GowlFxSnowClock;
+
+/**
+ * gowl_fx_snow_advance:
+ * @clock: (inout): the clock
+ * @dt: seconds since the last advance
+ * @speed: how fast the flakes fall; 1.0 is the tuned rate
+ * @life_seconds: how long a settled flake takes to land, sit, melt and
+ *   run away
+ * @frost_rate: how fast frost creeps in from the edges; 0 never frosts
+ *
+ * Moves the snow on.  A @dt over a quarter of a second is treated as a
+ * quarter of a second.
+ */
+void gowl_fx_snow_advance (GowlFxSnowClock *clock,
+                           gdouble          dt,
+                           gdouble          speed,
+                           gdouble          life_seconds,
+                           gdouble          frost_rate);
+
+/**
+ * GowlFxSnowParams:
+ * @width: the rect's width in pixels
+ * @height: the rect's height in pixels
+ * @radius: corner radius in pixels
+ * @flake: a falling flake's radius in pixels
+ * @cell: pixels per cell of the settled layer
+ * @settled: how many cells hold a flake resting on the glass, 0 to 1
+ * @column: pixels per column of the fine falling layer
+ * @falling: how many columns have a flake coming down them, 0 to 1
+ * @arms: how dendritic a flake is, 0 to 1.  0 is a plain hexagonal
+ *   plate, 1 is a stellar dendrite with side branches on every arm
+ * @drift: the steady sideways wind, in pixels per fall
+ * @flutter: how far a falling flake wanders sideways, as a fraction of a
+ *   column
+ * @spin: how fast a falling flake turns, in turns per fall
+ * @melt: where in a settled flake's life the melt begins, 0 to 1.  0.45
+ *   is a flake that sits for a while first; 0 is a warm pane
+ * @shrink: how much smaller the water bead is than the flake it came
+ *   from.  A snowflake is mostly air, so this is severe on purpose:
+ *   0.35 is about right and 1.0 is a flake that turns into a puddle its
+ *   own size
+ * @bulge: how domed the melt-water bead is
+ * @depth: how far the wallpaper is behind the pane, in bead radii ---
+ *   the rain's meaning exactly, because a melted flake IS a rain drop
+ * @dispersion: chromatic separation inside a bead
+ * @runs: how many columns have melt-water running down them, 0 to 1
+ * @run_width: pixels per column of the melt-water layer
+ * @run_len: pixels of trail behind a running bead
+ * @beads: how much of a trail is left behind as residual drops
+ * @frost: how much frost grows in from the edges of the pane, 0 to 1
+ * @frost_scale: pixels per feather of that frost
+ * @sparkle: how much a crystal glitters, 0 to 1
+ * @fog: how frosted the bare pane is, 0 to 1
+ * @clarity: how much of that a water bead lifts
+ * @glow: how much brighter a dry crystal is than the pane.  Snow does
+ *   not refract, it SCATTERS: a crystal is a bright diffusing patch, and
+ *   drawing it as a lens is the single most common way to get snow wrong
+ * @specular: strength of the glint on a water bead
+ * @shine: specular exponent
+ * @rim: how much darker the edge of a bead is than its middle
+ * @light: direction to the light, as a 3-vector
+ * @tint: what the melt-water takes out of the light
+ * @absorption: how much of @tint is applied
+ * @brightness: multiplied into the result
+ * @alpha: overall opacity
+ * @src_origin: where this rect's top-left sits in the source textures
+ * @src_scale: how many SOURCE pixels one pixel of this rect is
+ * @seed: which crop of the snow this rect shows
+ *
+ * One window in a snowfall.  gowl_fx_snow_params_init() fills in a
+ * steady fall on a pane just above freezing.
+ */
+typedef struct {
+	gint   width, height;
+	gfloat radius;
+	gfloat flake;
+	gfloat cell;
+	gfloat settled;
+	gfloat column;
+	gfloat falling;
+	gfloat arms;
+	gfloat drift;
+	gfloat flutter;
+	gfloat spin;
+	gfloat melt;
+	gfloat shrink;
+	gfloat bulge;
+	gfloat depth;
+	gfloat dispersion;
+	gfloat runs;
+	gfloat run_width;
+	gfloat run_len;
+	gfloat beads;
+	gfloat frost;
+	gfloat frost_scale;
+	gfloat sparkle;
+	gfloat fog;
+	gfloat clarity;
+	gfloat glow;
+	gfloat specular;
+	gfloat shine;
+	gfloat rim;
+	gfloat light[3];
+	gfloat tint[3];
+	gfloat absorption;
+	gfloat brightness;
+	gfloat alpha;
+	gfloat src_origin[2];
+	gfloat src_scale;
+	gfloat seed;
+} GowlFxSnowParams;
+
+/**
+ * gowl_fx_snow_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_snow_params_init (GowlFxSnowParams *params);
+
+/**
+ * gowl_fx_pass_snow:
+ * @pass: a pass, begun on the buffer the snow is drawn into
+ * @soft: the frosted wallpaper, covering the whole output
+ * @sharp: (nullable): the same wallpaper unblurred
+ * @params: the snowfall to draw
+ * @clock: (nullable): where the snow has got to; %NULL is a warm pane
+ *
+ * Draws snow falling past a window, settling on it and melting off it.
+ *
+ * A falling flake is a six-fold crystal that turns as it comes down and
+ * wanders on the wind.  A flake that lands sits as a bright scattering
+ * crystal, rounds off as it melts, collapses to a water bead a third its
+ * size --- which is a rain drop, and refracts like one --- and runs away
+ * down the pane leaving a beaded trail.  Frost creeps in from the edges
+ * while it happens.
+ *
+ * Like the water and the rain, this is NEVER up to date.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller shows no snow and the desktop is as it was.
+ */
+gboolean gowl_fx_pass_snow (GowlFxPass             *pass,
+                            const GowlFxTexture    *soft,
+                            const GowlFxTexture    *sharp,
+                            const GowlFxSnowParams *params,
+                            const GowlFxSnowClock  *clock);
+
 /* ── PQ output encode ────────────────────────────────────────────── */
 
 /**

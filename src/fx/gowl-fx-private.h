@@ -186,6 +186,157 @@ typedef struct {
 } GowlFxRainProg;
 
 /*
+ * The carbonation program (gowl-fx-fizz.c).
+ *
+ * Built on first use like the glass, the water and the rain, and for the
+ * same reason.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_soft;
+	GLint  u_sharp;
+	GLint  u_src_origin;
+	GLint  u_src_size;
+	GLint  u_src_scale;
+	GLint  u_size;
+	GLint  u_radius;
+	GLint  u_cling_t;
+	GLint  u_rise;
+	GLint  u_cell;
+	GLint  u_bubble;
+	GLint  u_growth;
+	GLint  u_sites;
+	GLint  u_site_width;
+	GLint  u_spacing;
+	GLint  u_stray;
+	GLint  u_cling;
+	GLint  u_wobble;
+	GLint  u_foam;
+	GLint  u_foam_depth;
+	GLint  u_depth;
+	GLint  u_dispersion;
+	GLint  u_mirror;
+	GLint  u_fog;
+	GLint  u_clarity;
+	GLint  u_specular;
+	GLint  u_shine;
+	GLint  u_rim;
+	GLint  u_light;
+	GLint  u_tint;
+	GLint  u_absorb;
+	GLint  u_brightness;
+	GLint  u_alpha;
+	GLint  u_seed;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxFizzProg;
+
+/*
+ * The falling-leaves program (gowl-fx-leaves.c).
+ *
+ * Built on first use like the rest.  The only one here whose subject is
+ * OPAQUE: a leaf covers the wallpaper rather than bending it, which is
+ * why it carries three tints and no refraction depth.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_soft;
+	GLint  u_sharp;
+	GLint  u_src_origin;
+	GLint  u_src_size;
+	GLint  u_src_scale;
+	GLint  u_size;
+	GLint  u_radius;
+	GLint  u_stick_t;
+	GLint  u_fall;
+	GLint  u_gust;
+	GLint  u_sway;
+	GLint  u_leaf;
+	GLint  u_cell;
+	GLint  u_stuck;
+	GLint  u_column;
+	GLint  u_falling;
+	GLint  u_flutter;
+	GLint  u_tumble;
+	GLint  u_wind;
+	GLint  u_gust_push;
+	GLint  u_curl;
+	GLint  u_veins;
+	GLint  u_translucency;
+	GLint  u_gloss;
+	GLint  u_shadow;
+	GLint  u_fog;
+	GLint  u_clarity;
+	GLint  u_shine;
+	GLint  u_tint_warm;
+	GLint  u_tint_gold;
+	GLint  u_tint_dry;
+	GLint  u_light;
+	GLint  u_brightness;
+	GLint  u_alpha;
+	GLint  u_seed;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxLeafProg;
+
+/*
+ * The snow program (gowl-fx-snow.c).
+ *
+ * Built on first use like the rest.  The largest of them: a settled
+ * flake is a crystal, a bead and a run in one lifecycle, so it carries
+ * both the scattering terms and the whole of the rain's refraction.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_soft;
+	GLint  u_sharp;
+	GLint  u_src_origin;
+	GLint  u_src_size;
+	GLint  u_src_scale;
+	GLint  u_size;
+	GLint  u_radius;
+	GLint  u_settle_t;
+	GLint  u_fall;
+	GLint  u_run;
+	GLint  u_frost_t;
+	GLint  u_flake;
+	GLint  u_cell;
+	GLint  u_settled;
+	GLint  u_column;
+	GLint  u_falling;
+	GLint  u_arms;
+	GLint  u_drift;
+	GLint  u_flutter;
+	GLint  u_spin;
+	GLint  u_melt;
+	GLint  u_shrink;
+	GLint  u_bulge;
+	GLint  u_depth;
+	GLint  u_dispersion;
+	GLint  u_runs;
+	GLint  u_run_width;
+	GLint  u_run_len;
+	GLint  u_beads;
+	GLint  u_frost;
+	GLint  u_frost_scale;
+	GLint  u_sparkle;
+	GLint  u_fog;
+	GLint  u_clarity;
+	GLint  u_glow;
+	GLint  u_specular;
+	GLint  u_shine;
+	GLint  u_rim;
+	GLint  u_light;
+	GLint  u_tint;
+	GLint  u_absorb;
+	GLint  u_brightness;
+	GLint  u_alpha;
+	GLint  u_seed;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxSnowProg;
+
+/*
  * The PQ output encode (gowl-fx-pq.c).
  *
  * Built on first use like the rest, and its failure survivable: an HDR
@@ -217,6 +368,12 @@ struct _GowlFxGl {
 	gboolean             water_tried;
 	GowlFxRainProg       rain;       /* likewise */
 	gboolean             rain_tried;
+	GowlFxFizzProg       fizz;       /* likewise */
+	gboolean             fizz_tried;
+	GowlFxLeafProg       leaf;       /* likewise */
+	gboolean             leaf_tried;
+	GowlFxSnowProg       snow;       /* likewise */
+	gboolean             snow_tried;
 	GowlFxPqProg         pq;         /* likewise */
 	gboolean             pq_tried;
 

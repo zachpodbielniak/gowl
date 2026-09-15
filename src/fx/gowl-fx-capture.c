@@ -226,10 +226,52 @@ gowl_fx_vis_hide_layer(GowlFxVis      *vis,
  * view -- hence the forced whole damage before, and again after, so the
  * real frame that follows still draws everything.
  */
+/*
+ * Take every filter sheet out of the scene for the length of a capture.
+ *
+ * A filter sheet is not a picture of some other state of the desktop --
+ * it is a picture of the desktop AS IT IS, put through a shader and
+ * parked on top, which is what modules/crt does every frame.  So it must
+ * never be in a capture:
+ *
+ *   - its own, or the tube photographs its last frame and the picture
+ *     recedes into itself the way a camera pointed at a monitor does;
+ *   - anybody else's, or a magnifier, a cube face or a switcher preview
+ *     is built from an already-filtered picture and gets a second tube
+ *     applied to it when the filter runs again.
+ *
+ * Here rather than in each caller because every capture wants it and a
+ * caller that forgot would look right until the day somebody switched
+ * the tube on.
+ */
+static GowlFxVis *
+capture_hide_filters(void)
+{
+	GowlFxVis *vis = NULL;
+	GList     *l;
+
+	for (l = gowl_fx_sheet_live(); l != NULL; l = l->next) {
+		struct wlr_scene_tree *tree;
+
+		if (!gowl_fx_sheet_is_filter(l->data))
+			continue;
+		tree = gowl_fx_sheet_tree(l->data);
+		if (tree == NULL)
+			continue;
+		if (vis == NULL)
+			vis = gowl_fx_vis_begin();
+		gowl_fx_vis_set(vis, &tree->node, FALSE);
+	}
+	return vis;
+}
+
 static gboolean
 capture_state(GowlCompositor *compositor, GowlMonitor *monitor,
                struct wlr_output_state *state)
 {
+	GowlFxVis *filters;
+	gboolean   ok;
+
 	if (compositor == NULL || monitor == NULL
 	    || monitor->scene_output == NULL || monitor->wlr_output == NULL)
 		return FALSE;
@@ -237,8 +279,12 @@ capture_state(GowlCompositor *compositor, GowlMonitor *monitor,
 	wlr_output_state_init(state);
 	wlr_damage_ring_add_whole(&monitor->scene_output->damage_ring);
 
-	if (!wlr_scene_output_build_state(monitor->scene_output, state, NULL)
-	    || (state->committed & WLR_OUTPUT_STATE_BUFFER) == 0
+	filters = capture_hide_filters();
+	ok = wlr_scene_output_build_state(monitor->scene_output, state, NULL);
+	if (filters != NULL)
+		gowl_fx_vis_restore(filters);
+
+	if (!ok || (state->committed & WLR_OUTPUT_STATE_BUFFER) == 0
 	    || state->buffer == NULL) {
 		wlr_output_state_finish(state);
 		wlr_damage_ring_add_whole(&monitor->scene_output->damage_ring);

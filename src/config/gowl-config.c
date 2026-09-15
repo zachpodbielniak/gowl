@@ -279,6 +279,16 @@
 /* "leave it to the preset", for every override key below. */
 #define GOWL_CONFIG_SOAP_FROM_PRESET         (-1.0)
 
+/* --- The cathode ray tube (modules/crt) ---------------------------- */
+#define GOWL_CONFIG_DEFAULT_CRT                (FALSE)
+#define GOWL_CONFIG_DEFAULT_CRT_PRESET     "consumer"
+#define GOWL_CONFIG_DEFAULT_CRT_LINES          (0)   /* 0: from the output */
+#define GOWL_CONFIG_DEFAULT_CRT_MASK_SIZE      (0)   /* 0: from the output */
+#define GOWL_CONFIG_DEFAULT_CRT_GLOW_SCALE     (6)
+#define GOWL_CONFIG_DEFAULT_CRT_GLOW_PASSES    (3)
+/* "leave it to the preset", for every override key below. */
+#define GOWL_CONFIG_CRT_FROM_PRESET            (-1.0)
+
 #define GOWL_CONFIG_DEFAULT_EMBERS_PRESET  "embers"
 #define GOWL_CONFIG_DEFAULT_EMBERS_INTENSITY   (1.0)
 #define GOWL_CONFIG_DEFAULT_EMBERS_FPS         (30)
@@ -846,6 +856,30 @@ struct _GowlConfig {
 	gdouble  bokeh_threshold;
 	gdouble  bokeh_edge;
 	gdouble  bokeh_brightness;
+
+	gboolean crt;
+	gchar   *crt_preset;
+	gchar   *crt_mask_kind;    /* NULL: the preset's tube */
+	gint     crt_lines;        /* 0: one line per four output pixels */
+	gint     crt_mask_size;    /* 0: scaled to the output */
+	gint     crt_glow_scale;
+	gint     crt_glow_passes;
+	/* Overrides on the preset; GOWL_CONFIG_CRT_FROM_PRESET for "leave
+	 * it alone". */
+	gdouble  crt_curvature;
+	gdouble  crt_curvature_y;
+	gdouble  crt_scanline;
+	gdouble  crt_beam;
+	gdouble  crt_beam_bloom;
+	gdouble  crt_mask;
+	gdouble  crt_bloom;
+	gdouble  crt_bloom_cut;
+	gdouble  crt_vignette;
+	gdouble  crt_corner;
+	gdouble  crt_convergence;
+	gdouble  crt_hum;
+	gdouble  crt_gamma;
+	gdouble  crt_brightness;
 
 	gdouble  rain_impact;
 	gdouble  rain_speed;
@@ -1610,6 +1644,9 @@ gowl_config_finalize(GObject *object)
 	g_free(self->dew_preset);
 	g_free(self->dew_tint);
 
+	g_free(self->crt_preset);
+	g_free(self->crt_mask_kind);
+
 
 	g_free(self->hints_keys);
 	g_free(self->hints_colors);
@@ -2247,6 +2284,28 @@ gowl_config_init(GowlConfig *self)
 	self->bokeh_edge         = GOWL_CONFIG_DEFAULT_BOKEH_EDGE;
 	self->bokeh_brightness   = GOWL_CONFIG_DEFAULT_BOKEH_BRIGHTNESS;
 
+	self->crt                = GOWL_CONFIG_DEFAULT_CRT;
+	self->crt_preset         = g_strdup(GOWL_CONFIG_DEFAULT_CRT_PRESET);
+	self->crt_mask_kind      = NULL;
+	self->crt_lines          = GOWL_CONFIG_DEFAULT_CRT_LINES;
+	self->crt_mask_size      = GOWL_CONFIG_DEFAULT_CRT_MASK_SIZE;
+	self->crt_glow_scale     = GOWL_CONFIG_DEFAULT_CRT_GLOW_SCALE;
+	self->crt_glow_passes    = GOWL_CONFIG_DEFAULT_CRT_GLOW_PASSES;
+	self->crt_curvature      = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_curvature_y    = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_scanline       = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_beam           = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_beam_bloom     = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_mask           = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_bloom          = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_bloom_cut      = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_vignette       = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_corner         = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_convergence    = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_hum            = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_gamma          = GOWL_CONFIG_CRT_FROM_PRESET;
+	self->crt_brightness     = GOWL_CONFIG_CRT_FROM_PRESET;
+
 	self->rain_lightning     = GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING;
 	self->rain_lightning_rate = GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING_RATE;
 	self->rain_lightning_power = GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING_POWER;
@@ -2790,6 +2849,13 @@ static const gchar *const top_level_keys[] = {
 	"bokeh-radius", "bokeh-downscale", "bokeh-samples", "bokeh-blades",
 	"bokeh-rotation", "bokeh-highlight", "bokeh-threshold", "bokeh-edge",
 	"bokeh-brightness",
+
+	"crt", "crt-preset", "crt-mask-kind", "crt-lines", "crt-mask-size",
+	"crt-glow-scale", "crt-glow-passes", "crt-curvature",
+	"crt-curvature-y", "crt-scanline", "crt-beam", "crt-beam-bloom",
+	"crt-mask", "crt-bloom", "crt-bloom-cut", "crt-vignette",
+	"crt-corner", "crt-convergence", "crt-hum", "crt-gamma",
+	"crt-brightness",
 	"fizz-preset", "fizz-intensity", "fizz-fps", "fizz-scale", "fizz-tint",
 	"fizz-clarity", "fizz-opacity", "fizz-brightness", "fizz-light",
 	"fizz-frost", "fizz-frost-passes", "fizz-cell", "fizz-bubble",
@@ -4259,6 +4325,112 @@ gowl_config_apply_mapping(
 		self->bokeh_brightness = CLAMP(yaml_mapping_get_double_member(
 			mapping, "bokeh-brightness"), 0.0, 2.0);
 	}
+
+	if (yaml_mapping_has_member(mapping, "crt"))
+		self->crt = yaml_mapping_get_boolean_member(mapping, "crt");
+	if (yaml_mapping_has_member(mapping, "crt-preset")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "crt-preset");
+		if (gowl_config_crt_preset_valid(v)) {
+			g_free(self->crt_preset);
+			self->crt_preset = g_strdup(v);
+		} else {
+			g_warning("gowl_config: unknown crt-preset '%s'", v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "crt-mask-kind")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "crt-mask-kind");
+		GowlCrtMask kind;
+
+		if (gowl_config_crt_mask_from_name(v, &kind)) {
+			g_free(self->crt_mask_kind);
+			self->crt_mask_kind = g_strdup(v);
+		} else {
+			g_warning("gowl_config: unknown crt-mask-kind '%s'; expected "
+			          "none, grille, shadow or slot", v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "crt-lines")) {
+		/* 0 means "one line per four output pixels"; anything under 60
+		 * is not a raster, it is a venetian blind. */
+		gint v = (gint)yaml_mapping_get_int_member(mapping, "crt-lines");
+
+		self->crt_lines = v <= 0 ? 0 : CLAMP(v, 60, 4320);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-mask-size")) {
+		gint v = (gint)yaml_mapping_get_int_member(mapping,
+		                                           "crt-mask-size");
+
+		self->crt_mask_size = v <= 0 ? 0 : CLAMP(v, 1, 32);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-glow-scale")) {
+		self->crt_glow_scale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "crt-glow-scale"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-glow-passes")) {
+		self->crt_glow_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "crt-glow-passes"), 1, 6);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-curvature")) {
+		/* Past 0.9 the faceplate would have to pass the equator of its
+		 * own sphere, which is not a tube any more. */
+		self->crt_curvature = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-curvature"), 0.0, 0.9);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-curvature-y")) {
+		self->crt_curvature_y = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-curvature-y"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-scanline")) {
+		self->crt_scanline = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-scanline"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-beam")) {
+		self->crt_beam = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-beam"), 0.08, 0.45);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-beam-bloom")) {
+		self->crt_beam_bloom = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-beam-bloom"), 0.0, 0.40);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-mask")) {
+		self->crt_mask = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-mask"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-bloom")) {
+		self->crt_bloom = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-bloom"), 0.0, 4.0);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-bloom-cut")) {
+		self->crt_bloom_cut = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-bloom-cut"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-vignette")) {
+		self->crt_vignette = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-vignette"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-corner")) {
+		self->crt_corner = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-corner"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-convergence")) {
+		self->crt_convergence = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-convergence"), 0.0, 16.0);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-hum")) {
+		self->crt_hum = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-hum"), 0.0, 0.5);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-gamma")) {
+		self->crt_gamma = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-gamma"), 1.0, 3.2);
+	}
+	if (yaml_mapping_has_member(mapping, "crt-brightness")) {
+		self->crt_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "crt-brightness"), 0.0, 4.0);
+	}
+
 	if (yaml_mapping_has_member(mapping, "rain-lightning")) {
 		self->rain_lightning = yaml_mapping_get_boolean_member(
 			mapping, "rain-lightning");
@@ -10476,6 +10648,281 @@ gowl_config_set_dew_preset(GowlConfig *self, const gchar *name)
 		return;
 	g_free(self->dew_preset);
 	self->dew_preset = g_strdup(name);
+}
+
+/* --- The cathode ray tube (modules/crt) --------------------------- */
+
+/*
+ * Five tubes.
+ *
+ * These are machines rather than moods, which is why they differ in more
+ * than one number each: a Trinitron really is a cylinder with a grille
+ * and no vertical curvature, a studio monitor really did have a tighter
+ * spot and a near-flat face, and an arcade tube really was run hot
+ * enough that the whites bloom into the scan lines.
+ */
+typedef struct {
+	const gchar *name;
+	gdouble      curvature;
+	gdouble      curvature_y;
+	gdouble      scanline;
+	gdouble      beam;
+	gdouble      beam_bloom;
+	gdouble      mask;
+	GowlCrtMask  mask_kind;
+	gdouble      bloom;
+	gdouble      bloom_cut;
+	gdouble      vignette;
+	gdouble      corner;
+	gdouble      convergence;
+	gdouble      hum;
+	gdouble      gamma;
+	gdouble      brightness;
+} GowlCrtPreset;
+
+static const GowlCrtPreset crt_presets[] = {
+	/* A flat panel pretending: scan lines and phosphor, no glass.
+	   For anybody who wants the texture without losing the corners. */
+	{ "flat", 0.00, 1.0, 0.35, 0.18, 0.14, 0.22, GOWL_CRT_MASK_GRILLE,
+	  0.30, 0.55, 0.10, 0.02, 0.0, 0.000, 2.40, 1.00 },
+
+	/* A Trinitron: a cylinder, so it bows across and not down, with an
+	   aperture grille and the tightest geometry of the lot. */
+	{ "trinitron", 0.38, 0.0, 0.50, 0.16, 0.18, 0.34, GOWL_CRT_MASK_GRILLE,
+	  0.40, 0.50, 0.16, 0.04, 0.8, 0.012, 2.40, 1.02 },
+
+	/* The tube in the corner of everybody's living room in 1998. */
+	{ "consumer", 0.45, 1.0, 0.55, 0.16, 0.18, 0.30, GOWL_CRT_MASK_SLOT,
+	  0.45, 0.45, 0.22, 0.06, 1.2, 0.020, 2.40, 1.03 },
+
+	/* A grade-1 studio monitor: nearly flat, a fine spot, a grille, and
+	   deliberately as little character as the glass can manage. */
+	{ "broadcast", 0.22, 1.0, 0.45, 0.14, 0.14, 0.26, GOWL_CRT_MASK_GRILLE,
+	  0.25, 0.60, 0.12, 0.03, 0.4, 0.000, 2.35, 1.01 },
+
+	/* A cabinet tube, run hot: round, dark at the edges, and bright
+	   enough that the whites swell into the lines between them. */
+	{ "arcade", 0.62, 1.0, 0.75, 0.14, 0.22, 0.42, GOWL_CRT_MASK_SHADOW,
+	  0.85, 0.35, 0.34, 0.09, 2.0, 0.030, 2.50, 1.08 }
+};
+
+static const GowlCrtPreset *
+crt_preset_by_name(const gchar *name)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(crt_presets); i++) {
+		if (g_strcmp0(crt_presets[i].name, name) == 0)
+			return &crt_presets[i];
+	}
+	/* The shipped default, so an unknown name behaves exactly like
+	 * naming none. */
+	return &crt_presets[2];
+}
+
+gboolean
+gowl_config_crt_preset_valid(const gchar *name)
+{
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(crt_presets); i++) {
+		if (g_strcmp0(crt_presets[i].name, name) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar * const *
+gowl_config_crt_preset_names(void)
+{
+	static const gchar *names[G_N_ELEMENTS(crt_presets) + 1];
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		guint i;
+
+		for (i = 0; i < G_N_ELEMENTS(crt_presets); i++)
+			names[i] = crt_presets[i].name;
+		names[G_N_ELEMENTS(crt_presets)] = NULL;
+		g_once_init_leave(&once, 1);
+	}
+	return names;
+}
+
+gboolean
+gowl_config_crt_mask_from_name(const gchar *name, GowlCrtMask *out)
+{
+	static const struct {
+		const gchar *name;
+		GowlCrtMask  kind;
+	} kinds[] = {
+		{ "none",   GOWL_CRT_MASK_NONE },
+		{ "grille", GOWL_CRT_MASK_GRILLE },
+		{ "shadow", GOWL_CRT_MASK_SHADOW },
+		{ "slot",   GOWL_CRT_MASK_SLOT }
+	};
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(kinds); i++) {
+		if (g_ascii_strcasecmp(kinds[i].name, name) != 0)
+			continue;
+		if (out != NULL)
+			*out = kinds[i].kind;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar *
+gowl_config_crt_mask_to_name(GowlCrtMask kind)
+{
+	switch (kind) {
+	case GOWL_CRT_MASK_NONE:   return "none";
+	case GOWL_CRT_MASK_GRILLE: return "grille";
+	case GOWL_CRT_MASK_SHADOW: return "shadow";
+	case GOWL_CRT_MASK_SLOT:   return "slot";
+	default: break;
+	}
+	return "slot";
+}
+
+gboolean
+gowl_config_get_crt(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_CRT);
+	return self->crt;
+}
+
+void
+gowl_config_set_crt(GowlConfig *self, gboolean on)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->crt = on;
+}
+
+const gchar *
+gowl_config_get_crt_preset(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CRT_PRESET);
+	return self->crt_preset;
+}
+
+void
+gowl_config_set_crt_preset(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_crt_preset_valid(name))
+		return;
+	g_free(self->crt_preset);
+	self->crt_preset = g_strdup(name);
+}
+
+GowlCrtMask
+gowl_config_get_crt_mask_kind(GowlConfig *self)
+{
+	GowlCrtMask kind;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CRT_MASK_SLOT);
+
+	if (self->crt_mask_kind != NULL
+	    && gowl_config_crt_mask_from_name(self->crt_mask_kind, &kind))
+		return kind;
+	return crt_preset_by_name(self->crt_preset)->mask_kind;
+}
+
+void
+gowl_config_set_crt_mask_kind(GowlConfig *self, GowlCrtMask kind)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_free(self->crt_mask_kind);
+	self->crt_mask_kind = g_strdup(gowl_config_crt_mask_to_name(kind));
+}
+
+gint
+gowl_config_get_crt_lines(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CRT_LINES);
+	return self->crt_lines;
+}
+
+gint
+gowl_config_get_crt_mask_size(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CRT_MASK_SIZE);
+	return self->crt_mask_size;
+}
+
+gint
+gowl_config_get_crt_glow_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CRT_GLOW_SCALE);
+	return self->crt_glow_scale;
+}
+
+gint
+gowl_config_get_crt_glow_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_CRT_GLOW_PASSES);
+	return self->crt_glow_passes;
+}
+
+/* An override wins unless it is the sentinel, in which case the
+ * preset decides. */
+#define GOWL_CRT_GETTER(field)                                         gdouble                                                            gowl_config_get_crt_##field(GowlConfig *self)                    {                                                                  	const GowlCrtPreset *p;                                                                                                           	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.0);               	p = crt_preset_by_name(self->crt_preset);                    	return self->crt_##field < 0.0 ? p->field                     	                               : self->crt_##field;           }
+
+GOWL_CRT_GETTER(curvature)
+GOWL_CRT_GETTER(curvature_y)
+GOWL_CRT_GETTER(scanline)
+GOWL_CRT_GETTER(beam)
+GOWL_CRT_GETTER(beam_bloom)
+GOWL_CRT_GETTER(mask)
+GOWL_CRT_GETTER(bloom)
+GOWL_CRT_GETTER(bloom_cut)
+GOWL_CRT_GETTER(vignette)
+GOWL_CRT_GETTER(corner)
+GOWL_CRT_GETTER(convergence)
+GOWL_CRT_GETTER(hum)
+GOWL_CRT_GETTER(gamma)
+GOWL_CRT_GETTER(brightness)
+
+#undef GOWL_CRT_GETTER
+
+/*
+ * The three knobs worth reaching from Lisp without a config reload.
+ *
+ * Deliberately not one setter per key: the rest are things somebody
+ * decides once and puts in the YAML, and thirty trivial setters is
+ * thirty things to keep in step with the struct.
+ */
+void
+gowl_config_set_crt_curvature(GowlConfig *self, gdouble curvature)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->crt_curvature = CLAMP(curvature, 0.0, 0.9);
+}
+
+void
+gowl_config_set_crt_scanline(GowlConfig *self, gdouble depth)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->crt_scanline = CLAMP(depth, 0.0, 1.0);
+}
+
+void
+gowl_config_set_crt_mask(GowlConfig *self, gdouble depth)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->crt_mask = CLAMP(depth, 0.0, 1.0);
 }
 
 /* An override wins unless it is the sentinel, in which case the

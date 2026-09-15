@@ -294,6 +294,7 @@ gowl_action_get_type(void)
 			{ GOWL_ACTION_CYCLE_BACKDROP,    "GOWL_ACTION_CYCLE_BACKDROP",    "cycle-backdrop" },
 			{ GOWL_ACTION_TOGGLE_BELOW,      "GOWL_ACTION_TOGGLE_BELOW",      "toggle-below" },
 			{ GOWL_ACTION_TOGGLE_BELOW_ALL,  "GOWL_ACTION_TOGGLE_BELOW_ALL",  "toggle-below-all" },
+			{ GOWL_ACTION_TOGGLE_CRT,        "GOWL_ACTION_TOGGLE_CRT",        "toggle-crt" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlAction", values);
@@ -333,9 +334,39 @@ gowl_backdrop_style_get_type(void)
 			{ GOWL_BACKDROP_EMBERS, "GOWL_BACKDROP_EMBERS", "embers" },
 			{ GOWL_BACKDROP_DEW,   "GOWL_BACKDROP_DEW",   "dew" },
 			{ GOWL_BACKDROP_BOKEH, "GOWL_BACKDROP_BOKEH", "bokeh" },
+			{ GOWL_BACKDROP_CRT,   "GOWL_BACKDROP_CRT",   "crt" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlBackdropStyle", values);
+		g_once_init_leave(&g_type_id, type_id);
+	}
+
+	return (GType)g_type_id;
+}
+
+/* --- GowlCrtMask GType registration --- */
+
+/**
+ * gowl_crt_mask_get_type:
+ *
+ * Retrieves the #GType for #GowlCrtMask.
+ *
+ * Returns: the #GType for #GowlCrtMask
+ */
+GType
+gowl_crt_mask_get_type(void)
+{
+	static volatile gsize g_type_id = 0;
+
+	if (g_once_init_enter(&g_type_id)) {
+		static const GEnumValue values[] = {
+			{ GOWL_CRT_MASK_NONE,   "GOWL_CRT_MASK_NONE",   "none" },
+			{ GOWL_CRT_MASK_GRILLE, "GOWL_CRT_MASK_GRILLE", "grille" },
+			{ GOWL_CRT_MASK_SHADOW, "GOWL_CRT_MASK_SHADOW", "shadow" },
+			{ GOWL_CRT_MASK_SLOT,   "GOWL_CRT_MASK_SLOT",   "slot" },
+			{ 0, NULL, NULL }
+		};
+		GType type_id = g_enum_register_static("GowlCrtMask", values);
 		g_once_init_leave(&g_type_id, type_id);
 	}
 

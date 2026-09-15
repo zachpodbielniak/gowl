@@ -380,7 +380,7 @@ gowl_fx_gl_free(GowlFxGl *self)
 				self->snow.program,      self->soap.program,
 				self->embers.program,    self->submerged.program,
 				self->dew.program,       self->bokeh.program,
-				self->pq.program
+				self->crt.program,       self->pq.program
 			};
 			gsize i;
 

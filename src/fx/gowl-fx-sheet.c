@@ -36,6 +36,7 @@ struct _GowlFxSheet {
 	struct wlr_swapchain    *swapchain;
 	GPtrArray               *hidden;       /* GowlClient*, referenced */
 	gboolean                 hid_fullscreen_bg;
+	gboolean                 is_filter;
 	gint                     width;
 	gint                     height;
 };
@@ -48,7 +49,18 @@ sheet_swapchain_init(GowlFxSheet *sheet)
 	struct wlr_output    *output = sheet->monitor->wlr_output;
 
 	memset(&format, 0, sizeof(format));
-	format.format    = output->render_format;
+	/*
+	 * A FILTER SHEET IS ALLOCATED WITH AN ALPHA CHANNEL IT NEVER USES.
+	 *
+	 * wlr_scene decides a buffer is opaque from its FORMAT before it
+	 * looks at any region: an XRGB buffer occludes everything under it
+	 * whatever gowl_fx_sheet_new() declares.  A filter sheet must not
+	 * occlude -- see the comment there -- so it has to be a format the
+	 * scene cannot assume about.  The shader writes alpha 1 everywhere,
+	 * so this costs one ignored byte per pixel and nothing else.
+	 */
+	format.format    = sheet->is_filter ? DRM_FORMAT_ARGB8888
+	                                    : output->render_format;
 	format.len       = 1;
 	format.capacity  = 1;
 	format.modifiers = &modifier;
@@ -60,7 +72,8 @@ sheet_swapchain_init(GowlFxSheet *sheet)
 		/* Some drivers refuse the output's render format for an
 		 * off-screen buffer.  Plain opaque 8888 is the format every GBM
 		 * allocator in existence can produce. */
-		format.format = DRM_FORMAT_XRGB8888;
+		format.format = sheet->is_filter ? DRM_FORMAT_ARGB8888
+		                                : DRM_FORMAT_XRGB8888;
 		sheet->swapchain = wlr_swapchain_create(
 			sheet->compositor->allocator,
 			output->width, output->height, &format);
@@ -95,6 +108,12 @@ gowl_fx_sheet_tree(GowlFxSheet *sheet)
 	return sheet != NULL ? sheet->tree : NULL;
 }
 
+gboolean
+gowl_fx_sheet_is_filter(GowlFxSheet *sheet)
+{
+	return sheet != NULL && sheet->is_filter;
+}
+
 GowlFxSheet *
 gowl_fx_sheet_new(GowlCompositor   *compositor,
                   GowlMonitor      *monitor,
@@ -112,6 +131,7 @@ gowl_fx_sheet_new(GowlCompositor   *compositor,
 	sheet = g_new0(GowlFxSheet, 1);
 	sheet->compositor = compositor;
 	sheet->monitor    = monitor;
+	sheet->is_filter  = (flags & GOWL_FX_SHEET_FILTER) != 0;
 	sheet->width      = monitor->wlr_output->width;
 	sheet->height     = monitor->wlr_output->height;
 
@@ -135,12 +155,21 @@ gowl_fx_sheet_new(GowlCompositor   *compositor,
 	 * Under the top layer by default, so the bar and notifications stay
 	 * live above the effect --- which is what a panel does during a
 	 * workspace animation everywhere else.  ABOVE_TOP is for effects that
-	 * must own the whole screen instead.
+	 * must own the whole screen instead, and ABOVE_OVERLAY for one that
+	 * must own it including the fullscreen and overlay layers.  The
+	 * session lock stays above all three: a lock a shader could hide is
+	 * not a lock.
 	 */
-	wlr_scene_node_place_above(&sheet->tree->node,
-	                           (flags & GOWL_FX_SHEET_ABOVE_TOP) != 0
-	                               ? &compositor->layers[GOWL_SCENE_LAYER_TOP]->node
-	                               : &compositor->layers[GOWL_SCENE_LAYER_FLOAT]->node);
+	{
+		GowlSceneLayer under = GOWL_SCENE_LAYER_FLOAT;
+
+		if ((flags & GOWL_FX_SHEET_ABOVE_OVERLAY) != 0)
+			under = GOWL_SCENE_LAYER_OVERLAY;
+		else if ((flags & GOWL_FX_SHEET_ABOVE_TOP) != 0)
+			under = GOWL_SCENE_LAYER_TOP;
+		wlr_scene_node_place_above(&sheet->tree->node,
+		                           &compositor->layers[under]->node);
+	}
 	wlr_scene_node_set_position(&sheet->tree->node,
 	                            monitor->m.x, monitor->m.y);
 
@@ -154,10 +183,39 @@ gowl_fx_sheet_new(GowlCompositor   *compositor,
 
 	wlr_scene_buffer_set_dest_size(sheet->node,
 	                               monitor->m.width, monitor->m.height);
-	pixman_region32_init_rect(&opaque, 0, 0,
-	                          monitor->m.width, monitor->m.height);
-	wlr_scene_buffer_set_opaque_region(sheet->node, &opaque);
-	pixman_region32_fini(&opaque);
+
+	/*
+	 * A FILTER SHEET DECLARES NO OPAQUE REGION, AND THAT IS THE WHOLE
+	 * DIFFERENCE BETWEEN A TUBE AND A FROZEN SCREEN.
+	 *
+	 * The opaque region is an optimisation hint, and wlr_scene acts on
+	 * it twice: it culls damage from nodes it can prove are hidden, and
+	 * it sends frame callbacks only to surfaces that are visible.  A
+	 * full-screen opaque sheet therefore tells every window on the
+	 * machine that it cannot be seen -- so their damage stops
+	 * scheduling frames and their frame callbacks stop arriving, and
+	 * they stop drawing altogether.
+	 *
+	 * For the effects that park a sheet for a second that is a saving.
+	 * For one that stays up, it is fatal and it is SILENT: the screen
+	 * keeps showing the picture that was captured when the sheet went
+	 * up, the compositor sits at no CPU, nothing is logged, and it reads
+	 * exactly like the editor having hung.  It has not; it is drawing
+	 * into a scene nobody is compositing.
+	 *
+	 * And the hint would be a lie in any case.  A filter sheet is a
+	 * PHOTOGRAPH of what is underneath it, retaken every frame: the
+	 * things it covers are the things it is made of, so they have to
+	 * keep drawing for it to have anything to photograph.
+	 *
+	 * tests/test-crt-frames.c is this paragraph as an assertion.
+	 */
+	if (!sheet->is_filter) {
+		pixman_region32_init_rect(&opaque, 0, 0,
+		                          monitor->m.width, monitor->m.height);
+		wlr_scene_buffer_set_opaque_region(sheet->node, &opaque);
+		pixman_region32_fini(&opaque);
+	}
 
 	/*
 	 * Two kinds of client sit above the sheet in gowl's layer order:
@@ -167,6 +225,19 @@ gowl_fx_sheet_new(GowlCompositor   *compositor,
 	 * re-enable.
 	 */
 	sheet->hidden = g_ptr_array_new_with_free_func(g_object_unref);
+
+	/*
+	 * Nothing to get out of the way when the sheet is above every layer
+	 * a client can be in.  This is not an optimisation: an effect that
+	 * re-captures the screen every frame would find these clients
+	 * SWITCHED OFF in its own capture and draw a desktop with the
+	 * fullscreen window missing from it.
+	 */
+	if ((flags & GOWL_FX_SHEET_ABOVE_OVERLAY) != 0) {
+		fx_live_sheets = g_list_prepend(fx_live_sheets, sheet);
+		return sheet;
+	}
+
 	for (l = compositor->clients; l != NULL; l = l->next) {
 		GowlClient *c = l->data;
 		gboolean fullscreen;

@@ -70,6 +70,12 @@ static const gchar *const cmacs_modules[] = {
 	 * per-client scene buffer and a GL context of their own -- so each
 	 * has its own chance to reach a freed compositor on the way out. */
 	"fizz", "leaves", "snow",
+	/* And the four that share one host, plus the tube.  These were
+	 * missing: the list is maintained by hand beside TEARDOWN_MODULES in
+	 * the Makefile and drifted away from it as each was added, so five
+	 * modules that all hold a GL context and a scene node were never
+	 * asked what they do when the compositor goes first. */
+	"soapfilm", "embers", "submerged", "dew", "crt",
 	"layout-indicator",
 	"alpha", "vanitygaps", "roundcorners", "windowrules", "dropdown",
 	"scratchpad", "screenshot", "osd", "clipboard",

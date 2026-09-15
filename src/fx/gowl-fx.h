@@ -237,6 +237,133 @@ gboolean gowl_fx_texture_bokeh (GowlFxGl                *self,
                                 const GowlFxTexture     *src,
                                 const GowlFxBokehParams *params);
 
+/**
+ * GowlFxCrtParams:
+ * @curvature: 1/R of the faceplate, with R in half screen widths.  0 is
+ *   a flat panel; 0.45 is a late flat-square consumer tube; past about
+ *   0.8 the corners are eating a serious amount of desktop
+ * @curvature_y: the vertical share of @curvature, 0 to 1.  1 is a
+ *   sphere, 0 is a cylinder --- curved across and dead flat down, which
+ *   is a Trinitron
+ * @lines: scan lines down the raster, or 0 for
+ *   gowl_fx_crt_auto_lines() of the output height
+ * @scanline: how deep the dark glass between lines cuts, 0 to 1
+ * @beam: the spot's sigma in scan lines with the gun at black
+ * @beam_bloom: how much wider the spot gets at full white.  This is the
+ *   one that matters: a beam that does not fatten with current draws a
+ *   pattern that sits ON the picture rather than being made of it
+ * @mask: phosphor triad depth, 0 to 1
+ * @mask_kind: which mask the tube has
+ * @mask_size: output pixels per triad, or 0 for
+ *   gowl_fx_crt_auto_mask_size() of the output width
+ * @bloom: halation gain --- light that left the phosphor, bounced
+ *   around the faceplate and came back out somewhere else
+ * @bloom_cut: the light level halation starts from
+ * @vignette: how much darker the edge of the glass is, 0 to 1
+ * @corner: the tube's corner radius, as a share of half the screen
+ *   height
+ * @convergence: how far the red and blue guns miss at the corner, in
+ *   output pixels.  Radial, and zero in the middle, where a technician
+ *   would have adjusted it
+ * @hum: amplitude of the slow bright bar drifting up the screen
+ * @gamma: the tube's transfer exponent, near 2.4.  Everything the beam,
+ *   the mask and the glow do happens on the light this produces, not on
+ *   the drive level that came in
+ * @brightness: a final gain, to pay back what the vignette took
+ *
+ * One cathode ray tube.  gowl_fx_crt_params_init() fills in a consumer
+ * set from about 1998.
+ */
+typedef struct {
+	gfloat      curvature;
+	gfloat      curvature_y;
+	gfloat      lines;
+	gfloat      scanline;
+	gfloat      beam;
+	gfloat      beam_bloom;
+	gfloat      mask;
+	GowlCrtMask mask_kind;
+	gfloat      mask_size;
+	gfloat      bloom;
+	gfloat      bloom_cut;
+	gfloat      vignette;
+	gfloat      corner;
+	gfloat      convergence;
+	gfloat      hum;
+	gfloat      gamma;
+	gfloat      brightness;
+} GowlFxCrtParams;
+
+/**
+ * GowlFxCrtClock:
+ * @hum_phase: where the mains beat has got to, in [0, 1)
+ *
+ * The only thing on a tube that moves by itself.  A zeroed clock is a
+ * screen that has just been switched on, which is what a renderer loss
+ * leaves behind.
+ */
+typedef struct {
+	gdouble hum_phase;
+} GowlFxCrtClock;
+
+/**
+ * gowl_fx_crt_params_init:
+ * @params: (out): the tube to reset
+ */
+void gowl_fx_crt_params_init (GowlFxCrtParams *params);
+
+/**
+ * gowl_fx_crt_advance:
+ * @clock: (inout): the clock
+ * @dt: seconds since the last frame
+ */
+void gowl_fx_crt_advance (GowlFxCrtClock *clock, gdouble dt);
+
+/**
+ * gowl_fx_crt_auto_lines:
+ * @height: the output's height in pixels
+ *
+ * Returns: the scan line count to use when the config asks for none ---
+ *   one line per four output pixels, which is the finest ridge the grid
+ *   can carry before the shader has to widen the beam to suit it.
+ */
+gint gowl_fx_crt_auto_lines (gint height);
+
+/**
+ * gowl_fx_crt_auto_mask_size:
+ * @width: the output's width in pixels
+ *
+ * Returns: output pixels per phosphor triad when the config asks for
+ *   none.  Scaled with the screen, so the phosphor stays the same size
+ *   rather than the same number of pixels.
+ */
+gint gowl_fx_crt_auto_mask_size (gint width);
+
+/**
+ * gowl_fx_crt_fit:
+ * @curvature: as #GowlFxCrtParams.curvature
+ * @curvature_y: as #GowlFxCrtParams.curvature_y
+ * @aspect: the output's height divided by its width
+ * @fit_x: (out) (optional): the horizontal stretch at the edge
+ * @fit_y: (out) (optional): the vertical stretch at the edge
+ *
+ * How much the arc stretches the middle of each edge of the picture.
+ * The shader divides by these, which is what makes the curved picture
+ * FIT the screen instead of overflowing it: the middle of every edge of
+ * the raster lands on the middle of the matching edge of the screen and
+ * the corners come in from there.  No part of the desktop is pushed off,
+ * which a real tube's overscan would have done and which on a desktop
+ * eats window buttons.
+ *
+ * Out here rather than in the shader because it is the same two numbers
+ * for every fragment, and because arithmetic in a C file can be tested.
+ */
+void gowl_fx_crt_fit (gdouble  curvature,
+                      gdouble  curvature_y,
+                      gdouble  aspect,
+                      gfloat  *fit_x,
+                      gfloat  *fit_y);
+
 /* ── Drawing ─────────────────────────────────────────────────────── */
 
 typedef struct _GowlFxPass GowlFxPass;
@@ -1424,6 +1551,30 @@ gboolean gowl_fx_pass_soap (GowlFxPass             *pass,
                             const GowlFxSoapParams *params,
                             const GowlFxSoapClock  *clock);
 
+/* ── Cathode ray tube ──────────────────────────────── */
+
+/**
+ * gowl_fx_pass_crt:
+ * @pass: the pass, whose target is the whole output
+ * @screen: the finished desktop, captured this frame
+ * @glow: (nullable): the same picture blurred wide, for halation.  %NULL
+ *   turns the glow off rather than failing
+ * @params: the tube
+ * @clock: (nullable): where the mains beat is; %NULL is a still screen
+ *
+ * The desktop, on a tube.  The ONLY whole-output filter in here:
+ * everything else in this header draws what is behind a window, and
+ * this draws what is in front of all of them.
+ *
+ * Returns: %FALSE when the shader could not be built, which leaves the
+ *   caller to present the capture unfiltered or put its sheet away.
+ */
+gboolean gowl_fx_pass_crt (GowlFxPass            *pass,
+                           const GowlFxTexture   *screen,
+                           const GowlFxTexture   *glow,
+                           const GowlFxCrtParams *params,
+                           const GowlFxCrtClock  *clock);
+
 /* ── Carbonation ─────────────────────────────────────────────────── */
 
 /**
@@ -2212,11 +2363,24 @@ typedef struct _GowlFxSheet GowlFxSheet;
  * @GOWL_FX_SHEET_ABOVE_TOP: park above the bar as well, for an effect
  *   that must cover the whole screen rather than sit under the panel
  * @GOWL_FX_SHEET_KEEP_FULLSCREEN: leave fullscreen clients showing
+ * @GOWL_FX_SHEET_ABOVE_OVERLAY: park above every layer but the session
+ *   lock.  Nothing is left above it, so unlike the other placements this
+ *   hides NOTHING --- which matters for an effect that captures the
+ *   screen every frame, because a client the sheet had switched off to
+ *   get out of its way would be missing from that capture too
+ * @GOWL_FX_SHEET_FILTER: this sheet is a filter over the finished
+ *   screen rather than a picture of some other state, so no capture
+ *   should ever see it.  gowl_fx_capture() hides these for the length of
+ *   its render: without it the tube photographs its own last frame, and
+ *   a magnifier or a cube would photograph the tube and put a second
+ *   one through it
  */
 typedef enum {
 	GOWL_FX_SHEET_NONE            = 0,
 	GOWL_FX_SHEET_ABOVE_TOP       = 1 << 0,
-	GOWL_FX_SHEET_KEEP_FULLSCREEN = 1 << 1
+	GOWL_FX_SHEET_KEEP_FULLSCREEN = 1 << 1,
+	GOWL_FX_SHEET_ABOVE_OVERLAY   = 1 << 2,
+	GOWL_FX_SHEET_FILTER          = 1 << 3
 } GowlFxSheetFlags;
 
 /**

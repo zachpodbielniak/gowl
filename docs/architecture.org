@@ -1028,6 +1028,50 @@ be wrong in a way that still looks plausible --- a lens that bends
 nothing is indistinguishable from a frosted backdrop, and one that bends
 the wrong way is indistinguishable in a screenshot and wrong over text.
 
+*The tube is the only whole-output filter.* =gowl_fx_pass_crt()=
+(=src/fx/gowl-fx-crt.c=, driven by =modules/crt=) is the one effect here
+that does not draw behind a window: it captures the finished output and
+draws the whole of it back through a curved faceplate, a scanned beam, a
+phosphor mask and halation. Two things in =src/fx/= exist for it.
+
+=GOWL_FX_SHEET_FILTER= marks a sheet as a picture of the desktop AS IT
+IS, put through a shader and parked on top, rather than a picture of some
+other state. It does two things.
+
+=gowl_fx_capture()= hides every such sheet for the length of its render,
+which is what stops the tube photographing its own last frame --- and,
+just as important, stops the magnifier, the cube and the switcher
+building their pictures out of an already-curved one and putting a second
+tube through it.
+
+And a filter sheet *declares no opaque region, and is allocated with an
+alpha channel it never uses*. Both are needed to stop wlr_scene
+concluding that it occludes what is under it --- it infers opacity from
+the buffer's format before it looks at any region --- and that conclusion
+is fatal for a sheet that stays up. wlr_scene culls damage from nodes it
+can prove are hidden and sends frame callbacks only to visible surfaces,
+so a permanently parked opaque full-screen sheet tells every window on
+the machine that it cannot be seen: they stop scheduling frames, they
+stop receiving callbacks, and they stop drawing. The screen then holds
+the picture that was captured when the sheet went up, the compositor
+sits at no CPU, and nothing is logged --- it reads exactly like the
+editor having hung, and the editor is fine.
+
+The hint would be a lie in any case: a filter sheet is made OF the things
+it covers, so they have to keep drawing for it to have anything to
+photograph. The cost is that the scene below it is composited rather than
+culled, which is a second pass over a scene the capture has already
+drawn. tests/test-crt-frames.c holds both halves.
+
+=GOWL_FX_SHEET_ABOVE_OVERLAY= parks a sheet above every layer a client
+can be in, and unlike the other placements it hides NOTHING. The others
+switch off the clients they cannot cover --- fullscreen and
+embedder-pinned ones --- which is right for an effect that captured the
+screen once at the start and wrong for one that re-captures every frame:
+a client switched off to make room would be missing from that capture,
+and a fullscreen video would simply vanish. The session lock layer stays
+above it either way.
+
 The glass and water programs are the two things =gowl_fx_gl_new()= does
 NOT build up front. Each is compiled on first use and its failure is
 survivable (the pass returns =FALSE= and the module shows nothing),

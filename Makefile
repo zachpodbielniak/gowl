@@ -112,6 +112,7 @@ LIB_SRCS := \
 	src/fx/gowl-fx-snow.c \
 	src/fx/gowl-fx-backdrop-host.c \
 	src/fx/gowl-fx-bokeh.c \
+	src/fx/gowl-fx-crt.c \
 	src/fx/gowl-fx-pq.c \
 	src/util/gowl-systemd.c \
 	src/util/gowl-wayland-socket.c \
@@ -693,7 +694,8 @@ $(OUTDIR)/modules/soapfilm.so: $(wildcard modules/soapfilm/*.c modules/soapfilm/
 $(OUTDIR)/modules/embers.so: $(wildcard modules/embers/*.c modules/embers/*.h)
 $(OUTDIR)/modules/submerged.so: $(wildcard modules/submerged/*.c modules/submerged/*.h)
 $(OUTDIR)/modules/dew.so: $(wildcard modules/dew/*.c modules/dew/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+$(OUTDIR)/modules/crt.so: $(wildcard modules/crt/*.c modules/crt/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
@@ -707,13 +709,19 @@ $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(absp
 $(OUTDIR)/test-blur-nodes: $(addprefix $(OUTDIR)/modules/,blur.so liquidglass.so liquidwater.so liquidrain.so fizz.so leaves.so snow.so soapfilm.so embers.so submerged.so dew.so animation.so roundcorners.so)
 $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
+# The tube against the real .so in a headless compositor: a sheet parked
+# over the whole output must not stop the scene below it asking to be
+# drawn, and must not keep the output awake once nothing is moving.
+$(OUTDIR)/test-crt-frames: $(OUTDIR)/modules/crt.so
+$(OBJDIR)/tests/test-crt-frames.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
 # Everything cmacs --gowl loads, started under a headless compositor and
 # released after it, the way main() tears down: the manager's dispose
 # deactivates each module with the compositor already gone.  The same
 # list as cmacs_modules[] in the test.
 TEARDOWN_MODULES := wallpaper tile monocle float scrolling animation cube \
 	expo switcher magnifier blur liquidglass liquidwater liquidrain \
-	fizz leaves snow hints soapfilm embers submerged dew \
+	fizz leaves snow hints soapfilm embers submerged dew crt \
 	layout-indicator alpha \
 	vanitygaps roundcorners windowrules dropdown scratchpad screenshot \
 	osd clipboard bar

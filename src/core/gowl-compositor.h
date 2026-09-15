@@ -611,16 +611,46 @@ void gowl_compositor_set_backdrop_style (GowlCompositor    *self,
  * @direction: 1 forwards, -1 backwards
  *
  * Steps to the next style: rain, snow, leaves, fizz, water, glass, blur,
- * nothing, round again.
+ * nothing, the tube, round again.
  *
  * That is not the enum's order.  Everything that draws something comes
  * first, grouped by what it is --- the three weathers, then the two that
  * are liquid in a pane, then the two that settle --- so one press from
  * either shipped default lands on another look rather than on nothing,
  * and turning the backdrop off takes the full way round.
+ *
+ * %GOWL_BACKDROP_CRT is last and is not a backdrop: it draws nothing
+ * behind a window and puts the whole SCREEN through a tube.  Landing on
+ * it switches the tube on and leaving it switches the tube off; moving
+ * between any two backdrops leaves the tube exactly as it was, so one
+ * switched on by hand with gowl_compositor_set_crt() survives a change
+ * of backdrop.
  */
 void gowl_compositor_cycle_backdrop_style (GowlCompositor *self,
                                            gint            direction);
+
+/**
+ * gowl_compositor_get_crt:
+ * @self: a #GowlCompositor
+ *
+ * Returns: %TRUE while the whole screen is being put through a tube.
+ */
+gboolean gowl_compositor_get_crt (GowlCompositor *self);
+
+/**
+ * gowl_compositor_set_crt:
+ * @self: a #GowlCompositor
+ * @on: %TRUE to put the screen on a cathode ray tube
+ *
+ * The setting lives in the config, which is where modules/crt reads it.
+ *
+ * This also asks every output for a frame, which is load bearing rather
+ * than tidy: the module draws from its frame hook only, and an output
+ * with nothing moving on it has stopped asking for frames.  Without the
+ * push, switching the tube on from a still desktop would do nothing
+ * until something else happened to repaint.
+ */
+void gowl_compositor_set_crt (GowlCompositor *self, gboolean on);
 
 /**
  * gowl_compositor_get_bar:

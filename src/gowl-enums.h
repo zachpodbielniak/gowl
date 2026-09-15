@@ -260,9 +260,9 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  * @GOWL_ACTION_MOVE_STACK: Reorder the focused tiled client.
  * @GOWL_ACTION_CUSTOM: Custom action handled by a module callback.
  * @GOWL_ACTION_CYCLE_BACKDROP: Cycle what shows through translucent
- *   windows --- rain, snow, leaves, fizz, water, glass, blur, nothing
- *   --- or set it outright when
- *   @arg names one of them.
+ *   windows --- rain, snow, leaves, fizz, water, glass, blur, nothing,
+ *   and last of all `crt', which is not a backdrop but the whole screen
+ *   on a tube --- or set it outright when @arg names one of them.
  * @GOWL_ACTION_TOGGLE_HDR: Switch the focused output between HDR and SDR
  * @GOWL_ACTION_OUTPUT_POWER: Power every output on, off or toggle
  *   (arg "on", "off", anything else toggles).
@@ -288,6 +288,9 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  *   visible on the focused output at once
  * @GOWL_ACTION_FOCUS_LAST: Focus the window that had focus before this
  *   one, viewing its tags if need be.
+ * @GOWL_ACTION_TOGGLE_CRT: Put the whole output through a cathode ray
+ *   tube, or take it back off.  The argument may be "on", "off" or
+ *   nothing, which toggles.
  *
  * Compositor actions that can be bound to keys or IPC commands.
  */
@@ -328,7 +331,8 @@ typedef enum {
 	GOWL_ACTION_TOGGLE_HDR,
 	GOWL_ACTION_CYCLE_BACKDROP,
 	GOWL_ACTION_TOGGLE_BELOW,
-	GOWL_ACTION_TOGGLE_BELOW_ALL
+	GOWL_ACTION_TOGGLE_BELOW_ALL,
+	GOWL_ACTION_TOGGLE_CRT
 } GowlAction;
 
 #define GOWL_TYPE_ACTION (gowl_action_get_type())
@@ -369,6 +373,11 @@ GType gowl_action_get_type(void) G_GNUC_CONST;
  *   (modules/embers)
  * @GOWL_BACKDROP_DEW: a spider's web strung with dew, each drop a lens
  *   (modules/dew)
+ * @GOWL_BACKDROP_CRT: not a backdrop at all --- the WHOLE SCREEN on a
+ *   cathode ray tube (modules/crt), with nothing behind translucent
+ *   windows.  It is in this enum so that the one key that tours the
+ *   looks can reach it; the tube itself is the `crt' setting, which can
+ *   also be switched on beside any backdrop
  * @GOWL_BACKDROP_BOKEH: the wallpaper thrown out of focus by a real
  *   aperture --- discs rather than a smear.  Drawn by modules/blur,
  *   which already owns one output-sized picture of the wallpaper
@@ -400,8 +409,35 @@ typedef enum {
 	GOWL_BACKDROP_SUBMERGED,
 	GOWL_BACKDROP_EMBERS,
 	GOWL_BACKDROP_DEW,
-	GOWL_BACKDROP_BOKEH
+	GOWL_BACKDROP_BOKEH,
+	GOWL_BACKDROP_CRT
 } GowlBackdropStyle;
+
+/* --- GowlCrtMask --- */
+
+/**
+ * GowlCrtMask:
+ * @GOWL_CRT_MASK_NONE: no phosphor structure; a white pixel is white
+ * @GOWL_CRT_MASK_GRILLE: an aperture grille --- vertical RGB stripes
+ *   running the whole height of the tube, as a Trinitron has
+ * @GOWL_CRT_MASK_SHADOW: a shadow mask --- RGB dots in a hexagonal
+ *   array, every other row of holes offset by half a pitch
+ * @GOWL_CRT_MASK_SLOT: a slot mask --- the grille's stripes broken into
+ *   staggered slots, which is what most tubes ever built used
+ *
+ * What sits between the electron guns and the phosphor, which is what
+ * decides the very fine colour texture of everything on the screen.
+ * Used by `crt-mask-kind' (modules/crt).
+ */
+typedef enum {
+	GOWL_CRT_MASK_NONE,
+	GOWL_CRT_MASK_GRILLE,
+	GOWL_CRT_MASK_SHADOW,
+	GOWL_CRT_MASK_SLOT
+} GowlCrtMask;
+
+#define GOWL_TYPE_CRT_MASK (gowl_crt_mask_get_type())
+GType gowl_crt_mask_get_type(void) G_GNUC_CONST;
 
 #define GOWL_TYPE_BACKDROP_STYLE (gowl_backdrop_style_get_type())
 GType gowl_backdrop_style_get_type(void) G_GNUC_CONST;

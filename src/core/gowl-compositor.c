@@ -2623,31 +2623,107 @@ gowl_compositor_get_backdrop_style(GowlCompositor *self)
 	return gowl_config_get_backdrop_style(self->config);
 }
 
+/*
+ * Tell every backdrop module to look again.
+ *
+ * Both modules add and drop their node from client_placed, and nothing
+ * else here is going to place these windows -- they have not moved.  So
+ * say so for each of them, which is the whole mechanism by which a
+ * change appears at once rather than the next time somebody drags
+ * something.
+ *
+ * BROADCAST, so it reaches every provider whatever its priority: the
+ * blur module has to hear it too, to take its backdrop down when the
+ * glass takes over.
+ */
+static void
+compositor_replace_backdrops(GowlCompositor *self)
+{
+	GList *l;
+
+	for (l = self->clients; l != NULL; l = l->next)
+		gowl_effects_client_placed(self, (GowlClient *)l->data);
+}
+
+/*
+ * The tube, without the announcement.
+ *
+ * Split out because the backdrop cycle drives it too, and there the
+ * toast that belongs on screen is the cycle's own ("CRT") rather than a
+ * second one saying the same thing.
+ */
+static void
+compositor_apply_crt(GowlCompositor *self, gboolean on, gboolean announce)
+{
+	GList *l;
+
+	if (self->config == NULL)
+		return;
+	if (gowl_config_get_crt(self->config) == on)
+		return;
+	gowl_config_set_crt(self->config, on);
+
+	/*
+	 * Ask every output for a frame.
+	 *
+	 * modules/crt only draws from its frame hook, and an output with
+	 * nothing moving on it has stopped scheduling frames -- so switching
+	 * the tube ON from a still desktop would do nothing at all until
+	 * something else happened to repaint.  Switching it OFF needs the
+	 * same push, to get one frame in which the module can put its sheet
+	 * away.
+	 */
+	for (l = self->monitors; l != NULL; l = l->next) {
+		GowlMonitor *m = (GowlMonitor *)l->data;
+
+		if (m->wlr_output != NULL)
+			wlr_output_schedule_frame(m->wlr_output);
+	}
+
+	if (announce && self->selmon != NULL) {
+		g_signal_emit_by_name(self, "toast-requested", self->selmon,
+		                      on ? "CRT on" : "CRT off");
+	}
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT crt %s", on ? "on" : "off");
+	g_info("crt: %s", on ? "on" : "off");
+}
+
 void
 gowl_compositor_set_backdrop_style(GowlCompositor *self,
                                    GowlBackdropStyle style)
 {
-	GList *l;
+	GowlBackdropStyle was;
 
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
 	if (self->config == NULL)
 		return;
+	was = gowl_config_get_backdrop_style(self->config);
 	gowl_config_set_backdrop_style(self->config, style);
 
 	/*
-	 * Both modules add and drop their node from client_placed, and
-	 * nothing else here is going to place these windows -- they have not
-	 * moved.  So say so for each of them, which is the whole mechanism
-	 * by which the change appears at once rather than the next time
-	 * somebody drags something.
+	 * The tube is not a backdrop, and this is the one place the two
+	 * settings touch.
 	 *
-	 * BROADCAST, so it reaches every provider whatever its priority:
-	 * the blur module has to hear it too, to take its backdrop down when
-	 * the glass takes over.
+	 * `crt' is an independent switch: it can be on beside the rain, and
+	 * the config key or the `toggle_crt' action is how somebody asks for
+	 * that.  But the key that tours the looks is how anybody discovers a
+	 * look exists, so the tour has a stop of its own for it -- and the
+	 * ONLY thing that stop does is turn the tube on when the tour
+	 * arrives and off when it leaves.
+	 *
+	 * Deliberately not "every other stop turns it off".  That would take
+	 * a hand-set tube away the next time somebody changed the rain,
+	 * which is the sort of action at a distance nobody can predict from
+	 * the key they pressed.
 	 */
-	for (l = self->clients; l != NULL; l = l->next)
-		gowl_effects_client_placed(self, (GowlClient *)l->data);
+	if (style == GOWL_BACKDROP_CRT && was != GOWL_BACKDROP_CRT)
+		compositor_apply_crt(self, TRUE, FALSE);
+	else if (style != GOWL_BACKDROP_CRT && was == GOWL_BACKDROP_CRT)
+		compositor_apply_crt(self, FALSE, FALSE);
+
+	compositor_replace_backdrops(self);
 
 	/*
 	 * Say so on screen, the way a layout change does.
@@ -2682,6 +2758,9 @@ gowl_compositor_set_backdrop_style(GowlCompositor *self,
 		case GOWL_BACKDROP_DEW:    label = "Dew on a web";   break;
 		case GOWL_BACKDROP_BOKEH:  label = "Bokeh";          break;
 		case GOWL_BACKDROP_BLUR:   label = "Blur";           break;
+		/* The only stop on the tour that is not a backdrop: nothing
+		   behind the windows, and the whole screen on a tube. */
+		case GOWL_BACKDROP_CRT:    label = "CRT";            break;
 		default:                   label = "No backdrop";    break;
 		}
 		g_signal_emit_by_name(self, "toast-requested", self->selmon, label);
@@ -2691,6 +2770,35 @@ gowl_compositor_set_backdrop_style(GowlCompositor *self,
 		gowl_ipc_push_event(self->ipc, "EVENT backdrop %s",
 		                    gowl_config_backdrop_style_name(style));
 	g_info("window backdrop: %s", gowl_config_backdrop_style_name(style));
+}
+
+gboolean
+gowl_compositor_get_crt(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	return self->config != NULL && gowl_config_get_crt(self->config);
+}
+
+void
+gowl_compositor_set_crt(GowlCompositor *self, gboolean on)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->config == NULL)
+		return;
+	compositor_apply_crt(self, on, TRUE);
+
+	/*
+	 * Switching the tube off while the tour is parked on its stop would
+	 * otherwise leave a dead setting: `window-backdrop: crt' with no
+	 * tube, which draws nothing anywhere and reads as the key having
+	 * broken.  Step the tour off it.
+	 */
+	if (!on && gowl_config_get_backdrop_style(self->config)
+	           == GOWL_BACKDROP_CRT) {
+		gowl_config_set_backdrop_style(self->config, GOWL_BACKDROP_NONE);
+		compositor_replace_backdrops(self);
+	}
 }
 
 void
@@ -2732,7 +2840,19 @@ gowl_compositor_cycle_backdrop_style(GowlCompositor *self, gint direction)
 		GOWL_BACKDROP_SOAP,  GOWL_BACKDROP_DEW,
 		GOWL_BACKDROP_WATER, GOWL_BACKDROP_GLASS,
 		GOWL_BACKDROP_BOKEH, GOWL_BACKDROP_BLUR,
-		GOWL_BACKDROP_NONE
+		GOWL_BACKDROP_NONE,
+		/*
+		 * And last, the one that is not a backdrop: the whole screen
+		 * on a tube, with nothing behind the windows at all.
+		 *
+		 * After `none' rather than among the looks, because it is a
+		 * different KIND of thing -- every stop before it changes what
+		 * is behind a window and this one changes the screen -- and
+		 * because it is the most drastic of them.  Somebody stepping
+		 * the key to see what is there should meet it at the end of the
+		 * tour rather than fall into it on the way past the rain.
+		 */
+		GOWL_BACKDROP_CRT
 	};
 	GowlBackdropStyle now;
 	gint i, at = 0;
@@ -10119,6 +10239,20 @@ run_keybind_entry(
 			          "none, blur, glass, water, rain, snow, leaves, "
 			          "fizz, next or prev", kb->arg);
 		}
+		return TRUE;
+	}
+	case GOWL_ACTION_TOGGLE_CRT: {
+		/* "on", "off", or toggle -- which is what no argument and any
+		 * other argument mean. */
+		gboolean on;
+
+		if (kb->arg != NULL && g_ascii_strcasecmp(kb->arg, "on") == 0)
+			on = TRUE;
+		else if (kb->arg != NULL && g_ascii_strcasecmp(kb->arg, "off") == 0)
+			on = FALSE;
+		else
+			on = !gowl_compositor_get_crt(self);
+		gowl_compositor_set_crt(self, on);
 		return TRUE;
 	}
 	case GOWL_ACTION_TOGGLE_HDR: {

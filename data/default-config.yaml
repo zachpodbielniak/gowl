@@ -169,7 +169,68 @@ magnifier-follow-cursor: true
 magnifier-smooth: true    # false shows the actual pixels, unfiltered
 magnifier-modifier: "Super"   # Super, Alt, Ctrl or Shift
 
-# What shows through a translucent window.  Thirteen of them, plus none:
+# The cathode ray tube (modules.crt.enabled).  Off by default, and the
+# only effect here that is not behind a window: it captures the finished
+# screen and puts the WHOLE of it back through a tube -- curved glass,
+# scan lines, phosphor triads, halation, and three guns that do not quite
+# agree at the corners.  `crt: true' has it on from the start, and it is
+# the last stop on the Super+Shift+" tour of looks (see window-backdrop
+# below).  There is a `toggle_crt' action too, bound to nothing by
+# default: bind it if you want a key of its own for the tube.
+#
+# WORTH KNOWING BEFORE LEAVING IT ON: the pointer is not curved.  It is
+# on a hardware plane rather than in the scene, so the capture never
+# contains it and the shader never sees it -- it sits where it really is
+# while everything under it has moved.  At the default curvature that is
+# about a dozen pixels at 1080p, worst two thirds of the way out and none
+# at all in the middle or at the edges.  `crt-curvature: 0', or the
+# `flat' preset, is the answer for anybody who wants the phosphor without
+# the parallax.
+#
+# It costs one extra render of the whole scene per frame IT DRAWS, on
+# every output that has it -- and it only draws when something under the
+# glass has changed, so a still desktop costs nothing.  (The one visible
+# consequence: the crt-hum bar drifts while something is happening and
+# holds still when nothing is.)
+crt: false
+#
+# Which tube.  These differ in more than one number each, because the
+# machines did:
+#
+#   flat       scan lines and phosphor, no glass at all
+#   trinitron  a CYLINDER -- curved across, flat down -- with a grille
+#   consumer   the tube in the corner of the living room in 1998
+#   broadcast  a grade-1 studio monitor: nearly flat, a fine spot
+#   arcade     a cabinet tube run hot, round and dark at the edges
+crt-preset: consumer
+#
+# Everything below overrides the preset.  Leave a key out and the preset
+# decides it.
+#
+# crt-curvature: 0.45     # 1/R of the faceplate, R in half screen widths.
+#                         # 0 is flat; past 0.8 the corners eat real desktop
+# crt-curvature-y: 1.0    # the vertical share of it: 1 a sphere, 0 a cylinder
+# crt-scanline: 0.55      # how deep the dark glass between lines cuts
+# crt-lines: 0            # lines down the raster; 0 is one per four pixels
+# crt-beam: 0.16          # the spot's width at black, in scan lines
+# crt-beam-bloom: 0.18    # how much wider at full white.  THIS is the one
+#                         # that makes it a tube and not a striped overlay
+# crt-mask: 0.30          # phosphor triad depth
+# crt-mask-kind: slot     # none, grille (Trinitron), shadow, slot
+# crt-mask-size: 0        # pixels per triad; 0 scales it to the screen
+# crt-bloom: 0.45         # halation -- light scattered in the faceplate
+# crt-bloom-cut: 0.45     # the level it starts from
+# crt-glow-scale: 6       # how far the capture shrinks before it is blurred
+# crt-glow-passes: 3      # box passes of that blur
+# crt-vignette: 0.22      # how much darker the edge of the glass is
+# crt-corner: 0.06        # the tube's corner radius, in half screen heights
+# crt-convergence: 1.2    # how far red and blue miss at the corner, in pixels
+# crt-hum: 0.02           # the slow bright bar drifting up a tired tube
+# crt-gamma: 2.4          # the tube's transfer exponent
+# crt-brightness: 1.03    # a final gain, to pay the vignette back
+
+# What shows through a translucent window.  Thirteen of them, plus none
+# -- and one that is not a backdrop at all:
 #
 #   rain       drops that collect, run and streak       (modules.liquidrain)
 #   storm      the same, with lightning                 (modules.liquidrain)
@@ -186,6 +247,8 @@ magnifier-modifier: "Super"   # Super, Alt, Ctrl or Shift
 #   bokeh      thrown out of focus by a real aperture         (modules.blur)
 #   blur       the wallpaper, blurred behind it               (modules.blur)
 #   none       the desktop, straight through
+#   crt        NOT a backdrop: nothing behind the windows, and the
+#              whole screen on a cathode ray tube        (modules.crt)
 #
 # THE MODULE IT NAMES HAS TO BE ENABLED.  Every one is opt-in below, and
 # they are alternatives rather than layers -- each draws into the same
@@ -197,8 +260,15 @@ magnifier-modifier: "Super"   # Super, Alt, Ctrl or Shift
 # blur module with a different kernel, so neither needs a module of its
 # own.
 #
-# Super+Shift+" (cycle_backdrop) steps through all fourteen at runtime,
-# and the layout indicator names the one it landed on.
+# Super+Shift+" (cycle_backdrop) steps through all fifteen at runtime,
+# and the layout indicator names the one it landed on.  `crt' is last,
+# after `none': it is a different KIND of thing -- every stop before it
+# changes what is behind a window and that one changes the screen.
+#
+# The tube is ALSO an independent switch (`crt' above, and the
+# `toggle_crt' action), so it can be on beside the rain.  The tour only
+# touches it when it lands on its stop or leaves it, never when it moves
+# between backdrops.
 window-backdrop: glass
 
 # Frosted glass and shadows (modules.blur.enabled, window-backdrop: blur).
@@ -763,6 +833,14 @@ modules:
     enabled: false  # opt in here; CMacs loads this module by default
   magnifier:
     enabled: false  # opt in here; CMacs loads this module by default
+  crt:
+    enabled: false  # opt in here; CMacs loads this module by default
+                    # needed for `crt: true' and for the tour's last
+                    # stop.  It
+                    # re-renders the whole scene once more per frame and
+                    # holds every output it is on awake, so it costs
+                    # nothing at all while `crt' is false and a good deal
+                    # while it is true
   blur:
     enabled: false  # opt in here; CMacs loads this module by default
   liquidglass:

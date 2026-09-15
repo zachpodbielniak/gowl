@@ -508,6 +508,42 @@ typedef struct {
 } GowlFxDewProg;
 
 /*
+ * The cathode ray tube (gowl-fx-crt.c).
+ *
+ * The one shader in here that is not drawn behind a window: modules/crt
+ * captures the finished output and runs the whole of it through this.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_screen;
+	GLint  u_glow;
+	GLint  u_size;
+	GLint  u_aspect;
+	GLint  u_curve;
+	GLint  u_curve_y;
+	GLint  u_fit;
+	GLint  u_lines;
+	GLint  u_scanline;
+	GLint  u_beam;
+	GLint  u_beam_bloom;
+	GLint  u_mask;
+	GLint  u_mask_kind;
+	GLint  u_mask_size;
+	GLint  u_bloom;
+	GLint  u_bloom_cut;
+	GLint  u_glow_on;
+	GLint  u_vignette;
+	GLint  u_corner;
+	GLint  u_converge;
+	GLint  u_hum;
+	GLint  u_hum_phase;
+	GLint  u_gamma;
+	GLint  u_bright;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxCrtProg;
+
+/*
  * The bokeh kernel (gowl-fx-bokeh.c).
  *
  * The blur module's other way of softening one output-sized picture of
@@ -576,6 +612,8 @@ struct _GowlFxGl {
 	gboolean             dew_tried;
 	GowlFxBokehProg      bokeh;      /* likewise */
 	gboolean             bokeh_tried;
+	GowlFxCrtProg        crt;        /* likewise */
+	gboolean             crt_tried;
 	GowlFxPqProg         pq;         /* likewise */
 	gboolean             pq_tried;
 
@@ -612,5 +650,9 @@ GList *gowl_fx_sheet_live (void);
 
 /* The sheet's scene tree, so a capture can switch it off. */
 struct wlr_scene_tree *gowl_fx_sheet_tree (GowlFxSheet *sheet);
+
+/* Whether this sheet is a filter over the finished screen, which no
+ * capture may see.  See GOWL_FX_SHEET_FILTER. */
+gboolean gowl_fx_sheet_is_filter (GowlFxSheet *sheet);
 
 #endif /* GOWL_FX_PRIVATE_H */

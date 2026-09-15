@@ -574,6 +574,163 @@ nothing. It also sits above the bar, since a magnifier that magnified
 everything except the panel would be useless to somebody who needs it to
 read the panel.
 
+**** The cathode ray tube
+:PROPERTIES:
+:CUSTOM_ID: crt
+:END:
+
+The whole desktop on a CRT: a curved faceplate, scan lines, phosphor
+triads, halation in thick glass, and three guns that do not quite agree
+at the corners. Opt in with =modules.crt.enabled: true=, then =crt: true= --- or step
+=Super+"= round to its last stop, which is where anybody is going to find
+it. See [[#crt-on-the-tour][The tube is the last stop on the tour]] for
+how the two settings interact. There is a =toggle_crt= action for a key
+of its own; nothing is bound to it by default.
+
+*This is the only effect in gowl that is not behind a window.* Everything
+else here draws what shows THROUGH a translucent window; this draws what
+is in front of all of them, because the thing it is imitating is the
+glass.
+
+| Property            | Type   | Default      | Description |
+|---------------------+--------+--------------+-------------|
+| =crt=               | bool   | =false=      | Master switch; =toggle_crt= flips it at runtime |
+| =crt-preset=        | string | ="consumer"= | =flat=, =trinitron=, =consumer=, =broadcast=, =arcade= |
+| =crt-curvature=     | float  | preset       | 1/R of the faceplate, R in half screen widths. =0= is flat, =0.9= is the most a tube can be |
+| =crt-curvature-y=   | float  | preset       | The vertical share of it: =1= a sphere, =0= a cylinder |
+| =crt-scanline=      | float  | preset       | How deep the dark glass between lines cuts, =0= to =1= |
+| =crt-lines=         | int    | =0=          | Scan lines down the raster; =0= is one per four output pixels |
+| =crt-beam=          | float  | preset       | The spot's width at black, in scan lines |
+| =crt-beam-bloom=    | float  | preset       | How much wider the spot gets at full white |
+| =crt-mask=          | float  | preset       | Phosphor triad depth, =0= to =1= |
+| =crt-mask-kind=     | string | preset       | =none=, =grille=, =shadow=, =slot= |
+| =crt-mask-size=     | int    | =0=          | Output pixels per triad; =0= scales it to the screen |
+| =crt-bloom=         | float  | preset       | Halation gain |
+| =crt-bloom-cut=     | float  | preset       | The light level halation starts from |
+| =crt-glow-scale=    | int    | =6=          | How far the capture shrinks before it is blurred, =1= to =8= |
+| =crt-glow-passes=   | int    | =3=          | Box passes of that blur, =1= to =6= |
+| =crt-vignette=      | float  | preset       | How much darker the edge of the glass is |
+| =crt-corner=        | float  | preset       | The tube's corner radius, in half screen heights |
+| =crt-convergence=   | float  | preset       | How far red and blue miss at the corner, in output pixels |
+| =crt-hum=           | float  | preset       | The slow bright bar drifting up a tired tube |
+| =crt-gamma=         | float  | preset       | The tube's transfer exponent, near =2.4= |
+| =crt-brightness=    | float  | preset       | A final gain, to pay the vignette back |
+
+Anything left out comes from =crt-preset=, exactly as the animated
+backdrops work.
+
+***** The pointer is not curved
+
+Read this before leaving it on for a working day. The cursor is on a
+hardware plane rather than in the scene, so the capture never contains it
+and the shader never sees it: *it sits where it really is while
+everything under it has moved.* At the default curvature that is about a
+dozen pixels at 1080p, worst about two thirds of the way out from the
+middle, and none at all in the centre or at the edges.
+
+Locking software cursors would put the pointer in the capture and curve
+it with everything else --- and would also leave wlroots drawing a
+second, flat one on top of the sheet, because the real frame renders
+through the same path. So it is left alone.
+
+=crt-curvature: 0= keeps every other part of the tube and takes the
+parallax away entirely, and the =flat= preset is exactly that.
+
+***** Five tubes
+
+They differ in more than one number each, because the machines did.
+
+| Preset      | What it is |
+|-------------+------------|
+| =flat=      | Scan lines and phosphor, no glass at all |
+| =trinitron= | A cylinder --- curved across, flat down --- with an aperture grille |
+| =consumer=  | The tube in the corner of the living room in 1998 |
+| =broadcast= | A grade-1 studio monitor: nearly flat, a fine spot, as little character as the glass can manage |
+| =arcade=    | A cabinet tube run hot: round, dark at the edges, and bright enough that the whites swell into the lines |
+
+***** The picture fits; it is not cropped
+
+A curved faceplate packs more picture behind the pixels near its rim than
+behind the ones in the middle, so straight lines bow outward and the
+corners tuck in. Gowl scales that so the middle of each edge of the
+desktop lands on the middle of the matching edge of the screen: the
+corners come in from there and the tube shows black in the four corners.
+
+A real tube overscanned instead --- filled the screen and let the corners
+fall off the edge. On a desktop that eats window buttons, so it is not
+what happens here.
+
+***** Nothing it does costs any brightness
+
+The beam is a Gaussian periodised over the line spacing and divided by
+its own area, so its mean is exactly one however deep the lines are cut.
+The phosphor mask is a raised cosine per channel, one third of a pitch
+apart, so its mean is exactly one too. Turning either up changes the
+texture of the screen and not how bright it is, which is the difference
+between this and a striped overlay.
+
+(A real aperture grille blocks about two thirds of the light and a real
+tube answers with more beam current. Modelling the loss and not the
+answer would just make the desktop dark.)
+
+Halation is the same story from the other end: it is light that left the
+phosphor, bounced about in the faceplate and came back out somewhere
+else, so what arrives at a pixel is added and what left it is taken away.
+Adding only the arrival --- what a bloom pass usually does --- gives a
+big white window more light than it started with everywhere at once, and
+every pixel of it clips to the same flat value, taking the scan lines and
+the phosphor with it.
+
+***** =crt-lines= cannot be set too high
+
+Ask for a raster finer than the screen can draw and the pattern fades out
+rather than aliasing into a moire that crawls. Two things do that: the
+spot is never allowed to be narrower than about a pixel, and below two
+output pixels to a line the depth goes to nothing.
+
+The default, =0=, is one line per four output pixels --- the finest ridge
+a pixel grid can carry --- which is 270 lines on a 1080p screen and 540
+on a 4K one. =crt-mask-size: 0= scales the phosphor the same way, so a
+triad stays the same SIZE rather than the same number of pixels; a
+three-pixel pitch on a 4K panel is under half a millimetre and invisible.
+
+***** What it costs
+
+One extra render of the whole scene per frame it draws, on every output
+it is on, plus a wide blur when =crt-bloom= is not zero. The sheet cannot
+declare itself opaque (see below), so the scene underneath is composited
+rather than occlusion-culled, which is a second pass over what the
+capture has already drawn. It costs nothing at all while =crt= is false:
+the sheet and both textures go away.
+
+*It does not redraw a screen that has not changed.* The tube takes
+another photograph when the scene under it has something new to show, or
+when one of its own settings moves, and otherwise leaves the sheet alone
+and lets the output go back to sleep --- so a still desktop with the tube
+on costs exactly what a still desktop without it costs. The one visible
+consequence is that the =crt-hum= bar drifts only while something else on
+the screen is happening; on a still desktop it holds still, which nobody
+can see and which is worth a great deal more than a core spent
+photographing an unchanging picture.
+
+*The sheet is deliberately not opaque.* wlr_scene culls damage from nodes
+it can prove are hidden and sends frame callbacks only to surfaces that
+are visible, so a full-screen opaque sheet parked permanently tells every
+window on the machine that it cannot be seen --- and they stop drawing.
+The screen then holds the picture taken when the tube came on, at no CPU,
+with nothing logged. A filter sheet is made of the things it covers, so
+they have to keep drawing for it to have anything to photograph.
+
+It also draws last of everything, after the cube, the expo, the switcher
+and the magnifier, because the glass is in front of whatever they put up.
+Its sheet is marked as a filter, so no capture ever sees it: without that
+the tube would photograph its own last frame, and a magnifier or a cube
+face would be built from an already-curved picture and get a second tube
+applied to it.
+
+The session lock stays above the sheet, and the module stops drawing
+while the session is locked. A lock a shader could hide is not a lock.
+
 **** Window hints
 :PROPERTIES:
 :CUSTOM_ID: hints
@@ -728,11 +885,12 @@ what is on screen.
 
 Eleven modules can fill the space behind a translucent window, between
 them offering thirteen looks, and =window-backdrop= says which one
-draws.
+draws. A fourteenth value, =crt=, is not a backdrop at all --- see
+[[#crt-on-the-tour][The tube is the last stop on the tour]] below.
 
 | Property           | Type   | Default   | Description |
 |--------------------+--------+-----------+-------------|
-| =window-backdrop=  | enum   | =glass=   | =rain=, =storm=, =snow=, =leaves=, =fizz=, =submerged=, =embers=, =soap=, =dew=, =water=, =glass=, =bokeh=, =blur= or =none= |
+| =window-backdrop=  | enum   | =glass=   | =rain=, =storm=, =snow=, =leaves=, =fizz=, =submerged=, =embers=, =soap=, =dew=, =water=, =glass=, =bokeh=, =blur=, =none= or =crt= |
 
 - =rain= --- the wallpaper through a window left out in the rain: drops
   that collect, run and streak ([[#liquidrain][Liquid rain]]).
@@ -757,6 +915,36 @@ draws.
   ([[#bokeh][Bokeh]]).
 - =blur= --- the wallpaper, blurred ([[#blur][Frosted glass and shadows]]).
 - =none= --- the desktop, seen straight through.
+- =crt= --- not a backdrop: nothing behind the windows, and the whole
+  SCREEN through a cathode ray tube ([[#crt][The cathode ray tube]]).
+
+***** The tube is the last stop on the tour
+:PROPERTIES:
+:CUSTOM_ID: crt-on-the-tour
+:END:
+
+=crt= is in this setting for one reason: the key that tours the looks has
+to be able to reach it. The tube is otherwise an independent switch ---
+=crt: true= or the =toggle_crt= action --- and can be on beside the rain
+or anything else.
+
+So the tour touches it only when it lands on that stop or leaves it:
+
+- cycling onto =crt= switches the tube on, and nothing draws behind
+  windows while it is there;
+- cycling off =crt= switches the tube off;
+- cycling between any two backdrops leaves the tube exactly as it was, so
+  one switched on by hand survives a change of rain. "Every other stop
+  turns it off" would be one line shorter and would take a tube away from
+  under somebody who pressed a key that says nothing about it;
+- switching the tube off by hand while the setting is =crt= steps the
+  setting to =none=, because =crt= with no tube draws nothing anywhere
+  and reads as the key having broken.
+
+It is last on the tour, after =none=, because it is a different kind of
+thing: every stop before it changes what is behind a window and this one
+changes the screen. Somebody stepping the key to see what is there should
+meet it at the end rather than fall into it on the way past the rain.
 
 *Two of those are not modules of their own.* =storm= is the
 [[#liquidrain][=liquidrain=]] module with the lightning switched on, and
@@ -779,7 +967,7 @@ so both resolve.
 module draws a brief toast naming the new one --- "Liquid rain", "Snow",
 "Falling leaves", "Carbonation", "Thunderstorm", "Submerged", "Embers",
 "Soap film", "Dew on a web", "Liquid water", "Liquid glass", "Bokeh",
-"Blur", "No backdrop". Without it the honest reaction to pressing the
+"Blur", "No backdrop", "CRT". Without it the honest reaction to pressing the
 key over a
 busy wallpaper is "did that do anything?", because a calm water and a
 subtle glass can both look a great deal like the blur they replaced.
@@ -2404,6 +2592,7 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =cycle_backdrop=    | --, ="next"=, ="prev"=, or a style name | Cycle what shows through translucent windows: =glass=, =water=, =blur=, =none= |
 | =toggle_below=      | --, ="on"=, ="off"=              | Draw the focused FLOATING window behind the tiling instead of over it, or put it back |
 | =toggle_below_all=  | --, ="on"=, ="off"=              | The same for every floating window visible on the focused output |
+| =toggle_crt=        | --, ="on"=, ="off"=              | Put the whole output through a cathode ray tube, or take it back off (needs =modules.crt=) |
 | =focus_dir=         | ="left"=, ="right"=, ="up"=, ="down"= | Focus the nearest window that way, crossing to the next monitor when there is none |
 | =focus_urgent=      | --                               | Focus the window marked urgent, viewing its tags if need be |
 | =focus_last=        | --                               | Focus the window that had focus before this one |

@@ -93,6 +93,13 @@ static const GowlBuiltinModule builtin_modules[] = {
 		" *   - magnifier: screen zoom on modifier+wheel\n"
 	},
 	{
+		"crt",
+		"Puts the whole output through a cathode ray tube",
+		"  crt:\n"
+		"    enabled: true\n",
+		" *   - crt: the whole screen on a curved, scanned tube\n"
+	},
+	{
 		"blur",
 		"Blurs the desktop behind translucent windows and adds shadows",
 		"  blur:\n"
@@ -389,10 +396,16 @@ static const gchar *default_yaml_config =
 	"\n"
 	"  # What shows through a translucent window.  Fourteen of them:\n"
 	"  # rain, storm, snow, leaves, fizz, submerged, embers, soap, dew,\n"
-	"  # water, glass, bokeh, blur, nothing.\n"
+	"  # water, glass, bokeh, blur, nothing -- and `crt\', which is not a\n"
+	"  # backdrop at all but the whole screen on a tube, last on the tour.\n"
 	"  # Every backdrop module reads `window-backdrop', so this is\n"
 	"  # instant and needs none of them loaded to be bound.\n"
 	"  \"Super+Shift+apostrophe\": { action: cycle_backdrop, desc: \"Cycle the window backdrop\" }\n"
+	"\n"
+	"  # The tube is the last stop of that same key.  There is a\n"
+	"  # `toggle_crt' action for a key of its own, bound to nothing\n"
+	"  # here: the pointer is not curved with the rest of the picture,\n"
+	"  # so see `crt-curvature' before reaching for one.\n"
 	"\n"
 	"  # Put a letter on every visible window and focus the one you\n"
 	"  # press -- tmux's `C-b q' for a compositor, and the fastest way\n"

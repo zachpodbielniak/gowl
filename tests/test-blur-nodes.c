@@ -868,6 +868,81 @@ on_toast(GowlCompositor *comp, GowlMonitor *mon, const gchar *label,
 	g_ptr_array_add(seen, g_strdup(label));
 }
 
+/*
+ * The tube's stop on the tour that Super+" walks.
+ *
+ * `crt' is in #GowlBackdropStyle and is not a backdrop: nothing draws
+ * behind a window while it is selected, and the WHOLE SCREEN goes
+ * through a tube instead.  It is in the enum only so that the one key
+ * that tours the looks can reach it, which is a coupling between two
+ * otherwise independent settings and therefore worth pinning down.
+ *
+ * The part that is easy to get wrong is the part that must NOT happen:
+ * the tube is also a switch of its own (`crt: true', the `toggle_crt'
+ * action), on beside the rain if somebody wants it, and changing the
+ * rain must not take it away.
+ */
+static void
+test_the_tube_is_a_stop_on_the_tour(void)
+{
+	Rig r;
+
+	if (!modules_built(blur_alone))
+		return;
+	if (!rig_up(&r, blur_alone)) {
+		rig_down(&r);
+		g_test_skip("no GLES2 renderer to draw with here");
+		return;
+	}
+
+	list_client(&r);
+	as_tile(&r);
+
+	/* Arriving turns it on... */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_BLUR);
+	g_assert_false(gowl_compositor_get_crt(r.compositor));
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_CRT);
+	g_assert_true(gowl_compositor_get_crt(r.compositor));
+
+	/* ...and nothing is drawn behind the window while it is there: the
+	 * tube is the screen, not a backdrop, so a module still drawing here
+	 * would be putting a blurred wallpaper inside a curved picture of
+	 * itself. */
+	g_assert_null(decor_of(r.c).backdrop);
+
+	/* Leaving turns it off. */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_BLUR);
+	g_assert_false(gowl_compositor_get_crt(r.compositor));
+
+	/*
+	 * But a tube somebody switched on by hand SURVIVES a change of
+	 * backdrop.  "Every other stop turns it off" would be one line
+	 * shorter and would take the tube away the next time somebody
+	 * changed the rain -- action at a distance from a key that says
+	 * nothing about it.
+	 */
+	gowl_compositor_set_crt(r.compositor, TRUE);
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_GLASS);
+	g_assert_true(gowl_compositor_get_crt(r.compositor));
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_RAIN);
+	g_assert_true(gowl_compositor_get_crt(r.compositor));
+
+	/*
+	 * And switching the tube off while the tour is parked on its stop
+	 * steps the tour off it.  Otherwise `window-backdrop: crt' with no
+	 * tube is a setting that draws nothing anywhere, which reads as the
+	 * key having broken.
+	 */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_CRT);
+	g_assert_true(gowl_compositor_get_crt(r.compositor));
+	gowl_compositor_set_crt(r.compositor, FALSE);
+	g_assert_false(gowl_compositor_get_crt(r.compositor));
+	g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor), ==,
+	                GOWL_BACKDROP_NONE);
+
+	rig_down(&r);
+}
+
 static void
 test_backdrop_style_picks_the_module(void)
 {
@@ -956,7 +1031,15 @@ test_backdrop_style_picks_the_module(void)
 			GOWL_BACKDROP_SOAP,  GOWL_BACKDROP_DEW,
 			GOWL_BACKDROP_WATER, GOWL_BACKDROP_GLASS,
 			GOWL_BACKDROP_BOKEH, GOWL_BACKDROP_BLUR,
-			GOWL_BACKDROP_NONE,  GOWL_BACKDROP_RAIN
+			GOWL_BACKDROP_NONE,
+			/* And last of all the one that is not a backdrop: the
+			 * whole screen on a tube.  After `none' because it is a
+			 * different KIND of thing and the most drastic of them --
+			 * somebody stepping the key to see what is there should
+			 * meet it at the end rather than fall into it on the way
+			 * past the rain. */
+			GOWL_BACKDROP_CRT,
+			GOWL_BACKDROP_RAIN
 		};
 		guint i;
 
@@ -971,7 +1054,7 @@ test_backdrop_style_picks_the_module(void)
 		 * back the other way. */
 		gowl_compositor_cycle_backdrop_style(r.compositor, -1);
 		g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
-		                ==, GOWL_BACKDROP_NONE);
+		                ==, GOWL_BACKDROP_CRT);
 	}
 
 	/*
@@ -1190,7 +1273,9 @@ test_every_style_draws_exactly_once(void)
 			        name, d.count);
 	}
 
-	/* And off again, which is the fourteenth entry of the cycle. */
+	/* And off again, which is the fourteenth of the fifteen stops --
+	   the tube is the fifteenth and is not a backdrop, so it is not in
+	   the list above. */
 	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_NONE);
 	d = decor_of(r.c);
 	g_assert_null(d.backdrop);
@@ -1563,6 +1648,8 @@ main(int argc, char **argv)
 	                test_an_hdr_output_is_encoded);
 	g_test_add_func("/blur-nodes/backdrop-style",
 	                test_backdrop_style_picks_the_module);
+	g_test_add_func("/blur-nodes/the-tube-is-a-stop-on-the-tour",
+	                test_the_tube_is_a_stop_on_the_tour);
 	g_test_add_func("/blur-nodes/follow-the-window",
 	                test_nodes_follow_the_window);
 	g_test_add_func("/blur-nodes/what-counts-as-a-grab",

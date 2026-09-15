@@ -1526,6 +1526,79 @@ gboolean gowl_config_get_cube_all_monitors (GowlConfig *self);
  * whether applications see three-finger swipes at all. */
 gboolean gowl_config_get_cube_gesture (GowlConfig *self);
 
+/* --- Cathode ray tube (modules/crt) ---
+ *
+ * The one effect that is not behind a window: it captures the finished
+ * output and puts the whole of it back through a tube.  `crt' is off by
+ * default; it is the last stop on the Super+Shift+" tour of looks, and
+ * the `toggle_crt' action is there for anybody who wants a key of its
+ * own (nothing is bound to it by default).
+ *
+ * Every key below except the plain ones comes from `crt-preset' unless
+ * it is given explicitly, exactly as the animated backdrops work.
+ */
+
+/* Whether the screen is on a tube at all. */
+gboolean     gowl_config_get_crt (GowlConfig *self);
+void         gowl_config_set_crt (GowlConfig *self, gboolean on);
+
+/* Which tube: "flat", "trinitron", "consumer", "broadcast" or
+ * "arcade".  These differ in more than one number each, because the
+ * machines did. */
+const gchar *gowl_config_get_crt_preset (GowlConfig *self);
+void         gowl_config_set_crt_preset (GowlConfig *self,
+                                         const gchar *name);
+gboolean     gowl_config_crt_preset_valid (const gchar *name);
+const gchar * const *gowl_config_crt_preset_names (void);
+
+/* What sits between the guns and the phosphor. */
+GowlCrtMask  gowl_config_get_crt_mask_kind (GowlConfig *self);
+void         gowl_config_set_crt_mask_kind (GowlConfig *self,
+                                            GowlCrtMask kind);
+gboolean     gowl_config_crt_mask_from_name (const gchar *name,
+                                             GowlCrtMask *out);
+const gchar *gowl_config_crt_mask_to_name (GowlCrtMask kind);
+
+/* Scan lines down the raster, 0 for one per four output pixels. */
+gint         gowl_config_get_crt_lines (GowlConfig *self);
+/* Output pixels per phosphor triad, 0 to scale it to the output. */
+gint         gowl_config_get_crt_mask_size (GowlConfig *self);
+/* How the halation glow is built: how far the capture is shrunk before
+ * it is blurred, and how many box passes it gets. */
+gint         gowl_config_get_crt_glow_scale (GowlConfig *self);
+gint         gowl_config_get_crt_glow_passes (GowlConfig *self);
+
+/* 1/R of the faceplate with R in half screen widths, and the vertical
+ * share of it --- 1 is a sphere, 0 is a cylinder, which is a Trinitron. */
+gdouble      gowl_config_get_crt_curvature (GowlConfig *self);
+gdouble      gowl_config_get_crt_curvature_y (GowlConfig *self);
+/* How deep the dark glass between scan lines cuts, and the spot's width
+ * at black and how much wider it gets at full white. */
+gdouble      gowl_config_get_crt_scanline (GowlConfig *self);
+gdouble      gowl_config_get_crt_beam (GowlConfig *self);
+gdouble      gowl_config_get_crt_beam_bloom (GowlConfig *self);
+/* Phosphor triad depth. */
+gdouble      gowl_config_get_crt_mask (GowlConfig *self);
+/* Halation: light that left the phosphor and came back out elsewhere. */
+gdouble      gowl_config_get_crt_bloom (GowlConfig *self);
+gdouble      gowl_config_get_crt_bloom_cut (GowlConfig *self);
+/* The edges of the glass, the rim's radius, and how far the red and
+ * blue guns miss at the corner in output pixels. */
+gdouble      gowl_config_get_crt_vignette (GowlConfig *self);
+gdouble      gowl_config_get_crt_corner (GowlConfig *self);
+gdouble      gowl_config_get_crt_convergence (GowlConfig *self);
+/* The slow bright bar drifting up a tired tube. */
+gdouble      gowl_config_get_crt_hum (GowlConfig *self);
+/* The tube's transfer exponent, and a gain to pay the vignette back. */
+gdouble      gowl_config_get_crt_gamma (GowlConfig *self);
+gdouble      gowl_config_get_crt_brightness (GowlConfig *self);
+
+/* The three worth reaching without a config reload. */
+void         gowl_config_set_crt_curvature (GowlConfig *self,
+                                            gdouble curvature);
+void         gowl_config_set_crt_scanline (GowlConfig *self, gdouble depth);
+void         gowl_config_set_crt_mask (GowlConfig *self, gdouble depth);
+
 /* --- Magnifier (modules/magnifier) ---
  *
  * Screen zoom: hold the modifier and scroll to magnify the whole output

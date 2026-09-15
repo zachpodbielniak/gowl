@@ -96,7 +96,6 @@ LIB_SRCS := \
 	src/util/gowl-log.c \
 	src/util/gowl-easing.c \
 	src/util/gowl-backdrop-plan.c \
-	src/fx/gowl-fx-backdrop-host.c \
 	src/util/gowl-fx-optout.c \
 	src/fx/gowl-fx-gl.c \
 	src/fx/gowl-fx-capture.c \
@@ -105,8 +104,14 @@ LIB_SRCS := \
 	src/fx/gowl-fx-water.c \
 	src/fx/gowl-fx-rain.c \
 	src/fx/gowl-fx-fizz.c \
+	src/fx/gowl-fx-soap.c \
+	src/fx/gowl-fx-embers.c \
+	src/fx/gowl-fx-submerged.c \
+	src/fx/gowl-fx-dew.c \
 	src/fx/gowl-fx-leaves.c \
 	src/fx/gowl-fx-snow.c \
+	src/fx/gowl-fx-backdrop-host.c \
+	src/fx/gowl-fx-bokeh.c \
 	src/fx/gowl-fx-pq.c \
 	src/util/gowl-systemd.c \
 	src/util/gowl-wayland-socket.c \
@@ -684,7 +689,11 @@ $(OUTDIR)/modules/fizz.so: $(wildcard modules/fizz/*.c modules/fizz/*.h)
 $(OUTDIR)/modules/leaves.so: $(wildcard modules/leaves/*.c modules/leaves/*.h)
 $(OUTDIR)/modules/snow.so: $(wildcard modules/snow/*.c modules/snow/*.h)
 $(OUTDIR)/modules/hints.so: $(wildcard modules/hints/*.c modules/hints/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+$(OUTDIR)/modules/soapfilm.so: $(wildcard modules/soapfilm/*.c modules/soapfilm/*.h)
+$(OUTDIR)/modules/embers.so: $(wildcard modules/embers/*.c modules/embers/*.h)
+$(OUTDIR)/modules/submerged.so: $(wildcard modules/submerged/*.c modules/submerged/*.h)
+$(OUTDIR)/modules/dew.so: $(wildcard modules/dew/*.c modules/dew/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
@@ -695,7 +704,7 @@ $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(absp
 # and a window the animation module resizes, claiming the placement, must
 # still have them follow it; again with the rounded borders, which draw the
 # frame through the decorator instead.
-$(OUTDIR)/test-blur-nodes: $(addprefix $(OUTDIR)/modules/,blur.so liquidglass.so liquidwater.so liquidrain.so fizz.so leaves.so snow.so animation.so roundcorners.so)
+$(OUTDIR)/test-blur-nodes: $(addprefix $(OUTDIR)/modules/,blur.so liquidglass.so liquidwater.so liquidrain.so fizz.so leaves.so snow.so soapfilm.so embers.so submerged.so dew.so animation.so roundcorners.so)
 $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 # Everything cmacs --gowl loads, started under a headless compositor and
@@ -704,7 +713,7 @@ $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abs
 # list as cmacs_modules[] in the test.
 TEARDOWN_MODULES := wallpaper tile monocle float scrolling animation cube \
 	expo switcher magnifier blur liquidglass liquidwater liquidrain \
-	fizz leaves snow hints \
+	fizz leaves snow hints soapfilm embers submerged dew \
 	layout-indicator alpha \
 	vanitygaps roundcorners windowrules dropdown scratchpad screenshot \
 	osd clipboard bar

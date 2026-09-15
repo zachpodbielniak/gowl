@@ -142,6 +142,34 @@ static const GowlBuiltinModule builtin_modules[] = {
 		" *   - fizz: bubbles rising through a carbonated drink\n"
 	},
 	{
+		"soapfilm",
+		"Shows the wallpaper through an iridescent soap film",
+		"  soapfilm:\n"
+		"    enabled: true\n",
+		" *   - soapfilm: thin-film interference, draining and popping\n"
+	},
+	{
+		"embers",
+		"Shows sparks rising from a fire below the window",
+		"  embers:\n"
+		"    enabled: true\n",
+		" *   - embers: sparks cooling as they rise, through heat haze\n"
+	},
+	{
+		"submerged",
+		"Shows the wallpaper as though the window were under water",
+		"  submerged:\n"
+		"    enabled: true\n",
+		" *   - submerged: absorption with depth, caustics and shafts\n"
+	},
+	{
+		"dew",
+		"Draws an orb web across the window, strung with dew",
+		"  dew:\n"
+		"    enabled: true\n",
+		" *   - dew: an orb web, each drop a lens\n"
+	},
+	{
 		"hints",
 		"Labels every window with a key that focuses it",
 		"  hints:\n"
@@ -359,8 +387,9 @@ static const gchar *default_yaml_config =
 	"  \"Super+v\": { action: set_split, arg: \"vsplit\" }\n"
 	"  \"Super+Shift+v\": { action: set_split, arg: \"normal\" }\n"
 	"\n"
-	"  # What shows through a translucent window: rain, snow, leaves,\n"
-	"  # fizz, water, glass, blur or nothing.\n"
+	"  # What shows through a translucent window.  Fourteen of them:\n"
+	"  # rain, storm, snow, leaves, fizz, submerged, embers, soap, dew,\n"
+	"  # water, glass, bokeh, blur, nothing.\n"
 	"  # Every backdrop module reads `window-backdrop', so this is\n"
 	"  # instant and needs none of them loaded to be bound.\n"
 	"  \"Super+Shift+apostrophe\": { action: cycle_backdrop, desc: \"Cycle the window backdrop\" }\n"

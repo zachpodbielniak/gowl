@@ -354,6 +354,24 @@ GType gowl_action_get_type(void) G_GNUC_CONST;
  * @GOWL_BACKDROP_FIZZ: the wallpaper through a glass of something
  *   carbonated --- trains of bubbles rising from the glass
  *   (modules/fizz)
+ * @GOWL_BACKDROP_STORM: the rain, with lightning.  Drawn by
+ *   modules/liquidrain, which is the same effect with `rain-lightning'
+ *   forced on --- a style of its own rather than only a setting,
+ *   because the cycle key is how anybody finds it
+ * @GOWL_BACKDROP_SOAP: the wallpaper through a soap film, coloured by
+ *   thin-film interference and draining under gravity until it pops
+ *   (modules/soapfilm)
+ * @GOWL_BACKDROP_SUBMERGED: the wallpaper seen from under water ---
+ *   absorption with depth, caustics from the surface above, shafts and
+ *   drifting particulate (modules/submerged)
+ * @GOWL_BACKDROP_EMBERS: sparks rising from a fire below the window,
+ *   cooling along a blackbody curve, seen through the heat haze
+ *   (modules/embers)
+ * @GOWL_BACKDROP_DEW: a spider's web strung with dew, each drop a lens
+ *   (modules/dew)
+ * @GOWL_BACKDROP_BOKEH: the wallpaper thrown out of focus by a real
+ *   aperture --- discs rather than a smear.  Drawn by modules/blur,
+ *   which already owns one output-sized picture of the wallpaper
  *
  * What shows through a translucent window.
  *
@@ -372,7 +390,17 @@ typedef enum {
 	GOWL_BACKDROP_RAIN,
 	GOWL_BACKDROP_SNOW,
 	GOWL_BACKDROP_LEAVES,
-	GOWL_BACKDROP_FIZZ
+	GOWL_BACKDROP_FIZZ,
+	/* Appended, never inserted: these are stored by NAME everywhere a
+	 * user can see them, but a module comparing against a number it was
+	 * compiled with would silently start drawing for a different
+	 * style. */
+	GOWL_BACKDROP_STORM,
+	GOWL_BACKDROP_SOAP,
+	GOWL_BACKDROP_SUBMERGED,
+	GOWL_BACKDROP_EMBERS,
+	GOWL_BACKDROP_DEW,
+	GOWL_BACKDROP_BOKEH
 } GowlBackdropStyle;
 
 #define GOWL_TYPE_BACKDROP_STYLE (gowl_backdrop_style_get_type())

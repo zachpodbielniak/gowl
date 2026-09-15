@@ -1831,6 +1831,52 @@ gdouble      gowl_config_get_rain_rim (GowlConfig *self);
 gdouble      gowl_config_get_rain_impact (GowlConfig *self);
 /* How fast the running drops fall; 1.0 is the preset's own rate. */
 gdouble      gowl_config_get_rain_speed (GowlConfig *self);
+
+/* --- Bokeh: the blur module's other kernel ---
+ *
+ * `window-backdrop: bokeh' softens the same one output-sized picture of
+ * the wallpaper with a DISC rather than a Gaussian, which is what a lens
+ * does: an out-of-focus point of light becomes the shape of the
+ * aperture, evenly filled and hard-edged.
+ *
+ * `bokeh-highlight' is the one that decides whether any of it is
+ * visible.  A wallpaper has no values above 1.0, so the dynamic range a
+ * real lens works with has to be put back by hand; at 0 this is a box
+ * blur with hard edges. */
+gdouble      gowl_config_get_bokeh_radius (GowlConfig *self);
+void         gowl_config_set_bokeh_radius (GowlConfig *self, gdouble px);
+gint         gowl_config_get_bokeh_downscale (GowlConfig *self);
+void         gowl_config_set_bokeh_downscale (GowlConfig *self, gint n);
+gint         gowl_config_get_bokeh_samples (GowlConfig *self);
+void         gowl_config_set_bokeh_samples (GowlConfig *self, gint n);
+/* Aperture blades; under 3 is a circle, which is a lens wide open. */
+gint         gowl_config_get_bokeh_blades (GowlConfig *self);
+void         gowl_config_set_bokeh_blades (GowlConfig *self, gint n);
+gdouble      gowl_config_get_bokeh_rotation (GowlConfig *self);
+void         gowl_config_set_bokeh_rotation (GowlConfig *self, gdouble deg);
+gdouble      gowl_config_get_bokeh_highlight (GowlConfig *self);
+void         gowl_config_set_bokeh_highlight (GowlConfig *self, gdouble k);
+gdouble      gowl_config_get_bokeh_threshold (GowlConfig *self);
+void         gowl_config_set_bokeh_threshold (GowlConfig *self, gdouble t);
+/* Spherical aberration: how much brighter the rim of a disc is than its
+ * middle.  0 is corrected glass; 1 is a soap-bubble bokeh. */
+gdouble      gowl_config_get_bokeh_edge (GowlConfig *self);
+void         gowl_config_set_bokeh_edge (GowlConfig *self, gdouble k);
+gdouble      gowl_config_get_bokeh_brightness (GowlConfig *self);
+void         gowl_config_set_bokeh_brightness (GowlConfig *self, gdouble k);
+
+/* The storm.  `storm' as a backdrop style is this forced on over
+ * whatever rain the config asks for; `rain-lightning' switches it on
+ * for the plain `rain' style too.  The rate is the MEAN seconds between
+ * strikes, not a fixed interval: the gaps are exponential around it. */
+gboolean     gowl_config_get_rain_lightning (GowlConfig *self);
+void         gowl_config_set_rain_lightning (GowlConfig *self, gboolean on);
+gdouble      gowl_config_get_rain_lightning_rate (GowlConfig *self);
+void         gowl_config_set_rain_lightning_rate (GowlConfig *self,
+                                                  gdouble seconds);
+gdouble      gowl_config_get_rain_lightning_power (GowlConfig *self);
+void         gowl_config_set_rain_lightning_power (GowlConfig *self,
+                                                   gdouble power);
 /* How much of the tint the water takes out of the light, and how long a
  * resting drop lives in seconds.  Both preset only. */
 gdouble      gowl_config_get_rain_absorption (GowlConfig *self);
@@ -2187,6 +2233,182 @@ gdouble      gowl_config_get_snow_light (GowlConfig *self);
  * passes, 1 to 6. */
 gint         gowl_config_get_snow_frost (GowlConfig *self);
 gint         gowl_config_get_snow_frost_passes (GowlConfig *self);
+
+
+/* --- The soap film, the embers, the submerged view and the dew ---
+ *
+ * Four animated backdrops, and the same arrangement as the rain, the
+ * fizz, the leaves and the snow before them: `<fx>-preset' names a whole
+ * tuned set, `<fx>-intensity' scales how much of it is happening, and
+ * every other key OVERRIDES one number of the preset.  A key left out is
+ * not a key set to a default -- it is a key the preset still owns.
+ *
+ * `soap'       thin-film interference.  `soap-thickness' is in
+ *              NANOMETRES and is the whole effect: the colour of a pixel
+ *              is 4 R0 sin^2(2 pi n d / lambda) for the local d, so the
+ *              thickness decides how many bands are stacked up the pane.
+ *              `soap-gain' amplifies a real nine percent into something
+ *              visible behind a window.
+ *
+ * `embers'     `embers-temperature' is in KELVIN and is the palette: the
+ *              colour is the Planckian locus and the brightness is its
+ *              FOURTH power, so this is a far stronger knob than it
+ *              looks.  `embers-haze' is the shimmer of hot air, which is
+ *              a domain warp and not a refraction.
+ *
+ * `submerged'  `submerged-depth' is in METRES and everything about the
+ *              colour follows from it through the three
+ *              `submerged-extinction-*' coefficients.  There is no blue
+ *              tint anywhere in the effect: red is absorbed about twenty
+ *              times faster than blue and that is where it comes from.
+ *
+ * `dew'        an orb web.  `dew-spacing' is the Rayleigh-Plateau
+ *              wavelength -- a coated fibre does not stay coated, it
+ *              breaks into a regular string of drops -- and `dew-depth'
+ *              is in a drop's own radii, past 2 of which a bead turns
+ *              what is behind it upside down.
+ */
+
+gboolean     gowl_config_soap_preset_valid (const gchar *name);
+const gchar * const *gowl_config_soap_preset_names (void);
+const gchar *gowl_config_get_soap_preset (GowlConfig *self);
+void         gowl_config_set_soap_preset (GowlConfig *self,
+                                        const gchar *name);
+gdouble      gowl_config_get_soap_intensity (GowlConfig *self);
+const gchar *gowl_config_get_soap_tint (GowlConfig *self);
+gdouble      gowl_config_get_soap_clarity (GowlConfig *self);
+gdouble      gowl_config_get_soap_opacity (GowlConfig *self);
+gdouble      gowl_config_get_soap_brightness (GowlConfig *self);
+gdouble      gowl_config_get_soap_light (GowlConfig *self);
+gint         gowl_config_get_soap_fps (GowlConfig *self);
+gint         gowl_config_get_soap_scale (GowlConfig *self);
+gint         gowl_config_get_soap_frost (GowlConfig *self);
+gint         gowl_config_get_soap_frost_passes (GowlConfig *self);
+gdouble      gowl_config_get_soap_thickness (GowlConfig *self);
+gdouble      gowl_config_get_soap_thin (GowlConfig *self);
+gdouble      gowl_config_get_soap_drain (GowlConfig *self);
+gdouble      gowl_config_get_soap_turbulence (GowlConfig *self);
+gdouble      gowl_config_get_soap_swirl (GowlConfig *self);
+gdouble      gowl_config_get_soap_index (GowlConfig *self);
+gdouble      gowl_config_get_soap_gain (GowlConfig *self);
+gdouble      gowl_config_get_soap_sheen (GowlConfig *self);
+gdouble      gowl_config_get_soap_wedge (GowlConfig *self);
+gdouble      gowl_config_get_soap_pop (GowlConfig *self);
+gdouble      gowl_config_get_soap_meniscus (GowlConfig *self);
+gdouble      gowl_config_get_soap_fog (GowlConfig *self);
+gdouble      gowl_config_get_soap_speed (GowlConfig *self);
+gdouble      gowl_config_get_soap_life (GowlConfig *self);
+
+gboolean     gowl_config_embers_preset_valid (const gchar *name);
+const gchar * const *gowl_config_embers_preset_names (void);
+const gchar *gowl_config_get_embers_preset (GowlConfig *self);
+void         gowl_config_set_embers_preset (GowlConfig *self,
+                                        const gchar *name);
+gdouble      gowl_config_get_embers_intensity (GowlConfig *self);
+const gchar *gowl_config_get_embers_tint (GowlConfig *self);
+gdouble      gowl_config_get_embers_clarity (GowlConfig *self);
+gdouble      gowl_config_get_embers_opacity (GowlConfig *self);
+gdouble      gowl_config_get_embers_brightness (GowlConfig *self);
+gint         gowl_config_get_embers_fps (GowlConfig *self);
+gint         gowl_config_get_embers_scale (GowlConfig *self);
+gint         gowl_config_get_embers_frost (GowlConfig *self);
+gint         gowl_config_get_embers_frost_passes (GowlConfig *self);
+gdouble      gowl_config_get_embers_column (GowlConfig *self);
+gdouble      gowl_config_get_embers_density (GowlConfig *self);
+gdouble      gowl_config_get_embers_ember (GowlConfig *self);
+gdouble      gowl_config_get_embers_spacing (GowlConfig *self);
+gdouble      gowl_config_get_embers_sway (GowlConfig *self);
+gdouble      gowl_config_get_embers_drag (GowlConfig *self);
+gdouble      gowl_config_get_embers_temperature (GowlConfig *self);
+gdouble      gowl_config_get_embers_cool (GowlConfig *self);
+gdouble      gowl_config_get_embers_flicker (GowlConfig *self);
+gdouble      gowl_config_get_embers_ash (GowlConfig *self);
+gdouble      gowl_config_get_embers_glow (GowlConfig *self);
+gdouble      gowl_config_get_embers_hearth (GowlConfig *self);
+gdouble      gowl_config_get_embers_haze (GowlConfig *self);
+gdouble      gowl_config_get_embers_haze_scale (GowlConfig *self);
+gdouble      gowl_config_get_embers_fog (GowlConfig *self);
+gdouble      gowl_config_get_embers_speed (GowlConfig *self);
+
+gboolean     gowl_config_submerged_preset_valid (const gchar *name);
+const gchar * const *gowl_config_submerged_preset_names (void);
+const gchar *gowl_config_get_submerged_preset (GowlConfig *self);
+void         gowl_config_set_submerged_preset (GowlConfig *self,
+                                        const gchar *name);
+gdouble      gowl_config_get_submerged_intensity (GowlConfig *self);
+const gchar *gowl_config_get_submerged_water (GowlConfig *self);
+gdouble      gowl_config_get_submerged_clarity (GowlConfig *self);
+gdouble      gowl_config_get_submerged_opacity (GowlConfig *self);
+gdouble      gowl_config_get_submerged_brightness (GowlConfig *self);
+gint         gowl_config_get_submerged_fps (GowlConfig *self);
+gint         gowl_config_get_submerged_scale (GowlConfig *self);
+gint         gowl_config_get_submerged_frost (GowlConfig *self);
+gint         gowl_config_get_submerged_frost_passes (GowlConfig *self);
+gdouble      gowl_config_get_submerged_depth (GowlConfig *self);
+gdouble      gowl_config_get_submerged_extinction_r (GowlConfig *self);
+gdouble      gowl_config_get_submerged_extinction_g (GowlConfig *self);
+gdouble      gowl_config_get_submerged_extinction_b (GowlConfig *self);
+gdouble      gowl_config_get_submerged_murk (GowlConfig *self);
+gdouble      gowl_config_get_submerged_caustics (GowlConfig *self);
+gdouble      gowl_config_get_submerged_caustic_scale (GowlConfig *self);
+gdouble      gowl_config_get_submerged_shafts (GowlConfig *self);
+gdouble      gowl_config_get_submerged_shaft_lean (GowlConfig *self);
+gdouble      gowl_config_get_submerged_motes (GowlConfig *self);
+gdouble      gowl_config_get_submerged_mote_size (GowlConfig *self);
+gdouble      gowl_config_get_submerged_surface (GowlConfig *self);
+gdouble      gowl_config_get_submerged_sway (GowlConfig *self);
+gdouble      gowl_config_get_submerged_fog (GowlConfig *self);
+gdouble      gowl_config_get_submerged_speed (GowlConfig *self);
+gdouble      gowl_config_get_submerged_drift (GowlConfig *self);
+
+gboolean     gowl_config_dew_preset_valid (const gchar *name);
+const gchar * const *gowl_config_dew_preset_names (void);
+const gchar *gowl_config_get_dew_preset (GowlConfig *self);
+void         gowl_config_set_dew_preset (GowlConfig *self,
+                                        const gchar *name);
+gdouble      gowl_config_get_dew_intensity (GowlConfig *self);
+const gchar *gowl_config_get_dew_tint (GowlConfig *self);
+gdouble      gowl_config_get_dew_clarity (GowlConfig *self);
+gdouble      gowl_config_get_dew_opacity (GowlConfig *self);
+gdouble      gowl_config_get_dew_brightness (GowlConfig *self);
+gdouble      gowl_config_get_dew_light (GowlConfig *self);
+gint         gowl_config_get_dew_fps (GowlConfig *self);
+gint         gowl_config_get_dew_scale (GowlConfig *self);
+gint         gowl_config_get_dew_frost (GowlConfig *self);
+gint         gowl_config_get_dew_frost_passes (GowlConfig *self);
+gdouble      gowl_config_get_dew_radials (GowlConfig *self);
+gdouble      gowl_config_get_dew_pitch (GowlConfig *self);
+gdouble      gowl_config_get_dew_thread (GowlConfig *self);
+gdouble      gowl_config_get_dew_drop (GowlConfig *self);
+gdouble      gowl_config_get_dew_spacing (GowlConfig *self);
+gdouble      gowl_config_get_dew_sag (GowlConfig *self);
+gdouble      gowl_config_get_dew_depth (GowlConfig *self);
+gdouble      gowl_config_get_dew_bulge (GowlConfig *self);
+gdouble      gowl_config_get_dew_silk (GowlConfig *self);
+gdouble      gowl_config_get_dew_glint (GowlConfig *self);
+gdouble      gowl_config_get_dew_shine (GowlConfig *self);
+gdouble      gowl_config_get_dew_rim (GowlConfig *self);
+gdouble      gowl_config_get_dew_sway (GowlConfig *self);
+gdouble      gowl_config_get_dew_fog (GowlConfig *self);
+gdouble      gowl_config_get_dew_speed (GowlConfig *self);
+
+
+void         gowl_config_set_soap_intensity (GowlConfig *self,
+                                             gdouble intensity);
+void         gowl_config_set_soap_fps (GowlConfig *self, gint fps);
+void         gowl_config_set_soap_scale (GowlConfig *self, gint scale);
+void         gowl_config_set_embers_intensity (GowlConfig *self,
+                                             gdouble intensity);
+void         gowl_config_set_embers_fps (GowlConfig *self, gint fps);
+void         gowl_config_set_embers_scale (GowlConfig *self, gint scale);
+void         gowl_config_set_submerged_intensity (GowlConfig *self,
+                                             gdouble intensity);
+void         gowl_config_set_submerged_fps (GowlConfig *self, gint fps);
+void         gowl_config_set_submerged_scale (GowlConfig *self, gint scale);
+void         gowl_config_set_dew_intensity (GowlConfig *self,
+                                             gdouble intensity);
+void         gowl_config_set_dew_fps (GowlConfig *self, gint fps);
+void         gowl_config_set_dew_scale (GowlConfig *self, gint scale);
 
 /* --- Window hints (modules/hints) ---
  *

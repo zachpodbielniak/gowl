@@ -2675,6 +2675,12 @@ gowl_compositor_set_backdrop_style(GowlCompositor *self,
 		   what somebody sees when they press the key is a glass of
 		   something fizzy. */
 		case GOWL_BACKDROP_FIZZ:   label = "Carbonation";    break;
+		case GOWL_BACKDROP_STORM:  label = "Thunderstorm";   break;
+		case GOWL_BACKDROP_SOAP:   label = "Soap film";      break;
+		case GOWL_BACKDROP_SUBMERGED: label = "Submerged";   break;
+		case GOWL_BACKDROP_EMBERS: label = "Embers";         break;
+		case GOWL_BACKDROP_DEW:    label = "Dew on a web";   break;
+		case GOWL_BACKDROP_BOKEH:  label = "Bokeh";          break;
 		case GOWL_BACKDROP_BLUR:   label = "Blur";           break;
 		default:                   label = "No backdrop";    break;
 		}
@@ -2700,22 +2706,32 @@ gowl_compositor_cycle_backdrop_style(GowlCompositor *self, gint direction)
 	 * and turning the backdrop off takes the full way round rather than a
 	 * single press somebody did not mean.
 	 *
-	 * The five that MOVE lead, and they are grouped by what they are:
-	 * the three weathers first, in the order somebody would flip through
-	 * them, then the two that are liquid in a pane.  So one press from
-	 * the cmacs default is snow, which is the nearest relative of the
-	 * rain and the comparison most often being made -- and the settled
-	 * ones are still only a few presses off.
+	 * The ones that MOVE lead, grouped by what they are:
+	 *
+	 *   the weather at the window   rain, storm, snow, leaves
+	 *   a medium, not a pane        fizz, submerged, embers
+	 *   quiet, but not still        soap, dew
+	 *   liquid in a pane            water, glass
+	 *   still                       bokeh, blur, none
+	 *
+	 * STORM IS SECOND, immediately after the rain, and deliberately so:
+	 * it is the same effect with the lightning switched on, so the
+	 * comparison somebody wants to make is with the press they just
+	 * came from.  It is a style rather than only `rain-lightning: true'
+	 * because the cycle key is how anybody discovers a backdrop exists.
 	 *
 	 * Adding to this list is the whole cost of adding a backdrop to the
 	 * key.  It is NOT derived from the enum precisely so that the order
 	 * can be a judgement rather than an accident of declaration order.
 	 */
 	static const GowlBackdropStyle order[] = {
-		GOWL_BACKDROP_RAIN,  GOWL_BACKDROP_SNOW,
-		GOWL_BACKDROP_LEAVES, GOWL_BACKDROP_FIZZ,
-		GOWL_BACKDROP_WATER,
-		GOWL_BACKDROP_GLASS, GOWL_BACKDROP_BLUR,
+		GOWL_BACKDROP_RAIN,  GOWL_BACKDROP_STORM,
+		GOWL_BACKDROP_SNOW,  GOWL_BACKDROP_LEAVES,
+		GOWL_BACKDROP_FIZZ,  GOWL_BACKDROP_SUBMERGED,
+		GOWL_BACKDROP_EMBERS,
+		GOWL_BACKDROP_SOAP,  GOWL_BACKDROP_DEW,
+		GOWL_BACKDROP_WATER, GOWL_BACKDROP_GLASS,
+		GOWL_BACKDROP_BOKEH, GOWL_BACKDROP_BLUR,
 		GOWL_BACKDROP_NONE
 	};
 	GowlBackdropStyle now;

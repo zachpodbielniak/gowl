@@ -46,7 +46,7 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =action NAME [ARG]=           | Runs a keybind action by nick with an argument     |
 | =power on\vert{}off\vert{}toggle= | Powers every output                             |
 | =hdr [on\vert{}off\vert{}toggle] [OUTPUT]= | Switches an output between HDR and SDR (the focused one by default); =ERROR= when it cannot do HDR |
-| =backdrop [none\vert{}blur\vert{}glass\vert{}water\vert{}rain\vert{}snow\vert{}leaves\vert{}fizz\vert{}next\vert{}prev]= | What shows through translucent windows; no argument reports it. Every backdrop module reads it, so the change is immediate. =carbonation=, =autumn= and a few other spellings resolve too |
+| =backdrop [STYLE\vert{}next\vert{}prev]= | What shows through translucent windows; no argument reports it. STYLE is one of =none=, =blur=, =bokeh=, =glass=, =water=, =rain=, =storm=, =snow=, =leaves=, =fizz=, =soap=, =submerged=, =embers=, =dew=. Every backdrop module reads it, so the change is immediate. =carbonation=, =autumn=, =thunderstorm=, =underwater= and a few other spellings resolve too |
 | =hints [-show\vert{}-hide]= | Put a letter on every visible window; press it to focus that window. Toggles with no argument |
 | =hints-select LABEL= | Focus the window wearing =LABEL=; replies with its window id |
 | =hints-list= | =LABEL ID TITLE= per line, for whatever the overlay is showing |
@@ -79,7 +79,7 @@ A subscriber receives one line per event, =EVENT <name> <args>=:
 | =monitor-added OUTPUT=             | an output was plugged in                       |
 | =monitor-removed OUTPUT=           | an output was unplugged                        |
 | =lock locked\vert{}unlocked=       | the session locked or unlocked, from any route |
-| =backdrop none\vert{}blur\vert{}glass\vert{}water\vert{}rain\vert{}snow\vert{}leaves\vert{}fizz= | what shows through translucent windows changed |
+| =backdrop STYLE= | what shows through translucent windows changed; STYLE is the short name, one of the fourteen |
 | =command LINE=                     | a module command ran, from any source          |
 
 Events are pushed from the compositor's own code paths, so a change made from a keybind, from Elisp, from MCP or from this socket is announced the same way.

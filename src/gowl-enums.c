@@ -327,6 +327,12 @@ gowl_backdrop_style_get_type(void)
 			{ GOWL_BACKDROP_SNOW,  "GOWL_BACKDROP_SNOW",  "snow" },
 			{ GOWL_BACKDROP_LEAVES, "GOWL_BACKDROP_LEAVES", "leaves" },
 			{ GOWL_BACKDROP_FIZZ,  "GOWL_BACKDROP_FIZZ",  "fizz" },
+			{ GOWL_BACKDROP_STORM, "GOWL_BACKDROP_STORM", "storm" },
+			{ GOWL_BACKDROP_SOAP,  "GOWL_BACKDROP_SOAP",  "soap" },
+			{ GOWL_BACKDROP_SUBMERGED, "GOWL_BACKDROP_SUBMERGED", "submerged" },
+			{ GOWL_BACKDROP_EMBERS, "GOWL_BACKDROP_EMBERS", "embers" },
+			{ GOWL_BACKDROP_DEW,   "GOWL_BACKDROP_DEW",   "dew" },
+			{ GOWL_BACKDROP_BOKEH, "GOWL_BACKDROP_BOKEH", "bokeh" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlBackdropStyle", values);

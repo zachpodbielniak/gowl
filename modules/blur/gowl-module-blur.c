@@ -131,7 +131,34 @@ typedef struct {
 	 * follows it.
 	 */
 	struct wlr_swapchain *swapchain;
+	/* Which KERNEL this picture was softened with.  Without it,
+	 * switching between blur and bokeh -- or moving any of their knobs
+	 * -- changed nothing on screen until the next tag switch, because
+	 * the only other thing that makes a backdrop stale is its size or
+	 * its tags. */
+	guint64            kernel_gen;
 } GowlBlurBackdrop;
+
+/*
+ * How the one output-sized picture is softened.
+ *
+ * Two kernels, and `window-backdrop' picks: a box blur (`blur') or a
+ * lens (`bokeh').  Both produce exactly the same thing -- one
+ * output-sized texture that every window crops a piece out of -- which
+ * is why bokeh is a second kernel here rather than a ninth module with
+ * its own wallpaper capture, its own swapchain and its own copy of the
+ * host half.
+ *
+ * Compared with memcmp(), so a knob nobody remembered to check cannot
+ * leave the old picture on screen.
+ */
+typedef struct {
+	gboolean          bokeh;
+	gint              downscale;
+	gint              passes;
+	gdouble           brightness;
+	GowlFxBokehParams lens;
+} GowlBlurKernel;
 
 struct _GowlModuleBlur {
 	GowlModule  parent_instance;
@@ -141,7 +168,56 @@ struct _GowlModuleBlur {
 	GList      *backdrops;   /* GowlBlurBackdrop* */
 	gboolean    capturing;
 	guint64     serial;      /* the last backdrop built */
+	GowlBlurKernel kernel;
+	gboolean    kernel_known;
+	guint64     kernel_gen;
 };
+
+static gboolean
+blur_style_is_ours(GowlBackdropStyle style)
+{
+	return style == GOWL_BACKDROP_BLUR || style == GOWL_BACKDROP_BOKEH;
+}
+
+/*
+ * Read the kernel out of the config; %TRUE when it changed.
+ *
+ * The brightness is in here too, and it is not decoration: the box blur
+ * ships at 0.9 because a blurred wallpaper behind text wants holding
+ * back, and the bokeh ships at 1.0 because its whole point is that
+ * bright things stay bright.
+ */
+static gboolean
+blur_read_kernel(GowlModuleBlur *mod, GowlConfig *config)
+{
+	GowlBlurKernel k;
+
+	memset(&k, 0, sizeof(k));
+	k.bokeh = gowl_config_get_backdrop_style(config) == GOWL_BACKDROP_BOKEH;
+	if (k.bokeh) {
+		gowl_fx_bokeh_params_init(&k.lens);
+		k.lens.radius    = (gfloat)gowl_config_get_bokeh_radius(config);
+		k.lens.downscale = gowl_config_get_bokeh_downscale(config);
+		k.lens.samples   = gowl_config_get_bokeh_samples(config);
+		k.lens.blades    = gowl_config_get_bokeh_blades(config);
+		k.lens.rotation  = (gfloat)gowl_config_get_bokeh_rotation(config);
+		k.lens.highlight = (gfloat)gowl_config_get_bokeh_highlight(config);
+		k.lens.threshold = (gfloat)gowl_config_get_bokeh_threshold(config);
+		k.lens.edge      = (gfloat)gowl_config_get_bokeh_edge(config);
+		k.brightness     = gowl_config_get_bokeh_brightness(config);
+	} else {
+		k.downscale  = gowl_config_get_blur_downscale(config);
+		k.passes     = gowl_config_get_blur_passes(config);
+		k.brightness = gowl_config_get_blur_brightness(config);
+	}
+
+	if (mod->kernel_known && memcmp(&k, &mod->kernel, sizeof(k)) == 0)
+		return FALSE;
+	mod->kernel = k;
+	mod->kernel_known = TRUE;
+	mod->kernel_gen++;
+	return TRUE;
+}
 
 /* Per-client decoration, hung off the client so it lives and dies with
  * it and needs no separate bookkeeping. */
@@ -429,16 +505,26 @@ blur_build_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m,
 		return FALSE;
 	}
 
-	ok = gowl_fx_texture_blur(mod->gl, &soft, &raw,
-	                          gowl_config_get_blur_downscale(self->config),
-	                          gowl_config_get_blur_passes(self->config));
+	blur_read_kernel(mod, self->config);
+	if (mod->kernel.bokeh) {
+		ok = gowl_fx_texture_bokeh(mod->gl, &soft, &raw, &mod->kernel.lens);
+		/* A driver that could not build the bokeh shader still gets a
+		 * backdrop: the box blur is not what was asked for, but it is a
+		 * great deal closer to it than nothing behind the window. */
+		if (!ok)
+			ok = gowl_fx_texture_blur(mod->gl, &soft, &raw, 2, 3);
+	} else {
+		ok = gowl_fx_texture_blur(mod->gl, &soft, &raw,
+		                          mod->kernel.downscale,
+		                          mod->kernel.passes);
+	}
 
 	/* Draw the blurred texture back into the buffer the scene will
 	 * sample, at the output's full size. */
 	if (ok) {
 		pass = gowl_fx_pass_begin(mod->gl, out);
 		if (pass != NULL) {
-			gdouble bright = gowl_config_get_blur_brightness(self->config);
+			gdouble bright = mod->kernel.brightness;
 			gfloat  clear[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 			gowl_fx_pass_clear(pass, clear);
@@ -471,6 +557,7 @@ blur_build_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m,
 	/* A new blur, so every backdrop showing the last one is re-pointed --
 	 * and only then, which is what the serial is for. */
 	bd->serial = ++mod->serial;
+	bd->kernel_gen = mod->kernel_gen;
 	return TRUE;
 }
 
@@ -486,11 +573,13 @@ blur_ensure_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m)
 		mod->backdrops = g_list_prepend(mod->backdrops, bd);
 	}
 
+	blur_read_kernel(mod, self->config);
 	stale = gowl_blur_backdrop_stale(bd->buffer != NULL,
 	                                 bd->tags, m->tagset[m->seltags],
 	                                 bd->width, bd->height,
 	                                 m->wlr_output->width,
-	                                 m->wlr_output->height);
+	                                 m->wlr_output->height)
+	        || bd->kernel_gen != mod->kernel_gen;
 
 	if (stale && !blur_build_backdrop(mod, self, m, bd))
 		return NULL;
@@ -652,8 +741,11 @@ blur_apply_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlClient *c,
 	 * other while still paying for both -- so this stands down unless
 	 * the blur is what was asked for.  The older boolean `blur' key
 	 * still switches this off outright whatever the style is.
+	 *
+	 * `bokeh' is the same node built with the other kernel, so it is
+	 * this module's too.
 	 */
-	if (gowl_config_get_backdrop_style(self->config) != GOWL_BACKDROP_BLUR
+	if (!blur_style_is_ours(gowl_config_get_backdrop_style(self->config))
 	    || !gowl_config_get_blur(self->config)
 	    || (c->rule_flags & GOWL_CLIENT_RULE_NO_BLUR)
 	    || c->alpha >= GOWL_BLUR_MIN_TRANSPARENCY

@@ -169,22 +169,36 @@ magnifier-follow-cursor: true
 magnifier-smooth: true    # false shows the actual pixels, unfiltered
 magnifier-modifier: "Super"   # Super, Alt, Ctrl or Shift
 
-# What shows through a translucent window.
+# What shows through a translucent window.  Thirteen of them, plus none:
 #
-#   glass  the wallpaper refracted through the window, as though it were
-#          a slab of glass with a bevelled edge   (modules.liquidglass)
-#   water  refracted through a MOVING water surface (modules.liquidwater)
-#   blur   the wallpaper, blurred behind it              (modules.blur)
-#   none   the desktop, straight through
+#   rain       drops that collect, run and streak       (modules.liquidrain)
+#   storm      the same, with lightning                 (modules.liquidrain)
+#   snow       flakes that settle, melt and run off           (modules.snow)
+#   leaves     autumn, until the wind takes them            (modules.leaves)
+#   fizz       bubbles rising through a carbonated drink      (modules.fizz)
+#   submerged  seen from under water                     (modules.submerged)
+#   embers     sparks from a fire below, through the heat  (modules.embers)
+#   soap       an iridescent film, draining and popping  (modules.soapfilm)
+#   dew        an orb web, every bead a lens                   (modules.dew)
+#   water      refracted through a MOVING water surface (modules.liquidwater)
+#   glass      refracted through the window as a bevelled slab
+#                                                        (modules.liquidglass)
+#   bokeh      thrown out of focus by a real aperture         (modules.blur)
+#   blur       the wallpaper, blurred behind it               (modules.blur)
+#   none       the desktop, straight through
 #
-# THE MODULE IT NAMES HAS TO BE ENABLED.  All three are opt-in below, and
+# THE MODULE IT NAMES HAS TO BE ENABLED.  Every one is opt-in below, and
 # they are alternatives rather than layers -- each draws into the same
 # place in the same window's tree, so only the one named here draws.
 # Setting `window-backdrop: blur' and leaving modules.blur disabled gets
 # you nothing, and so does enabling modules.blur while this says glass.
 #
-# Super+Shift+" (cycle_backdrop) steps through all four at runtime, and
-# the layout indicator names the one it landed on.
+# `storm' is the rain module with the lightning on, and `bokeh' is the
+# blur module with a different kernel, so neither needs a module of its
+# own.
+#
+# Super+Shift+" (cycle_backdrop) steps through all fourteen at runtime,
+# and the layout indicator names the one it landed on.
 window-backdrop: glass
 
 # Frosted glass and shadows (modules.blur.enabled, window-backdrop: blur).
@@ -232,6 +246,70 @@ water-preset: sea
 water-intensity: 0.4
 water-fps: 30             # 0 draws every frame the output offers
 water-scale: 2            # render at 1/this of the window, then stretch
+
+# Lightning (window-backdrop: storm, or rain-lightning with plain rain).
+# A flash is three to five separate return strokes tens of milliseconds
+# apart, and the gaps between flashes are EXPONENTIAL around the rate
+# rather than a fixed interval -- a storm is a Poisson process, and a
+# metronome is half of what gives a fake one away.
+rain-lightning: false     # `storm' forces this on whatever it says
+rain-lightning-rate: 9.0  # MEAN seconds between strikes, 0.5..300
+rain-lightning-power: 1.0 # 0..2; 0 leaves the rain and takes the flash
+
+# Bokeh (modules.blur.enabled, window-backdrop: bokeh).  The same one
+# output-sized picture the blur makes, softened with a DISC instead of a
+# Gaussian: an out-of-focus point of light becomes the shape of the
+# aperture, evenly filled and hard-edged.
+#
+# `bokeh-highlight' is the one that decides whether any of it is visible.
+# A wallpaper has no values above 1.0, so the dynamic range a real lens
+# works with has to be put back by hand; at 0 this is a box blur with
+# hard edges.
+bokeh-radius: 34          # the defocus disc, in pixels
+bokeh-blades: 6           # 3..12 is a polygon; under 3 is a circle
+bokeh-rotation: 12        # degrees; every highlight shares it
+bokeh-samples: 128        # paid once per tag switch; under ~96 is grainy
+bokeh-downscale: 2        # 1 keeps small highlights, at four times the cost
+bokeh-highlight: 5.0      # how much a bright sample dominates its disc
+bokeh-threshold: 0.55     # the luminance it has to beat
+bokeh-edge: 0.22          # spherical aberration: a brighter rim
+bokeh-brightness: 1.0
+
+# The four newest animated backdrops.  Each has a `<fx>-preset' naming a
+# whole tuned set, an `<fx>-intensity' scaling how much is happening, and
+# an `<fx>-fps' throttle -- and around twenty override keys apiece that
+# are documented in docs/configuration.org rather than here.
+#
+# ALL OF THEM NEVER SETTLE.  While a translucent window is on a screen,
+# that screen is rendering.
+
+# Soap film: thin-film interference.  `soap-thickness' is in NANOMETRES
+# and is the whole effect -- the colour of a pixel is computed from the
+# local thickness, so it decides how many bands are stacked up the pane.
+soap-preset: drifting     # fresh, drifting, thin, oil, bubble
+soap-intensity: 1.0
+soap-fps: 30
+
+# Embers: a fire below the window.  `embers-temperature' is in KELVIN and
+# is the palette: the colour is the Planckian locus and the brightness is
+# its FOURTH power, so it is a far stronger knob than it looks.
+embers-preset: embers     # dying, embers, campfire, forge, wildfire
+embers-intensity: 1.0
+embers-fps: 30
+
+# Submerged: seen from under water.  `submerged-depth' is in METRES and
+# the colour follows from it -- water absorbs red about twenty times
+# faster than blue, so the blue is what survives rather than a tint.
+submerged-preset: reef    # pool, reef, lake, deep, murk
+submerged-intensity: 1.0
+submerged-fps: 30
+
+# Dew: an orb web.  `dew-spacing' is the Rayleigh-Plateau wavelength --
+# a coated fibre breaks into a regular string of drops -- and `dew-depth'
+# is in a bead's own radii, past 2 of which it inverts what is behind it.
+dew-preset: dawn          # gossamer, dawn, heavy, tattered, frostweb
+dew-intensity: 1.0
+dew-fps: 30
 
 # Wallpaper.  `wallpaper' is the picture every tag uses; wallpaper-tags
 # overrides it for individual tags, and a tag with no entry keeps the

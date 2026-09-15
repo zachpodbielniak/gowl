@@ -129,6 +129,13 @@ typedef struct {
 	gdouble shine;
 	gdouble rim;
 	gdouble impact;
+	/* The storm.  @lightning is whether there is any, which the STORM
+	 * backdrop forces on whatever the config says; @lightning_rate is
+	 * the mean seconds between strikes and @lightning_power how bright
+	 * one gets. */
+	gboolean lightning;
+	gdouble  lightning_rate;
+	gdouble  lightning_power;
 	gdouble absorption;
 	gdouble life;
 	gdouble speed;
@@ -369,6 +376,21 @@ rain_read_style(GowlModuleLiquidRain *mod, GowlConfig *config)
 	style.shine      = gowl_config_get_rain_shine(config);
 	style.rim        = gowl_config_get_rain_rim(config);
 	style.impact     = gowl_config_get_rain_impact(config);
+	/*
+	 * STORM IS RAIN WITH THE LIGHTNING ON.
+	 *
+	 * Not a second effect and not a second set of numbers: the same
+	 * pane, the same drops, the same preset.  Making it a style of its
+	 * own rather than only `rain-lightning: true' is about DISCOVERY --
+	 * Super+Shift+" is how anybody finds out a backdrop exists, and a
+	 * feature reachable only by editing a config file is a feature most
+	 * people will never see.
+	 */
+	style.lightning  = gowl_config_get_backdrop_style(config)
+	                   == GOWL_BACKDROP_STORM
+	                   || gowl_config_get_rain_lightning(config);
+	style.lightning_rate  = gowl_config_get_rain_lightning_rate(config);
+	style.lightning_power = gowl_config_get_rain_lightning_power(config);
 	style.absorption = gowl_config_get_rain_absorption(config);
 	style.life       = gowl_config_get_rain_life(config);
 	style.clarity    = gowl_config_get_rain_clarity(config);
@@ -494,12 +516,26 @@ rain_client_eligible(GowlClient *c)
 	       && !gowl_fx_client_is_pinned(c);
 }
 
+/*
+ * The two styles this module draws.
+ *
+ * `rain' and `storm' are the same pane; the difference is one boolean
+ * the shader reads, so there is nothing to be gained by a second module
+ * and a great deal to be lost -- two copies of the host half, two
+ * wallpaper captures, two clocks that would disagree at the seam.
+ */
+static gboolean
+rain_style_is_ours(GowlBackdropStyle style)
+{
+	return style == GOWL_BACKDROP_RAIN || style == GOWL_BACKDROP_STORM;
+}
+
 /* Whether this window should have rain behind it at all. */
 static gboolean
 rain_client_wants(GowlCompositor *self, GowlClient *c)
 {
 	return rain_client_eligible(c)
-	       && gowl_config_get_backdrop_style(self->config) == GOWL_BACKDROP_RAIN
+	       && rain_style_is_ours(gowl_config_get_backdrop_style(self->config))
 	       && !(c->rule_flags & GOWL_CLIENT_RULE_NO_BLUR)
 	       && c->alpha < GOWL_RAIN_MIN_TRANSPARENCY
 	       && c->mon != NULL;
@@ -570,7 +606,8 @@ rain_acquire_buffer(GowlCompositor *self, GowlRainNodes *nodes,
 }
 
 static void
-rain_fill_params(const GowlRainStyle *style, const GowlBackdropPlan *plan,
+rain_fill_params(const GowlRainStyle *style, const GowlFxRainClock *clock,
+                 const GowlBackdropPlan *plan,
                  gdouble radius, guint seed, GowlFxRainParams *out)
 {
 	gdouble scale = (plan->scale_x + plan->scale_y) * 0.5;
@@ -605,6 +642,8 @@ rain_fill_params(const GowlRainStyle *style, const GowlBackdropPlan *plan,
 	out->shine      = (gfloat)style->shine;
 	out->rim        = (gfloat)style->rim;
 	out->impact     = (gfloat)style->impact;
+	out->flash      = (gfloat)clock->flash;
+	out->bolt       = (gfloat)clock->bolt;
 	out->absorption = (gfloat)style->absorption;
 	out->clarity    = (gfloat)style->clarity;
 	out->brightness = (gfloat)style->brightness;
@@ -728,7 +767,7 @@ rain_update_client(GowlModuleLiquidRain *mod, GowlCompositor *self,
 			wlr_buffer_unlock(buf);
 			return TRUE;
 		}
-		rain_fill_params(&mod->style, &plan, radius,
+		rain_fill_params(&mod->style, &mod->clock, &plan, radius,
 		                 gowl_client_get_id(c), &params);
 		gowl_fx_pass_clear(pass, clear);
 		ok = gowl_fx_pass_rain(pass, &src->soft, &src->sharp, &params,
@@ -795,7 +834,7 @@ rain_frame(GowlSceneEffect *effect, GowlCompositor *self, GowlMonitor *m,
 
 	if (self == NULL || self->config == NULL || self->locked || mod->capturing)
 		return FALSE;
-	if (gowl_config_get_backdrop_style(self->config) != GOWL_BACKDROP_RAIN)
+	if (!rain_style_is_ours(gowl_config_get_backdrop_style(self->config)))
 		return FALSE;
 
 	rain_ensure_gl(mod, self);
@@ -811,9 +850,20 @@ rain_frame(GowlSceneEffect *effect, GowlCompositor *self, GowlMonitor *m,
 	 * which is correct -- no time has passed.
 	 */
 	if (mod->last_tick_us != 0 && now_us > mod->last_tick_us) {
-		gowl_fx_rain_advance(&mod->clock,
-		                     (gdouble)(now_us - mod->last_tick_us) / 1e6,
+		gdouble dt = (gdouble)(now_us - mod->last_tick_us) / 1e6;
+
+		gowl_fx_rain_advance(&mod->clock, dt,
 		                     mod->style.speed, mod->style.life);
+		/*
+		 * The storm runs on the same clock and the same tick.  Passing
+		 * a rate of 0 when the lightning is off is not a no-op: it
+		 * decays a flash that was in progress, so switching the style
+		 * away mid-strike looks like the flash ending rather than like
+		 * a dropped frame.
+		 */
+		gowl_fx_rain_lightning_advance(&mod->clock, dt,
+			mod->style.lightning ? mod->style.lightning_rate : 0.0,
+			mod->style.lightning_power);
 	}
 	if (now_us > mod->last_tick_us)
 		mod->last_tick_us = now_us;

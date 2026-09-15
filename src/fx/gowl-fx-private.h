@@ -175,6 +175,8 @@ typedef struct {
 	GLint  u_shine;
 	GLint  u_rim;
 	GLint  u_impact;
+	GLint  u_flash;
+	GLint  u_bolt;
 	GLint  u_light;
 	GLint  u_tint;
 	GLint  u_absorb;
@@ -337,6 +339,196 @@ typedef struct {
 } GowlFxSnowProg;
 
 /*
+ * The soap-film program (gowl-fx-soap.c).
+ *
+ * Built on first use like the rest.  The only one whose colour comes
+ * from INTERFERENCE rather than from a tint or a texture, which is why
+ * it carries an index of refraction and a gain and no palette at all.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_soft;
+	GLint  u_sharp;
+	GLint  u_src_origin;
+	GLint  u_src_size;
+	GLint  u_src_scale;
+	GLint  u_size;
+	GLint  u_radius;
+	GLint  u_life;
+	GLint  u_swirl_t;
+	GLint  u_thickness;
+	GLint  u_thin;
+	GLint  u_drain;
+	GLint  u_turbulence;
+	GLint  u_swirl;
+	GLint  u_index;
+	GLint  u_gain;
+	GLint  u_sheen;
+	GLint  u_wedge;
+	GLint  u_dispersion;
+	GLint  u_pop;
+	GLint  u_meniscus;
+	GLint  u_fog;
+	GLint  u_clarity;
+	GLint  u_light;
+	GLint  u_tint;
+	GLint  u_brightness;
+	GLint  u_alpha;
+	GLint  u_seed;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxSoapProg;
+
+/*
+ * The embers program (gowl-fx-embers.c).
+ *
+ * Built on first use like the rest.  The only EMISSIVE one: its subject
+ * adds light rather than bending it, which is why it carries a
+ * temperature and no depth.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_soft;
+	GLint  u_sharp;
+	GLint  u_src_origin;
+	GLint  u_src_size;
+	GLint  u_src_scale;
+	GLint  u_size;
+	GLint  u_radius;
+	GLint  u_rise;
+	GLint  u_haze_t;
+	GLint  u_column;
+	GLint  u_density;
+	GLint  u_ember;
+	GLint  u_spacing;
+	GLint  u_sway;
+	GLint  u_drag;
+	GLint  u_temperature;
+	GLint  u_cool;
+	GLint  u_flicker;
+	GLint  u_ash;
+	GLint  u_glow;
+	GLint  u_hearth;
+	GLint  u_haze;
+	GLint  u_haze_scale;
+	GLint  u_fog;
+	GLint  u_clarity;
+	GLint  u_tint;
+	GLint  u_brightness;
+	GLint  u_alpha;
+	GLint  u_seed;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxEmbersProg;
+
+/*
+ * The submerged program (gowl-fx-submerged.c).
+ *
+ * Built on first use like the rest.  The only one whose colour is an
+ * EXTINCTION rather than a tint: three per-metre absorption coefficients
+ * and an exponential, which is where all of the blue comes from.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_soft;
+	GLint  u_sharp;
+	GLint  u_src_origin;
+	GLint  u_src_size;
+	GLint  u_src_scale;
+	GLint  u_size;
+	GLint  u_radius;
+	GLint  u_caustic_t;
+	GLint  u_drift;
+	GLint  u_surf;
+	GLint  u_depth;
+	GLint  u_extinction;
+	GLint  u_murk;
+	GLint  u_water;
+	GLint  u_caustics;
+	GLint  u_caustic_scale;
+	GLint  u_shafts;
+	GLint  u_shaft_lean;
+	GLint  u_motes;
+	GLint  u_mote_size;
+	GLint  u_surface;
+	GLint  u_sway;
+	GLint  u_fog;
+	GLint  u_clarity;
+	GLint  u_brightness;
+	GLint  u_alpha;
+	GLint  u_seed;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxSubmergedProg;
+
+/*
+ * The dew-on-a-web program (gowl-fx-dew.c).
+ *
+ * Built on first use like the rest.  Its optics are the rain's -- a
+ * drop is a drop -- and everything else about it is WHERE the drops
+ * are, which is why it carries a hub, a pitch and a spacing and no
+ * density at all.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_soft;
+	GLint  u_sharp;
+	GLint  u_src_origin;
+	GLint  u_src_size;
+	GLint  u_src_scale;
+	GLint  u_size;
+	GLint  u_radius;
+	GLint  u_sway_t;
+	GLint  u_shimmer;
+	GLint  u_radials;
+	GLint  u_pitch;
+	GLint  u_thread;
+	GLint  u_drop;
+	GLint  u_spacing;
+	GLint  u_sag;
+	GLint  u_depth;
+	GLint  u_bulge;
+	GLint  u_dispersion;
+	GLint  u_silk;
+	GLint  u_glint;
+	GLint  u_shine;
+	GLint  u_rim;
+	GLint  u_sway;
+	GLint  u_hub;
+	GLint  u_fog;
+	GLint  u_clarity;
+	GLint  u_light;
+	GLint  u_tint;
+	GLint  u_absorb;
+	GLint  u_brightness;
+	GLint  u_alpha;
+	GLint  u_seed;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxDewProg;
+
+/*
+ * The bokeh kernel (gowl-fx-bokeh.c).
+ *
+ * The blur module's other way of softening one output-sized picture of
+ * the wallpaper, and the only shader here that is not drawn per window.
+ */
+typedef struct {
+	GLuint program;
+	GLint  u_tex;
+	GLint  u_texel;
+	GLint  u_radius;
+	GLint  u_blades;
+	GLint  u_rot;
+	GLint  u_highlight;
+	GLint  u_threshold;
+	GLint  u_edge;
+	GLint  u_taps;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxBokehProg;
+
+/*
  * The PQ output encode (gowl-fx-pq.c).
  *
  * Built on first use like the rest, and its failure survivable: an HDR
@@ -374,6 +566,16 @@ struct _GowlFxGl {
 	gboolean             leaf_tried;
 	GowlFxSnowProg       snow;       /* likewise */
 	gboolean             snow_tried;
+	GowlFxSoapProg       soap;       /* likewise */
+	gboolean             soap_tried;
+	GowlFxEmbersProg     embers;     /* likewise */
+	gboolean             embers_tried;
+	GowlFxSubmergedProg  submerged;  /* likewise */
+	gboolean             submerged_tried;
+	GowlFxDewProg        dew;        /* likewise */
+	gboolean             dew_tried;
+	GowlFxBokehProg      bokeh;      /* likewise */
+	gboolean             bokeh_tried;
 	GowlFxPqProg         pq;         /* likewise */
 	gboolean             pq_tried;
 

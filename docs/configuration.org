@@ -726,37 +726,61 @@ what is on screen.
 :CUSTOM_ID: window-backdrop
 :END:
 
-Seven modules can fill the space behind a translucent window, and
-=window-backdrop= says which one does.
+Eleven modules can fill the space behind a translucent window, between
+them offering thirteen looks, and =window-backdrop= says which one
+draws.
 
 | Property           | Type   | Default   | Description |
 |--------------------+--------+-----------+-------------|
-| =window-backdrop=  | enum   | =glass=   | =rain=, =snow=, =leaves=, =fizz=, =water=, =glass=, =blur= or =none= |
+| =window-backdrop=  | enum   | =glass=   | =rain=, =storm=, =snow=, =leaves=, =fizz=, =submerged=, =embers=, =soap=, =dew=, =water=, =glass=, =bokeh=, =blur= or =none= |
 
 - =rain= --- the wallpaper through a window left out in the rain: drops
   that collect, run and streak ([[#liquidrain][Liquid rain]]).
+- =storm= --- the same, with lightning ([[#storm][The storm]]).
 - =snow= --- flakes falling past the window, settling on it, melting into
   beads and running off ([[#snow][Snow]]).
 - =leaves= --- autumn leaves falling past the window and collecting on it
   until the wind takes them ([[#leaves][Falling leaves]]).
 - =fizz= --- the wallpaper through a glass of something carbonated, with
   trains of bubbles rising from the glass ([[#fizz][Carbonation]]).
+- =submerged= --- seen from under water: absorption with depth, caustics
+  from the surface above, shafts and marine snow ([[#submerged][Submerged]]).
+- =embers= --- sparks rising from a fire below the window, cooling along
+  a blackbody curve, through the heat haze ([[#embers][Embers]]).
+- =soap= --- an iridescent soap film that drains, goes clear at the top
+  and pops ([[#soap][The soap film]]).
+- =dew= --- an orb web strung with dew, each bead a lens ([[#dew][Dew on a web]]).
 - =water= --- refracted through a MOVING water surface ([[#liquidwater][Liquid water]]).
 - =glass= --- the wallpaper refracted through the window, as though the
   window were a slab of glass with a bevelled edge ([[#liquidglass][Liquid glass]]).
+- =bokeh= --- thrown out of focus by a real aperture: discs, not a smear
+  ([[#bokeh][Bokeh]]).
 - =blur= --- the wallpaper, blurred ([[#blur][Frosted glass and shadows]]).
 - =none= --- the desktop, seen straight through.
 
-=fizz= also answers to =carbonation=, =soda= and =bubbles=; =leaves= also
-answers to =autumn=, =fall= and =leaf=. The short spelling is what the
-config keys use --- =fizz-sites= rather than =carbonation-sites= --- and
-the long one is what the toast says, so both resolve.
+*Two of those are not modules of their own.* =storm= is the
+[[#liquidrain][=liquidrain=]] module with the lightning switched on, and
+=bokeh= is the [[#blur][=blur=]] module with a different kernel over the
+same one output-sized picture. Neither needs a module enabled that the
+effect it is built on does not already need.
+
+Several answer to more than one name. =fizz= also takes =carbonation=,
+=soda= and =bubbles=; =leaves= takes =autumn=, =fall= and =leaf=; =storm=
+takes =thunderstorm=, =thunder= and =lightning=; =submerged= takes
+=underwater=, =deep= and =ocean=; =embers= takes =fire=, =sparks= and
+=hearth=; =dew= takes =web=, =cobweb= and =spiderweb=; =soap= takes
+=film= and =iridescence=; =bokeh= takes =defocus= and =aperture=. The
+short spelling is what the config keys use --- =fizz-sites= rather than
+=carbonation-sites= --- and the long one is usually what the toast says,
+so both resolve.
 
 *A change says so on screen.* Switching backdrop raises the same
 =toast-requested= signal a layout change does, so the =layout-indicator=
 module draws a brief toast naming the new one --- "Liquid rain", "Snow",
-"Falling leaves", "Carbonation", "Liquid water", "Liquid glass", "Blur",
-"No backdrop". Without it the honest reaction to pressing the key over a
+"Falling leaves", "Carbonation", "Thunderstorm", "Submerged", "Embers",
+"Soap film", "Dew on a web", "Liquid water", "Liquid glass", "Bokeh",
+"Blur", "No backdrop". Without it the honest reaction to pressing the
+key over a
 busy wallpaper is "did that do anything?", because a calm water and a
 subtle glass can both look a great deal like the blur they replaced.
 
@@ -767,14 +791,21 @@ on every tag switch. Loading all of them is normal and intended: the
 setting picks which one draws, and =Super+Shift+"= (=cycle_backdrop=)
 steps through them without loading anything. The order is
 
-: rain -> snow -> leaves -> fizz -> water -> glass -> blur -> none -> rain
+: rain -> storm -> snow -> leaves -> fizz -> submerged -> embers
+:      -> soap -> dew -> water -> glass -> bokeh -> blur -> none -> rain
 
 --- everything that draws something first, grouped by what it is: the
-three weathers, then the two that are liquid in a pane, then the two that
-settle. So one press from either shipped default --- rain under CMacs,
-glass standalone --- lands on another LOOK rather than on nothing, and
-turning the backdrop off takes the full way round rather than a single
-press somebody did not mean.
+weather at the window, then the three that are a MEDIUM rather than a
+pane, then the two that are quiet but not still, then liquid in a pane,
+then the settled ones. So one press from either shipped default --- rain
+under CMacs, glass standalone --- lands on another LOOK rather than on
+nothing, and turning the backdrop off takes the full way round rather
+than a single press somebody did not mean.
+
+*=storm= is second on purpose.* It IS the rain with the lightning on, so
+the comparison anybody wants to make is with the press they just came
+from. It is a style of its own rather than only =rain-lightning: true=
+because the cycle key is how anybody finds out a backdrop exists at all.
 
 Scripts reach the same setting with =gowl-msg backdrop glass= or
 =gowl-msg backdrop next=, and a change is announced as =EVENT backdrop=
@@ -854,6 +885,363 @@ The same three things the [[#window-rules][=no-blur=, =no-shadow= and =no-anim= 
 rules]] ask for: no backdrop of any kind, no drop shadow, and no open,
 close or move animation. A window covered by both a rule and this is
 covered once; neither ever switches an effect back ON.
+
+**** The storm
+:PROPERTIES:
+:CUSTOM_ID: storm
+:END:
+
+=window-backdrop: storm= is [[#liquidrain][the rain]] with the lightning
+switched on. Same module, same drops, same preset --- one boolean more.
+It is a style of its own rather than only a setting because
+=Super+Shift+"= is how anybody discovers a backdrop exists, and a feature
+reachable only by editing a config file is a feature most people never
+see.
+
+| Property                 | Type  | Default | Description |
+|--------------------------+-------+---------+-------------|
+| =rain-lightning=         | bool  | =false= | Lightning on the plain =rain= style too.  =storm= forces it on whatever this says |
+| =rain-lightning-rate=    | float | =9.0=   | MEAN seconds between strikes, 0.5 to 300 |
+| =rain-lightning-power=   | float | =1.0=   | How bright a flash gets, 0 to 2 |
+
+*A flash is not one flash.* What people picture as a lightning flash is
+three to five separate RETURN STROKES down the same channel, twenty to
+ninety milliseconds apart, and the flicker between them is the single
+most recognisable thing about it. A smooth fade up and down reads as
+somebody turning a lamp on, which is what almost every implementation of
+this does because one envelope is easier than several. The count, the
+spacing and the strengths are hashed per strike, so no two flashes are
+the same one twice.
+
+*The gaps are exponential, not an interval.* A storm is a Poisson
+process: sometimes two almost on top of each other, sometimes a long
+wait, with only the mean fixed. =rain-lightning-rate= is that mean. A
+fixed interval is the other half of what gives a fake storm away, and it
+is the half people notice second --- after about a minute of looking at
+it.
+
+*What a flash does to the pane* is three things, and only one of them is
+"brighter". The FOG lights up --- a scattering medium under a bright
+source glows rather than clearing, so the frosted parts go brightest and
+the clean lenses stay comparatively dark. Every DROP blazes, because
+each is a lens with something very bright behind it now. And the GLINTS
+MOVE: the bolt is somewhere specific, off to one side and above, so the
+highlight on every drop jumps to a new place and back. That jump is the
+cue that says the light came from outside rather than from a number
+being turned up.
+
+Nine seconds is a storm a mile or two off: close enough to be a storm,
+far enough that a flash is an event rather than a strobe.
+
+**** Bokeh
+:PROPERTIES:
+:CUSTOM_ID: bokeh
+:END:
+
+=window-backdrop: bokeh= is [[#blur][the blur module]] with a different
+kernel over the same one output-sized picture of the wallpaper. It needs
+=modules.blur.enabled= and nothing else, and it costs what the blur costs
+--- one pass per output per tag switch, nothing per frame.
+
+| Property            | Type  | Default | Description |
+|---------------------+-------+---------+-------------|
+| =bokeh-radius=      | float | =34=    | The defocus disc, in pixels, 0 to 200 |
+| =bokeh-blades=      | int   | =6=     | Aperture blades, 3 to 12; under 3 is a circle |
+| =bokeh-rotation=    | float | =12=    | How the aperture is turned, in degrees |
+| =bokeh-samples=     | int   | =128=   | Taps around the disc, 8 to 128 |
+| =bokeh-downscale=   | int   | =2=     | Work at 1/this, 1 to 4 |
+| =bokeh-highlight=   | float | =5.0=   | How much a bright sample dominates its disc, 0 to 32 |
+| =bokeh-threshold=   | float | =0.55=  | The luminance it has to beat |
+| =bokeh-edge=        | float | =0.22=  | Spherical aberration: a brighter rim, 0 to 2 |
+| =bokeh-brightness=  | float | =1.0=   | Applied to the result |
+
+*A Gaussian blur is not what a lens does.* An out-of-focus point of light
+does not become a soft smudge fading away from its middle --- it becomes
+the SHAPE OF THE APERTURE, evenly filled, with a hard edge. That is the
+whole visible difference between a photograph's background and a blurred
+screenshot, and everything else here follows from it.
+
+*Three things make it work and two of them are not obvious.*
+
+The kernel is a disc, or a polygon: a camera stopped down has straight
+blades, and every out-of-focus highlight in the frame is the same little
+hexagon turned the same way. =bokeh-blades= picks; wide open is a circle.
+
+The averaging is done in LIGHT rather than in display values. Display
+values are encoded with roughly a square root, so averaging them directly
+averages the square roots of the light --- which drags every bright thing
+down towards its neighbours and is the single biggest reason a naive blur
+looks flat and grey.
+
+And =bokeh-highlight= puts the dynamic range back. In a real lens a
+highlight is often hundreds of times brighter than the wall behind it, so
+its disc is what you see and the wall's is not. A wallpaper has no values
+above 1.0 to carry that, so a sample's weight has to rise with how far
+its luminance is above =bokeh-threshold=. *At =bokeh-highlight: 0= this
+is a box blur with hard edges* --- the discs are all there and nobody can
+see them, which is the failure mode that makes people conclude bokeh does
+not work on SDR images.
+
+*=bokeh-samples= is the expensive knob, and two different things go wrong
+when it is too low.* A disc of radius R sampled N times has its taps
+about R/sqrt(N/pi) apart, and a highlight SMALLER than that spacing lands
+on some taps and between others --- what gets drawn is a ring rather than
+a filled shape. That one is fixed by a few dozen taps.
+
+The other is GRAIN, and it needs far more. The highlight weighting is
+what makes the discs visible at all, and it also means a handful of
+bright samples carry most of the weight --- so the effective sample count
+is a fraction of the nominal one and a detailed wallpaper comes out
+speckled. 128 is where that stops showing on a photograph. It is paid
+once per output per tag switch and never per frame, which is the only
+reason a number that large is reasonable.
+
+*The spiral is also turned by a per-pixel angle.* With one fixed sample
+set, detail finer than the tap spacing beats against the pattern and
+comes out as a fixed woven texture rather than a blur. Turning the set
+per pixel converts that into noise, which the eye forgives and a moire is
+not --- the aperture stays put, so every highlight is still the same
+hexagon turned the same way.
+
+**** The soap film
+:PROPERTIES:
+:CUSTOM_ID: soap
+:END:
+
+=window-backdrop: soap= needs =modules.soapfilm.enabled=. It is the one
+backdrop whose colour is not moved, sampled or tinted from anywhere: it
+is COMPUTED, by interference, out of a colourless film over a colourless
+wall.
+
+| Property            | Type   | Default      | Description |
+|---------------------+--------+--------------+-------------|
+| =soap-preset=       | string | ="drifting"= | =fresh=, =drifting=, =thin=, =oil=, =bubble= |
+| =soap-intensity=    | float  | =1.0=        | Scales the churn and the rise; 0 to 3 |
+| =soap-thickness=    | float  | preset       | NANOMETRES at the bottom of a fresh film |
+| =soap-thin=         | float  | preset       | The top's thickness as a fraction of the bottom's |
+| =soap-drain=        | float  | preset       | How fast the whole film thins over its life |
+| =soap-turbulence=   | float  | preset       | How much the rising thin patches disturb the bands |
+| =soap-swirl=        | float  | preset       | Plume cells across the pane |
+| =soap-index=        | float  | preset       | Refractive index; 1.35 is soap, 1.47 is oil |
+| =soap-gain=         | float  | preset       | Amplification of a real nine percent |
+| =soap-sheen=        | float  | preset       | The room, reflected |
+| =soap-wedge=        | float  | preset       | Prism deviation, in pixels |
+| =soap-pop=          | float  | preset       | How much of a life is spent popping, 0 to 0.6 |
+| =soap-meniscus=     | float  | preset       | The thick border where the film meets its frame |
+| =soap-life=         | float  | preset       | Seconds from blown to popped |
+| =soap-fog= =soap-clarity= =soap-opacity= =soap-brightness= =soap-light= =soap-tint= | | | as the other backdrops |
+| =soap-fps= =soap-scale= =soap-frost= =soap-frost-passes= | | | as the other backdrops |
+
+*Where the colour comes from.* Light hits the front face of the film and
+some reflects; the rest crosses it, reflects off the back face and comes
+back out. The two have travelled different distances --- 2nd further, for
+thickness d and index n --- so for each wavelength they arrive in step or
+out of it:
+
+: R(lambda) = 4 R0 sin^2(2 pi n d / lambda),  R0 = ((n-1)/(n+1))^2
+
+That is the whole effect. Feed it a thickness and it gives back the
+colour that thickness is; there is no palette anywhere in the shader.
+
+*Three things it does while you watch it.*
+
+IT DRAINS. Gravity pulls the liquid down, so the film is a wedge and the
+bands lie in horizontal stripes --- a stripe being a line of constant
+thickness. Getting that backwards is what makes a soap effect look like
+an oil slick.
+
+THE TOP GOES CLEAR BEFORE IT POPS. As d falls below about a twentieth of
+a wavelength the phase goes to zero and sin² of it goes with it, for
+every wavelength at once. Seen in reflection that is the famous black
+film; seen in transmission, which is what a window shows, the top simply
+stops colouring and the wallpaper comes through untouched. It is not
+drawn in --- it falls out of the formula.
+
+IT SWIRLS UPWARD. Counter-intuitively, thin patches RISE: thinner film is
+lighter, so it floats up through the thicker film around it. A film whose
+bands only slide downward is missing the thing that makes a real one
+hypnotic.
+
+*=soap-gain= is honest amplification, not invention.* A real film sends
+back at most nine percent of what hits it, which behind a translucent
+window is a colour nobody would see. The transmission's EXPOSURE is
+normalised out and its CHROMA is kept, so the gain buys visible bands
+instead of a window that has quietly gone dark. That is the only
+presentational choice in the shader, and it leaves the clear-film limit
+intact: as the thickness goes to zero every channel's reflectance goes to
+zero together, so the normalisation divides by one and changes nothing.
+
+*Past about 3600 nm the bands are finer than a pixel* and what is drawn
+is aliasing rather than a rainbow, so =soap-thickness= is clamped there.
+A real film that thick exists for under a second.
+
+**** Submerged
+:PROPERTIES:
+:CUSTOM_ID: submerged
+:END:
+
+=window-backdrop: submerged= needs =modules.submerged.enabled=.
+[[#liquidwater][Liquid water]] is a SURFACE seen from outside; this is the
+medium seen from inside, and nothing a medium does over a distance is
+anything a surface does.
+
+| Property                    | Type   | Default  | Description |
+|-----------------------------+--------+----------+-------------|
+| =submerged-preset=          | string | ="reef"= | =pool=, =reef=, =lake=, =deep=, =murk= |
+| =submerged-intensity=       | float  | =1.0=    | Scales the caustics, the motes and the surface; 0 to 3 |
+| =submerged-depth=           | float  | preset   | METRES of water at the middle of the pane, 0 to 30 |
+| =submerged-extinction-r=    | float  | preset   | Per-metre absorption in red |
+| =submerged-extinction-g=    | float  | preset   | ... in green |
+| =submerged-extinction-b=    | float  | preset   | ... in blue |
+| =submerged-murk=            | float  | preset   | Extra scattering, as though silty |
+| =submerged-water=           | colour | ="#0b4761"= | What is scattered back INTO the line of sight |
+| =submerged-caustics=        | float  | preset   | How bright the net from the surface is |
+| =submerged-caustic-scale=   | float  | preset   | Caustic cells across the pane |
+| =submerged-shafts=          | float  | preset   | Columns of light coming down |
+| =submerged-shaft-lean=      | float  | preset   | How far they lean --- where the sun is |
+| =submerged-motes=           | float  | preset   | How much marine snow, 0 to 1 |
+| =submerged-mote-size=       | float  | preset   | A speck's radius in pixels |
+| =submerged-surface=         | float  | preset   | How visible the underside of the surface is |
+| =submerged-sway=            | float  | preset   | How far the whole view wobbles, in pixels |
+| =submerged-drift=           | float  | preset   | Seconds for a speck to cross the pane |
+| =submerged-fog= =submerged-clarity= =submerged-opacity= =submerged-brightness= | | | as the other backdrops |
+| =submerged-fps= =submerged-scale= =submerged-frost= =submerged-frost-passes= | | | as the other backdrops |
+
+*The blue is not a tint.* Water absorbs light exponentially with
+distance and the coefficient depends strongly on wavelength --- roughly
+0.45 per metre in the red, 0.07 in the green, 0.02 in the blue. So over a
+few metres the red is gone, over ten the green is going, and what is left
+is blue:
+
+: T(lambda) = exp(-k(lambda) * depth)
+
+Nothing in the shader multiplies by a blue colour. Three numbers and one
+exponential produce it, which is why turning =submerged-depth= up walks
+the picture through exactly the sequence a diver sees --- oranges first,
+then yellows, then greens --- instead of just getting bluer.
+
+*And the medium puts light back.* A scattering medium is not only a
+filter: it glows with what is scattered INTO the line of sight, which is
+why distant things underwater are pale rather than black.
+=submerged-water= is that colour. The same exponential, the other way
+round.
+
+*The caustics are the surface's fold lines.* Where neighbouring patches
+of the wavy surface send light to the same place it piles up, and for a
+random surface those lines are the boundaries between the regions each
+bump lights --- which is a cellular diagram. They are drawn as the edges
+of one whose feature points ORBIT rather than translate, so the net
+writhes in place instead of sliding across the bottom. A periodic sine
+pattern reads as swimming-pool tiling.
+
+**** Embers
+:PROPERTIES:
+:CUSTOM_ID: embers
+:END:
+
+=window-backdrop: embers= needs =modules.embers.enabled=. The thermal
+opposite of [[#snow][the snow]], and it brings two mechanisms nothing else
+here has.
+
+| Property                | Type   | Default    | Description |
+|-------------------------+--------+------------+-------------|
+| =embers-preset=         | string | ="embers"= | =dying=, =embers=, =campfire=, =forge=, =wildfire= |
+| =embers-intensity=      | float  | =1.0=      | Scales how many sparks and how fast; 0 to 3 |
+| =embers-temperature=    | float  | preset     | KELVIN at birth, 900 to 4000 |
+| =embers-cool=           | float  | preset     | How fast a spark cools over its rise |
+| =embers-column=         | float  | preset     | Pixels per column of the ember layer |
+| =embers-density=        | float  | preset     | How many columns carry sparks, 0 to 1 |
+| =embers-ember=          | float  | preset     | A spark's radius in pixels |
+| =embers-spacing=        | float  | preset     | How closely a column lets them go |
+| =embers-sway=           | float  | preset     | How far one wanders sideways, in pixels |
+| =embers-drag=           | float  | preset     | How hard a spark decelerates as it rises |
+| =embers-flicker=        | float  | preset     | Per-spark unsteadiness |
+| =embers-ash=            | float  | preset     | The fraction that have burnt out --- dark, and FALLING |
+| =embers-glow=           | float  | preset     | The halo around each spark |
+| =embers-hearth=         | float  | preset     | The fire's own light on the bottom of the pane |
+| =embers-haze=           | float  | preset     | Heat shimmer, in pixels of displacement |
+| =embers-haze-scale=     | float  | preset     | Shimmer cells across the pane |
+| =embers-fog= =embers-clarity= =embers-opacity= =embers-brightness= =embers-tint= | | | as the other backdrops |
+| =embers-fps= =embers-scale= =embers-frost= =embers-frost-passes= | | | as the other backdrops |
+
+*The colour is a temperature.* An ember is a lump of carbon glowing as a
+black body, and the colour of a black body is a function of that one
+number: around 2300 K at the top of a wood fire, dull red at 1000, gone
+below about 800. The Planckian locus is evaluated directly, so the whole
+palette of the effect is one cooling curve and nobody chose any of it.
+=embers-temperature= is therefore a HUE control as much as a brightness
+one, which is why =embers-intensity= deliberately does not touch it.
+
+*And the brightness goes as the fourth power.* Stefan-Boltzmann:
+radiated power is proportional to T⁴, so a spark that has cooled by half
+is SIXTEEN times dimmer. That is why real sparks wink out so sharply
+rather than fading gently, and it is the difference between this and a
+particle system with an alpha ramp.
+
+*The air above a fire is not a lens.* Hot air is less dense, so its
+refractive index is lower, and the air above a fire is a turbulent
+mixture. What that does to a view through it is a DOMAIN WARP --- the
+image displaced by a smoothly varying, slowly drifting random field, so
+straight lines wobble rather than bending one way. Every other backdrop
+here displaces the sample by the geometry of a surface; =embers-haze= is
+the only one that displaces it by noise, and it is a different look:
+shimmer, not refraction. It is strongest just above the source and mixes
+itself away with height.
+
+*Some of them are ash*: burnt out, dark, and falling rather than rising.
+Two directions on screen at once is most of what makes it read as a fire
+rather than as an effect.
+
+**** Dew on a web
+:PROPERTIES:
+:CUSTOM_ID: dew
+:END:
+
+=window-backdrop: dew= needs =modules.dew.enabled=. The optics are
+[[#liquidrain][the rain's]] --- a dew drop and a raindrop are the same ball
+of water --- and the effect is WHERE the drops are.
+
+| Property          | Type   | Default  | Description |
+|-------------------+--------+----------+-------------|
+| =dew-preset=      | string | ="dawn"= | =gossamer=, =dawn=, =heavy=, =tattered=, =frostweb= |
+| =dew-intensity=   | float  | =1.0=    | The wind: how far it breathes and how fast; 0 to 3 |
+| =dew-radials=     | float  | preset   | Spokes, 3 to 48.  Their angles are jittered |
+| =dew-pitch=       | float  | preset   | Pixels the capture spiral gains per turn |
+| =dew-thread=      | float  | preset   | Silk width in pixels |
+| =dew-drop=        | float  | preset   | A bead's radius in pixels |
+| =dew-spacing=     | float  | preset   | Pixels between beads --- the Rayleigh-Plateau wavelength |
+| =dew-sag=         | float  | preset   | How far a loaded span hangs |
+| =dew-depth=       | float  | preset   | Wallpaper distance in a drop's OWN radii; past 2 it inverts |
+| =dew-bulge=       | float  | preset   | How domed a drop reads |
+| =dew-silk=        | float  | preset   | How bright the dry thread is |
+| =dew-glint= =dew-shine= =dew-rim= | float | preset | The highlight on each bead, and the dark contact ring |
+| =dew-sway=        | float  | preset   | How far the web breathes, in pixels |
+| =dew-fog= =dew-clarity= =dew-opacity= =dew-brightness= =dew-light= =dew-tint= | | | as the other backdrops |
+| =dew-fps= =dew-scale= =dew-frost= =dew-frost-passes= | | | as the other backdrops |
+
+*The structure is a real one.* The hub is ABOVE CENTRE, because an orb
+weaver sits head-down and drops on prey --- a centred hub reads as a
+logo. The capture spiral is Archimedean, gaining a constant amount per
+turn, because the spider lays it walking outward a body length at a time.
+The spoke angles are jittered, because a spider does not measure and a
+web with exactly 360/n between its spokes is a wheel.
+
+*The dew is on the spiral and not on the radials*, and that is not an
+economy. The capture spiral is the STICKY one --- coated in glue droplets
+--- and the radials are dry silk, so water beads on the one and not the
+other. Anybody who has looked at a wet web has seen this and would not be
+able to say why the other way round looks wrong.
+
+*The beads are evenly spaced* because of the Rayleigh-Plateau
+instability, not because of a decision: a cylinder of liquid on a fibre
+is unstable to a wavelength a few times its own circumference, so a
+coated thread does not stay coated --- it breaks into a regular string of
+drops. =dew-spacing= is that wavelength.
+
+*And the thread sags under them.* A line loaded along its length hangs in
+a catenary, a parabola over one span, with the sag going as the load. A
+web drawn with straight segments between radials is the commonest way
+this is drawn wrong.
 
 **** Frosted glass and shadows
 :PROPERTIES:

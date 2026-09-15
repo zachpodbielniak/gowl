@@ -128,6 +128,8 @@ static const gchar rain_frag_src[] =
 	"uniform float u_shine;         /* specular exponent */\n"
 	"uniform float u_rim;           /* the dark contact ring */\n"
 	"uniform float u_impact;        /* rings thrown by a landing drop */\n"
+	"uniform float u_flash;         /* lightning, this instant, 0..1 */\n"
+	"uniform float u_bolt;          /* where across the sky it is, -1..1 */\n"
 	"uniform vec3  u_light;\n"
 	"uniform vec3  u_tint;\n"
 	"uniform float u_absorb;\n"
@@ -660,6 +662,60 @@ static const gchar rain_frag_src[] =
 	"  if (ring > 0.0)\n"
 	"    col += vec3(clamp(ring, 0.0, 1.0) * 0.22);\n"
 	"\n"
+	"  /*\n"
+	"   * THE LIGHTNING.\n"
+	"   *\n"
+	"   * Three things happen to a rainy window under a flash, and only\n"
+	"   * one of them is \"brighter\".  Doing that one alone is what makes\n"
+	"   * a lightning effect look like somebody flicking a light switch.\n"
+	"   *\n"
+	"   * 1. THE FOG LIGHTS UP.  A scattering medium under a bright source\n"
+	"   *    GLOWS; it does not clear.  So the glow is weighted by @fog --\n"
+	"   *    the frosted parts of the pane go brightest and the clean\n"
+	"   *    lenses stay comparatively dark, which is the opposite of what\n"
+	"   *    a flat white add does and is why the drops still read as\n"
+	"   *    drops mid-flash.\n"
+	"   *\n"
+	"   * 2. EVERY DROP BLAZES.  A drop is a lens with something very\n"
+	"   *    bright behind it now, so its focus -- the gathered light in\n"
+	"   *    the middle -- goes up far more than the pane around it does.\n"
+	"   *\n"
+	"   * 3. THE GLINTS MOVE.  The bolt is somewhere specific, off to one\n"
+	"   *    side and above, and for the length of the flash it is the\n"
+	"   *    brightest thing in the sky by a wide margin -- so the\n"
+	"   *    highlight on every drop jumps to a new place and back.  That\n"
+	"   *    jump is the cue that says the light came from OUTSIDE rather\n"
+	"   *    than from the compositor turning a number up.\n"
+	"   *\n"
+	"   * The colour is a return stroke\'s, near enough: a lightning\n"
+	"   * channel runs around 9000 K and reads blue-white against\n"
+	"   * anything on a desktop.\n"
+	"   */\n"
+	"  if (u_flash > 0.002) {\n"
+	"    vec3  lit = vec3(0.84, 0.90, 1.00);\n"
+	"    float g   = clamp(u_flash, 0.0, 1.0);\n"
+	"\n"
+	"    col += lit * g * (0.02 + fog * 0.07);\n"
+	"    if (best.w > 0.0) {\n"
+	"      vec3  bl = normalize(vec3(u_bolt, -0.80, 0.55));\n"
+	"      vec3  hv = normalize(bl + vec3(0.0, 0.0, 1.0));\n"
+	"      float s  = pow(max(dot(n, hv), 0.0), max(u_shine, 1.0));\n"
+	"      float f  = pow(max(1.0 - l, 0.0), 2.0);\n"
+	"      col += lit * g * (0.60 * f + 1.25 * s) * best.w;\n"
+	"    }\n"
+	"    /*\n"
+	"     * A touch of wash, and only a touch.\n"
+	"     *\n"
+	"     * The window in front of this is something somebody is reading,\n"
+	"     * and a dry pane at the shipped fog is most of the pane -- so\n"
+	"     * the lit-fog term above is already the loudest thing here.  At\n"
+	"     * the first numbers tried, a peak flash took the whole backdrop\n"
+	"     * to near white and the drops became glass beads on a blank\n"
+	"     * sheet.  A flash should be dramatic, not obliterating.\n"
+	"     */\n"
+	"    col = mix(col, lit, g * 0.03);\n"
+	"  }\n"
+	"\n"
 	"  col = clamp(col * u_brightness, 0.0, 1.0);\n"
 	"\n"
 	"  float a = u_alpha * cov;\n"
@@ -717,6 +773,8 @@ rain_prog_ensure(GowlFxGl *self)
 	p->u_shine      = glGetUniformLocation(p->program, "u_shine");
 	p->u_rim        = glGetUniformLocation(p->program, "u_rim");
 	p->u_impact     = glGetUniformLocation(p->program, "u_impact");
+	p->u_flash      = glGetUniformLocation(p->program, "u_flash");
+	p->u_bolt       = glGetUniformLocation(p->program, "u_bolt");
 	p->u_light      = glGetUniformLocation(p->program, "u_light");
 	p->u_tint       = glGetUniformLocation(p->program, "u_tint");
 	p->u_absorb     = glGetUniformLocation(p->program, "u_absorb");
@@ -846,6 +904,135 @@ gowl_fx_rain_advance(GowlFxRainClock *clock, gdouble dt, gdouble speed,
 	}
 }
 
+/*
+ * A stable pseudo-random number in [0,1) from two whole-ish numbers.
+ *
+ * Used to give each flash its own stroke pattern.  Written out here
+ * rather than taken from glib's GRand because the flash has to be a
+ * FUNCTION of which strike it is: two outputs advancing the same clock
+ * must agree, and a stateful generator consulted a different number of
+ * times on each would not.
+ */
+static gdouble
+storm_hash(gdouble a, gdouble b)
+{
+	gdouble s = sin(a * 12.9898 + b * 78.233) * 43758.5453;
+
+	return s - floor(s);
+}
+
+/*
+ * How bright the flash is @t seconds into strike number @n.
+ *
+ * A flash is 2 to 5 RETURN STROKES down the same channel, each with a
+ * rise of about a millisecond and a decay of a few tens, spaced 20 to
+ * 90 ms apart.  That flicker is the most recognisable thing about
+ * lightning and the thing a single smooth envelope gets wrong: a fade
+ * up and down reads as a lamp, not as a strike.
+ *
+ * The first stroke is the brightest (it discharges the most channel);
+ * the rest are drawn from a spread that lets a later one occasionally
+ * beat it, which happens in real flashes and is worth the two lines.
+ */
+static gdouble
+storm_envelope(gdouble n, gdouble t)
+{
+	gint   strokes;
+	gint   k;
+	gdouble at = 0.0;
+	gdouble sum = 0.0;
+
+	if (t < 0.0)
+		return 0.0;
+
+	strokes = 2 + (gint)(storm_hash(n, 3.7) * 4.0);   /* 2..5 */
+	for (k = 0; k < strokes; k++) {
+		gdouble amp, tau, dt;
+
+		amp = (k == 0) ? 1.0 : 0.30 + storm_hash(n, (gdouble)k * 1.7) * 0.75;
+		tau = 0.022 + storm_hash(n, (gdouble)k * 5.1 + 0.3) * 0.045;
+		dt  = t - at;
+		if (dt >= 0.0) {
+			/* Rise over ~1.5 ms, then an exponential tail.  The rise
+			 * matters: without it a stroke starts at full brightness on
+			 * whichever frame it lands, and at 30 fps that is a
+			 * one-frame square pulse that aliases into a flicker of the
+			 * wrong frequency. */
+			gdouble rise = dt < 0.0015 ? dt / 0.0015 : 1.0;
+
+			sum += amp * rise * exp(-dt / tau);
+		}
+		at += 0.020 + storm_hash(n, (gdouble)k * 2.3 + 9.0) * 0.070;
+	}
+	return sum;
+}
+
+void
+gowl_fx_rain_lightning_advance(GowlFxRainClock *clock, gdouble dt,
+                               gdouble rate, gdouble power)
+{
+	gdouble flash;
+
+	if (clock == NULL)
+		return;
+	if (!(dt > 0.0))
+		return;
+	if (dt > 0.25)
+		dt = 0.25;   /* a stall is not a squall */
+
+	if (!(rate > 0.0)) {
+		/* Switched off.  Decay whatever was in progress rather than cut
+		 * it: turning the storm off mid-flash should look like the flash
+		 * finishing, not like a dropped frame. */
+		clock->flash = clock->flash > 0.001 ? clock->flash * 0.25 : 0.0;
+		clock->strike_t = -1.0;
+		clock->wait = 0.0;
+		return;
+	}
+
+	if (clock->strike_t >= 0.0) {
+		clock->strike_t += dt;
+		/* Five strokes at up to 90 ms apart plus a tail; past this there
+		 * is nothing left of the flash to compute. */
+		if (clock->strike_t > 0.9) {
+			clock->strike_t = -1.0;
+			clock->flash = 0.0;
+		}
+	}
+
+	if (clock->strike_t < 0.0) {
+		clock->wait -= dt;
+		if (clock->wait <= 0.0) {
+			gdouble u;
+
+			clock->strike += 1.0;
+			if (clock->strike > 1e6)
+				clock->strike = 0.0;
+			clock->strike_t = 0.0;
+			/* Where across the sky.  Whole window widths off to either
+			 * side, so the glints swing rather than nudge. */
+			clock->bolt = storm_hash(clock->strike, 17.0) * 2.0 - 1.0;
+			/*
+			 * An EXPONENTIAL gap, which is what a Poisson process gives
+			 * and what a storm sounds like: sometimes two almost on top
+			 * of each other, sometimes a long wait.  A fixed interval is
+			 * the other half of what gives a fake storm away, and it is
+			 * the half people notice second -- after about a minute.
+			 *
+			 * Clamped away from 0 so the log is finite, and the mean is
+			 * @rate by construction.
+			 */
+			u = storm_hash(clock->strike, 41.0);
+			u = CLAMP(u, 1e-4, 0.9999);
+			clock->wait = -rate * log(u);
+		}
+	}
+
+	flash = clock->strike_t >= 0.0
+		? storm_envelope(clock->strike, clock->strike_t) : 0.0;
+	clock->flash = CLAMP(flash * (power > 0.0 ? power : 1.0), 0.0, 1.0);
+}
+
 gboolean
 gowl_fx_pass_rain(GowlFxPass             *pass,
                   const GowlFxTexture    *soft,
@@ -910,6 +1097,8 @@ gowl_fx_pass_rain(GowlFxPass             *pass,
 	glUniform1f(p->u_shine, MAX(1.0f, params->shine));
 	glUniform1f(p->u_rim, CLAMP(params->rim, 0.0f, 1.0f));
 	glUniform1f(p->u_impact, CLAMP(params->impact, 0.0f, 1.0f));
+	glUniform1f(p->u_flash, CLAMP(params->flash, 0.0f, 1.0f));
+	glUniform1f(p->u_bolt, CLAMP(params->bolt, -1.0f, 1.0f));
 	glUniform3fv(p->u_light, 1, params->light);
 	glUniform3fv(p->u_tint, 1, params->tint);
 	glUniform1f(p->u_absorb, CLAMP(params->absorption, 0.0f, 1.0f));

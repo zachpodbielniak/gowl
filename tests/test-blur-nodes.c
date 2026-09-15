@@ -67,6 +67,11 @@ static const gchar *const with_rounded[]   = { "blur", "animation",
 static const gchar *const both_backdrops[] = { "blur", "liquidglass",
                                                "liquidwater", "liquidrain",
                                                NULL };
+/* And literally every one, including the four that share a host. */
+static const gchar *const all_backdrops[] = {
+	"blur", "liquidglass", "liquidwater", "liquidrain", "fizz", "leaves",
+	"snow", "soapfilm", "embers", "submerged", "dew", NULL
+};
 
 typedef struct {
 	gchar             *parent;   /* XDG_RUNTIME_DIR before the rig */
@@ -926,21 +931,32 @@ test_backdrop_style_picks_the_module(void)
 	 * that DRAWS something comes first, so one press from either shipped
 	 * default lands on another look and turning the backdrop off takes
 	 * the full way round.  Derived from the enum it would be none, blur,
-	 * glass, water, rain, snow, leaves, fizz -- which nobody would notice
-	 * was wrong except by pressing the key.
+	 * glass, water, rain, ... in declaration order -- which nobody would
+	 * notice was wrong except by pressing the key.
 	 *
-	 * The five that MOVE lead, grouped by what they are: the three
-	 * weathers, then the two that are liquid in a pane.  Written out in
-	 * full here rather than looped, because the ORDER is the thing being
-	 * asserted and a loop over a copy of the same array would assert
-	 * nothing at all.
+	 * The ones that MOVE lead, grouped by what they are: the weather at
+	 * the window, then the three that are a medium rather than a pane,
+	 * then the quiet two, then liquid in a pane, then the still ones.
+	 *
+	 * STORM IS SECOND, immediately after the rain, because it IS the
+	 * rain with the lightning on and the comparison anybody wants is
+	 * with the press they just came from.  That is the one entry in this
+	 * list whose position was asked for rather than chosen.
+	 *
+	 * Written out in full rather than looped, because the ORDER is the
+	 * thing being asserted and a loop over a copy of the same array
+	 * would assert nothing at all.
 	 */
 	{
 		static const GowlBackdropStyle expect[] = {
-			GOWL_BACKDROP_SNOW, GOWL_BACKDROP_LEAVES,
-			GOWL_BACKDROP_FIZZ, GOWL_BACKDROP_WATER,
-			GOWL_BACKDROP_GLASS, GOWL_BACKDROP_BLUR,
-			GOWL_BACKDROP_NONE, GOWL_BACKDROP_RAIN
+			GOWL_BACKDROP_STORM,
+			GOWL_BACKDROP_SNOW,  GOWL_BACKDROP_LEAVES,
+			GOWL_BACKDROP_FIZZ,  GOWL_BACKDROP_SUBMERGED,
+			GOWL_BACKDROP_EMBERS,
+			GOWL_BACKDROP_SOAP,  GOWL_BACKDROP_DEW,
+			GOWL_BACKDROP_WATER, GOWL_BACKDROP_GLASS,
+			GOWL_BACKDROP_BOKEH, GOWL_BACKDROP_BLUR,
+			GOWL_BACKDROP_NONE,  GOWL_BACKDROP_RAIN
 		};
 		guint i;
 
@@ -950,8 +966,9 @@ test_backdrop_style_picks_the_module(void)
 			g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
 			                ==, expect[i]);
 		}
-		/* Eight presses is all the way round, which is what the last
-		 * entry above says.  And back the other way. */
+		/* The last entry is the rain again, which is what says the list
+		 * above is the WHOLE way round rather than a prefix of it.  And
+		 * back the other way. */
 		gowl_compositor_cycle_backdrop_style(r.compositor, -1);
 		g_assert_cmpint(gowl_compositor_get_backdrop_style(r.compositor),
 		                ==, GOWL_BACKDROP_NONE);
@@ -1092,6 +1109,92 @@ test_a_window_that_asked_for_nothing_gets_nothing(void)
 	after = decor_of(r.c);
 	g_assert_null(after.backdrop);
 	g_assert_null(after.shadow);
+
+	rig_down(&r);
+}
+
+/*
+ * Every style draws, and only its own module draws.
+ *
+ * Eleven backdrop modules are loaded at once, which is how cmacs loads
+ * them, and each of the thirteen styles is selected in turn.  Two things
+ * are asserted for each and they fail in opposite directions:
+ *
+ *   IT DRAWS AT ALL.  A style whose module is not listening -- a
+ *   mistyped enum in a `*_style_is_ours', a module never registered --
+ *   leaves the window with nothing behind it.  That is a silent
+ *   failure: the toast still announces the style, and the only symptom
+ *   is that the desktop looks like `none'.
+ *
+ *   EXACTLY ONE draws.  These are alternatives that all write a node
+ *   into the same place in the same window's tree, so two answering
+ *   means one is hidden behind the other while both still pay for a
+ *   capture, a blur and a render every tick.  The cost is invisible and
+ *   the picture looks right, which is the worst combination.
+ *
+ *   `d.count' is every buffer hanging off the window, which is the
+ *   backdrop plus the shadow; the shadow is the blur module's and stays
+ *   whatever the style is.
+ */
+static void
+test_every_style_draws_exactly_once(void)
+{
+	static const GowlBackdropStyle styles[] = {
+		GOWL_BACKDROP_BLUR,  GOWL_BACKDROP_BOKEH,
+		GOWL_BACKDROP_GLASS, GOWL_BACKDROP_WATER,
+		GOWL_BACKDROP_RAIN,  GOWL_BACKDROP_STORM,
+		GOWL_BACKDROP_SNOW,  GOWL_BACKDROP_LEAVES,
+		GOWL_BACKDROP_FIZZ,  GOWL_BACKDROP_SOAP,
+		GOWL_BACKDROP_EMBERS, GOWL_BACKDROP_SUBMERGED,
+		GOWL_BACKDROP_DEW
+	};
+	Rig   r;
+	Decor d;
+	guint i;
+
+	if (!modules_built(all_backdrops))
+		return;
+	if (!rig_up(&r, all_backdrops)) {
+		rig_down(&r);
+		g_test_skip("no GLES2 renderer to draw with here");
+		return;
+	}
+
+	list_client(&r);
+	as_tile(&r);
+
+	d = decor_of(r.c);
+	if (d.backdrop == NULL) {
+		rig_down(&r);
+		g_test_skip("no backdrop was built in this rig");
+		return;
+	}
+
+	for (i = 0; i < G_N_ELEMENTS(styles); i++) {
+		const gchar *name = gowl_config_backdrop_style_name(styles[i]);
+
+		gowl_compositor_set_backdrop_style(r.compositor, styles[i]);
+		/* The animated ones draw from their frame hook as well as from
+		 * client_placed; a tick makes sure the ones that only bootstrap
+		 * on a placement are not being flattered. */
+		settle(&r);
+		d = decor_of(r.c);
+
+		if (d.backdrop == NULL)
+			g_error("the `%s' backdrop drew nothing -- the style is "
+			        "selectable and its module is not listening", name);
+		if (d.count != 2)
+			g_error("the `%s' backdrop left %u buffers on the window; "
+			        "one backdrop and one shadow is 2, and more than "
+			        "that is two modules drawing over each other",
+			        name, d.count);
+	}
+
+	/* And off again, which is the fourteenth entry of the cycle. */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_NONE);
+	d = decor_of(r.c);
+	g_assert_null(d.backdrop);
+	g_assert_nonnull(d.shadow);
 
 	rig_down(&r);
 }
@@ -1452,6 +1555,8 @@ main(int argc, char **argv)
 
 	g_test_add_func("/blur-nodes/no-effects-for-a-window-that-asked",
 	                test_a_window_that_asked_for_nothing_gets_nothing);
+	g_test_add_func("/blur-nodes/every-style-draws-exactly-once",
+	                test_every_style_draws_exactly_once);
 	g_test_add_func("/blur-nodes/only-one-backdrop",
 	                test_only_one_backdrop_draws);
 	g_test_add_func("/blur-nodes/hdr-is-encoded",

@@ -195,8 +195,148 @@
  * cell across and most cells are empty, so a 46 px cell a third full is
  * the scatter a window picks up in a shower.
  */
+/*
+ * Bokeh: the blur module's other kernel.
+ *
+ * A 34-pixel disc through a six-bladed aperture, which is a fast lens
+ * stopped down a little -- the aperture reads as a hexagon around any
+ * bright thing on the wallpaper and as a circle everywhere else, which
+ * is what a photograph looks like.
+ *
+ * `bokeh-highlight' at 5 is the number that matters and the one nobody
+ * would guess.  A wallpaper has no values above 1.0, so a lens's real
+ * dynamic range -- a highlight hundreds of times brighter than the wall
+ * behind it -- has to be put back by hand or the discs are drawn and
+ * invisible.  At 0 this is a box blur with hard edges.
+ */
+#define GOWL_CONFIG_DEFAULT_BOKEH_RADIUS         (34.0)
+#define GOWL_CONFIG_DEFAULT_BOKEH_DOWNSCALE      (2)
+/*
+ * The taps, and this is the expensive knob.
+ *
+ * Two separate things go wrong when there are too few, and they look
+ * nothing like each other.
+ *
+ * A disc of radius R sampled N times has its taps about R/sqrt(N/pi)
+ * apart, so a highlight SMALLER than that spacing lands on some taps and
+ * between others, and what gets drawn is a RING rather than a filled
+ * shape.  That one is fixed by a few dozen taps.
+ *
+ * The other is GRAIN, and it needs far more.  The highlight weighting is
+ * what makes the discs visible at all, and it also means a handful of
+ * bright samples carry most of the weight -- so the effective sample
+ * count is a fraction of the nominal one, and a detailed wallpaper comes
+ * out speckled.  128 is where that stops being visible on a photograph;
+ * 48 is plainly grainy and 96 is still slightly so.
+ *
+ * It is paid ONCE PER OUTPUT PER TAG SWITCH and never per frame, which
+ * is the only reason a number this large is reasonable.  Lower it if a
+ * tag switch hitches; raise `bokeh-radius' and this wants raising too.
+ */
+#define GOWL_CONFIG_DEFAULT_BOKEH_SAMPLES        (128)
+#define GOWL_CONFIG_DEFAULT_BOKEH_BLADES         (6)
+#define GOWL_CONFIG_DEFAULT_BOKEH_ROTATION       (12.0)
+#define GOWL_CONFIG_DEFAULT_BOKEH_HIGHLIGHT      (5.0)
+#define GOWL_CONFIG_DEFAULT_BOKEH_THRESHOLD      (0.55)
+#define GOWL_CONFIG_DEFAULT_BOKEH_EDGE           (0.22)
+#define GOWL_CONFIG_DEFAULT_BOKEH_BRIGHTNESS     (1.0)
+
+
+/*
+ * The four newest backdrops: the soap film, the embers, the submerged
+ * view and the dew.
+ *
+ * Every one of them follows the shape the rain, the fizz, the leaves and
+ * the snow settled on, because the shape works:
+ *
+ *   A PRESET IS A WHOLE TUNED SET and not a starting point.  The numbers
+ *   in one only mean anything together -- a fire's column width against
+ *   its ember size is how many sparks there are, and either alone is a
+ *   different fire in a different sized window.  `<fx>-preset' picks
+ *   one; every other key is an OVERRIDE on it, and leaving a key out is
+ *   not the same as setting it to a default.
+ *
+ *   ONE INTENSITY KNOB scales the two or three numbers that together
+ *   mean "how much of this is happening", and deliberately not the
+ *   sizes.  Scaling the sizes does not give a busier effect; it gives
+ *   the same effect in a smaller window.
+ *
+ *   THE SENTINEL IS NEGATIVE, because every one of these is a length, a
+ *   fraction, a count or a temperature and none of them can be.
+ */
+
+#define GOWL_CONFIG_DEFAULT_SOAP_PRESET  "drifting"
+#define GOWL_CONFIG_DEFAULT_SOAP_INTENSITY   (1.0)
+#define GOWL_CONFIG_DEFAULT_SOAP_FPS         (30)
+#define GOWL_CONFIG_DEFAULT_SOAP_SCALE       (2)
+#define GOWL_CONFIG_DEFAULT_SOAP_TINT  "#ffffff"
+#define GOWL_CONFIG_DEFAULT_SOAP_CLARITY     (0.55)
+#define GOWL_CONFIG_DEFAULT_SOAP_OPACITY     (1.0)
+#define GOWL_CONFIG_DEFAULT_SOAP_BRIGHTNESS  (1.0)
+#define GOWL_CONFIG_DEFAULT_SOAP_LIGHT       (-140.0)
+#define GOWL_CONFIG_DEFAULT_SOAP_FROST       (3)
+#define GOWL_CONFIG_DEFAULT_SOAP_FROST_PASSES (2)
+/* "leave it to the preset", for every override key below. */
+#define GOWL_CONFIG_SOAP_FROM_PRESET         (-1.0)
+
+#define GOWL_CONFIG_DEFAULT_EMBERS_PRESET  "embers"
+#define GOWL_CONFIG_DEFAULT_EMBERS_INTENSITY   (1.0)
+#define GOWL_CONFIG_DEFAULT_EMBERS_FPS         (30)
+#define GOWL_CONFIG_DEFAULT_EMBERS_SCALE       (2)
+#define GOWL_CONFIG_DEFAULT_EMBERS_TINT  "#ffdcb8"
+#define GOWL_CONFIG_DEFAULT_EMBERS_CLARITY     (0.55)
+#define GOWL_CONFIG_DEFAULT_EMBERS_OPACITY     (1.0)
+#define GOWL_CONFIG_DEFAULT_EMBERS_BRIGHTNESS  (1.0)
+#define GOWL_CONFIG_DEFAULT_EMBERS_FROST       (3)
+#define GOWL_CONFIG_DEFAULT_EMBERS_FROST_PASSES (2)
+/* "leave it to the preset", for every override key below. */
+#define GOWL_CONFIG_EMBERS_FROM_PRESET         (-1.0)
+
+#define GOWL_CONFIG_DEFAULT_SUBMERGED_PRESET  "reef"
+#define GOWL_CONFIG_DEFAULT_SUBMERGED_INTENSITY   (1.0)
+#define GOWL_CONFIG_DEFAULT_SUBMERGED_FPS         (30)
+#define GOWL_CONFIG_DEFAULT_SUBMERGED_SCALE       (2)
+#define GOWL_CONFIG_DEFAULT_SUBMERGED_WATER  "#0b4761"
+#define GOWL_CONFIG_DEFAULT_SUBMERGED_CLARITY     (0.55)
+#define GOWL_CONFIG_DEFAULT_SUBMERGED_OPACITY     (1.0)
+#define GOWL_CONFIG_DEFAULT_SUBMERGED_BRIGHTNESS  (1.0)
+#define GOWL_CONFIG_DEFAULT_SUBMERGED_FROST       (3)
+#define GOWL_CONFIG_DEFAULT_SUBMERGED_FROST_PASSES (2)
+/* "leave it to the preset", for every override key below. */
+#define GOWL_CONFIG_SUBMERGED_FROM_PRESET         (-1.0)
+
+#define GOWL_CONFIG_DEFAULT_DEW_PRESET  "dawn"
+#define GOWL_CONFIG_DEFAULT_DEW_INTENSITY   (1.0)
+#define GOWL_CONFIG_DEFAULT_DEW_FPS         (30)
+#define GOWL_CONFIG_DEFAULT_DEW_SCALE       (2)
+#define GOWL_CONFIG_DEFAULT_DEW_TINT  "#f5fbff"
+#define GOWL_CONFIG_DEFAULT_DEW_CLARITY     (0.55)
+#define GOWL_CONFIG_DEFAULT_DEW_OPACITY     (1.0)
+#define GOWL_CONFIG_DEFAULT_DEW_BRIGHTNESS  (1.0)
+#define GOWL_CONFIG_DEFAULT_DEW_LIGHT       (-140.0)
+#define GOWL_CONFIG_DEFAULT_DEW_FROST       (3)
+#define GOWL_CONFIG_DEFAULT_DEW_FROST_PASSES (2)
+/* "leave it to the preset", for every override key below. */
+#define GOWL_CONFIG_DEW_FROM_PRESET         (-1.0)
+
+
 #define GOWL_CONFIG_DEFAULT_RAIN_PRESET          "shower"
 #define GOWL_CONFIG_DEFAULT_RAIN_INTENSITY       (1.0)
+/*
+ * The storm.
+ *
+ * Off for `rain' and forced on for `storm', which is the same effect
+ * and the same preset with this switched.
+ *
+ * Nine seconds between strikes is a storm a mile or two off rather than
+ * overhead: close enough to be a storm, far enough that the flash is an
+ * event instead of a strobe.  The gaps are exponential around that mean,
+ * so some come almost together and some leave a long wait -- which is
+ * most of what makes it read as weather rather than as a timer.
+ */
+#define GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING       (FALSE)
+#define GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING_RATE  (9.0)
+#define GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING_POWER (1.0)
 #define GOWL_CONFIG_DEFAULT_RAIN_FPS             (30)
 #define GOWL_CONFIG_DEFAULT_RAIN_SCALE           (2)
 #define GOWL_CONFIG_DEFAULT_RAIN_TINT            "#dceeff"
@@ -581,8 +721,137 @@ struct _GowlConfig {
 	gdouble  rain_beads;
 	gdouble  rain_fog;
 	gdouble  rain_specular;
+	gchar   *soap_preset;
+	gdouble  soap_intensity;
+	gint     soap_fps;
+	gint     soap_scale;
+	gchar   *soap_tint;
+	gdouble  soap_clarity;
+	gdouble  soap_opacity;
+	gdouble  soap_brightness;
+	gdouble  soap_light;
+	gint     soap_frost;
+	gint     soap_frost_passes;
+	/* Overrides on the preset; GOWL_CONFIG_SOAP_FROM_PRESET for "leave
+	 * it alone". */
+	gdouble  soap_thickness;
+	gdouble  soap_thin;
+	gdouble  soap_drain;
+	gdouble  soap_turbulence;
+	gdouble  soap_swirl;
+	gdouble  soap_index;
+	gdouble  soap_gain;
+	gdouble  soap_sheen;
+	gdouble  soap_wedge;
+	gdouble  soap_pop;
+	gdouble  soap_meniscus;
+	gdouble  soap_fog;
+	gdouble  soap_speed;
+	gdouble  soap_life;
+
+	gchar   *embers_preset;
+	gdouble  embers_intensity;
+	gint     embers_fps;
+	gint     embers_scale;
+	gchar   *embers_tint;
+	gdouble  embers_clarity;
+	gdouble  embers_opacity;
+	gdouble  embers_brightness;
+	gint     embers_frost;
+	gint     embers_frost_passes;
+	/* Overrides on the preset; GOWL_CONFIG_EMBERS_FROM_PRESET for "leave
+	 * it alone". */
+	gdouble  embers_column;
+	gdouble  embers_density;
+	gdouble  embers_ember;
+	gdouble  embers_spacing;
+	gdouble  embers_sway;
+	gdouble  embers_drag;
+	gdouble  embers_temperature;
+	gdouble  embers_cool;
+	gdouble  embers_flicker;
+	gdouble  embers_ash;
+	gdouble  embers_glow;
+	gdouble  embers_hearth;
+	gdouble  embers_haze;
+	gdouble  embers_haze_scale;
+	gdouble  embers_fog;
+	gdouble  embers_speed;
+
+	gchar   *submerged_preset;
+	gdouble  submerged_intensity;
+	gint     submerged_fps;
+	gint     submerged_scale;
+	gchar   *submerged_water;
+	gdouble  submerged_clarity;
+	gdouble  submerged_opacity;
+	gdouble  submerged_brightness;
+	gint     submerged_frost;
+	gint     submerged_frost_passes;
+	/* Overrides on the preset; GOWL_CONFIG_SUBMERGED_FROM_PRESET for "leave
+	 * it alone". */
+	gdouble  submerged_depth;
+	gdouble  submerged_extinction_r;
+	gdouble  submerged_extinction_g;
+	gdouble  submerged_extinction_b;
+	gdouble  submerged_murk;
+	gdouble  submerged_caustics;
+	gdouble  submerged_caustic_scale;
+	gdouble  submerged_shafts;
+	gdouble  submerged_shaft_lean;
+	gdouble  submerged_motes;
+	gdouble  submerged_mote_size;
+	gdouble  submerged_surface;
+	gdouble  submerged_sway;
+	gdouble  submerged_fog;
+	gdouble  submerged_speed;
+	gdouble  submerged_drift;
+
+	gchar   *dew_preset;
+	gdouble  dew_intensity;
+	gint     dew_fps;
+	gint     dew_scale;
+	gchar   *dew_tint;
+	gdouble  dew_clarity;
+	gdouble  dew_opacity;
+	gdouble  dew_brightness;
+	gdouble  dew_light;
+	gint     dew_frost;
+	gint     dew_frost_passes;
+	/* Overrides on the preset; GOWL_CONFIG_DEW_FROM_PRESET for "leave
+	 * it alone". */
+	gdouble  dew_radials;
+	gdouble  dew_pitch;
+	gdouble  dew_thread;
+	gdouble  dew_drop;
+	gdouble  dew_spacing;
+	gdouble  dew_sag;
+	gdouble  dew_depth;
+	gdouble  dew_bulge;
+	gdouble  dew_silk;
+	gdouble  dew_glint;
+	gdouble  dew_shine;
+	gdouble  dew_rim;
+	gdouble  dew_sway;
+	gdouble  dew_fog;
+	gdouble  dew_speed;
+
+
+	gdouble  bokeh_radius;
+	gint     bokeh_downscale;
+	gint     bokeh_samples;
+	gint     bokeh_blades;
+	gdouble  bokeh_rotation;
+	gdouble  bokeh_highlight;
+	gdouble  bokeh_threshold;
+	gdouble  bokeh_edge;
+	gdouble  bokeh_brightness;
+
 	gdouble  rain_impact;
 	gdouble  rain_speed;
+	gboolean rain_lightning;
+	gdouble  rain_lightning_rate;
+	gdouble  rain_lightning_power;
 
 	gchar   *fizz_preset;
 	gdouble  fizz_intensity;
@@ -1329,6 +1598,19 @@ gowl_config_finalize(GObject *object)
 	g_free(self->leaves_dry);
 	g_free(self->snow_preset);
 	g_free(self->snow_tint);
+	g_free(self->soap_preset);
+	g_free(self->soap_tint);
+
+	g_free(self->embers_preset);
+	g_free(self->embers_tint);
+
+	g_free(self->submerged_preset);
+	g_free(self->submerged_water);
+
+	g_free(self->dew_preset);
+	g_free(self->dew_tint);
+
+
 	g_free(self->hints_keys);
 	g_free(self->hints_colors);
 	g_free(self->no_fx_apps);
@@ -1847,6 +2129,127 @@ gowl_config_init(GowlConfig *self)
 	self->water_speed        = GOWL_CONFIG_WATER_FROM_PRESET;
 	self->rain_preset        = g_strdup(GOWL_CONFIG_DEFAULT_RAIN_PRESET);
 	self->rain_intensity     = GOWL_CONFIG_DEFAULT_RAIN_INTENSITY;
+	self->soap_preset = g_strdup(GOWL_CONFIG_DEFAULT_SOAP_PRESET);
+	self->soap_intensity = GOWL_CONFIG_DEFAULT_SOAP_INTENSITY;
+	self->soap_fps = GOWL_CONFIG_DEFAULT_SOAP_FPS;
+	self->soap_scale = GOWL_CONFIG_DEFAULT_SOAP_SCALE;
+	self->soap_tint = g_strdup(GOWL_CONFIG_DEFAULT_SOAP_TINT);
+	self->soap_clarity = GOWL_CONFIG_DEFAULT_SOAP_CLARITY;
+	self->soap_opacity = GOWL_CONFIG_DEFAULT_SOAP_OPACITY;
+	self->soap_brightness = GOWL_CONFIG_DEFAULT_SOAP_BRIGHTNESS;
+	self->soap_light = GOWL_CONFIG_DEFAULT_SOAP_LIGHT;
+	self->soap_frost = GOWL_CONFIG_DEFAULT_SOAP_FROST;
+	self->soap_frost_passes = GOWL_CONFIG_DEFAULT_SOAP_FROST_PASSES;
+	self->soap_thickness = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_thin = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_drain = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_turbulence = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_swirl = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_index = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_gain = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_sheen = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_wedge = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_pop = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_meniscus = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_fog = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_speed = GOWL_CONFIG_SOAP_FROM_PRESET;
+	self->soap_life = GOWL_CONFIG_SOAP_FROM_PRESET;
+
+	self->embers_preset = g_strdup(GOWL_CONFIG_DEFAULT_EMBERS_PRESET);
+	self->embers_intensity = GOWL_CONFIG_DEFAULT_EMBERS_INTENSITY;
+	self->embers_fps = GOWL_CONFIG_DEFAULT_EMBERS_FPS;
+	self->embers_scale = GOWL_CONFIG_DEFAULT_EMBERS_SCALE;
+	self->embers_tint = g_strdup(GOWL_CONFIG_DEFAULT_EMBERS_TINT);
+	self->embers_clarity = GOWL_CONFIG_DEFAULT_EMBERS_CLARITY;
+	self->embers_opacity = GOWL_CONFIG_DEFAULT_EMBERS_OPACITY;
+	self->embers_brightness = GOWL_CONFIG_DEFAULT_EMBERS_BRIGHTNESS;
+	self->embers_frost = GOWL_CONFIG_DEFAULT_EMBERS_FROST;
+	self->embers_frost_passes = GOWL_CONFIG_DEFAULT_EMBERS_FROST_PASSES;
+	self->embers_column = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_density = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_ember = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_spacing = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_sway = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_drag = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_temperature = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_cool = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_flicker = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_ash = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_glow = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_hearth = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_haze = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_haze_scale = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_fog = GOWL_CONFIG_EMBERS_FROM_PRESET;
+	self->embers_speed = GOWL_CONFIG_EMBERS_FROM_PRESET;
+
+	self->submerged_preset = g_strdup(GOWL_CONFIG_DEFAULT_SUBMERGED_PRESET);
+	self->submerged_intensity = GOWL_CONFIG_DEFAULT_SUBMERGED_INTENSITY;
+	self->submerged_fps = GOWL_CONFIG_DEFAULT_SUBMERGED_FPS;
+	self->submerged_scale = GOWL_CONFIG_DEFAULT_SUBMERGED_SCALE;
+	self->submerged_water = g_strdup(GOWL_CONFIG_DEFAULT_SUBMERGED_WATER);
+	self->submerged_clarity = GOWL_CONFIG_DEFAULT_SUBMERGED_CLARITY;
+	self->submerged_opacity = GOWL_CONFIG_DEFAULT_SUBMERGED_OPACITY;
+	self->submerged_brightness = GOWL_CONFIG_DEFAULT_SUBMERGED_BRIGHTNESS;
+	self->submerged_frost = GOWL_CONFIG_DEFAULT_SUBMERGED_FROST;
+	self->submerged_frost_passes = GOWL_CONFIG_DEFAULT_SUBMERGED_FROST_PASSES;
+	self->submerged_depth = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_extinction_r = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_extinction_g = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_extinction_b = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_murk = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_caustics = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_caustic_scale = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_shafts = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_shaft_lean = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_motes = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_mote_size = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_surface = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_sway = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_fog = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_speed = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+	self->submerged_drift = GOWL_CONFIG_SUBMERGED_FROM_PRESET;
+
+	self->dew_preset = g_strdup(GOWL_CONFIG_DEFAULT_DEW_PRESET);
+	self->dew_intensity = GOWL_CONFIG_DEFAULT_DEW_INTENSITY;
+	self->dew_fps = GOWL_CONFIG_DEFAULT_DEW_FPS;
+	self->dew_scale = GOWL_CONFIG_DEFAULT_DEW_SCALE;
+	self->dew_tint = g_strdup(GOWL_CONFIG_DEFAULT_DEW_TINT);
+	self->dew_clarity = GOWL_CONFIG_DEFAULT_DEW_CLARITY;
+	self->dew_opacity = GOWL_CONFIG_DEFAULT_DEW_OPACITY;
+	self->dew_brightness = GOWL_CONFIG_DEFAULT_DEW_BRIGHTNESS;
+	self->dew_light = GOWL_CONFIG_DEFAULT_DEW_LIGHT;
+	self->dew_frost = GOWL_CONFIG_DEFAULT_DEW_FROST;
+	self->dew_frost_passes = GOWL_CONFIG_DEFAULT_DEW_FROST_PASSES;
+	self->dew_radials = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_pitch = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_thread = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_drop = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_spacing = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_sag = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_depth = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_bulge = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_silk = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_glint = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_shine = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_rim = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_sway = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_fog = GOWL_CONFIG_DEW_FROM_PRESET;
+	self->dew_speed = GOWL_CONFIG_DEW_FROM_PRESET;
+
+
+	self->bokeh_radius       = GOWL_CONFIG_DEFAULT_BOKEH_RADIUS;
+	self->bokeh_downscale    = GOWL_CONFIG_DEFAULT_BOKEH_DOWNSCALE;
+	self->bokeh_samples      = GOWL_CONFIG_DEFAULT_BOKEH_SAMPLES;
+	self->bokeh_blades       = GOWL_CONFIG_DEFAULT_BOKEH_BLADES;
+	self->bokeh_rotation     = GOWL_CONFIG_DEFAULT_BOKEH_ROTATION;
+	self->bokeh_highlight    = GOWL_CONFIG_DEFAULT_BOKEH_HIGHLIGHT;
+	self->bokeh_threshold    = GOWL_CONFIG_DEFAULT_BOKEH_THRESHOLD;
+	self->bokeh_edge         = GOWL_CONFIG_DEFAULT_BOKEH_EDGE;
+	self->bokeh_brightness   = GOWL_CONFIG_DEFAULT_BOKEH_BRIGHTNESS;
+
+	self->rain_lightning     = GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING;
+	self->rain_lightning_rate = GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING_RATE;
+	self->rain_lightning_power = GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING_POWER;
 	self->rain_fps           = GOWL_CONFIG_DEFAULT_RAIN_FPS;
 	self->rain_scale         = GOWL_CONFIG_DEFAULT_RAIN_SCALE;
 	self->rain_tint          = g_strdup(GOWL_CONFIG_DEFAULT_RAIN_TINT);
@@ -2351,6 +2754,42 @@ static const gchar *const top_level_keys[] = {
 	"rain-cell", "rain-density", "rain-bulge", "rain-depth",
 	"rain-runs", "rain-run-width", "rain-run-length", "rain-beads",
 	"rain-fog", "rain-specular", "rain-impact", "rain-speed",
+	"rain-lightning", "rain-lightning-rate", "rain-lightning-power",
+	"soap-preset", "soap-intensity", "soap-fps", "soap-scale",
+	"soap-tint", "soap-clarity", "soap-opacity", "soap-brightness",
+	"soap-light", "soap-frost", "soap-frost-passes", "soap-thickness",
+	"soap-thin", "soap-drain", "soap-turbulence", "soap-swirl",
+	"soap-index", "soap-gain", "soap-sheen", "soap-wedge", "soap-pop",
+	"soap-meniscus", "soap-fog", "soap-speed", "soap-life",
+
+	"embers-preset", "embers-intensity", "embers-fps", "embers-scale",
+	"embers-tint", "embers-clarity", "embers-opacity",
+	"embers-brightness", "embers-frost", "embers-frost-passes",
+	"embers-column", "embers-density", "embers-ember", "embers-spacing",
+	"embers-sway", "embers-drag", "embers-temperature", "embers-cool",
+	"embers-flicker", "embers-ash", "embers-glow", "embers-hearth",
+	"embers-haze", "embers-haze-scale", "embers-fog", "embers-speed",
+
+	"submerged-preset", "submerged-intensity", "submerged-fps",
+	"submerged-scale", "submerged-water", "submerged-clarity",
+	"submerged-opacity", "submerged-brightness", "submerged-frost",
+	"submerged-frost-passes", "submerged-depth", "submerged-extinction-r",
+	"submerged-extinction-g", "submerged-extinction-b", "submerged-murk",
+	"submerged-caustics", "submerged-caustic-scale", "submerged-shafts",
+	"submerged-shaft-lean", "submerged-motes", "submerged-mote-size",
+	"submerged-surface", "submerged-sway", "submerged-fog",
+	"submerged-speed", "submerged-drift",
+
+	"dew-preset", "dew-intensity", "dew-fps", "dew-scale", "dew-tint",
+	"dew-clarity", "dew-opacity", "dew-brightness", "dew-light",
+	"dew-frost", "dew-frost-passes", "dew-radials", "dew-pitch",
+	"dew-thread", "dew-drop", "dew-spacing", "dew-sag", "dew-depth",
+	"dew-bulge", "dew-silk", "dew-glint", "dew-shine", "dew-rim",
+	"dew-sway", "dew-fog", "dew-speed",
+
+	"bokeh-radius", "bokeh-downscale", "bokeh-samples", "bokeh-blades",
+	"bokeh-rotation", "bokeh-highlight", "bokeh-threshold", "bokeh-edge",
+	"bokeh-brightness",
 	"fizz-preset", "fizz-intensity", "fizz-fps", "fizz-scale", "fizz-tint",
 	"fizz-clarity", "fizz-opacity", "fizz-brightness", "fizz-light",
 	"fizz-frost", "fizz-frost-passes", "fizz-cell", "fizz-bubble",
@@ -3329,6 +3768,510 @@ gowl_config_apply_mapping(
 	if (yaml_mapping_has_member(mapping, "rain-specular")) {
 		self->rain_specular = CLAMP(yaml_mapping_get_double_member(
 			mapping, "rain-specular"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-preset")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "soap-preset");
+		if (gowl_config_soap_preset_valid(v)) {
+			g_free(self->soap_preset);
+			self->soap_preset = g_strdup(v);
+		} else if (v != NULL) {
+			g_warning("gowl_config: unknown soap-preset '%s'", v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "soap-intensity")) {
+		self->soap_intensity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-intensity"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-fps")) {
+		self->soap_fps = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "soap-fps"), 0, 144);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-scale")) {
+		self->soap_scale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "soap-scale"), 1, 4);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-tint")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "soap-tint");
+		if (v != NULL) {
+			g_free(self->soap_tint);
+			self->soap_tint = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "soap-clarity")) {
+		self->soap_clarity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-opacity")) {
+		self->soap_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-brightness")) {
+		self->soap_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-brightness"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-light")) {
+		self->soap_light = yaml_mapping_get_double_member(
+			mapping, "soap-light");
+	}
+	if (yaml_mapping_has_member(mapping, "soap-frost")) {
+		self->soap_frost = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "soap-frost"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-frost-passes")) {
+		self->soap_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "soap-frost-passes"), 1, 6);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-thickness")) {
+		self->soap_thickness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-thickness"), 60.0, 3600.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-thin")) {
+		self->soap_thin = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-thin"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-drain")) {
+		self->soap_drain = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-drain"), 0.0, 6.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-turbulence")) {
+		self->soap_turbulence = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-turbulence"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-swirl")) {
+		self->soap_swirl = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-swirl"), 0.5, 16.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-index")) {
+		self->soap_index = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-index"), 1.05, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-gain")) {
+		self->soap_gain = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-gain"), 0.0, 12.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-sheen")) {
+		self->soap_sheen = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-sheen"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-wedge")) {
+		self->soap_wedge = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-wedge"), 0.0, 2000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-pop")) {
+		self->soap_pop = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-pop"), 0.0, 0.6);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-meniscus")) {
+		self->soap_meniscus = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-meniscus"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-fog")) {
+		self->soap_fog = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-fog"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-speed")) {
+		self->soap_speed = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-speed"), 0.0, 5.0);
+	}
+	if (yaml_mapping_has_member(mapping, "soap-life")) {
+		self->soap_life = CLAMP(yaml_mapping_get_double_member(
+			mapping, "soap-life"), 1.0, 600.0);
+	}
+
+	if (yaml_mapping_has_member(mapping, "embers-preset")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "embers-preset");
+		if (gowl_config_embers_preset_valid(v)) {
+			g_free(self->embers_preset);
+			self->embers_preset = g_strdup(v);
+		} else if (v != NULL) {
+			g_warning("gowl_config: unknown embers-preset '%s'", v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "embers-intensity")) {
+		self->embers_intensity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-intensity"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-fps")) {
+		self->embers_fps = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "embers-fps"), 0, 144);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-scale")) {
+		self->embers_scale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "embers-scale"), 1, 4);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-tint")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "embers-tint");
+		if (v != NULL) {
+			g_free(self->embers_tint);
+			self->embers_tint = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "embers-clarity")) {
+		self->embers_clarity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-opacity")) {
+		self->embers_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-brightness")) {
+		self->embers_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-brightness"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-frost")) {
+		self->embers_frost = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "embers-frost"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-frost-passes")) {
+		self->embers_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "embers-frost-passes"), 1, 6);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-column")) {
+		self->embers_column = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-column"), 16.0, 600.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-density")) {
+		self->embers_density = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-density"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-ember")) {
+		self->embers_ember = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-ember"), 0.4, 40.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-spacing")) {
+		self->embers_spacing = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-spacing"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-sway")) {
+		self->embers_sway = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-sway"), 0.0, 200.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-drag")) {
+		self->embers_drag = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-drag"), 0.05, 8.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-temperature")) {
+		self->embers_temperature = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-temperature"), 900.0, 4000.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-cool")) {
+		self->embers_cool = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-cool"), 0.0, 6.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-flicker")) {
+		self->embers_flicker = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-flicker"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-ash")) {
+		self->embers_ash = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-ash"), 0.0, 0.8);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-glow")) {
+		self->embers_glow = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-glow"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-hearth")) {
+		self->embers_hearth = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-hearth"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-haze")) {
+		self->embers_haze = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-haze"), 0.0, 60.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-haze-scale")) {
+		self->embers_haze_scale = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-haze-scale"), 0.5, 24.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-fog")) {
+		self->embers_fog = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-fog"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "embers-speed")) {
+		self->embers_speed = CLAMP(yaml_mapping_get_double_member(
+			mapping, "embers-speed"), 0.0, 5.0);
+	}
+
+	if (yaml_mapping_has_member(mapping, "submerged-preset")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "submerged-preset");
+		if (gowl_config_submerged_preset_valid(v)) {
+			g_free(self->submerged_preset);
+			self->submerged_preset = g_strdup(v);
+		} else if (v != NULL) {
+			g_warning("gowl_config: unknown submerged-preset '%s'", v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-intensity")) {
+		self->submerged_intensity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-intensity"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-fps")) {
+		self->submerged_fps = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "submerged-fps"), 0, 144);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-scale")) {
+		self->submerged_scale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "submerged-scale"), 1, 4);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-water")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "submerged-water");
+		if (v != NULL) {
+			g_free(self->submerged_water);
+			self->submerged_water = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-clarity")) {
+		self->submerged_clarity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-opacity")) {
+		self->submerged_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-brightness")) {
+		self->submerged_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-brightness"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-frost")) {
+		self->submerged_frost = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "submerged-frost"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-frost-passes")) {
+		self->submerged_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "submerged-frost-passes"), 1, 6);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-depth")) {
+		self->submerged_depth = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-depth"), 0.0, 30.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-extinction-r")) {
+		self->submerged_extinction_r = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-extinction-r"), 0.0, 4.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-extinction-g")) {
+		self->submerged_extinction_g = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-extinction-g"), 0.0, 4.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-extinction-b")) {
+		self->submerged_extinction_b = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-extinction-b"), 0.0, 4.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-murk")) {
+		self->submerged_murk = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-murk"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-caustics")) {
+		self->submerged_caustics = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-caustics"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-caustic-scale")) {
+		self->submerged_caustic_scale = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-caustic-scale"), 0.5, 24.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-shafts")) {
+		self->submerged_shafts = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-shafts"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-shaft-lean")) {
+		self->submerged_shaft_lean = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-shaft-lean"), -2.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-motes")) {
+		self->submerged_motes = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-motes"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-mote-size")) {
+		self->submerged_mote_size = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-mote-size"), 0.4, 24.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-surface")) {
+		self->submerged_surface = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-surface"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-sway")) {
+		self->submerged_sway = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-sway"), 0.0, 80.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-fog")) {
+		self->submerged_fog = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-fog"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-speed")) {
+		self->submerged_speed = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-speed"), 0.0, 5.0);
+	}
+	if (yaml_mapping_has_member(mapping, "submerged-drift")) {
+		self->submerged_drift = CLAMP(yaml_mapping_get_double_member(
+			mapping, "submerged-drift"), 1.0, 600.0);
+	}
+
+	if (yaml_mapping_has_member(mapping, "dew-preset")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "dew-preset");
+		if (gowl_config_dew_preset_valid(v)) {
+			g_free(self->dew_preset);
+			self->dew_preset = g_strdup(v);
+		} else if (v != NULL) {
+			g_warning("gowl_config: unknown dew-preset '%s'", v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "dew-intensity")) {
+		self->dew_intensity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-intensity"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-fps")) {
+		self->dew_fps = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "dew-fps"), 0, 144);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-scale")) {
+		self->dew_scale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "dew-scale"), 1, 4);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-tint")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping, "dew-tint");
+		if (v != NULL) {
+			g_free(self->dew_tint);
+			self->dew_tint = gowl_palette_resolve(self->palette, v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "dew-clarity")) {
+		self->dew_clarity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-clarity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-opacity")) {
+		self->dew_opacity = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-opacity"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-brightness")) {
+		self->dew_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-brightness"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-light")) {
+		self->dew_light = yaml_mapping_get_double_member(
+			mapping, "dew-light");
+	}
+	if (yaml_mapping_has_member(mapping, "dew-frost")) {
+		self->dew_frost = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "dew-frost"), 1, 8);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-frost-passes")) {
+		self->dew_frost_passes = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "dew-frost-passes"), 1, 6);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-radials")) {
+		self->dew_radials = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-radials"), 3.0, 48.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-pitch")) {
+		self->dew_pitch = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-pitch"), 16.0, 600.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-thread")) {
+		self->dew_thread = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-thread"), 0.4, 12.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-drop")) {
+		self->dew_drop = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-drop"), 0.5, 60.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-spacing")) {
+		self->dew_spacing = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-spacing"), 8.0, 400.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-sag")) {
+		self->dew_sag = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-sag"), 0.0, 200.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-depth")) {
+		self->dew_depth = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-depth"), 0.0, 20.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-bulge")) {
+		self->dew_bulge = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-bulge"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-silk")) {
+		self->dew_silk = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-silk"), 0.0, 3.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-glint")) {
+		self->dew_glint = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-glint"), 0.0, 4.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-shine")) {
+		self->dew_shine = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-shine"), 1.0, 256.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-rim")) {
+		self->dew_rim = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-rim"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-sway")) {
+		self->dew_sway = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-sway"), 0.0, 40.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-fog")) {
+		self->dew_fog = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-fog"), 0.0, 1.0);
+	}
+	if (yaml_mapping_has_member(mapping, "dew-speed")) {
+		self->dew_speed = CLAMP(yaml_mapping_get_double_member(
+			mapping, "dew-speed"), 0.0, 5.0);
+	}
+
+	if (yaml_mapping_has_member(mapping, "bokeh-radius")) {
+		self->bokeh_radius = CLAMP(yaml_mapping_get_double_member(
+			mapping, "bokeh-radius"), 0.0, 200.0);
+	}
+	if (yaml_mapping_has_member(mapping, "bokeh-downscale")) {
+		self->bokeh_downscale = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "bokeh-downscale"), 1, 4);
+	}
+	if (yaml_mapping_has_member(mapping, "bokeh-samples")) {
+		self->bokeh_samples = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "bokeh-samples"), 8, 128);
+	}
+	if (yaml_mapping_has_member(mapping, "bokeh-blades")) {
+		/* Under 3 is a circle: a lens wide open has no straight edges
+		 * to show.  12 is past where anybody could tell. */
+		self->bokeh_blades = CLAMP((gint)yaml_mapping_get_int_member(
+			mapping, "bokeh-blades"), 0, 12);
+	}
+	if (yaml_mapping_has_member(mapping, "bokeh-rotation")) {
+		self->bokeh_rotation = yaml_mapping_get_double_member(
+			mapping, "bokeh-rotation");
+	}
+	if (yaml_mapping_has_member(mapping, "bokeh-highlight")) {
+		self->bokeh_highlight = CLAMP(yaml_mapping_get_double_member(
+			mapping, "bokeh-highlight"), 0.0, 32.0);
+	}
+	if (yaml_mapping_has_member(mapping, "bokeh-threshold")) {
+		self->bokeh_threshold = CLAMP(yaml_mapping_get_double_member(
+			mapping, "bokeh-threshold"), 0.0, 0.99);
+	}
+	if (yaml_mapping_has_member(mapping, "bokeh-edge")) {
+		self->bokeh_edge = CLAMP(yaml_mapping_get_double_member(
+			mapping, "bokeh-edge"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "bokeh-brightness")) {
+		self->bokeh_brightness = CLAMP(yaml_mapping_get_double_member(
+			mapping, "bokeh-brightness"), 0.0, 2.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-lightning")) {
+		self->rain_lightning = yaml_mapping_get_boolean_member(
+			mapping, "rain-lightning");
+	}
+	if (yaml_mapping_has_member(mapping, "rain-lightning-rate")) {
+		/* Half a second is a strobe and five minutes is a rumour; both
+		 * ends are reachable and neither is a default. */
+		self->rain_lightning_rate = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-lightning-rate"), 0.5, 300.0);
+	}
+	if (yaml_mapping_has_member(mapping, "rain-lightning-power")) {
+		self->rain_lightning_power = CLAMP(yaml_mapping_get_double_member(
+			mapping, "rain-lightning-power"), 0.0, 2.0);
 	}
 	if (yaml_mapping_has_member(mapping, "rain-impact")) {
 		self->rain_impact = CLAMP(yaml_mapping_get_double_member(
@@ -7250,6 +8193,36 @@ gowl_config_backdrop_style_from_name(const gchar       *name,
 		*out = GOWL_BACKDROP_SNOW;
 		return TRUE;
 	}
+	if (g_strcmp0(norm, "thunderstorm") == 0
+	    || g_strcmp0(norm, "thunder") == 0
+	    || g_strcmp0(norm, "lightning") == 0) {
+		*out = GOWL_BACKDROP_STORM;
+		return TRUE;
+	}
+	if (g_strcmp0(norm, "soap-film") == 0 || g_strcmp0(norm, "film") == 0
+	    || g_strcmp0(norm, "iridescence") == 0) {
+		*out = GOWL_BACKDROP_SOAP;
+		return TRUE;
+	}
+	if (g_strcmp0(norm, "underwater") == 0 || g_strcmp0(norm, "deep") == 0
+	    || g_strcmp0(norm, "ocean") == 0) {
+		*out = GOWL_BACKDROP_SUBMERGED;
+		return TRUE;
+	}
+	if (g_strcmp0(norm, "ember") == 0 || g_strcmp0(norm, "sparks") == 0
+	    || g_strcmp0(norm, "hearth") == 0 || g_strcmp0(norm, "fire") == 0) {
+		*out = GOWL_BACKDROP_EMBERS;
+		return TRUE;
+	}
+	if (g_strcmp0(norm, "web") == 0 || g_strcmp0(norm, "cobweb") == 0
+	    || g_strcmp0(norm, "spiderweb") == 0) {
+		*out = GOWL_BACKDROP_DEW;
+		return TRUE;
+	}
+	if (g_strcmp0(norm, "defocus") == 0 || g_strcmp0(norm, "aperture") == 0) {
+		*out = GOWL_BACKDROP_BOKEH;
+		return TRUE;
+	}
 	return FALSE;
 }
 
@@ -7777,6 +8750,102 @@ gowl_config_get_rain_life(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), 8.0);
 	return rain_preset_by_name(self->rain_preset)->life;
+}
+
+#define GOWL_BOKEH_DOUBLE(field, lo, hi)                                   \
+gdouble                                                                    \
+gowl_config_get_bokeh_##field(GowlConfig *self)                            \
+{                                                                          \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),                             \
+	                     GOWL_CONFIG_DEFAULT_BOKEH_##field##_UC);          \
+	return self->bokeh_##field;                                            \
+}                                                                          \
+void                                                                       \
+gowl_config_set_bokeh_##field(GowlConfig *self, gdouble v)                 \
+{                                                                          \
+	g_return_if_fail(GOWL_IS_CONFIG(self));                                \
+	self->bokeh_##field = CLAMP(v, lo, hi);                                \
+}
+
+#define GOWL_CONFIG_DEFAULT_BOKEH_radius_UC     GOWL_CONFIG_DEFAULT_BOKEH_RADIUS
+#define GOWL_CONFIG_DEFAULT_BOKEH_rotation_UC   GOWL_CONFIG_DEFAULT_BOKEH_ROTATION
+#define GOWL_CONFIG_DEFAULT_BOKEH_highlight_UC  GOWL_CONFIG_DEFAULT_BOKEH_HIGHLIGHT
+#define GOWL_CONFIG_DEFAULT_BOKEH_threshold_UC  GOWL_CONFIG_DEFAULT_BOKEH_THRESHOLD
+#define GOWL_CONFIG_DEFAULT_BOKEH_edge_UC       GOWL_CONFIG_DEFAULT_BOKEH_EDGE
+#define GOWL_CONFIG_DEFAULT_BOKEH_brightness_UC GOWL_CONFIG_DEFAULT_BOKEH_BRIGHTNESS
+
+GOWL_BOKEH_DOUBLE(radius, 0.0, 200.0)
+GOWL_BOKEH_DOUBLE(rotation, -360.0, 360.0)
+GOWL_BOKEH_DOUBLE(highlight, 0.0, 32.0)
+GOWL_BOKEH_DOUBLE(threshold, 0.0, 0.99)
+GOWL_BOKEH_DOUBLE(edge, 0.0, 2.0)
+GOWL_BOKEH_DOUBLE(brightness, 0.0, 2.0)
+
+#undef GOWL_BOKEH_DOUBLE
+
+#define GOWL_BOKEH_INT(field, dflt, lo, hi)                                \
+gint                                                                       \
+gowl_config_get_bokeh_##field(GowlConfig *self)                            \
+{                                                                          \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), dflt);                      \
+	return self->bokeh_##field;                                            \
+}                                                                          \
+void                                                                       \
+gowl_config_set_bokeh_##field(GowlConfig *self, gint v)                    \
+{                                                                          \
+	g_return_if_fail(GOWL_IS_CONFIG(self));                                \
+	self->bokeh_##field = CLAMP(v, lo, hi);                                \
+}
+
+GOWL_BOKEH_INT(downscale, GOWL_CONFIG_DEFAULT_BOKEH_DOWNSCALE, 1, 4)
+GOWL_BOKEH_INT(samples, GOWL_CONFIG_DEFAULT_BOKEH_SAMPLES, 8, 128)
+GOWL_BOKEH_INT(blades, GOWL_CONFIG_DEFAULT_BOKEH_BLADES, 0, 12)
+
+#undef GOWL_BOKEH_INT
+
+gboolean
+gowl_config_get_rain_lightning(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING);
+	return self->rain_lightning;
+}
+
+void
+gowl_config_set_rain_lightning(GowlConfig *self, gboolean on)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->rain_lightning = on;
+}
+
+gdouble
+gowl_config_get_rain_lightning_rate(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING_RATE);
+	return self->rain_lightning_rate;
+}
+
+void
+gowl_config_set_rain_lightning_rate(GowlConfig *self, gdouble seconds)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->rain_lightning_rate = CLAMP(seconds, 0.5, 300.0);
+}
+
+gdouble
+gowl_config_get_rain_lightning_power(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_RAIN_LIGHTNING_POWER);
+	return self->rain_lightning_power;
+}
+
+void
+gowl_config_set_rain_lightning_power(GowlConfig *self, gdouble power)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->rain_lightning_power = CLAMP(power, 0.0, 2.0);
 }
 
 gint
@@ -8737,6 +9806,864 @@ gowl_config_get_snow_frost_passes(GowlConfig *self)
 	g_return_val_if_fail(GOWL_IS_CONFIG(self),
 	                     GOWL_CONFIG_DEFAULT_SNOW_FROST_PASSES);
 	return self->snow_frost_passes;
+}
+
+/* --- The soap film, the embers, the submerged view and the dew ----- */
+
+typedef struct {
+	const gchar *name;
+	gdouble      thickness;
+	gdouble      thin;
+	gdouble      drain;
+	gdouble      turbulence;
+	gdouble      swirl;
+	gdouble      index;
+	gdouble      gain;
+	gdouble      sheen;
+	gdouble      wedge;
+	gdouble      pop;
+	gdouble      meniscus;
+	gdouble      fog;
+	gdouble      speed;
+	gdouble      life;
+} GowlSoapPreset;
+
+static const GowlSoapPreset soap_presets[] = {
+	/* thickness thin drain turbulence swirl index gain sheen wedge pop meniscus fog speed life */
+	{ "fresh", 1400.0, 0.22, 0.85, 0.42, 2.6, 1.35, 4.5, 0.6, 260.0, 0.08, 0.7, 0.32, 0.8, 34.0 },
+	{ "drifting", 900.0, 0.1, 1.3, 0.55, 3.2, 1.35, 5.0, 0.55, 220.0, 0.1, 0.55, 0.3, 1.0, 18.0 },
+	{ "thin", 520.0, 0.05, 2.1, 0.75, 4.1, 1.35, 5.6, 0.5, 180.0, 0.14, 0.4, 0.28, 1.3, 11.0 },
+	{ "oil", 1150.0, 0.55, 0.1, 0.35, 2.2, 1.47, 4.0, 0.35, 300.0, 0.0, 0.2, 0.36, 0.45, 60.0 },
+	{ "bubble", 700.0, 0.06, 2.6, 0.95, 4.8, 1.33, 6.0, 0.65, 200.0, 0.18, 0.45, 0.26, 1.7, 7.0 }
+};
+
+static const GowlSoapPreset *
+soap_preset_by_name(const gchar *name)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(soap_presets); i++) {
+		if (g_strcmp0(soap_presets[i].name, name) == 0)
+			return &soap_presets[i];
+	}
+	/* The shipped default, so an unknown name behaves exactly
+	 * like naming none. */
+	return &soap_presets[1];
+}
+
+gboolean
+gowl_config_soap_preset_valid(const gchar *name)
+{
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(soap_presets); i++) {
+		if (g_strcmp0(soap_presets[i].name, name) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar * const *
+gowl_config_soap_preset_names(void)
+{
+	static const gchar *names[G_N_ELEMENTS(soap_presets) + 1];
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		guint i;
+
+		for (i = 0; i < G_N_ELEMENTS(soap_presets); i++)
+			names[i] = soap_presets[i].name;
+		names[G_N_ELEMENTS(soap_presets)] = NULL;
+		g_once_init_leave(&once, 1);
+	}
+	return names;
+}
+
+const gchar *
+gowl_config_get_soap_preset(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SOAP_PRESET);
+	return self->soap_preset;
+}
+
+void
+gowl_config_set_soap_preset(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_soap_preset_valid(name))
+		return;
+	g_free(self->soap_preset);
+	self->soap_preset = g_strdup(name);
+}
+
+/* An override wins unless it is the sentinel, in which case the
+ * preset decides. */
+#define GOWL_SOAP_GETTER(field)                                        \
+gdouble                                                            \
+gowl_config_get_soap_##field(GowlConfig *self)                   \
+{                                                                  \
+	const GowlSoapPreset *p;                                       \
+                                                                   \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.0);               \
+	p = soap_preset_by_name(self->soap_preset);                  \
+	return self->soap_##field < 0.0 ? p->field                    \
+	                                : self->soap_##field;         \
+}
+
+GOWL_SOAP_GETTER(thickness)
+GOWL_SOAP_GETTER(thin)
+GOWL_SOAP_GETTER(drain)
+GOWL_SOAP_GETTER(turbulence)
+GOWL_SOAP_GETTER(swirl)
+GOWL_SOAP_GETTER(index)
+GOWL_SOAP_GETTER(gain)
+GOWL_SOAP_GETTER(sheen)
+GOWL_SOAP_GETTER(wedge)
+GOWL_SOAP_GETTER(pop)
+GOWL_SOAP_GETTER(meniscus)
+GOWL_SOAP_GETTER(fog)
+GOWL_SOAP_GETTER(speed)
+GOWL_SOAP_GETTER(life)
+
+#undef GOWL_SOAP_GETTER
+
+const gchar *
+gowl_config_get_soap_tint(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SOAP_TINT);
+	return self->soap_tint;
+}
+
+gdouble
+gowl_config_get_soap_intensity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SOAP_INTENSITY);
+	return self->soap_intensity;
+}
+
+gdouble
+gowl_config_get_soap_clarity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SOAP_CLARITY);
+	return self->soap_clarity;
+}
+
+gdouble
+gowl_config_get_soap_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SOAP_OPACITY);
+	return self->soap_opacity;
+}
+
+gdouble
+gowl_config_get_soap_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SOAP_BRIGHTNESS);
+	return self->soap_brightness;
+}
+
+gdouble
+gowl_config_get_soap_light(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SOAP_LIGHT);
+	return self->soap_light;
+}
+
+gint
+gowl_config_get_soap_fps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SOAP_FPS);
+	return self->soap_fps;
+}
+
+gint
+gowl_config_get_soap_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SOAP_SCALE);
+	return self->soap_scale;
+}
+
+gint
+gowl_config_get_soap_frost(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SOAP_FROST);
+	return self->soap_frost;
+}
+
+gint
+gowl_config_get_soap_frost_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SOAP_FROST_PASSES);
+	return self->soap_frost_passes;
+}
+
+
+typedef struct {
+	const gchar *name;
+	gdouble      column;
+	gdouble      density;
+	gdouble      ember;
+	gdouble      spacing;
+	gdouble      sway;
+	gdouble      drag;
+	gdouble      temperature;
+	gdouble      cool;
+	gdouble      flicker;
+	gdouble      ash;
+	gdouble      glow;
+	gdouble      hearth;
+	gdouble      haze;
+	gdouble      haze_scale;
+	gdouble      fog;
+	gdouble      speed;
+} GowlEmbersPreset;
+
+static const GowlEmbersPreset embers_presets[] = {
+	/* column density ember spacing sway drag temperature cool flicker ash glow hearth haze haze_scale fog speed */
+	{ "dying", 118.0, 0.48, 4.4, 0.38, 14.0, 2.6, 1500.0, 0.95, 0.65, 0.34, 1.05, 0.36, 5.0, 3.0, 0.34, 0.7 },
+	{ "embers", 84.0, 0.85, 5.5, 0.80, 18.0, 2.2, 2300.0, 0.65, 0.55, 0.16, 1.50, 0.62, 9.0, 3.4, 0.3, 1.0 },
+	{ "campfire", 70.0, 0.92, 6.2, 0.95, 22.0, 2.0, 2500.0, 0.58, 0.5, 0.12, 1.75, 0.76, 13.0, 3.8, 0.28, 1.3 },
+	{ "forge", 58.0, 1.0, 6.6, 1.00, 16.0, 1.8, 2900.0, 0.46, 0.4, 0.05, 2.00, 0.92, 17.0, 4.2, 0.24, 1.55 },
+	{ "wildfire", 52.0, 1.0, 7.2, 1.00, 30.0, 1.6, 2700.0, 0.52, 0.7, 0.18, 2.30, 1.05, 22.0, 4.6, 0.22, 2.0 }
+};
+
+static const GowlEmbersPreset *
+embers_preset_by_name(const gchar *name)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(embers_presets); i++) {
+		if (g_strcmp0(embers_presets[i].name, name) == 0)
+			return &embers_presets[i];
+	}
+	/* The shipped default, so an unknown name behaves exactly
+	 * like naming none. */
+	return &embers_presets[1];
+}
+
+gboolean
+gowl_config_embers_preset_valid(const gchar *name)
+{
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(embers_presets); i++) {
+		if (g_strcmp0(embers_presets[i].name, name) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar * const *
+gowl_config_embers_preset_names(void)
+{
+	static const gchar *names[G_N_ELEMENTS(embers_presets) + 1];
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		guint i;
+
+		for (i = 0; i < G_N_ELEMENTS(embers_presets); i++)
+			names[i] = embers_presets[i].name;
+		names[G_N_ELEMENTS(embers_presets)] = NULL;
+		g_once_init_leave(&once, 1);
+	}
+	return names;
+}
+
+const gchar *
+gowl_config_get_embers_preset(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_EMBERS_PRESET);
+	return self->embers_preset;
+}
+
+void
+gowl_config_set_embers_preset(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_embers_preset_valid(name))
+		return;
+	g_free(self->embers_preset);
+	self->embers_preset = g_strdup(name);
+}
+
+/* An override wins unless it is the sentinel, in which case the
+ * preset decides. */
+#define GOWL_EMBERS_GETTER(field)                                        \
+gdouble                                                            \
+gowl_config_get_embers_##field(GowlConfig *self)                   \
+{                                                                  \
+	const GowlEmbersPreset *p;                                       \
+                                                                   \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.0);               \
+	p = embers_preset_by_name(self->embers_preset);                  \
+	return self->embers_##field < 0.0 ? p->field                    \
+	                                : self->embers_##field;         \
+}
+
+GOWL_EMBERS_GETTER(column)
+GOWL_EMBERS_GETTER(density)
+GOWL_EMBERS_GETTER(ember)
+GOWL_EMBERS_GETTER(spacing)
+GOWL_EMBERS_GETTER(sway)
+GOWL_EMBERS_GETTER(drag)
+GOWL_EMBERS_GETTER(temperature)
+GOWL_EMBERS_GETTER(cool)
+GOWL_EMBERS_GETTER(flicker)
+GOWL_EMBERS_GETTER(ash)
+GOWL_EMBERS_GETTER(glow)
+GOWL_EMBERS_GETTER(hearth)
+GOWL_EMBERS_GETTER(haze)
+GOWL_EMBERS_GETTER(haze_scale)
+GOWL_EMBERS_GETTER(fog)
+GOWL_EMBERS_GETTER(speed)
+
+#undef GOWL_EMBERS_GETTER
+
+const gchar *
+gowl_config_get_embers_tint(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_EMBERS_TINT);
+	return self->embers_tint;
+}
+
+gdouble
+gowl_config_get_embers_intensity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EMBERS_INTENSITY);
+	return self->embers_intensity;
+}
+
+gdouble
+gowl_config_get_embers_clarity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EMBERS_CLARITY);
+	return self->embers_clarity;
+}
+
+gdouble
+gowl_config_get_embers_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EMBERS_OPACITY);
+	return self->embers_opacity;
+}
+
+gdouble
+gowl_config_get_embers_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EMBERS_BRIGHTNESS);
+	return self->embers_brightness;
+}
+
+gint
+gowl_config_get_embers_fps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EMBERS_FPS);
+	return self->embers_fps;
+}
+
+gint
+gowl_config_get_embers_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EMBERS_SCALE);
+	return self->embers_scale;
+}
+
+gint
+gowl_config_get_embers_frost(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EMBERS_FROST);
+	return self->embers_frost;
+}
+
+gint
+gowl_config_get_embers_frost_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_EMBERS_FROST_PASSES);
+	return self->embers_frost_passes;
+}
+
+
+typedef struct {
+	const gchar *name;
+	gdouble      depth;
+	gdouble      extinction_r;
+	gdouble      extinction_g;
+	gdouble      extinction_b;
+	gdouble      murk;
+	gdouble      caustics;
+	gdouble      caustic_scale;
+	gdouble      shafts;
+	gdouble      shaft_lean;
+	gdouble      motes;
+	gdouble      mote_size;
+	gdouble      surface;
+	gdouble      sway;
+	gdouble      fog;
+	gdouble      speed;
+	gdouble      drift;
+} GowlSubmergedPreset;
+
+static const GowlSubmergedPreset submerged_presets[] = {
+	/* depth extinction_r extinction_g extinction_b murk caustics caustic_scale shafts shaft_lean motes mote_size surface sway fog speed drift */
+	{ "pool", 1.4, 0.3, 0.06, 0.04, 0.04, 0.85, 5.6, 0.3, 0.35, 0.18, 1.8, 0.65, 5.0, 0.16, 1.2, 30.0 },
+	{ "reef", 3.4, 0.42, 0.075, 0.025, 0.12, 0.55, 4.2, 0.22, 0.35, 0.38, 2.2, 0.45, 6.0, 0.22, 1.0, 22.0 },
+	{ "lake", 4.5, 0.5, 0.22, 0.28, 0.35, 0.28, 3.4, 0.14, 0.3, 0.55, 2.6, 0.3, 5.0, 0.3, 0.75, 26.0 },
+	{ "deep", 9.0, 0.46, 0.1, 0.02, 0.18, 0.12, 2.6, 0.3, 0.2, 0.62, 2.0, 0.1, 4.0, 0.26, 0.6, 34.0 },
+	{ "murk", 6.0, 0.55, 0.3, 0.34, 0.85, 0.1, 3.0, 0.06, 0.25, 0.75, 3.0, 0.14, 4.5, 0.42, 0.55, 20.0 }
+};
+
+static const GowlSubmergedPreset *
+submerged_preset_by_name(const gchar *name)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(submerged_presets); i++) {
+		if (g_strcmp0(submerged_presets[i].name, name) == 0)
+			return &submerged_presets[i];
+	}
+	/* The shipped default, so an unknown name behaves exactly
+	 * like naming none. */
+	return &submerged_presets[1];
+}
+
+gboolean
+gowl_config_submerged_preset_valid(const gchar *name)
+{
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(submerged_presets); i++) {
+		if (g_strcmp0(submerged_presets[i].name, name) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar * const *
+gowl_config_submerged_preset_names(void)
+{
+	static const gchar *names[G_N_ELEMENTS(submerged_presets) + 1];
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		guint i;
+
+		for (i = 0; i < G_N_ELEMENTS(submerged_presets); i++)
+			names[i] = submerged_presets[i].name;
+		names[G_N_ELEMENTS(submerged_presets)] = NULL;
+		g_once_init_leave(&once, 1);
+	}
+	return names;
+}
+
+const gchar *
+gowl_config_get_submerged_preset(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SUBMERGED_PRESET);
+	return self->submerged_preset;
+}
+
+void
+gowl_config_set_submerged_preset(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_submerged_preset_valid(name))
+		return;
+	g_free(self->submerged_preset);
+	self->submerged_preset = g_strdup(name);
+}
+
+/* An override wins unless it is the sentinel, in which case the
+ * preset decides. */
+#define GOWL_SUBMERGED_GETTER(field)                                        \
+gdouble                                                            \
+gowl_config_get_submerged_##field(GowlConfig *self)                   \
+{                                                                  \
+	const GowlSubmergedPreset *p;                                       \
+                                                                   \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.0);               \
+	p = submerged_preset_by_name(self->submerged_preset);                  \
+	return self->submerged_##field < 0.0 ? p->field                    \
+	                                : self->submerged_##field;         \
+}
+
+GOWL_SUBMERGED_GETTER(depth)
+GOWL_SUBMERGED_GETTER(extinction_r)
+GOWL_SUBMERGED_GETTER(extinction_g)
+GOWL_SUBMERGED_GETTER(extinction_b)
+GOWL_SUBMERGED_GETTER(murk)
+GOWL_SUBMERGED_GETTER(caustics)
+GOWL_SUBMERGED_GETTER(caustic_scale)
+GOWL_SUBMERGED_GETTER(shafts)
+GOWL_SUBMERGED_GETTER(shaft_lean)
+GOWL_SUBMERGED_GETTER(motes)
+GOWL_SUBMERGED_GETTER(mote_size)
+GOWL_SUBMERGED_GETTER(surface)
+GOWL_SUBMERGED_GETTER(sway)
+GOWL_SUBMERGED_GETTER(fog)
+GOWL_SUBMERGED_GETTER(speed)
+GOWL_SUBMERGED_GETTER(drift)
+
+#undef GOWL_SUBMERGED_GETTER
+
+const gchar *
+gowl_config_get_submerged_water(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_SUBMERGED_WATER);
+	return self->submerged_water;
+}
+
+gdouble
+gowl_config_get_submerged_intensity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SUBMERGED_INTENSITY);
+	return self->submerged_intensity;
+}
+
+gdouble
+gowl_config_get_submerged_clarity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SUBMERGED_CLARITY);
+	return self->submerged_clarity;
+}
+
+gdouble
+gowl_config_get_submerged_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SUBMERGED_OPACITY);
+	return self->submerged_opacity;
+}
+
+gdouble
+gowl_config_get_submerged_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SUBMERGED_BRIGHTNESS);
+	return self->submerged_brightness;
+}
+
+gint
+gowl_config_get_submerged_fps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SUBMERGED_FPS);
+	return self->submerged_fps;
+}
+
+gint
+gowl_config_get_submerged_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SUBMERGED_SCALE);
+	return self->submerged_scale;
+}
+
+gint
+gowl_config_get_submerged_frost(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SUBMERGED_FROST);
+	return self->submerged_frost;
+}
+
+gint
+gowl_config_get_submerged_frost_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_SUBMERGED_FROST_PASSES);
+	return self->submerged_frost_passes;
+}
+
+
+typedef struct {
+	const gchar *name;
+	gdouble      radials;
+	gdouble      pitch;
+	gdouble      thread;
+	gdouble      drop;
+	gdouble      spacing;
+	gdouble      sag;
+	gdouble      depth;
+	gdouble      bulge;
+	gdouble      silk;
+	gdouble      glint;
+	gdouble      shine;
+	gdouble      rim;
+	gdouble      sway;
+	gdouble      fog;
+	gdouble      speed;
+} GowlDewPreset;
+
+static const GowlDewPreset dew_presets[] = {
+	/* radials pitch thread drop spacing sag depth bulge silk glint shine rim sway fog speed */
+	{ "gossamer", 22.0, 54.0, 1.0, 5.6, 30.0, 4.0, 5.0, 1.0, 0.26, 1.10, 66.0, 0.24, 2.6, 0.3, 1.0 },
+	{ "dawn", 15.0, 74.0, 1.3, 9.0, 46.0, 7.0, 5.6, 1.0, 0.30, 1.25, 58.0, 0.26, 3.2, 0.34, 1.0 },
+	{ "heavy", 12.0, 92.0, 1.7, 13.5, 60.0, 12.0, 6.2, 1.05, 0.34, 1.45, 50.0, 0.3, 4.2, 0.38, 0.8 },
+	{ "tattered", 9.0, 118.0, 1.4, 10.0, 72.0, 9.0, 5.4, 0.95, 0.22, 1.15, 60.0, 0.26, 5.0, 0.28, 1.2 },
+	{ "frostweb", 19.0, 62.0, 2.0, 4.0, 26.0, 2.0, 4.2, 0.9, 0.62, 0.90, 74.0, 0.18, 1.8, 0.44, 0.6 }
+};
+
+static const GowlDewPreset *
+dew_preset_by_name(const gchar *name)
+{
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(dew_presets); i++) {
+		if (g_strcmp0(dew_presets[i].name, name) == 0)
+			return &dew_presets[i];
+	}
+	/* The shipped default, so an unknown name behaves exactly
+	 * like naming none. */
+	return &dew_presets[1];
+}
+
+gboolean
+gowl_config_dew_preset_valid(const gchar *name)
+{
+	guint i;
+
+	if (name == NULL)
+		return FALSE;
+	for (i = 0; i < G_N_ELEMENTS(dew_presets); i++) {
+		if (g_strcmp0(dew_presets[i].name, name) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+const gchar * const *
+gowl_config_dew_preset_names(void)
+{
+	static const gchar *names[G_N_ELEMENTS(dew_presets) + 1];
+	static gsize once = 0;
+
+	if (g_once_init_enter(&once)) {
+		guint i;
+
+		for (i = 0; i < G_N_ELEMENTS(dew_presets); i++)
+			names[i] = dew_presets[i].name;
+		names[G_N_ELEMENTS(dew_presets)] = NULL;
+		g_once_init_leave(&once, 1);
+	}
+	return names;
+}
+
+const gchar *
+gowl_config_get_dew_preset(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_DEW_PRESET);
+	return self->dew_preset;
+}
+
+void
+gowl_config_set_dew_preset(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	if (!gowl_config_dew_preset_valid(name))
+		return;
+	g_free(self->dew_preset);
+	self->dew_preset = g_strdup(name);
+}
+
+/* An override wins unless it is the sentinel, in which case the
+ * preset decides. */
+#define GOWL_DEW_GETTER(field)                                        \
+gdouble                                                            \
+gowl_config_get_dew_##field(GowlConfig *self)                   \
+{                                                                  \
+	const GowlDewPreset *p;                                       \
+                                                                   \
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), 0.0);               \
+	p = dew_preset_by_name(self->dew_preset);                  \
+	return self->dew_##field < 0.0 ? p->field                    \
+	                                : self->dew_##field;         \
+}
+
+GOWL_DEW_GETTER(radials)
+GOWL_DEW_GETTER(pitch)
+GOWL_DEW_GETTER(thread)
+GOWL_DEW_GETTER(drop)
+GOWL_DEW_GETTER(spacing)
+GOWL_DEW_GETTER(sag)
+GOWL_DEW_GETTER(depth)
+GOWL_DEW_GETTER(bulge)
+GOWL_DEW_GETTER(silk)
+GOWL_DEW_GETTER(glint)
+GOWL_DEW_GETTER(shine)
+GOWL_DEW_GETTER(rim)
+GOWL_DEW_GETTER(sway)
+GOWL_DEW_GETTER(fog)
+GOWL_DEW_GETTER(speed)
+
+#undef GOWL_DEW_GETTER
+
+const gchar *
+gowl_config_get_dew_tint(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_DEW_TINT);
+	return self->dew_tint;
+}
+
+gdouble
+gowl_config_get_dew_intensity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_DEW_INTENSITY);
+	return self->dew_intensity;
+}
+
+gdouble
+gowl_config_get_dew_clarity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_DEW_CLARITY);
+	return self->dew_clarity;
+}
+
+gdouble
+gowl_config_get_dew_opacity(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_DEW_OPACITY);
+	return self->dew_opacity;
+}
+
+gdouble
+gowl_config_get_dew_brightness(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_DEW_BRIGHTNESS);
+	return self->dew_brightness;
+}
+
+gdouble
+gowl_config_get_dew_light(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_DEW_LIGHT);
+	return self->dew_light;
+}
+
+gint
+gowl_config_get_dew_fps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_DEW_FPS);
+	return self->dew_fps;
+}
+
+gint
+gowl_config_get_dew_scale(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_DEW_SCALE);
+	return self->dew_scale;
+}
+
+gint
+gowl_config_get_dew_frost(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_DEW_FROST);
+	return self->dew_frost;
+}
+
+gint
+gowl_config_get_dew_frost_passes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_DEW_FROST_PASSES);
+	return self->dew_frost_passes;
+}
+
+
+void
+gowl_config_set_soap_intensity(GowlConfig *self, gdouble intensity)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->soap_intensity = CLAMP(intensity, 0.0, 3.0);
+}
+
+void
+gowl_config_set_soap_fps(GowlConfig *self, gint fps)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->soap_fps = CLAMP(fps, 0, 144);
+}
+
+void
+gowl_config_set_soap_scale(GowlConfig *self, gint scale)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->soap_scale = CLAMP(scale, 1, 4);
+}
+
+void
+gowl_config_set_embers_intensity(GowlConfig *self, gdouble intensity)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->embers_intensity = CLAMP(intensity, 0.0, 3.0);
+}
+
+void
+gowl_config_set_embers_fps(GowlConfig *self, gint fps)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->embers_fps = CLAMP(fps, 0, 144);
+}
+
+void
+gowl_config_set_embers_scale(GowlConfig *self, gint scale)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->embers_scale = CLAMP(scale, 1, 4);
+}
+
+void
+gowl_config_set_submerged_intensity(GowlConfig *self, gdouble intensity)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->submerged_intensity = CLAMP(intensity, 0.0, 3.0);
+}
+
+void
+gowl_config_set_submerged_fps(GowlConfig *self, gint fps)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->submerged_fps = CLAMP(fps, 0, 144);
+}
+
+void
+gowl_config_set_submerged_scale(GowlConfig *self, gint scale)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->submerged_scale = CLAMP(scale, 1, 4);
+}
+
+void
+gowl_config_set_dew_intensity(GowlConfig *self, gdouble intensity)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->dew_intensity = CLAMP(intensity, 0.0, 3.0);
+}
+
+void
+gowl_config_set_dew_fps(GowlConfig *self, gint fps)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->dew_fps = CLAMP(fps, 0, 144);
+}
+
+void
+gowl_config_set_dew_scale(GowlConfig *self, gint scale)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->dew_scale = CLAMP(scale, 1, 4);
 }
 
 /* --- Window hints (modules/hints) ---------------------------------- */

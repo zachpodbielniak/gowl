@@ -170,6 +170,73 @@ gboolean gowl_fx_texture_blur (GowlFxGl            *self,
                                gint                 downscale,
                                gint                 passes);
 
+/**
+ * GowlFxBokehParams:
+ * @radius: the defocus disc, in source pixels
+ * @downscale: how much smaller to work, 1 to 4.  2 by default; 1 keeps
+ *   small highlights intact at four times the cost
+ * @samples: taps around the disc, 8 to 128.  Too few and the disc
+ *   becomes a ring of dots around a bright spot; too few AND a detailed
+ *   wallpaper and the whole thing comes out grainy, because the
+ *   highlight weighting leaves only a handful of samples carrying the
+ *   weight
+ * @blades: aperture blades, 3 to 12; under 3 is a circle (wide open)
+ * @rotation: how the aperture is turned, in degrees.  Only visible with
+ *   blades, and only worth setting because every highlight in the frame
+ *   shares it -- which is one of the cues that says "a lens did this"
+ * @highlight: how much more a bright sample counts than a dim one.  A
+ *   wallpaper has no values above 1.0, so the dynamic range a real lens
+ *   works with has to be put back by hand; 0 is a plain disc average and
+ *   looks like a blur with hard edges
+ * @threshold: the luminance a sample has to beat to count as bright
+ * @edge: spherical aberration -- how much brighter the rim of a disc is
+ *   than its middle.  0 is corrected glass, 1 is a soap-bubble bokeh
+ *
+ * One lens, out of focus.  gowl_fx_bokeh_params_init() fills in a fast
+ * six-bladed one.
+ */
+typedef struct {
+	gfloat radius;
+	gint   downscale;
+	gint   samples;
+	gint   blades;
+	gfloat rotation;
+	gfloat highlight;
+	gfloat threshold;
+	gfloat edge;
+} GowlFxBokehParams;
+
+/**
+ * gowl_fx_bokeh_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_bokeh_params_init (GowlFxBokehParams *params);
+
+/**
+ * gowl_fx_texture_bokeh:
+ * @self: the context
+ * @dst: (inout): the texture to write; resized as needed
+ * @src: the texture to throw out of focus
+ * @params: (nullable): the lens; %NULL is the default one
+ *
+ * The other kernel the blur module can build its one output-sized
+ * picture with.
+ *
+ * A DISC, not a Gaussian.  An out-of-focus point of light becomes the
+ * shape of the APERTURE, evenly filled and hard-edged -- which is the
+ * whole visible difference between a photograph's background and a
+ * blurred screenshot.  The averaging is done in light rather than in
+ * display values, and bright samples are weighted up, because without
+ * either of those the discs are present and invisible.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller falls back to the box blur.
+ */
+gboolean gowl_fx_texture_bokeh (GowlFxGl                *self,
+                                GowlFxTexture           *dst,
+                                const GowlFxTexture     *src,
+                                const GowlFxBokehParams *params);
+
 /* ── Drawing ─────────────────────────────────────────────────────── */
 
 typedef struct _GowlFxPass GowlFxPass;
@@ -584,7 +651,57 @@ gboolean gowl_fx_pass_water (GowlFxPass              *pass,
 typedef struct {
 	gdouble life;
 	gdouble run[3];
+	/*
+	 * The storm, which is the rain with the lightning switched on.
+	 *
+	 * SECONDS here, not cycles, and that is not an oversight.  The rest
+	 * of this clock is cyclic because it drives a field that repeats;
+	 * a flash is a one-off event with a hard onset and a decay measured
+	 * in tens of milliseconds, so what the shader needs is "how bright
+	 * is it RIGHT NOW", worked out on the CPU where a double has
+	 * precision to spare.
+	 *
+	 * @flash is that number, 0 to 1.  @strike_t is how far into the
+	 * current flash we are and is negative while none is happening;
+	 * @wait is how long until the next one; @strike is which flash,
+	 * which is what the stroke pattern is hashed from; @bolt is where
+	 * across the sky it is, -1 to 1, so the glints move.
+	 */
+	gdouble flash;
+	gdouble strike_t;
+	gdouble wait;
+	gdouble strike;
+	gdouble bolt;
 } GowlFxRainClock;
+
+/**
+ * gowl_fx_rain_lightning_advance:
+ * @clock: (inout): the clock, whose @flash and @bolt this writes
+ * @dt: seconds since the last advance
+ * @rate: mean seconds between strikes; 0 or less switches the lightning
+ *   off and decays any flash in progress to nothing
+ * @power: how bright a flash gets, 1.0 being the tuned strength
+ *
+ * Moves the storm on.
+ *
+ * A FLASH IS NOT ONE FLASH.  What people picture as a lightning flash is
+ * three to five separate return strokes down the same channel, tens of
+ * milliseconds apart, and the flicker between them is the single most
+ * recognisable thing about it -- a smooth fade in and out reads as
+ * somebody turning a lamp up, which is what almost every implementation
+ * of this does.  Each stroke here rises in a millisecond and decays with
+ * its own time constant, and the count, the spacing and the strengths
+ * are hashed from @clock->strike so no two flashes are the same one
+ * twice.
+ *
+ * The gaps are exponential, which is what a Poisson process gives and
+ * what a storm sounds like: sometimes two almost together, sometimes a
+ * long wait.  A fixed interval is the other thing that gives it away.
+ */
+void gowl_fx_rain_lightning_advance (GowlFxRainClock *clock,
+                                     gdouble          dt,
+                                     gdouble          rate,
+                                     gdouble          power);
 
 /**
  * gowl_fx_rain_advance:
@@ -672,6 +789,12 @@ typedef struct {
 	gfloat shine;
 	gfloat rim;
 	gfloat impact;
+	/* How lit the pane is by lightning this instant, 0 to 1, and where
+	 * across the sky the bolt is, -1 to 1.  Both come from the clock's
+	 * @flash and @bolt; 0 is a pane with no storm over it, which is what
+	 * gowl_fx_rain_params_init() leaves. */
+	gfloat flash;
+	gfloat bolt;
 	gfloat light[3];
 	gfloat tint[3];
 	gfloat absorption;
@@ -718,6 +841,588 @@ gboolean gowl_fx_pass_rain (GowlFxPass             *pass,
                             const GowlFxTexture    *sharp,
                             const GowlFxRainParams *params,
                             const GowlFxRainClock  *clock);
+
+/* ── Dew on a web ────────────────────────────────────────────────── */
+
+/**
+ * GOWL_FX_DEW_CYCLES:
+ *
+ * How far the breathing and shimmer clocks run before repeating.
+ *
+ * Nothing is indexed by the whole part here --- a web does not emit
+ * anything --- so this is only a bound on how large the numbers the
+ * sines see are allowed to get.
+ */
+#define GOWL_FX_DEW_CYCLES (64.0)
+
+/**
+ * GowlFxDewClock:
+ * @sway: three breathing phases, each in [0, %GOWL_FX_DEW_CYCLES)
+ * @shimmer: the per-drop glint phase, in the same range
+ *
+ * Where the web has got to.
+ *
+ * Advance it with gowl_fx_dew_advance(); a zeroed clock is a web in
+ * still air.
+ */
+typedef struct {
+	gdouble sway[3];
+	gdouble shimmer;
+} GowlFxDewClock;
+
+/**
+ * gowl_fx_dew_advance:
+ * @clock: (inout): the clock
+ * @dt: seconds since the last advance
+ * @speed: how much air is moving; 1.0 is the tuned rate
+ *
+ * Moves the web on.  A @dt over a quarter of a second is treated as a
+ * quarter of a second.
+ */
+void gowl_fx_dew_advance (GowlFxDewClock *clock,
+                          gdouble         dt,
+                          gdouble         speed);
+
+/**
+ * GowlFxDewParams:
+ * @width: the rect's width in pixels
+ * @height: the rect's height in pixels
+ * @radius: corner radius in pixels
+ * @radials: how many spokes the web has, 3 to 48.  Their angles are
+ *   jittered: a web whose spokes are exactly 360/n apart is a wheel
+ * @pitch: pixels the capture spiral gains per turn
+ * @thread: silk width in pixels
+ * @drop: a bead's radius in pixels.  Capped against @spacing and
+ *   @pitch, because a bead that reaches its neighbour or the next turn
+ *   welds the web into a disc
+ * @spacing: pixels between beads along the thread.  This is the
+ *   Rayleigh-Plateau wavelength: a coated fibre does not stay coated,
+ *   it breaks into a regular string of drops
+ * @sag: how far a loaded span hangs, in pixels
+ * @depth: how far the wallpaper is behind, in a drop's own radii.  Past
+ *   2 a drop inverts what is behind it, which is what a ball lens does
+ * @bulge: how domed a drop reads
+ * @dispersion: chromatic separation through a drop
+ * @silk: how bright the dry thread is.  BRIGHT, not dark: silk is a
+ *   transparent fibre and what reaches the eye from it is scattered
+ *   light
+ * @glint: the highlight on each drop
+ * @shine: specular exponent
+ * @rim: how much darker the very edge of a drop is
+ * @sway: how far the web breathes, in pixels
+ * @hub: where the hub sits, 0 to 1 of the pane.  Above centre by
+ *   default, because that is where an orb weaver builds it
+ * @fog: how misted the air is
+ * @clarity: how much of that a drop lifts
+ * @light: direction to the light, as a 3-vector
+ * @tint: what the water takes out of the light
+ * @absorption: how much of @tint is applied
+ * @brightness: multiplied into the result
+ * @alpha: overall opacity
+ * @src_origin: where this rect's top-left sits in the source textures
+ * @src_scale: how many SOURCE pixels one pixel of this rect is
+ * @seed: which web this rect shows
+ *
+ * One orb web, wet.  gowl_fx_dew_params_init() fills in a web at dawn.
+ */
+typedef struct {
+	gint   width, height;
+	gfloat radius;
+	gfloat radials;
+	gfloat pitch;
+	gfloat thread;
+	gfloat drop;
+	gfloat spacing;
+	gfloat sag;
+	gfloat depth;
+	gfloat bulge;
+	gfloat dispersion;
+	gfloat silk;
+	gfloat glint;
+	gfloat shine;
+	gfloat rim;
+	gfloat sway;
+	gfloat hub[2];
+	gfloat fog;
+	gfloat clarity;
+	gfloat light[3];
+	gfloat tint[3];
+	gfloat absorption;
+	gfloat brightness;
+	gfloat alpha;
+	gfloat src_origin[2];
+	gfloat src_scale;
+	gfloat seed;
+} GowlFxDewParams;
+
+/**
+ * gowl_fx_dew_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_dew_params_init (GowlFxDewParams *params);
+
+/**
+ * gowl_fx_pass_dew:
+ * @pass: a pass, begun on the buffer the web is drawn into
+ * @soft: the clouded wallpaper, covering the whole output
+ * @sharp: (nullable): the same wallpaper unblurred
+ * @params: the web to draw
+ * @clock: (nullable): where it has got to
+ *
+ * Draws an orb web across the window, strung with dew: radials from a
+ * hub above centre, an Archimedean capture spiral sagging between them,
+ * and evenly spaced beads on the spiral --- each of them a lens.
+ *
+ * The optics are the rain's.  The placement is the effect.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller shows no web and the desktop is as it was.
+ */
+gboolean gowl_fx_pass_dew (GowlFxPass            *pass,
+                           const GowlFxTexture   *soft,
+                           const GowlFxTexture   *sharp,
+                           const GowlFxDewParams *params,
+                           const GowlFxDewClock  *clock);
+
+/* ── Under water ─────────────────────────────────────────────────── */
+
+/**
+ * GOWL_FX_SUBMERGED_CYCLES:
+ *
+ * How far the caustic and drift clocks run before repeating.
+ *
+ * Nothing here is indexed by a large multiple of the cycle -- the motes
+ * are the only thing with a whole part, and it picks one speck -- so
+ * this can be generous without costing precision.
+ */
+#define GOWL_FX_SUBMERGED_CYCLES (128.0)
+
+/**
+ * GowlFxSubmergedClock:
+ * @caustic: three caustic phases, each in [0, %GOWL_FX_SUBMERGED_CYCLES)
+ * @drift: the marine snow's fall clock, in the same range
+ * @surf: the surface's own phase, for the shafts and the band at the top
+ *
+ * Where the water has got to.
+ *
+ * Advance it with gowl_fx_submerged_advance(); a zeroed clock is water
+ * that has only just been looked at.
+ */
+typedef struct {
+	gdouble caustic[3];
+	gdouble drift;
+	gdouble surf;
+} GowlFxSubmergedClock;
+
+/**
+ * gowl_fx_submerged_advance:
+ * @clock: (inout): the clock
+ * @dt: seconds since the last advance
+ * @speed: how fast the surface overhead moves; 1.0 is the tuned rate
+ * @drift_seconds: how long a speck takes to cross the pane
+ *
+ * Moves the water on.  A @dt over a quarter of a second is treated as a
+ * quarter of a second.
+ */
+void gowl_fx_submerged_advance (GowlFxSubmergedClock *clock,
+                                gdouble               dt,
+                                gdouble               speed,
+                                gdouble               drift_seconds);
+
+/**
+ * GowlFxSubmergedParams:
+ * @width: the rect's width in pixels
+ * @height: the rect's height in pixels
+ * @radius: corner radius in pixels
+ * @depth: METRES of water between the eye and the wallpaper, at the
+ *   middle of the pane.  The one knob that matters: everything about the
+ *   colour follows from it through @extinction
+ * @extinction: per-metre absorption in red, green and blue.  These three
+ *   numbers ARE the colour of the effect --- there is no blue tint
+ *   anywhere in it.  Their ratio is the point: red dies about twenty
+ *   times faster than blue in clear water
+ * @murk: extra scattering, as though the water were silty.  Raises the
+ *   extinction and the haze together
+ * @water: the colour scattered back INTO the line of sight, which is
+ *   what stops distant things being black
+ * @caustics: how bright the net of surface-focused light is
+ * @caustic_scale: how many caustic cells fit across the pane
+ * @shafts: columns of light coming down from the surface
+ * @shaft_lean: how far they lean, which is where the sun is
+ * @motes: how much marine snow, 0 to 1
+ * @mote_size: a speck's radius in pixels
+ * @surface: how visible the underside of the surface is at the top of
+ *   the pane, 0 to 1
+ * @sway: how far the whole view wobbles, in pixels
+ * @fog: how hazy the water is before @murk is added
+ * @clarity: how much of that is lifted
+ * @brightness: multiplied into the result
+ * @alpha: overall opacity
+ * @src_origin: where this rect's top-left sits in the source textures
+ * @src_scale: how many SOURCE pixels one pixel of this rect is
+ * @seed: which crop of the field this rect shows
+ *
+ * One view from under water.  gowl_fx_submerged_params_init() fills in
+ * a few metres of clear coastal water.
+ */
+typedef struct {
+	gint   width, height;
+	gfloat radius;
+	gfloat depth;
+	gfloat extinction[3];
+	gfloat murk;
+	gfloat water[3];
+	gfloat caustics;
+	gfloat caustic_scale;
+	gfloat shafts;
+	gfloat shaft_lean;
+	gfloat motes;
+	gfloat mote_size;
+	gfloat surface;
+	gfloat sway;
+	gfloat fog;
+	gfloat clarity;
+	gfloat brightness;
+	gfloat alpha;
+	gfloat src_origin[2];
+	gfloat src_scale;
+	gfloat seed;
+} GowlFxSubmergedParams;
+
+/**
+ * gowl_fx_submerged_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_submerged_params_init (GowlFxSubmergedParams *params);
+
+/**
+ * gowl_fx_pass_submerged:
+ * @pass: a pass, begun on the buffer the water is drawn into
+ * @soft: the clouded wallpaper, covering the whole output
+ * @sharp: (nullable): the same wallpaper unblurred
+ * @params: the water to draw
+ * @clock: (nullable): where it has got to
+ *
+ * Draws the wallpaper as though the eye were under water: wavelength
+ * absorption with depth, light scattered back in, a moving caustic net
+ * from the surface above, shafts, and marine snow drifting down.
+ *
+ * The liquid water next door is a SURFACE seen from outside.  This is
+ * the medium seen from inside, and none of what a medium does over a
+ * distance is anything a surface does.
+ *
+ * Like every animated backdrop here, this is NEVER up to date.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller shows no water and the desktop is as it was.
+ */
+gboolean gowl_fx_pass_submerged (GowlFxPass                  *pass,
+                                 const GowlFxTexture         *soft,
+                                 const GowlFxTexture         *sharp,
+                                 const GowlFxSubmergedParams *params,
+                                 const GowlFxSubmergedClock  *clock);
+
+/* ── Embers ──────────────────────────────────────────────────────── */
+
+/**
+ * GOWL_FX_EMBERS_CYCLES:
+ *
+ * How many sparks a column lets go before the clock repeats.
+ *
+ * The same size as the fizz's and for the same reason: an ember is
+ * indexed by EMISSION NUMBER, which is the clock times the column's
+ * emissions per cycle, so the integer the hash sees is several times
+ * this rather than this.
+ */
+#define GOWL_FX_EMBERS_CYCLES (64.0)
+
+/**
+ * GowlFxEmbersClock:
+ * @rise: the three ember clocks, each in [0, %GOWL_FX_EMBERS_CYCLES)
+ * @haze: three heat-shimmer phases, in the same range
+ *
+ * Where the fire has got to.
+ *
+ * Cycles, as everywhere here: the fraction of a rise clock is how far up
+ * a spark has got and the whole part is WHICH spark, so a column does
+ * not let go of the same one forever.
+ *
+ * Advance it with gowl_fx_embers_advance(); a zeroed clock is a fire
+ * that has just been lit.
+ */
+typedef struct {
+	gdouble rise[3];
+	gdouble haze[3];
+} GowlFxEmbersClock;
+
+/**
+ * gowl_fx_embers_advance:
+ * @clock: (inout): the clock
+ * @dt: seconds since the last advance
+ * @speed: how fast the sparks rise; 1.0 is the tuned rate
+ * @haze_speed: how fast the heat shimmer drifts
+ *
+ * Moves the fire on.  A @dt over a quarter of a second is treated as a
+ * quarter of a second: a stall is not a draught.
+ */
+void gowl_fx_embers_advance (GowlFxEmbersClock *clock,
+                             gdouble            dt,
+                             gdouble            speed,
+                             gdouble            haze_speed);
+
+/**
+ * GowlFxEmbersParams:
+ * @width: the rect's width in pixels
+ * @height: the rect's height in pixels
+ * @radius: corner radius in pixels
+ * @column: pixels per column of the ember layer
+ * @density: how many columns carry sparks at all, 0 to 1
+ * @ember: a spark's radius in pixels.  Capped against @column
+ * @spacing: how closely a column lets them go, 0 to 1.  Quantised inside
+ *   the shader to a whole number per cycle
+ * @sway: how far a spark wanders sideways, in pixels.  Capped at a
+ *   quarter of @column, because the layer only asks three columns
+ * @drag: how hard a spark decelerates as it rises.  Larger is a spark
+ *   that leaps and then crawls; 0 would be constant speed, which reads
+ *   as rain going the wrong way
+ * @temperature: KELVIN at birth.  This is the palette: the colour of
+ *   every spark is the Planckian locus at its current temperature, so
+ *   2300 is a wood fire and 1400 is a dying one
+ * @cool: how fast a spark cools over its rise.  Its brightness follows
+ *   the FOURTH POWER of the temperature, so this is a far stronger knob
+ *   than it looks
+ * @flicker: per-spark unsteadiness, 0 to 2
+ * @ash: the fraction that have burnt out --- dark, and FALLING
+ * @glow: the halo around each spark
+ * @hearth: the fire's own light on the bottom of the pane
+ * @haze: heat shimmer, in pixels of displacement at the bottom
+ * @haze_scale: how many shimmer cells fit across the pane
+ * @fog: how smoky the pane is
+ * @clarity: how much of that clears towards the top
+ * @tint: a warm cast over the whole pane
+ * @brightness: multiplied into the result
+ * @alpha: overall opacity
+ * @src_origin: where this rect's top-left sits in the source textures
+ * @src_scale: how many SOURCE pixels one pixel of this rect is
+ * @seed: which crop of the field this rect shows
+ *
+ * One fire, below the window.  gowl_fx_embers_params_init() fills in a
+ * hearth.
+ */
+typedef struct {
+	gint   width, height;
+	gfloat radius;
+	gfloat column;
+	gfloat density;
+	gfloat ember;
+	gfloat spacing;
+	gfloat sway;
+	gfloat drag;
+	gfloat temperature;
+	gfloat cool;
+	gfloat flicker;
+	gfloat ash;
+	gfloat glow;
+	gfloat hearth;
+	gfloat haze;
+	gfloat haze_scale;
+	gfloat fog;
+	gfloat clarity;
+	gfloat tint[3];
+	gfloat brightness;
+	gfloat alpha;
+	gfloat src_origin[2];
+	gfloat src_scale;
+	gfloat seed;
+} GowlFxEmbersParams;
+
+/**
+ * gowl_fx_embers_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_embers_params_init (GowlFxEmbersParams *params);
+
+/**
+ * gowl_fx_pass_embers:
+ * @pass: a pass, begun on the buffer the fire is drawn into
+ * @soft: the clouded wallpaper, covering the whole output
+ * @sharp: (nullable): the same wallpaper unblurred
+ * @params: the fire to draw
+ * @clock: (nullable): where it has got to; %NULL is a fire just lit
+ *
+ * Draws the wallpaper through the heat of a fire below the window:
+ * sparks rising and slowing, cooling along the Planckian locus and
+ * dimming as the fourth power of their temperature, ash falling back
+ * through them, and the whole view shimmering in the hot air.
+ *
+ * Nothing here is a lens.  The sparks ADD light, and the shimmer is a
+ * domain warp rather than a refraction --- which is what hot air
+ * actually does to a view through it.
+ *
+ * Like every animated backdrop here, this is NEVER up to date.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller shows no fire and the desktop is as it was.
+ */
+gboolean gowl_fx_pass_embers (GowlFxPass               *pass,
+                              const GowlFxTexture      *soft,
+                              const GowlFxTexture      *sharp,
+                              const GowlFxEmbersParams *params,
+                              const GowlFxEmbersClock  *clock);
+
+/* ── The soap film ───────────────────────────────────────────────── */
+
+/**
+ * GOWL_FX_SOAP_CYCLES:
+ *
+ * How many films are blown, drained and popped before the clock repeats.
+ *
+ * Small, because unlike the rain and the fizz nothing is indexed by
+ * anything larger than the cycle number itself: the whole part picks
+ * where the hole opens and nothing else, so thirty-two is a long time
+ * before the same film comes round and a number a float has no trouble
+ * with.
+ */
+#define GOWL_FX_SOAP_CYCLES (32.0)
+
+/**
+ * GowlFxSoapClock:
+ * @life: which film, and how far through its life, in
+ *   [0, %GOWL_FX_SOAP_CYCLES)
+ * @swirl: three plume phases, each in the same range
+ *
+ * Where the film has got to.
+ *
+ * The fractional part of @life is a film's whole existence -- blown,
+ * draining, black at the top, popped -- and the whole part is which
+ * film it is, which is what decides where the hole opens.  The three
+ * @swirl phases advect the thin patches upward at rates with no common
+ * period.
+ *
+ * Advance it with gowl_fx_soap_advance(); a zeroed clock is a film that
+ * has just been blown.
+ */
+typedef struct {
+	gdouble life;
+	gdouble swirl[3];
+} GowlFxSoapClock;
+
+/**
+ * gowl_fx_soap_advance:
+ * @clock: (inout): the clock
+ * @dt: seconds since the last advance
+ * @life_seconds: how long one film lasts, blown to popped
+ * @swirl_speed: how fast the thin patches rise; 1.0 is the tuned rate
+ *
+ * Moves the film on.  A @dt over a quarter of a second is treated as a
+ * quarter of a second: a stall is not a reason for the film to pop.
+ */
+void gowl_fx_soap_advance (GowlFxSoapClock *clock,
+                           gdouble          dt,
+                           gdouble          life_seconds,
+                           gdouble          swirl_speed);
+
+/**
+ * GowlFxSoapParams:
+ * @width: the rect's width in pixels
+ * @height: the rect's height in pixels
+ * @radius: corner radius in pixels
+ * @thickness: NANOMETRES at the bottom of a freshly blown film.  This is
+ *   the setting: the colour of every pixel is a function of the local
+ *   thickness and nothing else, so this decides how many interference
+ *   orders are stacked up the pane.  900 is about five
+ * @thin: the top's thickness as a fraction of the bottom's.  Gravity
+ *   drains a film downward, and this is how steep the wedge is
+ * @drain: how fast the whole film thins over its life.  Larger means the
+ *   black cap creeps down sooner
+ * @turbulence: how much the rising thin patches disturb the bands, 0 to 2
+ * @swirl: how many plume cells fit across the pane
+ * @index: refractive index of the liquid.  1.35 is soapy water; 1.47 is
+ *   oil on water, which is the same physics and a different look
+ * @gain: how much the real reflectance is amplified.  A soap film sends
+ *   back at most 9% of what hits it, which is correct and nearly
+ *   invisible behind a desktop window; this is the honest amplification
+ *   of a real number rather than a painted rainbow
+ * @sheen: how bright the room reflected in the film is
+ * @wedge: how far the wallpaper is displaced by the film acting as a
+ *   prism, in pixels per unit of thickness slope
+ * @dispersion: chromatic separation through that prism
+ * @pop: how much of a film's life is spent popping, 0 to 0.6.  0 is a
+ *   film that never pops, which is not a thing soap does
+ * @meniscus: the thick border where the film meets its frame, 0 to 2
+ * @fog: how turbid the liquid is
+ * @clarity: how much of that the film lifts
+ * @light: direction to the light, as a 3-vector
+ * @tint: what the liquid takes out of the light
+ * @brightness: multiplied into the result
+ * @alpha: overall opacity
+ * @src_origin: where this rect's top-left sits in the source textures
+ * @src_scale: how many SOURCE pixels one pixel of this rect is
+ * @seed: which crop of the field this rect shows
+ *
+ * One soap film.  gowl_fx_soap_params_init() fills in a film a few
+ * seconds old.
+ */
+typedef struct {
+	gint   width, height;
+	gfloat radius;
+	gfloat thickness;
+	gfloat thin;
+	gfloat drain;
+	gfloat turbulence;
+	gfloat swirl;
+	gfloat index;
+	gfloat gain;
+	gfloat sheen;
+	gfloat wedge;
+	gfloat dispersion;
+	gfloat pop;
+	gfloat meniscus;
+	gfloat fog;
+	gfloat clarity;
+	gfloat light[3];
+	gfloat tint[3];
+	gfloat brightness;
+	gfloat alpha;
+	gfloat src_origin[2];
+	gfloat src_scale;
+	gfloat seed;
+} GowlFxSoapParams;
+
+/**
+ * gowl_fx_soap_params_init:
+ * @params: (out): the parameters to reset
+ */
+void gowl_fx_soap_params_init (GowlFxSoapParams *params);
+
+/**
+ * gowl_fx_pass_soap:
+ * @pass: a pass, begun on the buffer the film is drawn into
+ * @soft: the clouded wallpaper, covering the whole output
+ * @sharp: (nullable): the same wallpaper unblurred
+ * @params: the film to draw
+ * @clock: (nullable): where it has got to; %NULL is a film just blown
+ *
+ * Draws the wallpaper through a soap film: horizontal interference bands
+ * that drain downward, thin patches rising through them, a black cap
+ * spreading from the top, and a pop.
+ *
+ * The colour is not painted.  It is 4 R0 sin^2(2 pi n d / lambda) at
+ * three wavelengths, for the local thickness d --- which is why the top
+ * of an old film goes black rather than fading out, and why what you see
+ * THROUGH the film is the exact complement of what bounces off it.
+ *
+ * Like every animated backdrop here, this is NEVER up to date: the
+ * caller is expected to draw it again next frame.
+ *
+ * Returns: %FALSE when the shader could not be built, which is not an
+ *   error --- the caller shows no film and the desktop is as it was.
+ */
+gboolean gowl_fx_pass_soap (GowlFxPass             *pass,
+                            const GowlFxTexture    *soft,
+                            const GowlFxTexture    *sharp,
+                            const GowlFxSoapParams *params,
+                            const GowlFxSoapClock  *clock);
 
 /* ── Carbonation ─────────────────────────────────────────────────── */
 

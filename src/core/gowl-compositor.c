@@ -6079,6 +6079,20 @@ gowl_compositor_resize_client(
  * layer, and re-arranges the client's monitor so the tile
  * layout reflects the new state.
  */
+gboolean
+gowl_compositor_client_is_grabbed(GowlCompositor *self, GowlClient *client)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	if (client == NULL || self->grabbed_client != client)
+		return FALSE;
+	/* PRESSED is a button held with no drag started, which is not a
+	 * grab yet -- treating it as one would freeze a backdrop for as
+	 * long as somebody rested a finger on the button. */
+	return self->cursor_mode == GOWL_CURSOR_MODE_MOVE
+	       || self->cursor_mode == GOWL_CURSOR_MODE_RESIZE;
+}
+
 void
 gowl_compositor_set_floating(
 	GowlCompositor *self,

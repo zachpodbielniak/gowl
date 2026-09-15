@@ -1008,6 +1008,39 @@ void gowl_compositor_set_floating (GowlCompositor *self,
                                     gboolean        floating);
 
 /**
+ * gowl_compositor_client_is_grabbed:
+ * @self: a #GowlCompositor
+ * @client: (nullable): a #GowlClient
+ *
+ * Whether the pointer is currently DRAGGING @client --- an interactive
+ * move or resize --- as opposed to a layout or an animation placing it.
+ *
+ * This exists for the per-window backdrops, and the reason is a rate
+ * mismatch rather than a rendering cost.  Every one of them redraws from
+ * client_placed, which runs once per POINTER MOTION EVENT during a drag;
+ * a mouse reports at up to a thousand hertz and a screen shows sixty, so
+ * fifteen out of every sixteen of those renders are thrown away before
+ * anyone sees them.  And `settled' cannot be used to notice: nothing is
+ * animating the window, the pointer is moving it directly, so it is TRUE
+ * throughout.
+ *
+ * The render is also not the expensive half.  An interactive RESIZE
+ * changes the buffer size on every one of those events, and a changed
+ * size throws the render swapchain away and allocates a new one ---
+ * several buffers the size of the window, a thousand times a second.
+ *
+ * A provider that draws per window should therefore do nothing on a
+ * client_placed for a grabbed client if it has a frame hook that will
+ * redraw it anyway (the animated backdrops all do, at their own frame
+ * rate), and otherwise throttle itself to something near the output's
+ * rate.
+ *
+ * Returns: %TRUE while @client is the window being dragged.
+ */
+gboolean gowl_compositor_client_is_grabbed (GowlCompositor *self,
+                                            GowlClient     *client);
+
+/**
  * gowl_compositor_reparent_client_to_client:
  * @self: a #GowlCompositor
  * @child: the client to embed

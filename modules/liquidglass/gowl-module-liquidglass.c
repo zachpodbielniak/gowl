@@ -186,6 +186,18 @@ typedef struct {
 	guint64                  serial;    /* which wallpaper capture */
 	guint64                  generation;/* which settings */
 	gdouble                  radius;    /* the corner radius it was drawn with */
+	/*
+	 * When this window was last drawn, for the drag throttle only.
+	 *
+	 * The animated backdrops next door get this for free: they have a
+	 * frame hook, so they can simply do nothing on a client_placed for a
+	 * window being dragged and let the per-output tick redraw it.  The
+	 * glass has no clock and no frame hook -- it is event-driven,
+	 * because between events it is correct -- so skipping the event
+	 * would freeze it for the whole drag.  It has to keep drawing and
+	 * count the time itself.
+	 */
+	gint64                   last_us;
 } GowlGlassNodes;
 
 struct _GowlModuleLiquidGlass {
@@ -659,6 +671,7 @@ glass_update_client(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 	GowlBackdropPlan    plan;
 	struct wlr_box   frame;
 	gint             divisor;
+	gboolean         moving;
 	gdouble          radius;
 
 	glass_ensure_gl(mod, self);
@@ -693,7 +706,18 @@ glass_update_client(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 		return;
 
 	frame   = glass_drawn_frame(c);
-	divisor = settled ? 1 : GOWL_GLASS_MOVING_DIVISOR;
+	/*
+	 * A DRAG COUNTS AS MOVING, and `settled' does not say so.
+	 *
+	 * settled is FALSE while a provider is animating the window and TRUE
+	 * otherwise -- and during an interactive move or resize nothing is
+	 * animating it, the pointer is moving it directly, so it has been
+	 * TRUE throughout every drag since this divisor was written.  The
+	 * one case the halved resolution was most obviously for was the one
+	 * case it never applied to.
+	 */
+	moving  = !settled || gowl_compositor_client_is_grabbed(self, c);
+	divisor = moving ? GOWL_GLASS_MOVING_DIVISOR : 1;
 	if (!gowl_backdrop_plan(&frame, &c->mon->m, src->width, src->height,
 	                     divisor, &plan)) {
 		nodes = glass_nodes(c, FALSE);
@@ -704,6 +728,45 @@ glass_update_client(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 
 	nodes  = glass_nodes(c, TRUE);
 	radius = glass_corner_radius(self, &frame, c->bw);
+
+	/*
+	 * ONCE PER FRAME WHILE DRAGGING, NOT ONCE PER MOTION EVENT.
+	 *
+	 * This function runs from client_placed, which during a drag runs
+	 * once per pointer motion -- and a mouse reports several times
+	 * faster than a screen refreshes, so most of those renders are
+	 * thrown away before anyone sees them.  The render is not even the
+	 * expensive half: a resize changes the buffer size on every one of
+	 * them, and a changed size throws the swapchain away and allocates
+	 * a new one.
+	 *
+	 * Eight milliseconds is a little under two frames at 240 Hz, so the
+	 * cap is above any refresh rate anybody has and below every mouse
+	 * report rate -- which is the whole point.  It applies ONLY while
+	 * the window is being dragged: everywhere else this is event-driven
+	 * because between events it is correct, and a throttle there would
+	 * be a backdrop that lags its window for no reason.
+	 */
+	if (moving && nodes->have && nodes->node != NULL) {
+		gint64 now = g_get_monotonic_time();
+
+		if (now - nodes->last_us < 8000) {
+			/* Keep tracking the window; just do not draw again.  The
+			 * source box stays the one the buffer was drawn with --
+			 * the new plan's is in the new buffer's coordinates, and
+			 * a source box past the end of the buffer wlroots has is
+			 * an abort rather than a glitch. */
+			wlr_scene_node_set_enabled(&nodes->node->node, TRUE);
+			wlr_scene_buffer_set_source_box(nodes->node, &nodes->plan.src);
+			wlr_scene_buffer_set_dest_size(nodes->node, plan.vis.width,
+			                               plan.vis.height);
+			wlr_scene_node_set_position(&nodes->node->node,
+			                            plan.vis.x - frame.x,
+			                            plan.vis.y - frame.y);
+			wlr_scene_node_lower_to_bottom(&nodes->node->node);
+			return;
+		}
+	}
 
 	if (gowl_backdrop_render_stale(nodes->have && nodes->node != NULL,
 	                            &nodes->plan, &plan,
@@ -750,6 +813,7 @@ glass_update_client(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 		nodes->serial     = src->serial;
 		nodes->generation = mod->generation;
 		nodes->radius     = radius;
+		nodes->last_us    = g_get_monotonic_time();
 	}
 
 	if (nodes->node == NULL)

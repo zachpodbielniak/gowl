@@ -946,6 +946,23 @@ leaves_client_placed(GowlSceneEffect *effect, GowlCompositor *self,
 
 	if (c == NULL || mod->capturing)
 		return;
+	/*
+	 * NOT WHILE IT IS BEING DRAGGED.
+	 *
+	 * This hook runs once per POINTER MOTION EVENT of an interactive
+	 * move or resize -- see gowl_compositor_client_is_grabbed() for why
+	 * `settled' cannot notice that -- and a mouse reports several times
+	 * faster than a screen refreshes.  Worse, a resize changes the
+	 * buffer size on every one of them, and a changed size throws the
+	 * swapchain away and allocates a new one.
+	 *
+	 * The frame hook redraws this window anyway, at the output's rate,
+	 * and a moved window makes the plan stale so it will not be skipped
+	 * by the throttle.  So the drag costs what it was always going to
+	 * cost once, per frame, instead of once per input event.
+	 */
+	if (gowl_compositor_client_is_grabbed(self, c))
+		return;
 	leaves_update_client(mod, self, c, TRUE);
 }
 

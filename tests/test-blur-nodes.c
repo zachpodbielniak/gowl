@@ -1214,6 +1214,174 @@ test_an_hdr_output_is_encoded(void)
 	rig_down(&r);
 }
 
+/*
+ * A DRAG MUST NOT REDRAW THE BACKDROP ONCE PER MOTION EVENT.
+ *
+ * client_placed runs once per pointer motion while a window is being
+ * interactively moved or resized, and a mouse reports several times
+ * faster than a screen refreshes -- so most of those renders are thrown
+ * away before anyone sees them.  And `settled' cannot be used to notice:
+ * nothing is animating the window, the pointer is moving it directly, so
+ * it is TRUE throughout.
+ *
+ * The render is not even the expensive half.  A resize changes the
+ * buffer size on every one of those events, and a changed size throws
+ * the render swapchain away and allocates a new one -- several buffers
+ * the size of the window, at whatever rate the mouse reports.  That was
+ * the reported symptom: a floating window with an animated backdrop
+ * behind it went to treacle under Super+right-drag.
+ *
+ * Asserted by watching WHICH BUFFER the scene node points at.  A render
+ * takes a fresh one out of the swapchain, and a resized render allocates
+ * a whole new swapchain, so the pointer changing is a render having
+ * happened and the pointer standing still is one that did not.
+ */
+static void
+test_a_dragged_window_is_not_redrawn_per_motion(void)
+{
+	Rig   r;
+	Decor d;
+	gint  before_w;
+	gint  i;
+
+	if (!rig_up(&r, both_backdrops)) {
+		rig_down(&r);
+		g_test_skip("no GLES2 compositor");
+		return;
+	}
+	/* An ANIMATED backdrop, which is what was reported: those five have
+	 * a frame hook that redraws them at the output's rate anyway, so a
+	 * client_placed during a drag is pure waste. */
+	gowl_compositor_set_backdrop_style(r.compositor, GOWL_BACKDROP_RAIN);
+
+	list_client(&r);
+	as_tile(&r);
+	settle(&r);
+	d = decor_of(r.c);
+	if (d.backdrop == NULL) {
+		rig_down(&r);
+		g_test_skip("no backdrop was built in this rig");
+		return;
+	}
+
+	/*
+	 * Measured by the node's DEST SIZE rather than by which buffer it
+	 * points at, and the difference is worth recording because the
+	 * obvious version of this test passes either way.  A render takes a
+	 * fresh buffer out of the swapchain, so the pointer changing looks
+	 * like a render having happened -- but a resized render DESTROYS the
+	 * swapchain and allocates a new one, and the allocator hands the
+	 * same addresses straight back.  The pointer compared equal whether
+	 * or not anything had been drawn.
+	 *
+	 * The dest size cannot lie: it is set in the same breath as the
+	 * render, and a hook that returned early never reaches it.
+	 */
+	before_w = wlr_scene_buffer_from_node(d.backdrop)->dst_width;
+
+	/*
+	 * The control, and the test is worth nothing without it: with no
+	 * grab in progress, a resize DOES follow at once.  A version that
+	 * only checked the grabbed case would pass just as well on a module
+	 * that had stopped drawing backdrops altogether.
+	 */
+	resize_to(&r, 200, 150, 460, 320);
+	d = decor_of(r.c);
+	g_assert_nonnull(d.backdrop);
+	g_assert_cmpint(wlr_scene_buffer_from_node(d.backdrop)->dst_width,
+	                !=, before_w);
+
+	/* Now the pointer has hold of it. */
+	r.compositor->cursor_mode = GOWL_CURSOR_MODE_RESIZE;
+	r.compositor->grabbed_client = r.c;
+	g_assert_true(gowl_compositor_client_is_grabbed(r.compositor, r.c));
+
+	before_w = wlr_scene_buffer_from_node(d.backdrop)->dst_width;
+	for (i = 0; i < 8; i++)
+		resize_to(&r, 200, 150, 460 + i * 9, 320 + i * 7);
+
+	d = decor_of(r.c);
+	g_assert_nonnull(d.backdrop);
+	/* Eight motion events and not a single redraw.  Before the fix this
+	 * was eight renders and eight swapchain reallocations, which is what
+	 * a thousand-hertz mouse turns into treacle. */
+	g_assert_cmpint(wlr_scene_buffer_from_node(d.backdrop)->dst_width,
+	                ==, before_w);
+
+	/*
+	 * AND THE DRAG DOES NOT STARVE IT.  Skipping the motion events is
+	 * only half the design: the frame hook has to carry on redrawing the
+	 * window at the output's own rate, or the backdrop would sit frozen
+	 * at whatever it was when the drag began.  One tick of that output,
+	 * still grabbed, and it has caught up.
+	 */
+	gowl_effects_frame(r.compositor, r.compositor->selmon,
+	                   g_get_monotonic_time() + 60 * G_USEC_PER_SEC);
+	d = decor_of(r.c);
+	g_assert_nonnull(d.backdrop);
+	g_assert_cmpint(wlr_scene_buffer_from_node(d.backdrop)->dst_width,
+	                !=, before_w);
+
+	/* And letting go goes back to following every placement. */
+	r.compositor->cursor_mode = GOWL_CURSOR_MODE_NORMAL;
+	r.compositor->grabbed_client = NULL;
+	before_w = wlr_scene_buffer_from_node(d.backdrop)->dst_width;
+	resize_to(&r, 200, 150, 540, 360);
+	d = decor_of(r.c);
+	g_assert_nonnull(d.backdrop);
+	g_assert_cmpint(wlr_scene_buffer_from_node(d.backdrop)->dst_width,
+	                !=, before_w);
+
+	rig_down(&r);
+}
+
+/*
+ * What counts as a grab, which is pure logic and worth pinning down: the
+ * predicate decides whether five modules do any work at all, and each of
+ * the three ways it can be wrong is silent.
+ */
+static void
+test_what_counts_as_a_grab(void)
+{
+	Rig r;
+
+	if (!rig_up(&r, blur_alone)) {
+		rig_down(&r);
+		g_test_skip("no GLES2 compositor");
+		return;
+	}
+	list_client(&r);
+
+	/* Nothing held. */
+	g_assert_false(gowl_compositor_client_is_grabbed(r.compositor, r.c));
+	g_assert_false(gowl_compositor_client_is_grabbed(r.compositor, NULL));
+
+	/*
+	 * A button held with no drag started is NOT a grab.  Treating it as
+	 * one would freeze a backdrop for as long as somebody rested a
+	 * finger on the button, which is a much stranger bug than the one
+	 * this is fixing.
+	 */
+	r.compositor->grabbed_client = r.c;
+	r.compositor->cursor_mode = GOWL_CURSOR_MODE_PRESSED;
+	g_assert_false(gowl_compositor_client_is_grabbed(r.compositor, r.c));
+
+	r.compositor->cursor_mode = GOWL_CURSOR_MODE_MOVE;
+	g_assert_true(gowl_compositor_client_is_grabbed(r.compositor, r.c));
+	r.compositor->cursor_mode = GOWL_CURSOR_MODE_RESIZE;
+	g_assert_true(gowl_compositor_client_is_grabbed(r.compositor, r.c));
+
+	/* And only the window actually being dragged.  Every OTHER window
+	 * on the screen must go on animating -- one of them being dragged is
+	 * not a reason for the rest of the desktop to stop. */
+	g_assert_false(gowl_compositor_client_is_grabbed(r.compositor, NULL));
+	r.compositor->grabbed_client = NULL;
+	g_assert_false(gowl_compositor_client_is_grabbed(r.compositor, r.c));
+
+	r.compositor->cursor_mode = GOWL_CURSOR_MODE_NORMAL;
+	rig_down(&r);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1227,6 +1395,10 @@ main(int argc, char **argv)
 	                test_backdrop_style_picks_the_module);
 	g_test_add_func("/blur-nodes/follow-the-window",
 	                test_nodes_follow_the_window);
+	g_test_add_func("/blur-nodes/what-counts-as-a-grab",
+	                test_what_counts_as_a_grab);
+	g_test_add_func("/blur-nodes/a-dragged-window-is-not-redrawn-per-motion",
+	                test_a_dragged_window_is_not_redrawn_per_motion);
 	g_test_add_func("/blur-nodes/follow-a-resize",
 	                test_nodes_follow_a_resize);
 	g_test_add_data_func("/blur-nodes/follow-an-animation",

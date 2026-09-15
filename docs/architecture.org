@@ -1450,6 +1450,64 @@ damages a scene node, which is what makes the output ask for a frame.
 Without it a window that became translucent on a still screen would sit
 there with no water.
 
+*** A dragged window and the rate its backdrop is drawn at
+:PROPERTIES:
+:CUSTOM_ID: backdrop-drag-rate
+:END:
+
+Every per-window backdrop redraws from =client_placed=, which runs once
+per POINTER MOTION EVENT while a window is being interactively moved or
+resized. A mouse reports at up to a thousand hertz and a screen shows
+sixty, so fifteen out of every sixteen of those renders were thrown away
+before anyone saw them.
+
+*And =settled= cannot be used to notice.* It is FALSE while a provider
+is animating the window and TRUE otherwise --- and during a drag nothing
+is animating it, the pointer is moving it directly. So it was TRUE
+throughout every drag, and the liquid glass's half-resolution
+=GOWL_GLASS_MOVING_DIVISOR=, written for exactly this, never applied to
+the one case it was most obviously for.
+
+*The render was not even the expensive half.* An interactive resize
+changes the buffer size on every one of those events, and
+=gowl_backdrop_plan= handing back a different =buf_width= throws the
+render swapchain away and allocates a new one --- several buffers the
+size of the window, a thousand times a second. That is what made a
+floating window with an animated backdrop behind it go to treacle under
+Super+right-drag.
+
+=gowl_compositor_client_is_grabbed()= is what a provider asks, and the
+two kinds answer it differently because they have different machinery:
+
+- The five ANIMATED backdrops do nothing at all on a =client_placed= for
+  a grabbed window. Their frame hook redraws it anyway, once per output
+  frame, and a window that has just moved makes the plan stale so the
+  frame-rate throttle does not skip it either. The drag then costs what
+  it was always going to cost once per frame instead of once per input
+  event.
+- The liquid GLASS has no clock and no frame hook --- it is event-driven
+  because between events it is correct --- so skipping the event would
+  freeze it for the whole drag. It keeps drawing and counts the time
+  itself, at most once every eight milliseconds, which is above any
+  refresh rate anybody has and below every mouse report rate. It also
+  takes the moving divisor now, which is what that constant was for.
+
+The BLUR needs none of this: its backdrop is a crop of one shared
+output-sized picture, so a window moving re-points a source box and
+allocates nothing.
+
+*While the glass is throttled it keeps the source box it was DRAWN
+with,* and that is not tidiness. The new plan's box is in the new
+buffer's coordinates, and handing wlroots a source box past the end of
+the buffer it actually has is an abort rather than a glitch --- gowl has
+taken a whole session down that way before.
+
+=tests/test-blur-nodes.c= asserts it by watching the node's dest size
+across eight simulated motion events. Not by watching which BUFFER the
+node points at, which is the obvious thing and passes either way: a
+resized render destroys the swapchain and allocates a new one, and the
+allocator hands the same addresses straight back.
+
 *** The three weathers that are not liquid
 :PROPERTIES:
 :CUSTOM_ID: weather-backdrops

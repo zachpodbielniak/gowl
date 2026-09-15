@@ -281,6 +281,11 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  *   there is none.
  * @GOWL_ACTION_FOCUS_URGENT: Focus the window most recently marked
  *   urgent, viewing its tags if need be.
+ * @GOWL_ACTION_TOGGLE_BELOW: Push the focused floating window behind
+ *   the tiling, or bring it back on top.  A per-window toggle; the
+ *   argument may be "on", "off" or nothing
+ * @GOWL_ACTION_TOGGLE_BELOW_ALL: The same for every floating window
+ *   visible on the focused output at once
  * @GOWL_ACTION_FOCUS_LAST: Focus the window that had focus before this
  *   one, viewing its tags if need be.
  *
@@ -321,7 +326,9 @@ typedef enum {
 	GOWL_ACTION_FOCUS_URGENT,
 	GOWL_ACTION_FOCUS_LAST,
 	GOWL_ACTION_TOGGLE_HDR,
-	GOWL_ACTION_CYCLE_BACKDROP
+	GOWL_ACTION_CYCLE_BACKDROP,
+	GOWL_ACTION_TOGGLE_BELOW,
+	GOWL_ACTION_TOGGLE_BELOW_ALL
 } GowlAction;
 
 #define GOWL_TYPE_ACTION (gowl_action_get_type())

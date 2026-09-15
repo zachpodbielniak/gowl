@@ -333,6 +333,18 @@ keybinds:
   # layouts that never had one.
   "Super+f": { action: toggle_fullscreen, desc: "Fullscreen this window" }
   "Super+Shift+f": { action: toggle_float, desc: "Float / unfloat this window" }
+  # A floating window sits ON TOP of the tiling -- that is what floating
+  # is.  These put one behind it instead, so the tiles underneath can be
+  # worked on without moving or closing it.  The window keeps the
+  # keyboard while it is down, so the same key brings it back.
+  #
+  # The second key does every floating window visible on the output at
+  # once: if any of them is still on top they all go down, and only when
+  # all of them are down does it bring them back.
+  "Super+Alt+b":
+    { action: toggle_below, desc: "This floating window behind the tiling" }
+  "Super+Ctrl+Alt+b":
+    { action: toggle_below_all, desc: "All floating windows behind the tiling" }
   "Super+m": { action: set_layout, arg: "monocle", desc: "Monocle layout" }
   "Super+Shift+m": { action: set_layout, arg: "tabbed", desc: "Tabbed layout" }
   # HDR on this output, where it is offered.  Not tone mapping: SDR

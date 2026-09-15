@@ -1554,6 +1554,43 @@ and the read, a container hides it, a hardened kernel refuses it --- and
 every failure answers "leave the window alone", which is the state the
 desktop was in before this existed.
 
+*** A floating window drawn behind the tiling
+:PROPERTIES:
+:CUSTOM_ID: window-below
+:END:
+
+=GOWL_SCENE_LAYER_FLOAT= sits above the whole of =GOWL_SCENE_LAYER_TILE=,
+so "floating" and "on top" are the same statement and there is no
+ordering within FLOAT that puts a floating window behind a tiled one.
+=client->isbelow= is drawn by moving the window's tree into the TILE
+layer and lowering it there, while everything else about it stays
+floating: it is not in =gowl_compositor_tiling_clients()=, it keeps its
+own geometry, and no layout places it.
+
+Two functions carry it. =client_scene_layer()= is the whole decision ---
+fullscreen, floating-and-above, otherwise the tiling layer --- and
+=client_restack()= re-parents and then lowers. Everything that used to
+spell the layer choice out (=setfloating()=, =setfullscreen()=,
+=arrange()=) calls them, which is what keeps a sunk window sunk through
+a re-tile: =arrange()= puts every client back in its layer, and what
+that used to mean was "every floating window into FLOAT".
+
+*Focus does not raise it.* The window keeps the keyboard while it is
+down, which is what makes pressing the same key again bring it back
+without hunting for the window first --- so the raise in
+=gowl_compositor_focus_client()= is skipped for it. Two sunk windows
+therefore keep their relative order: there is no "top of the bottom" to
+raise to, and lowering the newly-focused one would put it under the
+other.
+
+=tests/test-window-below.c= asserts the layer AND the order, because
+either alone passes for a broken version: the right order in the FLOAT
+layer is still drawn over every tile, and the right layer without the
+lowering is drawn over them too. It establishes which end of a
+=wlr_scene_tree='s child list is the top against
+=wlr_scene_node_raise_to_top()= rather than assuming it, since the
+header does not say.
+
 *** The three weathers that are not liquid
 :PROPERTIES:
 :CUSTOM_ID: weather-backdrops

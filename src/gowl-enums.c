@@ -292,6 +292,8 @@ gowl_action_get_type(void)
 			{ GOWL_ACTION_FOCUS_LAST,        "GOWL_ACTION_FOCUS_LAST",        "focus-last" },
 			{ GOWL_ACTION_TOGGLE_HDR,        "GOWL_ACTION_TOGGLE_HDR",        "toggle-hdr" },
 			{ GOWL_ACTION_CYCLE_BACKDROP,    "GOWL_ACTION_CYCLE_BACKDROP",    "cycle-backdrop" },
+			{ GOWL_ACTION_TOGGLE_BELOW,      "GOWL_ACTION_TOGGLE_BELOW",      "toggle-below" },
+			{ GOWL_ACTION_TOGGLE_BELOW_ALL,  "GOWL_ACTION_TOGGLE_BELOW_ALL",  "toggle-below-all" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlAction", values);

@@ -986,6 +986,64 @@ void gowl_compositor_apply_fx_optout (GowlCompositor *self,
                                       GowlClient     *client);
 
 /**
+ * gowl_compositor_get_client_below:
+ * @self: a #GowlCompositor
+ * @client: (nullable): a client
+ *
+ * Whether @client is a floating window currently drawn BEHIND the
+ * tiling rather than over it.
+ *
+ * Returns: %TRUE when it is
+ */
+gboolean gowl_compositor_get_client_below (GowlCompositor *self,
+                                           GowlClient     *client);
+
+/**
+ * gowl_compositor_set_client_below:
+ * @self: a #GowlCompositor
+ * @client: (nullable): the window to move
+ * @below: %TRUE to draw it behind the tiling, %FALSE to draw it above
+ *
+ * Floating means "on top", and this is the way out of that: the window
+ * stays floating -- out of the layout, at its own size, focusable --
+ * but is drawn underneath every tiled window, so the tiling can be
+ * worked on without moving it or closing it.
+ *
+ * Silently refused for a window whose stacking is not the user's to
+ * decide: a tiled one, a fullscreen one, a module-owned overlay or an
+ * embedded one.  Focus is not touched, which is what lets the same
+ * key bring the window back.
+ */
+void gowl_compositor_set_client_below (GowlCompositor *self,
+                                       GowlClient     *client,
+                                       gboolean        below);
+
+/**
+ * gowl_compositor_toggle_below_all:
+ * @self: a #GowlCompositor
+ * @monitor: (nullable): the output to act on; %NULL for the selected one
+ *
+ * Pushes every floating window visible on @monitor behind the tiling,
+ * or brings them all back.  If any of them is still on top they all go
+ * down; only when every one is down does this bring them back up.
+ */
+void gowl_compositor_toggle_below_all (GowlCompositor *self,
+                                       GowlMonitor    *monitor);
+
+/**
+ * gowl_compositor_set_all_below:
+ * @self: a #GowlCompositor
+ * @monitor: (nullable): the output to act on; %NULL for the selected one
+ * @below: which way to move them
+ *
+ * gowl_compositor_toggle_below_all() with the direction given rather
+ * than worked out.
+ */
+void gowl_compositor_set_all_below (GowlCompositor *self,
+                                    GowlMonitor    *monitor,
+                                    gboolean        below);
+
+/**
  * gowl_compositor_resize_client:
  * @self: a #GowlCompositor
  * @client: a #GowlClient

@@ -723,6 +723,14 @@ $(OUTDIR)/test-float-toggle: $(OUTDIR)/modules/tile.so
 $(OUTDIR)/test-float-toggle: TEST_LDFLAGS += -Wl,--export-dynamic
 $(OBJDIR)/tests/test-float-toggle.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
+# A floating window pushed behind the tiling, driven through the keybind
+# actions: the layer is the feature (the FLOAT layer is above the whole
+# TILE layer, so ordering alone cannot express it) and surviving a
+# re-tile is the half that gets forgotten.
+$(OUTDIR)/test-window-below: $(OUTDIR)/modules/tile.so
+$(OUTDIR)/test-window-below: TEST_LDFLAGS += -Wl,--export-dynamic
+$(OBJDIR)/tests/test-window-below.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
 # The hint overlay against the real .so in a headless compositor with two
 # outputs: the labels have to depend on where a window IS and on nothing
 # else, which is invisible in a screenshot and is the whole feature.

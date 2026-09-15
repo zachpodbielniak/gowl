@@ -213,6 +213,49 @@ cycle active layouts only on the current tag view, which is also how the
 scrolling strip is reached (Super+s is the scratchpad), and Super+[ /
 Super+] scroll it. Each tag view remembers its layout independently.
 
+**** Floating windows behind the tiling
+:PROPERTIES:
+:CUSTOM_ID: window-below
+:END:
+
+Floating means "on top". That is not a policy --- it is what the FLOAT
+scene layer is: it sits above the whole tiling layer, so no amount of
+lowering a floating window puts it behind a tiled one.
+
+=Super+Alt+b= (=toggle_below=) is the way out of that for the focused
+floating window. It stays floating in every other respect --- out of the
+layout, at its own size and position, focusable and movable --- but is
+drawn underneath every tiled window, so the tiling can be worked on
+without moving the floater or closing it. Press it again to bring it
+back.
+
+The window KEEPS THE KEYBOARD while it is down, and focusing it does not
+raise it. That is deliberate and is what makes the second press work:
+the window you sent behind the tiles is still the focused one, so the
+same key reaches it.
+
+=Super+Ctrl+Alt+b= (=toggle_below_all=) does every floating window
+visible on the focused output at once. The direction comes from the
+windows rather than from a remembered flag: if ANY of them is still on
+top they all go down, and only once all of them are down does the key
+bring them back. From a mixed state --- one sent down on its own
+earlier --- the first press therefore levels them all downward rather
+than swapping them, which is what anybody pressing "send them all back"
+meant.
+
+Both actions also take ="on"= or ="off"= instead of toggling, for a
+config that wants a direction on a key or a script driving it.
+
+It is refused, silently, for anything whose stacking is not the user's
+to decide: a tiled window (already in the tiling), a fullscreen one (in
+front by definition), a module-owned overlay such as the scratchpad or a
+dropdown, and an embedded window. Taking a window out of floating, or
+into fullscreen, forgets it --- "behind" has no meaning for either.
+
+Only what is on screen: a floating window on a tag nobody is looking at
+is not in front of anything, and re-stacking it would be a surprise
+waiting on the next tag switch.
+
 **** Motion
 :PROPERTIES:
 :CUSTOM_ID: animations
@@ -1971,6 +2014,8 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =toggle_sticky=     | --                               | Pin the focused window to every tag of its monitor, or unpin it |
 | =toggle_hdr=        | --, ="on"=, ="off"=, or an output name | Switch an output between HDR and SDR (the focused one by default) |
 | =cycle_backdrop=    | --, ="next"=, ="prev"=, or a style name | Cycle what shows through translucent windows: =glass=, =water=, =blur=, =none= |
+| =toggle_below=      | --, ="on"=, ="off"=              | Draw the focused FLOATING window behind the tiling instead of over it, or put it back |
+| =toggle_below_all=  | --, ="on"=, ="off"=              | The same for every floating window visible on the focused output |
 | =focus_dir=         | ="left"=, ="right"=, ="up"=, ="down"= | Focus the nearest window that way, crossing to the next monitor when there is none |
 | =focus_urgent=      | --                               | Focus the window marked urgent, viewing its tags if need be |
 | =focus_last=        | --                               | Focus the window that had focus before this one |

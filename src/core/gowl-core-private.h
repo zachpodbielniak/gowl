@@ -818,6 +818,23 @@ struct _GowlClient {
 	 * Its own tags are kept, so unpinning puts it back where it was. */
 	gboolean issticky;
 
+	/*
+	 * A FLOATING window the user pushed BEHIND the tiling.
+	 *
+	 * Floating means "on top" -- that is what the FLOAT scene layer is
+	 * -- and there is no way to keep a floating window around while
+	 * working on the tiles underneath it.  This says the window is
+	 * drawn in the TILE layer at the bottom of it instead, so it is
+	 * still floating (out of the layout, its own geometry, focusable)
+	 * but behind everything tiled.
+	 *
+	 * Only meaningful while @isfloating is set and @isfullscreen is
+	 * not; taking the window out of floating, or into fullscreen,
+	 * clears it, because "behind" has no meaning for either and a flag
+	 * that survived would surprise whoever came back to the window.
+	 */
+	gboolean isbelow;
+
 	/* The user took this window out of fullscreen by hand.  A client
 	 * that asks to go fullscreen again is refused until the user says
 	 * otherwise -- without this a game re-asserts fullscreen the

@@ -4980,6 +4980,61 @@ resize_client(
 }
 
 /**
+ * client_scene_layer:
+ *
+ * Which of the scene layers a managed client belongs in.
+ *
+ * Three states and not two: fullscreen is above everything, floating is
+ * above the tiling, and a floating window the user pushed BELOW goes
+ * into the tiling layer so the tiles can cover it.  There is nowhere
+ * else to put it -- the FLOAT layer is above the whole TILE layer, so
+ * lowering within FLOAT would still leave it over every tile.
+ *
+ * Everything that re-parents a managed client asks this, so the answer
+ * cannot drift between the three places that used to spell it out.
+ */
+static struct wlr_scene_tree *
+client_scene_layer(
+	GowlCompositor *self,
+	GowlClient     *c
+){
+	if (c->isfullscreen)
+		return self->layers[GOWL_SCENE_LAYER_FS];
+	if (c->isfloating && !c->isbelow)
+		return self->layers[GOWL_SCENE_LAYER_FLOAT];
+	return self->layers[GOWL_SCENE_LAYER_TILE];
+}
+
+/**
+ * client_restack:
+ *
+ * Put a client's scene tree in the layer it belongs in, and at the
+ * bottom of it when it is a window pushed below the tiling.
+ *
+ * The two steps belong together.  wlr_scene_node_reparent() places the
+ * node at the TOP of its new parent, so a re-parent into the tiling
+ * layer without the lowering that follows it draws the window over
+ * every tile -- which is the opposite of what was asked for, and looks
+ * like the key having done nothing.
+ *
+ * Re-parenting into the layer a node is ALREADY in leaves its position
+ * alone, so calling this from arrange() -- which runs for every client
+ * on the monitor, several times a keystroke -- costs nothing and keeps
+ * the answer in one place.
+ */
+static void
+client_restack(
+	GowlCompositor *self,
+	GowlClient     *c
+){
+	if (c->scene == NULL)
+		return;
+	wlr_scene_node_reparent(&c->scene->node, client_scene_layer(self, c));
+	if (c->isbelow && c->isfloating && !c->isfullscreen)
+		wlr_scene_node_lower_to_bottom(&c->scene->node);
+}
+
+/**
  * setfloating:
  *
  * Sets the floating state of a client and re-parents it in the
@@ -4995,15 +5050,17 @@ setfloating(
 	if (c->isoverlay)
 		return;
 	c->isfloating = floating;
+	/* "Behind the tiling" is a floating-window state.  A window
+	 * rejoining the layout is one of the tiles, so there is nothing
+	 * left for the flag to mean. */
+	if (!floating)
+		c->isbelow = FALSE;
 
 	if (c->mon == NULL)
 		return;
 
 	/* Re-parent in the scene graph */
-	wlr_scene_node_reparent(&c->scene->node,
-		self->layers[c->isfullscreen ? GOWL_SCENE_LAYER_FS
-		             : c->isfloating ? GOWL_SCENE_LAYER_FLOAT
-		             : GOWL_SCENE_LAYER_TILE]);
+	client_restack(self, c);
 	gowl_compositor_arrange(self, c->mon);
 }
 
@@ -5043,11 +5100,13 @@ setfullscreen(
 #endif
 		wlr_xdg_toplevel_set_fullscreen(c->xdg_toplevel, fullscreen);
 
+	/* Going fullscreen is the loudest possible "bring this forward",
+	 * so it also cancels having been pushed behind the tiling. */
+	if (fullscreen)
+		c->isbelow = FALSE;
+
 	/* Re-parent to appropriate layer */
-	wlr_scene_node_reparent(&c->scene->node,
-		self->layers[c->isfullscreen ? GOWL_SCENE_LAYER_FS
-		             : c->isfloating ? GOWL_SCENE_LAYER_FLOAT
-		             : GOWL_SCENE_LAYER_TILE]);
+	client_restack(self, c);
 
 	if (fullscreen) {
 		c->prev = c->geom;
@@ -5391,12 +5450,7 @@ gowl_compositor_arrange(
 		if (c->scene->node.parent == self->layers[GOWL_SCENE_LAYER_FS])
 			continue;
 
-		if (c->isfloating)
-			wlr_scene_node_reparent(&c->scene->node,
-			                        self->layers[GOWL_SCENE_LAYER_FLOAT]);
-		else
-			wlr_scene_node_reparent(&c->scene->node,
-			                        self->layers[GOWL_SCENE_LAYER_TILE]);
+		client_restack(self, c);
 	}
 
 	/* Run the monitor's selected layout, which also sets its symbol.
@@ -6095,6 +6149,149 @@ gowl_compositor_apply_fx_optout(
 }
 
 /**
+ * gowl_compositor_get_client_below:
+ * @self: a #GowlCompositor
+ * @client: (nullable): a client
+ *
+ * Whether @client is a floating window currently drawn BEHIND the
+ * tiling.
+ *
+ * Returns: %TRUE when it is
+ */
+gboolean
+gowl_compositor_get_client_below(
+	GowlCompositor *self,
+	GowlClient     *client
+){
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	return client != NULL && client->isbelow;
+}
+
+/**
+ * gowl_compositor_set_client_below:
+ * @self: a #GowlCompositor
+ * @client: (nullable): the window to push behind the tiling or pull back
+ * @below: %TRUE to put it behind, %FALSE to put it back on top
+ *
+ * Moves one floating window between "above the tiling" and "below it".
+ *
+ * Refused, silently, for anything the stacking is not the user's to
+ * decide: a TILED window is already in the tiling and has no "behind"
+ * to go to; a FULLSCREEN one is by definition in front; an OVERLAY
+ * (a scratchpad or a dropdown) is placed by the module that owns it;
+ * and an EMBEDDED one is placed by the host. Refusing rather than
+ * half-applying matters because the keybind is a toggle -- a flag set
+ * on a window that cannot honour it would make the next press appear
+ * to do nothing.
+ *
+ * Focus is deliberately left alone.  The window the user just pushed
+ * behind the tiling keeps the keyboard, which is what makes pressing
+ * the same key again bring it back.
+ */
+void
+gowl_compositor_set_client_below(
+	GowlCompositor *self,
+	GowlClient     *client,
+	gboolean        below
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (client == NULL || client->isoverlay || client->isembedded)
+		return;
+	if (!client->isfloating || client->isfullscreen)
+		return;
+	if (client->isbelow == below)
+		return;
+
+	client->isbelow = below;
+	client_restack(self, client);
+}
+
+/**
+ * gowl_compositor_toggle_below_all:
+ * @self: a #GowlCompositor
+ * @monitor: (nullable): the output to act on; %NULL means the selected one
+ *
+ * Pushes every floating window VISIBLE on @monitor behind the tiling,
+ * or brings them all back.
+ *
+ * The direction is decided by the windows rather than by a stored flag,
+ * so the key does the useful thing from any state: if ANY of them is
+ * still on top they all go down, and only once every one of them is
+ * down does the key bring them all back.  A remembered "all-down" bit
+ * would go out of step the first time one window was toggled on its
+ * own, and the next press would then appear to do nothing.
+ *
+ * Only what is on screen: a floating window on a tag nobody is looking
+ * at is not in front of anything, and quietly re-stacking it would be a
+ * surprise waiting on the next tag switch.
+ */
+void
+gowl_compositor_toggle_below_all(
+	GowlCompositor *self,
+	GowlMonitor    *monitor
+){
+	GList   *l;
+	gboolean want = FALSE;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (monitor == NULL)
+		monitor = self->selmon;
+	if (monitor == NULL)
+		return;
+
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if (!c->isfloating || c->isfullscreen || c->isoverlay
+		    || c->isembedded || !VISIBLEON(c, monitor))
+			continue;
+		if (!c->isbelow) {
+			want = TRUE;
+			break;
+		}
+	}
+
+	gowl_compositor_set_all_below(self, monitor, want);
+}
+
+/**
+ * gowl_compositor_set_all_below:
+ * @self: a #GowlCompositor
+ * @monitor: (nullable): the output to act on; %NULL means the selected one
+ * @below: %TRUE to push them behind the tiling, %FALSE to bring them back
+ *
+ * gowl_compositor_toggle_below_all() with the direction decided by the
+ * caller rather than by what is on screen -- what a bind with an
+ * explicit "on" or "off" argument runs.
+ */
+void
+gowl_compositor_set_all_below(
+	GowlCompositor *self,
+	GowlMonitor    *monitor,
+	gboolean        below
+){
+	GList *l;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (monitor == NULL)
+		monitor = self->selmon;
+	if (monitor == NULL)
+		return;
+
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if (!VISIBLEON(c, monitor))
+			continue;
+		gowl_compositor_set_client_below(self, c, below);
+	}
+}
+
+/**
  * gowl_compositor_resize_client:
  *
  * Public wrapper around the internal resize_client().
@@ -6325,8 +6522,17 @@ gowl_compositor_focus_client(
 	if (c != NULL && c->isoverlay && !c->overlay_visible)
 		return;
 
-	/* Raise client in stacking order if requested */
-	if (c != NULL && lift)
+	/*
+	 * Raise client in stacking order if requested.
+	 *
+	 * Not for a window pushed behind the tiling: the user put it there
+	 * ON PURPOSE and then has to focus it to bring it back, so a raise
+	 * on focus would undo the feature with the keystroke that is
+	 * supposed to precede undoing it.  Two sunk windows keep their
+	 * relative order for the same reason -- there is no "top of the
+	 * bottom" to raise to.
+	 */
+	if (c != NULL && lift && !c->isbelow)
 		wlr_scene_node_raise_to_top(&c->scene->node);
 
 	old = self->wlr_seat->keyboard_state.focused_surface;
@@ -8857,6 +9063,38 @@ on_cursor_hold_end(struct wl_listener *listener, void *data)
  * another.
  * ----------------------------------------------------------- */
 
+/*
+ * A keybind argument that names a direction for a two-state action.
+ *
+ * "on"/"below" and "off"/"above" set it outright; nothing, an empty
+ * string and "toggle" mean @fallback, which is whatever the caller
+ * worked out the toggle should do.  Anything else is a config mistake
+ * and is refused with a warning rather than guessed at -- guessing
+ * would make a misspelled bind look like a broken key.
+ */
+static gboolean
+keybind_arg_wanted(const gchar *arg, gboolean fallback, gboolean *out)
+{
+	if (arg == NULL || *arg == '\0'
+	    || g_ascii_strcasecmp(arg, "toggle") == 0) {
+		*out = fallback;
+		return TRUE;
+	}
+	if (g_ascii_strcasecmp(arg, "on") == 0
+	    || g_ascii_strcasecmp(arg, "below") == 0) {
+		*out = TRUE;
+		return TRUE;
+	}
+	if (g_ascii_strcasecmp(arg, "off") == 0
+	    || g_ascii_strcasecmp(arg, "above") == 0) {
+		*out = FALSE;
+		return TRUE;
+	}
+	g_warning("keybind: unknown argument '%s'; expected on, off, "
+	          "below, above, toggle or nothing", arg);
+	return FALSE;
+}
+
 static gboolean
 direction_from_string(const gchar *arg, GowlDirection *out)
 {
@@ -9789,6 +10027,38 @@ run_keybind_entry(
 			kb->action == GOWL_ACTION_MOVE_WINDOW
 			? GOWL_CURSOR_MODE_MOVE : GOWL_CURSOR_MODE_RESIZE,
 			edges);
+		return TRUE;
+	}
+	/*
+	 * Behind the tiling, one window or all of them.
+	 *
+	 * The argument is optional and the common case is not passing one:
+	 * "on"/"below" and "off"/"above" exist so a config can bind a
+	 * direction to a key rather than a toggle, which is what somebody
+	 * driving this from a script wants.
+	 */
+	case GOWL_ACTION_TOGGLE_BELOW: {
+		GowlClient *sel = focustop(self, self->selmon);
+		gboolean    want;
+
+		if (sel == NULL)
+			return TRUE;
+		if (!keybind_arg_wanted(kb->arg, !sel->isbelow, &want))
+			return TRUE;
+		gowl_compositor_set_client_below(self, sel, want);
+		return TRUE;
+	}
+	case GOWL_ACTION_TOGGLE_BELOW_ALL: {
+		gboolean want;
+
+		if (kb->arg == NULL || *kb->arg == '\0'
+		    || g_ascii_strcasecmp(kb->arg, "toggle") == 0) {
+			gowl_compositor_toggle_below_all(self, self->selmon);
+			return TRUE;
+		}
+		if (!keybind_arg_wanted(kb->arg, FALSE, &want))
+			return TRUE;
+		gowl_compositor_set_all_below(self, self->selmon, want);
 		return TRUE;
 	}
 	case GOWL_ACTION_TOGGLE_STICKY: {

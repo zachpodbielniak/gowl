@@ -630,6 +630,30 @@ void gowl_compositor_cycle_backdrop_style (GowlCompositor *self,
                                            gint            direction);
 
 /**
+ * gowl_compositor_get_tray:
+ * @self: a #GowlCompositor
+ *
+ * Returns: %TRUE while this process owns the tray register.  %FALSE
+ *   when the tray is off AND when another tray on the machine already
+ *   had the name --- from a caller's point of view those are the same
+ *   thing: the items are somebody else's.
+ */
+gboolean gowl_compositor_get_tray (GowlCompositor *self);
+
+/**
+ * gowl_compositor_set_tray:
+ * @self: a #GowlCompositor
+ * @on: %TRUE to be the machine's StatusNotifierItem watcher and host
+ *
+ * Starting is not the same as succeeding: gowl never takes the watcher
+ * name from another tray and never queues for it, so this may leave
+ * gowl_compositor_get_tray() %FALSE.  That is the correct outcome and
+ * is logged, not raised: two watchers on one bus is how applications
+ * end up registered with the one nobody is displaying.
+ */
+void gowl_compositor_set_tray (GowlCompositor *self, gboolean on);
+
+/**
  * gowl_compositor_get_crt:
  * @self: a #GowlCompositor
  *

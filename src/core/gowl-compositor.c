@@ -26,6 +26,7 @@
 #include "core/gowl-frame-sink.h"
 #include "util/gowl-systemd.h"
 #include "util/gowl-fx-optout.h"
+#include "tray/gowl-tray.h"
 #include "util/gowl-wayland-socket.h"
 
 #ifdef GOWL_HAVE_LIBDECOR
@@ -487,6 +488,9 @@ gowl_compositor_dispose(GObject *object)
 	g_clear_object(&self->seat);
 	g_clear_object(&self->cursor_obj);
 	g_clear_object(&self->kb_group_obj);
+	/* The tray's bus thread holds a source on the event loop that is
+	 * about to go; stop it before the loop does. */
+	gowl_tray_stop(gowl_tray_get_default());
 	g_clear_object(&self->idle_mgr);
 	g_clear_object(&self->bar);
 	g_clear_object(&self->prefix_key_policy);
@@ -2773,6 +2777,34 @@ gowl_compositor_set_backdrop_style(GowlCompositor *self,
 }
 
 gboolean
+gowl_compositor_get_tray(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	return gowl_tray_is_serving(gowl_tray_get_default());
+}
+
+void
+gowl_compositor_set_tray(GowlCompositor *self, gboolean on)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->config != NULL)
+		gowl_config_set_tray(self->config, on);
+
+	if (on) {
+		GError *error = NULL;
+
+		if (!gowl_tray_start(gowl_tray_get_default(), self->event_loop,
+		                     &error)) {
+			g_warning("tray: not started: %s", error->message);
+			g_clear_error(&error);
+		}
+	} else {
+		gowl_tray_stop(gowl_tray_get_default());
+	}
+}
+
+gboolean
 gowl_compositor_get_crt(GowlCompositor *self)
 {
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
@@ -4395,6 +4427,29 @@ gowl_compositor_start(
 
 	self->kb_group_obj = gowl_keyboard_group_new();
 	self->kb_group_obj->wlr_group = self->wlr_kb_group;
+
+	/*
+	 * The system tray, if this session is to be the one that keeps it.
+	 *
+	 * Started here rather than by the bar, because owning the register
+	 * and drawing it are different jobs: an application that cannot
+	 * find a watcher when it starts hides its icon and does not look
+	 * again, so the watcher has to exist whether or not anything is
+	 * currently displaying it.
+	 *
+	 * Failing to get the name is not a failure to start -- somebody
+	 * else's tray already has it, and gowl_tray_start() says so in the
+	 * log rather than fighting for it.
+	 */
+	if (self->config != NULL && gowl_config_get_tray(self->config)) {
+		GError *tray_error = NULL;
+
+		if (!gowl_tray_start(gowl_tray_get_default(), self->event_loop,
+		                     &tray_error)) {
+			g_warning("tray: not started: %s", tray_error->message);
+			g_clear_error(&tray_error);
+		}
+	}
 
 	self->idle_mgr = gowl_idle_manager_new();
 	/* idle-inhibit, the idle and dpms timers: the manager owns them

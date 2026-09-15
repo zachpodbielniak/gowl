@@ -110,6 +110,7 @@
 
 /* IPC */
 #include "ipc/gowl-ipc.h"
+#include "tray/gowl-tray.h"
 
 /* Utilities */
 #include "util/gowl-log.h"

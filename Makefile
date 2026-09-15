@@ -97,6 +97,7 @@ LIB_SRCS := \
 	src/util/gowl-easing.c \
 	src/util/gowl-backdrop-plan.c \
 	src/util/gowl-fx-optout.c \
+	src/tray/gowl-tray.c \
 	src/fx/gowl-fx-gl.c \
 	src/fx/gowl-fx-capture.c \
 	src/fx/gowl-fx-sheet.c \
@@ -223,6 +224,7 @@ LIB_HDRS := \
 	src/util/gowl-log.h \
 	src/util/gowl-easing.h \
 	src/fx/gowl-fx.h \
+	src/tray/gowl-tray.h \
 	src/util/gowl-systemd.h \
 	src/util/gowl-wayland-socket.h \
 	src/core/gowl-compositor.h \
@@ -695,7 +697,11 @@ $(OUTDIR)/modules/embers.so: $(wildcard modules/embers/*.c modules/embers/*.h)
 $(OUTDIR)/modules/submerged.so: $(wildcard modules/submerged/*.c modules/submerged/*.h)
 $(OUTDIR)/modules/dew.so: $(wildcard modules/dew/*.c modules/dew/*.h)
 $(OUTDIR)/modules/crt.so: $(wildcard modules/crt/*.c modules/crt/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+# The bar joined this list when the tray widget did: resolving a themed
+# icon name needs gdk-pixbuf, which is exactly the kind of dependency the
+# generic rule is documented as not knowing about.
+$(OUTDIR)/modules/bar.so: $(wildcard modules/bar/*.c modules/bar/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

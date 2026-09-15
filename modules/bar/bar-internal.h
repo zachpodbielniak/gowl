@@ -72,6 +72,7 @@ void bar_register_core_plugins    (GowlBarRegistry *registry);
 void bar_register_system_plugins  (GowlBarRegistry *registry);
 void bar_register_net_plugins     (GowlBarRegistry *registry);
 void bar_register_desktop_plugins (GowlBarRegistry *registry);
+void bar_register_tray_plugins    (GowlBarRegistry *registry);
 
 /* --- The output a widget is being run for -------------------------- */
 

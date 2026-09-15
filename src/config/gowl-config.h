@@ -1526,6 +1526,22 @@ gboolean gowl_config_get_cube_all_monitors (GowlConfig *self);
  * whether applications see three-finger swipes at all. */
 gboolean gowl_config_get_cube_gesture (GowlConfig *self);
 
+/* --- The system tray (src/tray) ---
+ *
+ * Whether gowl is the machine's StatusNotifierItem watcher and host:
+ * the thing that lets Zoom, Deskflow, the Proton bridge and the rest
+ * have a tray icon at all.  Off by default in standalone gowl and on
+ * under cmacs --gowl, which sets it itself.
+ *
+ * Owning the register is separate from DRAWING it.  The `tray' bar
+ * widget is what puts the icons on a screen, and a session may
+ * reasonably want the register without the widget --- an application
+ * that cannot find a watcher hides its icon entirely, which is worse
+ * than showing it somewhere unexpected.
+ */
+gboolean gowl_config_get_tray (GowlConfig *self);
+void     gowl_config_set_tray (GowlConfig *self, gboolean on);
+
 /* --- Cathode ray tube (modules/crt) ---
  *
  * The one effect that is not behind a window: it captures the finished

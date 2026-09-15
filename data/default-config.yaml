@@ -169,6 +169,34 @@ magnifier-follow-cursor: true
 magnifier-smooth: true    # false shows the actual pixels, unfiltered
 magnifier-modifier: "Super"   # Super, Alt, Ctrl or Shift
 
+# The system tray.  Off by default here and on under cmacs --gowl.
+#
+# gowl becomes the machine's StatusNotifierItem WATCHER and HOST: it
+# owns org.kde.StatusNotifierWatcher, keeps the register of items, and
+# says somebody is willing to display them -- which several applications
+# check before publishing an icon at all.  Zoom, Deskflow, the Proton
+# Mail bridge, Solaar, Syncthing and Steam all put their only
+# always-available interface there.
+#
+# It never takes the name from another tray and never queues for it, so
+# a desktop that already has one keeps it and gowl stands down with a
+# line in the log.  Two watchers on one bus is how applications end up
+# registered with the one nobody is displaying.
+#
+# OWNING THE REGISTER IS NOT DRAWING IT.  Add the `tray' widget to a bar
+# region for that (see the bar's widgets-* keys below).  The two are
+# separate because an application that cannot find a watcher when it
+# starts hides its icon and does not look again, so the register has to
+# exist whether or not anything is currently showing it.
+#
+#   double left    activate -- for nearly every application, "show me
+#                  your window".  Two clicks because one is too easy to
+#                  do by accident on a strip of 22-pixel targets
+#   right          the application's own menu
+#   middle         secondary activate
+#   scroll         forwarded, which is how a volume applet works
+tray: false
+
 # The cathode ray tube (modules.crt.enabled).  Off by default, and the
 # only effect here that is not behind a window: it captures the finished
 # screen and puts the WHOLE of it back through a tube -- curved glass,
@@ -884,6 +912,8 @@ modules:
     # ~/.config/gowl/bar-plugins/.
     widgets-left: "tags title"
     widgets-center: "clock"
+    # `tray' is the system tray -- see the `tray' key above, which has
+    # to be on for it to have anything to draw.
     # `tailscale' decides for itself whether it belongs on this host:
     # hidden where Tailscale is not installed, and where it is but no
     # tailnet has been joined, shown in yellow with a Join button in

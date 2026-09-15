@@ -574,6 +574,98 @@ nothing. It also sits above the bar, since a magnifier that magnified
 everything except the panel would be useless to somebody who needs it to
 read the panel.
 
+**** The system tray
+:PROPERTIES:
+:CUSTOM_ID: tray
+:END:
+
+Zoom, Deskflow, the Proton Mail bridge, Solaar, Syncthing, Steam and a
+long tail of others put their only always-available interface in a tray
+icon. There is nowhere to put one under a plain wlroots compositor, so
+those applications have been running with that interface simply absent.
+
+=tray: true= makes gowl the machine's StatusNotifierItem *watcher* and
+*host*: it owns =org.kde.StatusNotifierWatcher=, keeps the register of
+items, and says somebody is willing to display them --- which several
+applications check before publishing an icon at all. Off by default in
+standalone gowl; =cmacs --gowl= turns it on itself.
+
+| Property | Type | Default | Description |
+|----------+------+---------+-------------|
+| =tray=   | bool | =false= | Be the machine's tray watcher and host |
+
+***** Owning the register is not drawing it
+
+Add the =tray= widget to a bar region to see anything:
+
+#+begin_src yaml
+tray: true
+modules:
+  bar:
+    enabled: true
+    bottom-widgets-center: "tray"
+#+end_src
+
+The two are separate on purpose. An application that cannot find a
+watcher when it starts hides its icon and does not look again, so the
+register has to exist whether or not anything is currently showing it
+--- and a session may reasonably want the register with no widget at
+all, which is what reading the tray from Emacs looks like.
+
+***** It never fights for the name
+
+gowl asks for =org.kde.StatusNotifierWatcher= without =REPLACE= and
+without =QUEUE=. A desktop that already has a tray --- a GNOME session
+with the AppIndicator extension, a KDE session, a cmacs started first
+--- keeps it, and gowl says so in the log and does nothing else.
+
+Queueing would be worse than losing: gowl would silently become the
+watcher later, at which point every application has already registered
+with the other one and none of them will register again.
+
+***** The clicks
+
+| Gesture | What happens |
+|---------+--------------|
+| Double left | =Activate= --- for nearly every application, "show me your window" |
+| Right | The application's own menu, read over =com.canonical.dbusmenu= |
+| Middle | =SecondaryActivate=, which is whatever the application decided that means |
+| Scroll | Forwarded, which is how a volume applet works |
+
+*Double left, not single.* A bar is also where you click to switch tags,
+and a row of 22-pixel targets that open Zoom is the last thing that
+should be one stray click away. An item that sets =ItemIsMenu= has no
+=Activate= at all and gets its menu from the double click instead,
+because a double click that silently does nothing is worse than the
+wrong one.
+
+What happens to the window afterwards is nothing special: =Activate=
+makes the application show one, it maps, and gowl tiles it like any
+other. An application that should float is a =windowrules= entry, the
+same as everything else.
+
+***** Icons come from three places and any of them may be the only one
+
+An item offers raw ARGB pixmaps, a themed icon name, a directory of its
+own to look that name up in --- or some subset. In order of preference:
+the pixmap, because it is what the application chose to hand over rather
+than a name to look up; then the name in the item's own
+=IconThemePath=, which is there precisely because the theme has never
+heard of this icon; then the name in the icon theme; and last the
+application's =Id= as a name, which is a guess and a good one.
+
+An item whose icon resolves to nothing is drawn as its initial in a box
+rather than as a gap: the application *is* running and its menu still
+works, and an empty space says the opposite.
+
+***** What is not there
+
+A tray item may ask its own =ContextMenu= to appear, which under Wayland
+almost nothing implements --- gowl reads the menu and draws it itself
+instead. Menu rows show their icons as text, not images. And an item in
+=Passive= status is not drawn at all, which is what the specification
+asks for.
+
 **** The cathode ray tube
 :PROPERTIES:
 :CUSTOM_ID: crt

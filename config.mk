@@ -34,7 +34,7 @@ INCLUDEDIR ?= $(PREFIX)/include
 # API.  install-headers walks this list and skips any that has no .h
 # today, so adding a subsystem means adding one word here -- and
 # forgetting to is what left src/fx and src/barkit uninstalled.
-HEADER_SUBDIRS := core boxed config module interfaces ipc util \
+HEADER_SUBDIRS := core boxed config module interfaces ipc tray util \
                   barkit fx protocols
 DATADIR ?= $(PREFIX)/share
 PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig

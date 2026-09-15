@@ -279,6 +279,9 @@
 /* "leave it to the preset", for every override key below. */
 #define GOWL_CONFIG_SOAP_FROM_PRESET         (-1.0)
 
+/* --- The system tray (src/tray) ------------------------------------ */
+#define GOWL_CONFIG_DEFAULT_TRAY               (FALSE)
+
 /* --- The cathode ray tube (modules/crt) ---------------------------- */
 #define GOWL_CONFIG_DEFAULT_CRT                (FALSE)
 #define GOWL_CONFIG_DEFAULT_CRT_PRESET     "consumer"
@@ -857,6 +860,7 @@ struct _GowlConfig {
 	gdouble  bokeh_edge;
 	gdouble  bokeh_brightness;
 
+	gboolean tray;
 	gboolean crt;
 	gchar   *crt_preset;
 	gchar   *crt_mask_kind;    /* NULL: the preset's tube */
@@ -2284,6 +2288,7 @@ gowl_config_init(GowlConfig *self)
 	self->bokeh_edge         = GOWL_CONFIG_DEFAULT_BOKEH_EDGE;
 	self->bokeh_brightness   = GOWL_CONFIG_DEFAULT_BOKEH_BRIGHTNESS;
 
+	self->tray               = GOWL_CONFIG_DEFAULT_TRAY;
 	self->crt                = GOWL_CONFIG_DEFAULT_CRT;
 	self->crt_preset         = g_strdup(GOWL_CONFIG_DEFAULT_CRT_PRESET);
 	self->crt_mask_kind      = NULL;
@@ -2850,6 +2855,7 @@ static const gchar *const top_level_keys[] = {
 	"bokeh-rotation", "bokeh-highlight", "bokeh-threshold", "bokeh-edge",
 	"bokeh-brightness",
 
+	"tray",
 	"crt", "crt-preset", "crt-mask-kind", "crt-lines", "crt-mask-size",
 	"crt-glow-scale", "crt-glow-passes", "crt-curvature",
 	"crt-curvature-y", "crt-scanline", "crt-beam", "crt-beam-bloom",
@@ -4326,6 +4332,8 @@ gowl_config_apply_mapping(
 			mapping, "bokeh-brightness"), 0.0, 2.0);
 	}
 
+	if (yaml_mapping_has_member(mapping, "tray"))
+		self->tray = yaml_mapping_get_boolean_member(mapping, "tray");
 	if (yaml_mapping_has_member(mapping, "crt"))
 		self->crt = yaml_mapping_get_boolean_member(mapping, "crt");
 	if (yaml_mapping_has_member(mapping, "crt-preset")) {
@@ -10788,6 +10796,20 @@ gowl_config_crt_mask_to_name(GowlCrtMask kind)
 	default: break;
 	}
 	return "slot";
+}
+
+gboolean
+gowl_config_get_tray(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), GOWL_CONFIG_DEFAULT_TRAY);
+	return self->tray;
+}
+
+void
+gowl_config_set_tray(GowlConfig *self, gboolean on)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->tray = on;
 }
 
 gboolean

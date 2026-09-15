@@ -981,6 +981,36 @@ the whole active set in priority order;
 =gowl_module_manager_get_scene_effect_after()= remains for a module that
 wants to ask what is below it without receiving the call.
 
+*** The system tray
+
+=src/tray/gowl-tray.c= is the StatusNotifierItem register: the watcher,
+the host name, the item table and the =com.canonical.dbusmenu= client.
+It holds no pixels --- an item's icon is a themed name or raw ARGB, and
+turning either into something on a screen needs an icon theme and a
+renderer, which is =modules/bar='s business. That split is what lets one
+register serve a bar widget, a buffer in cmacs, and whatever comes next.
+
+*Everything D-Bus happens on a thread of its own* with its own
+=GMainContext=, exactly as =modules/notifyd= does it, and what the
+compositor thread sees is a snapshot taken under a lock and announced
+through an eventfd on the Wayland event loop. A tray application that
+stops answering must cost an icon, not the desktop.
+
+*It is a singleton*, reached by =gowl_tray_get_default()=. Not a
+convenience: the bus allows one owner of
+=org.kde.StatusNotifierWatcher= per process, so a second #GowlTray could
+only ever stand down --- and the compositor (which starts it) and the
+bar module (which draws it) are linked together but deliberately do not
+share headers.
+
+Four places where applications disagree with the specification are
+absorbed here, and each is a case in =tests/test-tray.c=: the interface
+has a KDE and a freedesktop spelling; =RegisterStatusNotifierItem= is
+passed a bus name, an object path or the two joined; almost nothing
+emits =PropertiesChanged=, so the payload-free =NewIcon= and friends are
+answered with a fresh =GetAll=; and nothing at all announces that an
+item has gone, so its bus name is watched instead.
+
 *** Visual effect layer
 
 =src/fx/= is the toolkit the effect modules are built on:

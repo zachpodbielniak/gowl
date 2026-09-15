@@ -1778,6 +1778,55 @@ test_config_wallpaper_tags_rejects_bad_keys(void)
 }
 
 /*
+ * `no-fx-apps' takes a string or a list, and is a property either way.
+ *
+ * Both YAML shapes, because both are what a config file actually
+ * contains -- one name reads as a string, three read as a list -- and a
+ * parser that only understood one of them would silently ignore the
+ * other: no error, no effects change, nothing to look at.
+ *
+ * And through g_object_set(), because cmacs never opens the YAML at
+ * all.  A key that lives only in the parser exists for standalone gowl
+ * and for nobody else, which is the mistake five HDR settings made
+ * before this (see below).
+ */
+static void
+test_no_fx_apps_takes_a_string_or_a_list(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError     *err = NULL;
+	g_autofree gchar *got = NULL;
+
+	/* Nothing by default: the names that matter are built into the
+	 * matcher, not defaulted into the config. */
+	g_assert_cmpstr(gowl_config_get_no_fx_apps(config), ==, "");
+
+	g_assert_true(load_yaml_from_string(config, "no-fx-apps: \"obs, vlc\"\n",
+	                                    &err));
+	g_assert_no_error(err);
+	g_assert_cmpstr(gowl_config_get_no_fx_apps(config), ==, "obs, vlc");
+	g_object_unref(config);
+
+	config = gowl_config_new();
+	g_assert_true(load_yaml_from_string(config,
+		"no-fx-apps:\n  - obs\n  - vlc\n  - mpv\n", &err));
+	g_assert_no_error(err);
+	g_assert_cmpstr(gowl_config_get_no_fx_apps(config), ==, "obs,vlc,mpv");
+
+	/* The property, which is cmacs's only way in. */
+	g_object_get(config, "no-fx-apps", &got, NULL);
+	g_assert_cmpstr(got, ==, "obs,vlc,mpv");
+	g_object_set(config, "no-fx-apps", "gimp", NULL);
+	g_assert_cmpstr(gowl_config_get_no_fx_apps(config), ==, "gimp");
+
+	/* And unsetting it is not a crash and not a NULL. */
+	gowl_config_set_no_fx_apps(config, NULL);
+	g_assert_cmpstr(gowl_config_get_no_fx_apps(config), ==, "");
+
+	g_object_unref(config);
+}
+
+/*
  * Every HDR setting is reachable through the PROPERTY system.
  *
  * Not a style point.  An embedder that owns its own configuration can
@@ -1903,6 +1952,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/config/output-profiles-from-code",
 	                test_config_output_profiles_from_code);
 	g_test_add_func("/config/rule-entry-init", test_config_rule_entry_init);
+	g_test_add_func("/config/no-fx-apps",
+	                test_no_fx_apps_takes_a_string_or_a_list);
 	g_test_add_func("/config/hdr-properties",
 	                test_the_hdr_settings_are_properties);
 

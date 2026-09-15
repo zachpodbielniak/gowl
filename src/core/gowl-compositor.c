@@ -25,6 +25,7 @@
 #include "core/gowl-capture-wlroots.h"
 #include "core/gowl-frame-sink.h"
 #include "util/gowl-systemd.h"
+#include "util/gowl-fx-optout.h"
 #include "util/gowl-wayland-socket.h"
 
 #ifdef GOWL_HAVE_LIBDECOR
@@ -6045,6 +6046,55 @@ gowl_compositor_reparent_client(
 }
 
 /**
+ * gowl_compositor_apply_fx_optout:
+ * @self: a #GowlCompositor
+ * @client: a client being mapped
+ *
+ * Switches the window effects off for @client when its process, its
+ * ancestry or its app_id says they should be.
+ *
+ * What it sets is the three rule flags the effect modules already
+ * honour -- no backdrop, no shadow, no animation -- rather than a flag
+ * of its own, so nothing downstream had to learn about this: a Steam
+ * game and a window covered by a `no-blur' rule look identical to the
+ * modules, which is right, because they want the same thing.
+ *
+ * Never CLEARS a flag.  A rule that switched an effect off stays off;
+ * this only ever adds.
+ */
+void
+gowl_compositor_apply_fx_optout(
+	GowlCompositor *self,
+	GowlClient     *client
+){
+	const gchar *list = NULL;
+	guint        flags;
+	guint        want;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(client));
+
+	want = GOWL_CLIENT_RULE_NO_BLUR
+	       | GOWL_CLIENT_RULE_NO_SHADOW
+	       | GOWL_CLIENT_RULE_NO_ANIM;
+	flags = client->rule_flags;
+	if ((flags & want) == want)
+		return;
+
+	if (self->config != NULL)
+		list = gowl_config_get_no_fx_apps(self->config);
+
+	if (!gowl_fx_optout_for_pid(gowl_client_get_pid(client),
+	                            client->app_id, list))
+		return;
+
+	client->rule_flags = flags | want;
+	g_debug("fx: no effects for '%s' (pid %d)",
+	        client->app_id != NULL ? client->app_id : "(no app_id)",
+	        (gint)gowl_client_get_pid(client));
+}
+
+/**
  * gowl_compositor_resize_client:
  *
  * Public wrapper around the internal resize_client().
@@ -11867,6 +11917,18 @@ on_client_map(struct wl_listener *listener, void *data)
 		if (c->xdg_toplevel->title != NULL && c->title == NULL)
 			c->title = g_strdup(c->xdg_toplevel->title);
 	}
+
+	/*
+	 * Windows that asked for no effects, before any module sees them.
+	 *
+	 * Done here rather than in the windowrules module because it is
+	 * not a rule: the answer comes from the PROCESS -- its environment
+	 * and its ancestry -- which a config file cannot express and which
+	 * is the whole point of GOWL_NO_FX being inherited.  The flags it
+	 * sets are the same three a rule sets, so a window covered by both
+	 * is covered once; windowrules ORs onto whatever is already here.
+	 */
+	gowl_compositor_apply_fx_optout(self, c);
 
 	/* Insert into client lists */
 	self->clients = g_list_prepend(self->clients, c);

@@ -1508,6 +1508,52 @@ node points at, which is the obvious thing and passes either way: a
 resized render destroys the swapchain and allocates a new one, and the
 allocator hands the same addresses straight back.
 
+*** Windows that get no effects at all
+:PROPERTIES:
+:CUSTOM_ID: fx-optout
+:END:
+
+=src/util/gowl-fx-optout.c= answers one question --- should this window
+have effects --- and =gowl_compositor_apply_fx_optout()= asks it once,
+in the map path, before any module has seen the client.
+
+*It sets the rule flags, not a flag of its own.* =GOWL_CLIENT_RULE_NO_BLUR=,
+=NO_SHADOW= and =NO_ANIM= are already honoured by every backdrop module,
+the shadow and the animation, so nothing downstream had to learn about
+this: a Steam game and a window covered by a =no-blur= rule look
+identical to the modules, which is right, because they want the same
+thing. It only ever ORs, so a rule that switched something off is never
+switched back on.
+
+*The answer comes from the PROCESS, which is why it is not a window
+rule.* Three inputs:
+
+- =/proc/PID/environ= for =GOWL_NO_FX=, read from the client's process
+  rather than from the compositor's own environment. That is what makes
+  it inherited --- export it and everything started from that shell is
+  covered --- and it is the reason this cannot be expressed in a config
+  file at all.
+- The same block for Steam's markers (=SteamAppId=, =SteamGameId=,
+  =SteamClientLaunch=, =STEAM_COMPAT_DATA_PATH=), which is how a game
+  whose executable nobody could name is recognised.
+- The window's =app_id=, and the command name of its process and of
+  every ancestor, against a built-in list (=steam=, =steamwebhelper=,
+  =mutter-devkit=) plus the configured =no-fx-apps=.
+
+*The ancestry walk stops at the compositor's own pid,* and that stop is
+load-bearing rather than an optimisation. gowl is embedded in cmacs and
+cmacs is started from a shell; a walk that ran to pid 1 would find
+=sh=, =systemd= and whatever else is above the compositor for EVERY
+window, so naming any of them would switch the effects off across the
+whole desktop instead of for one program.
+=tests/test-fx-optout.c= has a case for that direction specifically,
+built on a spawned grandchild so there is a real process tree to walk.
+
+Reading =/proc= can always fail --- the process exits between the map
+and the read, a container hides it, a hardened kernel refuses it --- and
+every failure answers "leave the window alone", which is the state the
+desktop was in before this existed.
+
 *** The three weathers that are not liquid
 :PROPERTIES:
 :CUSTOM_ID: weather-backdrops

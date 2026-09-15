@@ -336,6 +336,16 @@
 #define GOWL_CONFIG_DEFAULT_HINTS_SCRIM          (0.40)
 #define GOWL_CONFIG_DEFAULT_HINTS_WARP_POINTER   (TRUE)
 #define GOWL_CONFIG_DEFAULT_HINTS_CURRENT_OUTPUT (FALSE)
+/*
+ * Windows that get no effects at all.
+ *
+ * ADDED to the built-in `steam', `steamwebhelper' and `mutter-devkit',
+ * never replacing them -- see src/util/gowl-fx-optout.c.  Empty by
+ * default because the built-ins already cover the two things anybody
+ * asked for, and because the other way of saying it, `GOWL_NO_FX=1' in
+ * a process's environment, needs no config at all.
+ */
+#define GOWL_CONFIG_DEFAULT_NO_FX_APPS          ""
 #define GOWL_CONFIG_DEFAULT_NMASTER             (1)
 #define GOWL_CONFIG_DEFAULT_TAG_COUNT           (9)
 #define GOWL_CONFIG_DEFAULT_REPEAT_RATE         (25)
@@ -683,6 +693,10 @@ struct _GowlConfig {
 	gdouble  hints_scrim;
 	gboolean hints_warp_pointer;
 	gboolean hints_current_output;
+
+	/* Comma-separated app_ids / process names that get no effects,
+	 * on top of the built-in list. */
+	gchar   *no_fx_apps;
 
 	/* Per-tag wallpaper overrides, 1-based; NULL means "use the default
 	 * wallpaper", which is what every entry is until a config says
@@ -1068,6 +1082,12 @@ gowl_config_set_property(
 	case GOWL_CONFIG_PROP_INPUT_RECORDING:
 		self->input_recording = g_value_get_boolean(value);
 		break;
+	case GOWL_CONFIG_PROP_NO_FX_APPS:
+		g_free(self->no_fx_apps);
+		self->no_fx_apps = g_value_dup_string(value);
+		if (self->no_fx_apps == NULL)
+			self->no_fx_apps = g_strdup(GOWL_CONFIG_DEFAULT_NO_FX_APPS);
+		break;
 	case GOWL_CONFIG_PROP_INPUT_RECORDING_DENY_APPS:
 		g_free(self->input_recording_deny_apps);
 		self->input_recording_deny_apps = g_value_dup_string(value);
@@ -1197,6 +1217,9 @@ gowl_config_get_property(
 	case GOWL_CONFIG_PROP_INPUT_RECORDING:
 		g_value_set_boolean(value, self->input_recording);
 		break;
+	case GOWL_CONFIG_PROP_NO_FX_APPS:
+		g_value_set_string(value, self->no_fx_apps);
+		break;
 	case GOWL_CONFIG_PROP_INPUT_RECORDING_DENY_APPS:
 		g_value_set_string(value, self->input_recording_deny_apps);
 		break;
@@ -1308,6 +1331,7 @@ gowl_config_finalize(GObject *object)
 	g_free(self->snow_tint);
 	g_free(self->hints_keys);
 	g_free(self->hints_colors);
+	g_free(self->no_fx_apps);
 	{
 		gint ti;
 
@@ -1579,6 +1603,25 @@ gowl_config_class_init(GowlConfigClass *klass)
 		                      "clicking on their behalf.",
 		                      GOWL_CONFIG_DEFAULT_INPUT_RECORDING,
 		                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	/*
+	 * A PROPERTY and not only a YAML key, because cmacs deliberately
+	 * never opens ~/.config/gowl/config.yaml -- a setting that exists
+	 * only in the parser exists for standalone gowl and for nobody
+	 * else.
+	 */
+	properties[GOWL_CONFIG_PROP_NO_FX_APPS] =
+		g_param_spec_string("no-fx-apps",
+		                     "No-FX Apps",
+		                     "Comma-separated app_ids and process names "
+		                     "that get no backdrop, shadow or animation. "
+		                     "Matched against the window's app_id and "
+		                     "against the command name of its process "
+		                     "and every ancestor.  Added to the built-in "
+		                     "list (steam, steamwebhelper, "
+		                     "mutter-devkit), never replacing it.",
+		                     GOWL_CONFIG_DEFAULT_NO_FX_APPS,
+		                     G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
 	properties[GOWL_CONFIG_PROP_INPUT_RECORDING_DENY_APPS] =
 		g_param_spec_string("input-recording-deny-apps",
@@ -1929,6 +1972,8 @@ gowl_config_init(GowlConfig *self)
 	self->hints_scrim          = GOWL_CONFIG_DEFAULT_HINTS_SCRIM;
 	self->hints_warp_pointer   = GOWL_CONFIG_DEFAULT_HINTS_WARP_POINTER;
 	self->hints_current_output = GOWL_CONFIG_DEFAULT_HINTS_CURRENT_OUTPUT;
+
+	self->no_fx_apps       = g_strdup(GOWL_CONFIG_DEFAULT_NO_FX_APPS);
 
 	self->wallpaper_fade   = GOWL_CONFIG_DEFAULT_WALLPAPER_FADE;
 
@@ -2331,6 +2376,7 @@ static const gchar *const top_level_keys[] = {
 	"hints-keys", "hints-colors", "hints-timeout", "hints-size",
 	"hints-border-width", "hints-scrim", "hints-warp-pointer",
 	"hints-current-output",
+	"no-fx-apps",
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
 	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
 	"lock-command", "lock-on-suspend", "keybinds", "modes",
@@ -3763,6 +3809,46 @@ gowl_config_apply_mapping(
 		self->hints_current_output = yaml_mapping_get_boolean_member(
 			mapping, "hints-current-output");
 	}
+	/*
+	 * `no-fx-apps' takes either shape, because both are the obvious
+	 * one depending on how long the list is:
+	 *
+	 *   no-fx-apps: "obs, vlc"
+	 *   no-fx-apps: [obs, vlc]
+	 *
+	 * Stored as one comma-separated string either way; the matcher
+	 * strips whitespace around each entry, so the join needs no care.
+	 */
+	if (yaml_mapping_has_member(mapping, "no-fx-apps")) {
+		YamlSequence *seq = yaml_mapping_get_sequence_member(mapping,
+		                                                     "no-fx-apps");
+
+		if (seq != NULL) {
+			guint    len = yaml_sequence_get_length(seq);
+			guint    i;
+			GString *joined = g_string_new(NULL);
+
+			for (i = 0; i < len; i++) {
+				const gchar *elem = yaml_sequence_get_string_element(seq, i);
+
+				if (elem == NULL || *elem == '\0')
+					continue;
+				if (joined->len > 0)
+					g_string_append_c(joined, ',');
+				g_string_append(joined, elem);
+			}
+			{
+				g_autofree gchar *list = g_string_free(joined, FALSE);
+
+				g_object_set(self, "no-fx-apps", list, NULL);
+			}
+		} else {
+			const gchar *v = yaml_mapping_get_string_member(mapping,
+			                                                "no-fx-apps");
+			if (v != NULL)
+				g_object_set(self, "no-fx-apps", v, NULL);
+		}
+	}
 	if (yaml_mapping_has_member(mapping, "shadow-color")) {
 		const gchar *v = yaml_mapping_get_string_member(mapping,
 		                                                "shadow-color");
@@ -4972,6 +5058,8 @@ gowl_config_generate_yaml(GowlConfig *self)
 	g_string_append_printf(yaml, "input-recording-deny-apps: \"%s\"\n",
 	                       self->input_recording_deny_apps != NULL
 	                       ? self->input_recording_deny_apps : "");
+	g_string_append_printf(yaml, "no-fx-apps: \"%s\"\n",
+	                       self->no_fx_apps != NULL ? self->no_fx_apps : "");
 
 	/* Programs */
 	g_string_append_printf(yaml, "terminal: \"%s\"\n", self->terminal);
@@ -8713,6 +8801,40 @@ gowl_config_set_hints_keys(GowlConfig *self, const gchar *keys)
 		return;
 	g_free(self->hints_keys);
 	self->hints_keys = g_ascii_strdown(keys, -1);
+}
+
+/**
+ * gowl_config_get_no_fx_apps:
+ * @self: a #GowlConfig
+ *
+ * The configured extra names that get no window effects, comma
+ * separated.  Never %NULL; empty when nothing was configured, which is
+ * the default -- the built-in names live in the matcher, not here.
+ *
+ * Returns: (transfer none): the list
+ */
+const gchar *
+gowl_config_get_no_fx_apps(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_NO_FX_APPS);
+	return self->no_fx_apps != NULL ? self->no_fx_apps
+	                                : GOWL_CONFIG_DEFAULT_NO_FX_APPS;
+}
+
+/**
+ * gowl_config_set_no_fx_apps:
+ * @self: a #GowlConfig
+ * @apps: (nullable): comma-separated app_ids or process names; %NULL
+ *   or the empty string leaves only the built-in names
+ */
+void
+gowl_config_set_no_fx_apps(GowlConfig *self, const gchar *apps)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	g_object_set(self, "no-fx-apps",
+	             apps != NULL ? apps : GOWL_CONFIG_DEFAULT_NO_FX_APPS, NULL);
 }
 
 const gchar *

@@ -367,6 +367,9 @@ typedef struct {
  *   "evaluate-c-config-with-cmacs" property.  cmacs-only semantic:
  *   when %FALSE, cmacs `--gowl` startup skips loading the user's C
  *   config entirely.  Ignored by gowl's standalone main.
+ * @GOWL_CONFIG_PROP_NO_FX_APPS: "no-fx-apps" property.  Comma-separated
+ *   app_ids and process names that get no window effects, added to a
+ *   built-in list.
  * @GOWL_CONFIG_PROP_LAST: sentinel; total number of properties.
  *
  * Property identifiers for #GowlConfig GObject properties.
@@ -407,6 +410,7 @@ typedef enum {
 	GOWL_CONFIG_PROP_HDR_SDR_WHITE,
 	GOWL_CONFIG_PROP_HDR_UNMANAGED,
 	GOWL_CONFIG_PROP_HDR_ADVERTISE_PQ,
+	GOWL_CONFIG_PROP_NO_FX_APPS,
 	GOWL_CONFIG_PROP_LAST
 } GowlConfigProp;
 
@@ -2241,6 +2245,22 @@ void         gowl_config_set_hints_warp_pointer (GowlConfig *self,
  * reaching a window on ANOTHER screen in one keystroke is most of what
  * the overlay is for. */
 gboolean     gowl_config_get_hints_current_output (GowlConfig *self);
+
+/* --- Windows that get no effects ---
+ *
+ * A comma-separated list of app_ids and process names, matched
+ * case-insensitively against the window's app_id and against the
+ * command name of its process AND EVERY ANCESTOR -- so naming a
+ * launcher covers everything it launches.
+ *
+ * It ADDS to a built-in list (`steam', `steamwebhelper',
+ * `mutter-devkit') which cannot be configured away, and it is not the
+ * only way in: `GOWL_NO_FX=1' in a process's environment does the same
+ * thing for that process and its children with no config at all.  See
+ * src/util/gowl-fx-optout.c.  Empty by default. */
+const gchar *gowl_config_get_no_fx_apps (GowlConfig *self);
+void         gowl_config_set_no_fx_apps (GowlConfig *self,
+                                         const gchar *apps);
 
 /* --- HDR ---
  *

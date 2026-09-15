@@ -968,6 +968,24 @@ void gowl_compositor_reparent_client (GowlCompositor *self,
                                        gint            layer);
 
 /**
+ * gowl_compositor_apply_fx_optout:
+ * @self: a #GowlCompositor
+ * @client: a client, normally one being mapped
+ *
+ * Switches the window effects off for @client when its process asked
+ * for that -- `GOWL_NO_FX=1' anywhere in its environment, a Steam
+ * environment, or a name in the built-in or configured list matching
+ * its app_id or the command name of it or any of its ancestors.
+ *
+ * Sets the same rule flags a `no-blur' / `no-shadow' / `no-anim' window
+ * rule sets, and only ever adds to them.  Called from the map path; a
+ * test or an embedder may call it again, which is a no-op once the
+ * flags are set.
+ */
+void gowl_compositor_apply_fx_optout (GowlCompositor *self,
+                                      GowlClient     *client);
+
+/**
  * gowl_compositor_resize_client:
  * @self: a #GowlCompositor
  * @client: a #GowlClient

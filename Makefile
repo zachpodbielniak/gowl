@@ -96,6 +96,7 @@ LIB_SRCS := \
 	src/util/gowl-log.c \
 	src/util/gowl-easing.c \
 	src/util/gowl-backdrop-plan.c \
+	src/util/gowl-fx-optout.c \
 	src/fx/gowl-fx-gl.c \
 	src/fx/gowl-fx-capture.c \
 	src/fx/gowl-fx-sheet.c \

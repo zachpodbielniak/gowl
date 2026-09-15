@@ -1033,6 +1033,69 @@ test_backdrop_style_picks_the_module(void)
  * and a blur on every tag switch, and the key that is supposed to change
  * the look appearing to do nothing.
  */
+/*
+ * A window whose process asked for no effects is not decorated.
+ *
+ * End to end, through the module rather than through the flag: the
+ * decision lives in src/util/gowl-fx-optout.c and is unit-tested there,
+ * but what the user asked for is that Steam and a nested GNOME have
+ * nothing drawn behind or around them, and the only place that is true
+ * or false is the scene graph.
+ *
+ * The control comes first and in the SAME rig.  A case that only
+ * asserted the absence would pass for a rig where the blur never drew
+ * anything at all -- which is exactly what happens on a machine with no
+ * usable renderer, and is why the other cases here skip on it.
+ */
+static void
+test_a_window_that_asked_for_nothing_gets_nothing(void)
+{
+	Rig   r;
+	Decor before, after;
+
+	if (!modules_built(blur_alone))
+		return;
+	if (!rig_up(&r, blur_alone)) {
+		rig_down(&r);
+		g_test_skip("no GLES2 renderer to draw with here");
+		return;
+	}
+
+	list_client(&r);
+	as_tile(&r);
+	before = decor_of(r.c);
+	if (before.backdrop == NULL) {
+		rig_down(&r);
+		g_test_skip("no backdrop was built in this rig");
+		return;
+	}
+	g_assert_nonnull(before.shadow);
+
+	/*
+	 * The app_id alone, with no pid and no configuration: `steam' is
+	 * one of the built-in names, which is the half of the feature that
+	 * has to work on a machine where nothing was configured.
+	 */
+	gowl_client_set_app_id(r.c, "steam");
+	gowl_compositor_apply_fx_optout(r.compositor, r.c);
+	g_assert_cmpuint(gowl_client_get_rule_flags(r.c)
+	                 & (GOWL_CLIENT_RULE_NO_BLUR
+	                    | GOWL_CLIENT_RULE_NO_SHADOW
+	                    | GOWL_CLIENT_RULE_NO_ANIM), ==,
+	                 GOWL_CLIENT_RULE_NO_BLUR
+	                 | GOWL_CLIENT_RULE_NO_SHADOW
+	                 | GOWL_CLIENT_RULE_NO_ANIM);
+
+	/* Re-decorated from scratch, the way a re-mapped window is. */
+	send(&r, GOWL_SCENE_EFFECT_DESTROY);
+	as_tile(&r);
+	after = decor_of(r.c);
+	g_assert_null(after.backdrop);
+	g_assert_null(after.shadow);
+
+	rig_down(&r);
+}
+
 static void
 test_only_one_backdrop_draws(void)
 {
@@ -1387,6 +1450,8 @@ main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
 
+	g_test_add_func("/blur-nodes/no-effects-for-a-window-that-asked",
+	                test_a_window_that_asked_for_nothing_gets_nothing);
 	g_test_add_func("/blur-nodes/only-one-backdrop",
 	                test_only_one_backdrop_draws);
 	g_test_add_func("/blur-nodes/hdr-is-encoded",

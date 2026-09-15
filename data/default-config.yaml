@@ -257,6 +257,24 @@ wallpaper-fade: 320       # ms to cross-fade between them; 0 cuts
 # scrolling.column_width so a config translates.
 scroll-column-width: 0.5
 
+# Windows that get NO effects: no backdrop, no shadow, no open/close
+# animation.  Added to a built-in list -- steam, steamwebhelper and
+# mutter-devkit -- which cannot be configured away, so games and a
+# nested GNOME session are covered with nothing written here.
+#
+# Each name is matched case-insensitively against the window's app_id
+# AND against the command name of its process and every ancestor of it,
+# so naming a launcher covers everything that launcher starts.
+#
+# The other way in needs no config at all: GOWL_NO_FX=1 (or true) in a
+# process's environment switches the effects off for that process and
+# everything it launches, which is what to put in a .desktop file's
+# Env= or in front of a command.
+#
+#   no-fx-apps: "obs, vlc"
+#   no-fx-apps: [obs, vlc]
+no-fx-apps: ""
+
 # Keybind format:
 #   "Modifier+Modifier+Key":
 #     { action: <action>, arg: "<argument>", desc: "<description>" }

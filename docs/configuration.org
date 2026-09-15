@@ -742,6 +742,76 @@ window is --- the =alpha= module, a window rule, or the client's own
 background alpha. An opaque window shows no backdrop of any kind, and
 that is not a bug in either module.
 
+**** Windows that get no effects
+:PROPERTIES:
+:CUSTOM_ID: no-fx
+:END:
+
+Some windows should have nothing drawn behind or around them. A game is
+paying for every frame it renders and a shader behind its window is a
+frame it does not get; a nested GNOME session already has a desktop of
+its own behind its windows, and bubbles rising past it are somebody
+else's desktop showing through. There are two ways to say so, and they
+answer different questions.
+
+***** =GOWL_NO_FX= in the environment
+
+A process with =GOWL_NO_FX= set to =1= or =true= (any case) gets no
+effects on any window it maps --- and neither does anything it launches,
+because that is what an exported variable does. Nothing else counts:
+=0=, =false= and an empty value all mean "leave the effects on", so a
+wrapper script can turn them back on for one child of a process that has
+them off.
+
+#+begin_src sh
+GOWL_NO_FX=1 obs
+#+end_src
+
+or, in a =.desktop= file:
+
+#+begin_example
+Env=GOWL_NO_FX=1
+#+end_example
+
+It is read from =/proc/PID/environ=, not from the compositor's own
+environment, which is what makes it inherited and what makes it need no
+config change and no reload. A =/proc= that cannot be read is not an
+opt-out: every failure leaves the window alone.
+
+***** =no-fx-apps= in the config
+
+| Property      | Type   | Default | Description |
+|---------------+--------+---------+-------------|
+| =no-fx-apps=  | string or list | ="="  | Extra app_ids and process names that get no effects |
+
+#+begin_src yaml
+no-fx-apps: "obs, vlc"
+# or
+no-fx-apps: [obs, vlc]
+#+end_src
+
+Each name is matched case-insensitively against the window's =app_id=
+AND against the command name of its process and of every ancestor of
+that process --- so naming a launcher covers everything the launcher
+starts. The walk up the tree stops at the compositor, so a name that
+happens to appear above gowl (a shell, =systemd=) never matches.
+
+***** What is built in
+
+=steam=, =steamwebhelper= and =mutter-devkit= are matched whatever the
+config says: =no-fx-apps= ADDS to them and cannot remove them. Steam is
+also recognised by its environment --- =SteamAppId=, =SteamGameId=,
+=SteamClientLaunch= and Proton's =STEAM_COMPAT_DATA_PATH= --- which is
+how a game whose executable nobody could name is covered, including one
+that systemd re-parented away from the client.
+
+***** What "no effects" means
+
+The same three things the [[#window-rules][=no-blur=, =no-shadow= and =no-anim= window
+rules]] ask for: no backdrop of any kind, no drop shadow, and no open,
+close or move animation. A window covered by both a rule and this is
+covered once; neither ever switches an effect back ON.
+
 **** Frosted glass and shadows
 :PROPERTIES:
 :CUSTOM_ID: blur

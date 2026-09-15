@@ -359,20 +359,36 @@ gowl_fx_gl_free(GowlFxGl *self)
 		gowl_fx_texture_drop(self, &self->scratch_b);
 		if (self->scratch_fbo != 0)
 			glDeleteFramebuffers(1, &self->scratch_fbo);
-		if (self->quad.program != 0)
-			glDeleteProgram(self->quad.program);
-		if (self->backdrop.program != 0)
-			glDeleteProgram(self->backdrop.program);
-		if (self->copy_2d.program != 0)
-			glDeleteProgram(self->copy_2d.program);
-		if (self->copy_ext.program != 0)
-			glDeleteProgram(self->copy_ext.program);
-		if (self->blur.program != 0)
-			glDeleteProgram(self->blur.program);
-		if (self->glass.program != 0)
-			glDeleteProgram(self->glass.program);
-		if (self->water.program != 0)
-			glDeleteProgram(self->water.program);
+		/*
+		 * EVERY program, from a list rather than a run of ifs.
+		 *
+		 * The run of ifs named the seven programs that existed when it
+		 * was written and was never added to, so the ten shaders built
+		 * since -- rain, fizz, leaves, snow, soap, embers, submerged,
+		 * dew, bokeh, PQ -- outlived the context that made them every
+		 * time a module was deactivated and re-activated.  A list is
+		 * the same code for one more entry, which is the property the
+		 * ifs did not have.
+		 */
+		{
+			GLuint progs[] = {
+				self->quad.program,      self->backdrop.program,
+				self->copy_2d.program,   self->copy_ext.program,
+				self->blur.program,      self->glass.program,
+				self->water.program,     self->rain.program,
+				self->fizz.program,      self->leaf.program,
+				self->snow.program,      self->soap.program,
+				self->embers.program,    self->submerged.program,
+				self->dew.program,       self->bokeh.program,
+				self->pq.program
+			};
+			gsize i;
+
+			for (i = 0; i < G_N_ELEMENTS(progs); i++) {
+				if (progs[i] != 0)
+					glDeleteProgram(progs[i]);
+			}
+		}
 		gowl_fx_egl_leave(&save);
 	}
 	g_free(self);

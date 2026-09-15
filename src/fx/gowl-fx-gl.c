@@ -602,11 +602,24 @@ gowl_fx_texture_blur(
 	 * upscale to @dst turns the reduced detail into exactly the softness
 	 * that was wanted anyway.
 	 */
-	self->scratch_a.width  = small_w;
-	self->scratch_a.height = small_h;
-	self->scratch_b.width  = small_w;
-	self->scratch_b.height = small_h;
-
+	/*
+	 * THE SIZE FIELDS ARE NOT WRITTEN HERE, and that is the whole point
+	 * of this comment.
+	 *
+	 * gowl_fx_texture_alloc() decides whether to reallocate by
+	 * comparing the struct's OWN width and height against what is asked
+	 * for.  Setting them first -- which this used to do -- tells it the
+	 * texture is already the right size, so it keeps whatever it had:
+	 * the pass then renders at the new viewport into a texture of the
+	 * OLD size, and the final upscale stretches the whole of that to
+	 * the destination.
+	 *
+	 * It went unseen because the scratch pair had exactly one caller
+	 * using it at exactly one size for a whole session.  Change
+	 * `blur-downscale' while the compositor is running and it bites:
+	 * every backdrop built afterwards is a stretched crop of the last
+	 * one until something forces the texture to be freed.
+	 */
 	ok = gowl_fx_texture_alloc(&self->scratch_a, small_w, small_h)
 	     && gowl_fx_texture_alloc(&self->scratch_b, small_w, small_h);
 

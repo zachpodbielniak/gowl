@@ -64,6 +64,14 @@ typedef struct {
 	/* Which item's menu the panel is showing, and how far into it. */
 	gchar      *menu_key;
 	GArray     *menu_path;    /* gint ids, the drill-in trail */
+
+	/*
+	 * The register's serial at the moment the open panel was built.
+	 * A menu arrives long after the panel that asked for it opens, and
+	 * a panel is built once: without this the placeholder stayed up
+	 * for ever and the menu only appeared on the NEXT right click.
+	 */
+	guint       panel_serial;
 } TrayData;
 
 /* ── Layout ──────────────────────────────────────────────────────── */
@@ -247,10 +255,24 @@ static void
 tray_signature(GowlBarPlugin *plugin, gpointer data, GString *out)
 {
 	TrayData *d = data;
+	guint serial = gowl_tray_get_serial(gowl_tray_get_default());
 
-	(void)plugin;
-	g_string_append_printf(out, "tray:%u:%u",
-	                       gowl_tray_get_serial(gowl_tray_get_default()),
+	/*
+	 * A panel is built once, when it opens.  A menu is asked for at
+	 * that same moment and arrives from the bus thread some time
+	 * after, so the panel that asked for it is showing the "asking
+	 * the application" placeholder and has no reason of its own to
+	 * look again: the menu appeared only on the NEXT right click,
+	 * after a click elsewhere to dismiss the first one.
+	 *
+	 * This is the one hook the bar calls when the register says
+	 * something moved, which is exactly when the menu might have
+	 * landed, so it is where the panel gets told to look again.
+	 */
+	if (d->menu_key != NULL && serial != d->panel_serial)
+		gowl_bar_plugin_request_panel_refresh(plugin);
+
+	g_string_append_printf(out, "tray:%u:%u", serial,
 	                       d->shown != NULL ? d->shown->len : 0u);
 }
 
@@ -407,6 +429,13 @@ tray_panel(GowlBarPlugin *plugin, gpointer data)
 	if (d->menu_key == NULL)
 		return panel;
 
+	/*
+	 * Taken BEFORE the menu is read, so a read that lands between the
+	 * two is noticed rather than mistaken for the one this panel was
+	 * built from.
+	 */
+	d->panel_serial = gowl_tray_get_serial(gowl_tray_get_default());
+
 	root = gowl_tray_dup_menu(gowl_tray_get_default(), d->menu_key);
 	node = menu_at_path(root, d->menu_path);
 	if (node == NULL || node->children == NULL || node->children->len == 0) {
@@ -426,10 +455,7 @@ tray_panel(GowlBarPlugin *plugin, gpointer data)
 	/* A way back out of a submenu, since a panel is a flat list and
 	 * there is nowhere else to put the trail. */
 	if (d->menu_path->len > 0) {
-		GowlBarPanelItem *back =
-			gowl_bar_panel_add_field(panel, "Back", NULL);
-
-		gowl_bar_panel_item_set_id(back, "..");
+		gowl_bar_panel_add_row(panel, "..", NULL, "Back", NULL);
 		gowl_bar_panel_add_separator(panel);
 	}
 
@@ -445,15 +471,21 @@ tray_panel(GowlBarPlugin *plugin, gpointer data)
 			continue;
 		}
 
-		pi = gowl_bar_panel_add_field(panel,
-			row->label != NULL ? row->label : "", NULL);
+		/*
+		 * A ROW, not a FIELD.  A field is a label and a value, drawn
+		 * muted and given no hit region at all --- which made every
+		 * menu row grey and every click on one do nothing, whatever
+		 * id it carried.  A row is the clickable kind.
+		 */
 		id = g_strdup_printf("%d", row->id);
-		/* A disabled row keeps its text and loses its id, which is what
-		 * makes it inert: the host reports nothing for an item with no
-		 * id, so there is no way to act on it by accident. */
-		if (row->enabled)
-			gowl_bar_panel_item_set_id(pi, id);
+		pi = gowl_bar_panel_add_row(panel, id, NULL,
+			row->label != NULL ? row->label : "", NULL);
 		g_free(id);
+
+		/* A disabled row keeps its text, is drawn faint and is given
+		 * no hit region, so there is no way to act on it by accident. */
+		if (!row->enabled)
+			gowl_bar_panel_item_set_disabled(pi, TRUE);
 
 		/* A checkmark or a radio, shown as the value rather than as a
 		 * toggle row: a dbusmenu toggle is the application's state and

@@ -1042,6 +1042,38 @@ renders the mistake as a bright halo. The tinted surface is a copy: the
 name lookup hands back a surface the shared icon cache owns, and
 repainting it in place would recolour every other widget's copy.
 
+**** The menu, as a panel
+
+Right-clicking a tray icon asks the application for its menu and opens
+a panel. Those are two different clocks: =AboutToShow= and =GetLayout=
+run on the bus thread and land some time later, and *a panel is built
+once, when it opens*. Nothing asked for it to be built again, so the
+"asking the application for its menu" placeholder stayed up for ever
+--- the menu appeared only on the next right click, after a click
+elsewhere to dismiss the first one.
+
+The tray widget remembers the register's serial the open panel was
+built from, and =tray_signature()= --- the one hook the bar calls when
+the register says something moved, which is exactly when a menu might
+have landed --- compares it and calls
+=gowl_bar_plugin_request_panel_refresh()=. That is what the call is
+for; its own documentation describes the same shape of bug in the wifi
+widget.
+
+Menu rows are =GOWL_BAR_ITEM_ROW=, and the reason is worth keeping: a
+=GOWL_BAR_ITEM_FIELD= is a label and a value. =pass_draw_field()= draws
+it in =GOWL_BAR_COLOR_MUTED= and emits *no hit region at all*, so a
+menu built out of fields is grey and inert no matter what id each row
+carries --- which is exactly how it looked and exactly why every click
+did nothing. A row the application has disabled gets the panel's own
+=disabled= flag, which draws it faint and withholds its hit region;
+that is the mechanism for "inert", not withholding the id.
+
+=tests/test-tray-menu-panel.c= drives the real plugin out of the real
+=bar.so= against a real bus, because both faults were in the seam
+between the register and the widget and neither side looked wrong on
+its own.
+
 *** The menu
 
 =src/menu/gowl-menu.c= is the tree the menu shows: the YAML reader, the

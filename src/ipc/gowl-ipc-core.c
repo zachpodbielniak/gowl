@@ -34,6 +34,7 @@
 #include "../core/gowl-layout-registry.h"
 #include "gowl-ipc.h"
 #include "../config/gowl-keybind.h"
+#include "../tray/gowl-tray.h"
 #include <json-glib/json-glib.h>
 #include <string.h>
 #include <stdlib.h>
@@ -269,6 +270,8 @@ static const gchar *const help_text =
 	"dispatch KEY | action NAME [ARG] | power on|off|toggle | "
 	"hdr [on|off|toggle] [OUTPUT] | "
 	"backdrop [none|blur|glass|water|rain|snow|leaves|fizz|next|prev] | "
+	"crt [on|off|toggle] | hdr-state [OUTPUT] | "
+	"tray [list|activate|menu|secondary KEY] | "
 	"lock | unlock | locked | "
 	"reload | version | ping | subscribe | help";
 
@@ -558,6 +561,102 @@ gowl_compositor_ipc_command(
 			return g_strdup("ERROR the output cannot do HDR");
 		if (!gowl_monitor_set_hdr(m, on))
 			return g_strdup("ERROR the output refused the change");
+		return g_strdup(gowl_monitor_get_hdr(m) ? "OK on" : "OK off");
+	}
+	if (g_strcmp0(word, "crt") == 0) {
+		/*
+		 * The tube, as a query as well as a switch.
+		 *
+		 * `toggle-crt' has been bindable since the module landed, but
+		 * there was no way to ASK -- which a bar toggle, a menu row
+		 * and a status script all need, and which is why a menu row
+		 * could show the tube on while it was off.
+		 */
+		gboolean on;
+
+		if (args == NULL || *args == '\0')
+			return g_strdup(gowl_compositor_get_crt(self) ? "OK on"
+			                                              : "OK off");
+		if (g_ascii_strcasecmp(args, "toggle") == 0)
+			on = !gowl_compositor_get_crt(self);
+		else if (g_ascii_strcasecmp(args, "on") == 0)
+			on = TRUE;
+		else if (g_ascii_strcasecmp(args, "off") == 0)
+			on = FALSE;
+		else
+			return g_strdup("ERROR expected on, off or toggle");
+		gowl_compositor_set_crt(self, on);
+		return g_strdup(gowl_compositor_get_crt(self) ? "OK on" : "OK off");
+	}
+	if (g_strcmp0(word, "tray") == 0) {
+		/*
+		 * The system tray from a script.  cmacs has had the register
+		 * through its own bindings since it landed; the socket had
+		 * nothing, so `gowl tray' could not tell you what was in it
+		 * and nothing outside cmacs could click one.
+		 */
+		g_auto(GStrv) parts = args != NULL && *args != '\0'
+			? g_strsplit(args, " ", 2) : NULL;
+		const gchar *verb = parts != NULL ? parts[0] : "list";
+		const gchar *key = parts != NULL && parts[1] != NULL
+			? g_strstrip(parts[1]) : NULL;
+		GowlTray *tray = gowl_tray_get_default();
+		g_autoptr(GPtrArray) items = NULL;
+		guint i;
+
+		if (verb == NULL || *verb == '\0')
+			verb = "list";
+
+		if (g_strcmp0(verb, "list") == 0) {
+			items = gowl_tray_dup_items(tray);
+			b = json_builder_new();
+			json_builder_begin_array(b);
+			for (i = 0; items != NULL && i < items->len; i++) {
+				GowlTrayItem *it = g_ptr_array_index(items, i);
+
+				json_builder_begin_object(b);
+				json_builder_set_member_name(b, "key");
+				json_builder_add_string_value(b, it->key);
+				json_builder_set_member_name(b, "id");
+				json_builder_add_string_value(b,
+					it->id != NULL ? it->id : "");
+				json_builder_set_member_name(b, "title");
+				json_builder_add_string_value(b,
+					it->title != NULL ? it->title : "");
+				json_builder_set_member_name(b, "status");
+				json_builder_add_string_value(b,
+					it->status != NULL ? it->status : "");
+				json_builder_end_object(b);
+			}
+			json_builder_end_array(b);
+			return json_finish(b);
+		}
+		if (key == NULL || *key == '\0')
+			return g_strdup("ERROR tray activate|menu|secondary needs a key");
+		if (g_strcmp0(verb, "activate") == 0)
+			gowl_tray_activate(tray, key, 0, 0);
+		else if (g_strcmp0(verb, "menu") == 0)
+			gowl_tray_context_menu(tray, key, 0, 0);
+		else if (g_strcmp0(verb, "secondary") == 0)
+			gowl_tray_secondary_activate(tray, key, 0, 0);
+		else
+			return g_strdup("ERROR expected list, activate, menu or secondary");
+		return g_strdup("OK");
+	}
+	if (g_strcmp0(word, "hdr-state") == 0) {
+		/*
+		 * HDR, asked rather than changed.
+		 *
+		 * `hdr' with no argument TOGGLES, which is right for a key and
+		 * wrong for anything that wants to know -- a bar indicator, a
+		 * status line, a menu row's tick.  Those had no way to ask
+		 * without changing the thing they were asking about.
+		 */
+		GowlMonitor *m = args != NULL && *args != '\0'
+			? monitor_by_name(self, args) : self->selmon;
+
+		if (m == NULL)
+			return g_strdup("ERROR no such output");
 		return g_strdup(gowl_monitor_get_hdr(m) ? "OK on" : "OK off");
 	}
 	if (g_strcmp0(word, "backdrop") == 0) {

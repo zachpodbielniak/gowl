@@ -46,6 +46,9 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =action NAME [ARG]=           | Runs a keybind action by nick with an argument     |
 | =power on\vert{}off\vert{}toggle= | Powers every output                             |
 | =hdr [on\vert{}off\vert{}toggle] [OUTPUT]= | Switches an output between HDR and SDR (the focused one by default); =ERROR= when it cannot do HDR |
+| =hdr-state [OUTPUT]= | Whether an output is in HDR, without changing it --- =hdr= with no argument toggles, which a status line or a menu guard must not do |
+| =crt [on\vert{}off\vert{}toggle]= | The cathode ray tube; no argument reports it |
+| =tray [list\vert{}activate\vert{}menu\vert{}secondary KEY]= | The system tray register: =list= answers JSON, the rest click an item the way a bar widget would |
 | =backdrop [STYLE\vert{}next\vert{}prev]= | What shows through translucent windows; no argument reports it. STYLE is one of =none=, =blur=, =bokeh=, =glass=, =water=, =rain=, =storm=, =snow=, =leaves=, =fizz=, =soap=, =submerged=, =embers=, =dew=. Every backdrop module reads it, so the change is immediate. =carbonation=, =autumn=, =thunderstorm=, =underwater= and a few other spellings resolve too |
 | =hints [-show\vert{}-hide]= | Put a letter on every visible window; press it to focus that window. Toggles with no argument |
 | =hints-select LABEL= | Focus the window wearing =LABEL=; replies with its window id |
@@ -56,6 +59,11 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =reload=                      | Reloads the config; =OK with problems= when the validator found any |
 | =ping=, =version=, =help=     |                                                    |
 | =subscribe=                   | =OK subscribed=; events follow on this connection  |
+| =menu [ROUTE]=                | Opens the menu card, or closes it when it is already at =ROUTE= (modules/menu) |
+| =menu-open ROUTE=             | Always opens, at a route.  A route that names an action runs it |
+| =menu-close=                  | Closes the card |
+| =menu-refresh=                | Re-reads =menu.yaml= and the user's overlay |
+| =menu-list [ROUTE]=           | What is under a route: route, label, =menu= or =action=, and =checked=/=disabled=/=-=, tab separated |
 | anything else                 | A module's command (=expo=, =screenshot-area=, =scratchpad-toggle=, =clipboard-list=, =notify-dnd=, ...), or =ERROR unknown command= |
 
 A tag argument is a bitmask, as everywhere in gowl: tag 1 is =1=, tag 3 is =4=, all nine =511=.

@@ -596,32 +596,46 @@ standalone gowl; =cmacs --gowl= turns it on itself.
 
 ***** Owning the register is not drawing it
 
-Add the =tray= widget to a bar region to see anything:
+The =tray= widget ships in the bottom bar's centre, so a session that
+turns the register on has a tray without configuring a bar at all. The
+widget measures zero until an application registers an icon, so it costs
+that region nothing while there is nothing to show.
+
+The two are still separate settings. An application that cannot find a
+watcher when it starts hides its icon and does not look again, so the
+register has to exist whether or not anything is currently showing it
+--- and a session may reasonably want the register with no widget at
+all, which is what reading the tray from Emacs looks like.
+
+To put the icons somewhere else, move the widget rather than rewriting
+either region --- a region named in a config is replaced wholesale:
 
 #+begin_src yaml
 tray: true
 modules:
   bar:
     enabled: true
-    bottom-widgets-center: "tray"
+    bottom-widgets-center-remove: "tray"
+    bottom-widgets-right-add: "tray"
 #+end_src
 
-The two are separate on purpose. An application that cannot find a
-watcher when it starts hides its icon and does not look again, so the
-register has to exist whether or not anything is currently showing it
---- and a session may reasonably want the register with no widget at
-all, which is what reading the tray from Emacs looks like.
+***** It never takes the name, but it will wait for it
 
-***** It never fights for the name
+gowl asks for =org.kde.StatusNotifierWatcher= without =REPLACE=. A
+desktop that already has a tray --- a GNOME session with the
+AppIndicator extension, a KDE session, a cmacs started first --- keeps
+it, and gowl says so in the log and does nothing else.
 
-gowl asks for =org.kde.StatusNotifierWatcher= without =REPLACE= and
-without =QUEUE=. A desktop that already has a tray --- a GNOME session
-with the AppIndicator extension, a KDE session, a cmacs started first
---- keeps it, and gowl says so in the log and does nothing else.
+It does *queue*. Logging out and back in is a race with the outgoing
+session's compositor, which still owns the name when the incoming one
+asks for it; queueing is what turns that into a tray half a second late
+rather than no tray until the next reboot. =gowl-tray-serving-p= follows
+the handover when it happens.
 
-Queueing would be worse than losing: gowl would silently become the
-watcher later, at which point every application has already registered
-with the other one and none of them will register again.
+The cost is real but smaller than the alternative: an application that
+registered with a tray that then went away does not register again, so
+its icon is missing until it restarts. Standing down permanently would
+lose that icon and every later one as well.
 
 ***** The clicks
 

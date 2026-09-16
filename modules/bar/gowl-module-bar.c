@@ -2874,6 +2874,93 @@ bar_set_region(GowlModuleBar *self, GowlBarInstance *bar,
 	bar->anchor = -1;
 }
 
+/*
+ * Put widgets into a region without disturbing what is already there.
+ *
+ * A region is otherwise configured wholesale, which makes "and also
+ * show me this one widget" cost whatever else was in that region ---
+ * the system tray took the entire bottom bar that way.  Appended in the
+ * order given, after everything already in the region.
+ */
+static void
+bar_region_add(GowlModuleBar *self, GowlBarInstance *bar,
+               GowlBarRegion region, const gchar *spec_list)
+{
+	g_auto(GStrv) parts = NULL;
+	guint i;
+
+	if (spec_list == NULL)
+		return;
+
+	parts = g_strsplit_set(spec_list, " \t", -1);
+	for (i = 0; parts[i] != NULL; i++) {
+		if (parts[i][0] == '\0')
+			continue;
+		bar_add_item(self, bar, parts[i], region);
+	}
+
+	/* The items moved, so the anchor's index did too. */
+	bar->anchor = -1;
+}
+
+/*
+ * Take named widgets out of a region, leaving the rest of it alone.
+ *
+ * The counterpart to bar_region_add(), and what makes moving one widget
+ * between regions possible at all: take it out of the one it is in, put
+ * it in the one you want.  Matched on the WHOLE spec, so `disk' does not
+ * remove `disk:/var' --- a widget's parameter is part of which widget it
+ * is, and a rule that guessed would be the wrong one exactly when two
+ * disks are on the bar.  A name that is not there is not an error.
+ */
+static void
+bar_region_remove(GowlModuleBar *self, GowlBarInstance *bar,
+                  GowlBarRegion region, const gchar *spec_list)
+{
+	g_auto(GStrv) parts = NULL;
+	GPtrArray *next;
+	guint i;
+
+	if (spec_list == NULL)
+		return;
+
+	parts = g_strsplit_set(spec_list, " \t", -1);
+	next = g_ptr_array_new_with_free_func(bar_item_free);
+
+	for (i = 0; i < bar->items->len; i++) {
+		BarItem  *item = g_ptr_array_index(bar->items, i);
+		gboolean  drop = FALSE;
+		guint     j;
+
+		if (item->region == region) {
+			for (j = 0; parts[j] != NULL; j++) {
+				if (parts[j][0] == '\0')
+					continue;
+				if (g_strcmp0(parts[j], item->spec) == 0) {
+					drop = TRUE;
+					break;
+				}
+			}
+		}
+		if (!drop) {
+			g_ptr_array_add(next, item);
+			continue;
+		}
+		/* An open dropdown belongs to the item it came from. */
+		if (self->panel.item == item)
+			bar_panel_clear_state(self);
+		bar_item_free(item);
+	}
+
+	/* The survivors belong to `next' now; clearing the old array's
+	   free function is what stops it freeing them a second time. */
+	g_ptr_array_set_free_func(bar->items, NULL);
+	g_ptr_array_free(bar->items, TRUE);
+	bar->items = next;
+
+	bar->anchor = -1;
+}
+
 /* Resolve the configured anchor name to an index in the current item
    list.  Re-run after any change to the items, since the index moves. */
 static void
@@ -3019,38 +3106,41 @@ bar_configure_slot(GowlModuleBar *self, GowlBarInstance *bar,
 
 	/*
 	 * The shipped layout is what a bar nobody has configured looks
-	 * like, not a base to add to.  The first configuration naming any
-	 * widget list replaces it wholesale.
+	 * like, not a base to add to --- but only for the REGION a
+	 * configuration actually names.
 	 *
-	 * Without this, a configuration written before regions existed --
-	 * which sets only `widgets' -- keeps the shipped centre clock
-	 * alongside the clock at the end of its own list, and the bar
-	 * shows the time twice.
+	 * `bar_set_region' already replaces one region and leaves the
+	 * other two alone, so a configuration written in region keys
+	 * needs nothing here: naming `widgets-center' replaces the centre
+	 * and the shipped left and right stay put.  Clearing all three
+	 * was how the system tray --- which sets `widgets-center' on the
+	 * bottom bar and nothing else --- silently took `user host git'
+	 * and the whole status list off it, leaving an empty strip.
+	 *
+	 * A `widgets' key with no region is the one that still has to
+	 * replace the layout wholesale.  It describes the bar as it was
+	 * before regions existed --- the tag row and the window title on
+	 * the left, one status list on the right --- and lands in the
+	 * RIGHT region.  Left to merge, it would keep the shipped centre,
+	 * and a list of its own ending in a clock would draw the time
+	 * twice.  The left goes back afterwards, because that bar drew
+	 * the tags and the title unconditionally and upgrading must not
+	 * silently cost such a configuration either.
 	 */
 	if (bar->defaults_pending) {
 		GowlBarConfigKind kind;
 
 		kind = gowl_bar_layout_config_kind(settings);
-		if (kind != GOWL_BAR_CONFIG_NONE) {
+		if (kind == GOWL_BAR_CONFIG_LEGACY) {
 			bar_set_region(self, bar, GOWL_BAR_REGION_LEFT, NULL);
 			bar_set_region(self, bar, GOWL_BAR_REGION_CENTER, NULL);
 			bar_set_region(self, bar, GOWL_BAR_REGION_RIGHT, NULL);
 			g_clear_pointer(&bar->anchor_id, g_free);
-
-			/*
-			 * A `widgets' key with no region describes the bar as
-			 * it was before regions: the tag row and the window
-			 * title on the left, the status list on the right.
-			 * Put the left back, or upgrading would silently cost
-			 * every such configuration its tags and its title.
-			 */
-			if (kind == GOWL_BAR_CONFIG_LEGACY) {
-				bar_set_region(self, bar,
-				               GOWL_BAR_REGION_LEFT,
-				               "tags title");
-			}
-			bar->defaults_pending = FALSE;
+			bar_set_region(self, bar, GOWL_BAR_REGION_LEFT,
+			               "tags title");
 		}
+		if (kind != GOWL_BAR_CONFIG_NONE)
+			bar->defaults_pending = FALSE;
 	}
 
 	/* Widget lists.  `widgets' without a region keeps its historical
@@ -3116,6 +3206,55 @@ bar_configure_slot(GowlModuleBar *self, GowlBarInstance *bar,
 		val = g_hash_table_lookup(settings, "widgets");
 	if (val != NULL)
 		bar_set_region(self, bar, GOWL_BAR_REGION_RIGHT, val);
+
+	/*
+	 * Amendments, applied after the wholesale lists so that a single
+	 * configuration can set a region and then adjust it.
+	 *
+	 * These are how something adds ONE widget to a bar it does not own
+	 * --- the system tray, a module, a podomation rule --- without
+	 * having to know, and restate, everything else that is in that
+	 * region.  Removals run before additions so that moving a widget
+	 * from one region to another in one call cannot depend on which
+	 * key the hash table happens to hand back first.
+	 */
+	{
+		static const struct {
+			const gchar  *remove_key;
+			const gchar  *add_key;
+			const gchar  *alt_remove_key;
+			const gchar  *alt_add_key;
+			GowlBarRegion region;
+		} amend[] = {
+			{ "widgets-left-remove",   "widgets-left-add",
+			  NULL,                    NULL,
+			  GOWL_BAR_REGION_LEFT },
+			{ "widgets-center-remove", "widgets-center-add",
+			  "widgets-centre-remove", "widgets-centre-add",
+			  GOWL_BAR_REGION_CENTER },
+			{ "widgets-right-remove",  "widgets-right-add",
+			  NULL,                    NULL,
+			  GOWL_BAR_REGION_RIGHT }
+		};
+		gsize a;
+
+		for (a = 0; a < G_N_ELEMENTS(amend); a++) {
+			const gchar *spec;
+
+			spec = g_hash_table_lookup(settings,
+			                           amend[a].remove_key);
+			if (spec == NULL && amend[a].alt_remove_key != NULL)
+				spec = g_hash_table_lookup(settings,
+					amend[a].alt_remove_key);
+			bar_region_remove(self, bar, amend[a].region, spec);
+
+			spec = g_hash_table_lookup(settings, amend[a].add_key);
+			if (spec == NULL && amend[a].alt_add_key != NULL)
+				spec = g_hash_table_lookup(settings,
+					amend[a].alt_add_key);
+			bar_region_add(self, bar, amend[a].region, spec);
+		}
+	}
 
 	val = g_hash_table_lookup(settings, "center-anchor");
 	if (val == NULL)
@@ -4741,6 +4880,19 @@ bar_apply_shipped_defaults(GowlModuleBar *self)
 		"height",          "26",
 
 		"widgets-left",    "user host git",
+		/*
+		 * The system tray, dead centre --- deliberately not where
+		 * most desktops put one.  The corners of the bottom bar are
+		 * already the busy end, and a row of icons that grows and
+		 * shrinks as applications start would shove the rest of the
+		 * region sideways every time.
+		 *
+		 * The widget draws nothing at all while the register is off,
+		 * so the centre is simply empty in a session that has not
+		 * asked for a tray --- `tray: true' in the config, which is
+		 * what `cmacs --gowl' sets.
+		 */
+		"widgets-center",  "tray",
 		/* Reversed: reads as ip, podman, bluetooth, display,
 		   clipboard left to right.  The clipboard sits at the edge
 		   because it is a thing you go to, not a reading you glance

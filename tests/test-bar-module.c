@@ -270,7 +270,7 @@ test_a_pre_regions_config_gets_one_clock(void)
 }
 
 static void
-test_a_regions_config_replaces_the_shipped_layout(void)
+test_a_regions_config_replaces_only_that_region(void)
 {
 	GowlModule *module;
 	g_autoptr(GHashTable) settings = NULL;
@@ -280,16 +280,150 @@ test_a_regions_config_replaces_the_shipped_layout(void)
 	if (module == NULL)
 		return;
 
-	/* A config that names only the right region still drops the
-	   shipped centre clock: the shipped layout is a starting point,
-	   not a base to add to. */
+	/* A config that names only the right region replaces THAT region
+	   and leaves the shipped left and centre where they are. */
 	settings = settings_new("widgets-right", "cpu memory", NULL);
 	gowl_module_configure(module, settings);
 
 	listing = layout_of(module);
-	g_assert_cmpint(count_widget(listing, "clock"), ==, 0);
-	g_assert_cmpint(count_widget(listing, "tags"), ==, 0);
 	g_assert_cmpint(count_widget(listing, "cpu"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "memory"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "clock"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "tags"), ==, 1);
+
+	/* And the region it did name is replaced rather than added to:
+	   the shipped battery is gone. */
+	g_assert_cmpint(count_widget(listing, "battery"), ==, 0);
+
+	g_object_unref(module);
+}
+
+/*
+ * The regression this whole rule exists for.
+ *
+ * The system tray configures the bottom bar with `widgets-center' and
+ * nothing else.  Clearing all three regions on that first configuration
+ * took `user host git' and the entire status list off the bottom bar and
+ * left a 26-pixel empty strip -- which is what the desktop actually
+ * showed, because the tray widget measures zero until an application
+ * registers an icon.
+ */
+static void
+test_one_region_does_not_cost_the_bottom_bar(void)
+{
+	GowlModule *module;
+	g_autoptr(GHashTable) settings = NULL;
+	g_autofree gchar *listing = NULL;
+
+	module = load_bar_module();
+	if (module == NULL)
+		return;
+
+	settings = settings_new("position", "bottom",
+	                        "widgets-center", "clock", NULL);
+	gowl_module_configure(module, settings);
+
+	listing = layout_of(module);
+	g_assert_cmpint(count_widget(listing, "user"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "host"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "podman"), ==, 1);
+
+	g_object_unref(module);
+}
+
+/* The tray ships in the bottom bar's centre, so `cmacs --gowl' has one
+   without anybody configuring a bar. */
+static void
+test_the_tray_ships_in_the_bottom_bar(void)
+{
+	GowlModule *module;
+	g_autofree gchar *listing = NULL;
+	const gchar *bottom;
+
+	module = load_bar_module();
+	if (module == NULL)
+		return;
+
+	listing = layout_of(module);
+	g_assert_nonnull(listing);
+
+	bottom = strstr(listing, "bottom\t");
+	g_assert_nonnull(bottom);
+	g_assert_nonnull(strstr(bottom, "tray"));
+
+	/* In the centre, and not at the cost of either end. */
+	g_assert_nonnull(strstr(bottom, "center tray"));
+	g_assert_cmpint(count_widget(listing, "user"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "clipboard"), ==, 1);
+
+	g_object_unref(module);
+}
+
+/*
+ * Adding to a region without restating it, and taking one name back out
+ * again.  This is what lets something place a single widget on a bar it
+ * does not own.
+ */
+static void
+test_a_region_can_be_amended_rather_than_replaced(void)
+{
+	GowlModule *module;
+	g_autoptr(GHashTable) add = NULL;
+	g_autoptr(GHashTable) remove = NULL;
+	g_autofree gchar *added = NULL;
+	g_autofree gchar *removed = NULL;
+
+	module = load_bar_module();
+	if (module == NULL)
+		return;
+
+	/* `temp' is deliberately not in the shipped layout, so one
+	   occurrence can only have come from the amendment. */
+	add = settings_new("widgets-center-add", "temp", NULL);
+	gowl_module_configure(module, add);
+
+	added = layout_of(module);
+	g_assert_cmpint(count_widget(added, "temp"), ==, 1);
+	/* Everything the shipped centre had is still there. */
+	g_assert_cmpint(count_widget(added, "clock"), ==, 1);
+	g_assert_cmpint(count_widget(added, "weather"), ==, 1);
+	g_assert_cmpint(count_widget(added, "tags"), ==, 1);
+
+	remove = settings_new("widgets-center-remove", "temp", NULL);
+	gowl_module_configure(module, remove);
+
+	removed = layout_of(module);
+	g_assert_cmpint(count_widget(removed, "temp"), ==, 0);
+	g_assert_cmpint(count_widget(removed, "clock"), ==, 1);
+
+	g_object_unref(module);
+}
+
+/* A removal is matched on the whole spec: `disk' must not take
+   `disk:/var' with it, or a bar with two disks would lose the wrong
+   one. */
+static void
+test_a_removal_matches_the_whole_spec(void)
+{
+	GowlModule *module;
+	g_autoptr(GHashTable) settings = NULL;
+	g_autoptr(GHashTable) remove = NULL;
+	g_autofree gchar *listing = NULL;
+
+	module = load_bar_module();
+	if (module == NULL)
+		return;
+
+	settings = settings_new("widgets-right", "disk:/var disk:/home",
+	                        NULL);
+	gowl_module_configure(module, settings);
+
+	remove = settings_new("widgets-right-remove", "disk", NULL);
+	gowl_module_configure(module, remove);
+
+	listing = layout_of(module);
+	g_assert_cmpint(count_widget(listing, "disk:/var"), ==, 1);
+	g_assert_cmpint(count_widget(listing, "disk:/home"), ==, 1);
 
 	g_object_unref(module);
 }
@@ -485,8 +619,16 @@ main(int argc, char *argv[])
 	g_test_add_func("/bar-module/shipped-layout", test_the_shipped_layout);
 	g_test_add_func("/bar-module/pre-regions-one-clock",
 	                test_a_pre_regions_config_gets_one_clock);
-	g_test_add_func("/bar-module/regions-replace-shipped",
-	                test_a_regions_config_replaces_the_shipped_layout);
+	g_test_add_func("/bar-module/regions-replace-one-region",
+	                test_a_regions_config_replaces_only_that_region);
+	g_test_add_func("/bar-module/one-region-keeps-the-bottom-bar",
+	                test_one_region_does_not_cost_the_bottom_bar);
+	g_test_add_func("/bar-module/tray-ships-bottom-centre",
+	                test_the_tray_ships_in_the_bottom_bar);
+	g_test_add_func("/bar-module/region-amend",
+	                test_a_region_can_be_amended_rather_than_replaced);
+	g_test_add_func("/bar-module/removal-matches-whole-spec",
+	                test_a_removal_matches_the_whole_spec);
 	g_test_add_func("/bar-module/later-configures-incremental",
 	                test_later_configures_are_incremental);
 	g_test_add_func("/bar-module/bottom-prefix",

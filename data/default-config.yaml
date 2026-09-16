@@ -952,8 +952,22 @@ modules:
     # every time something appears beside it.
     center-anchor: "clock"
     #
+    # A region named here REPLACES that region and leaves the other two
+    # as shipped, so a config that sets only `widgets-center' keeps the
+    # shipped left and right.
+    #
+    # To adjust a region instead of replacing it -- add one widget
+    # without having to restate everything else in it, which is what a
+    # module or a script wants -- use the amendment keys.  Removals run
+    # first, so moving one widget across in a single block works:
+    # widgets-center-remove: "tray"
+    # widgets-right-add: "tray"
+    #
     # `widgets' with no region keeps its old meaning -- the right-hand
-    # status list -- so an existing configuration needs no changes.
+    # status list -- so an existing configuration needs no changes.  It
+    # is the one form that still replaces the WHOLE layout: it predates
+    # regions, and merging it would draw the shipped centre clock
+    # alongside the clock at the end of its own list.
     # widgets: "cpu memory disk battery clock"
     #
     # Per-widget colours name a palette role, so one `palette:' setting
@@ -985,8 +999,16 @@ modules:
     bottom-enabled: true
     bottom-height: 26
     bottom-bg-color: base/e6
-    bottom-widgets-left: "user host"
-    bottom-widgets-right: "network podman media"
+    bottom-widgets-left: "user host git"
+    # The system tray, dead centre -- deliberately not where most
+    # desktops put one.  The corners of this bar are already the busy
+    # end, and a row of icons that grows and shrinks as applications
+    # start would shove whatever shared the region sideways every time.
+    # The widget measures zero while the register is off, so this costs
+    # nothing until `tray: true' above -- which `cmacs --gowl' sets.
+    bottom-widgets-center: "tray"
+    bottom-widgets-right: "clipboard display bluetooth podman ip"
+    # The tag row belongs to the top bar; two copies is noise.
     bottom-tags.visible: "false"
   alpha:
     enabled: false

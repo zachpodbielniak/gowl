@@ -63,6 +63,16 @@ typedef struct {
 	gint                   radius;
 	gint                   width;      /* content width */
 	gint                   inner_w;    /* width minus horizontal padding */
+
+	/*
+	 * A fixed icon column, used only when something in this panel has
+	 * an IMAGE.  Glyphs measure to whatever width the font gives them,
+	 * so a list mixing real application icons with Nerd Font
+	 * characters has its labels stepping in and out by a few pixels
+	 * down the page.  Panels with no images keep the measured widths
+	 * and look exactly as they did.
+	 */
+	gint                   icon_col;   /* 0 when nothing has an image */
 } PanelPass;
 
 /* ----------------------------------------------------------------
@@ -618,11 +628,71 @@ pass_draw_field(PanelPass *p, GowlBarPanelItem *item, gint y, gint h,
 		gowl_bar_panel_item_get_value_color(item), 1.0, col_w / 2);
 }
 
+/*
+ * The icon column: an image when the item has one, otherwise its glyph.
+ *
+ * Returns the width taken, so the caller advances by it either way and
+ * a row with a real application icon lines up with a row that only has
+ * a Nerd Font character.  The image is drawn square at the row's text
+ * height rather than at its own size, because a 512-pixel application
+ * icon and a 22-pixel one must produce the same column.
+ */
+static gint
+pass_draw_icon(PanelPass *p, GowlBarPanelItem *item, gint x, gint center,
+               gdouble scale, gdouble alpha)
+{
+	cairo_surface_t *image;
+	const gchar *icon;
+	gint w = 0;
+
+	image = gowl_bar_panel_item_get_image(item);
+	if (image != NULL) {
+		gint side = p->icon_col > 0
+			? p->icon_col : MAX(12, (p->row_h * 62) / 100);
+		gint iw = cairo_image_surface_get_width(image);
+		gint ih = cairo_image_surface_get_height(image);
+
+		if (p->cr != NULL && iw > 0 && ih > 0) {
+			gdouble k = (gdouble)side / MAX(iw, ih);
+
+			cairo_save(p->cr);
+			cairo_translate(p->cr, x + (side - iw * k) * 0.5,
+			                center - ih * k * 0.5);
+			cairo_scale(p->cr, k, k);
+			cairo_set_source_surface(p->cr, image, 0, 0);
+			cairo_pattern_set_filter(cairo_get_source(p->cr),
+			                         CAIRO_FILTER_GOOD);
+			if (alpha >= 1.0)
+				cairo_paint(p->cr);
+			else
+				cairo_paint_with_alpha(p->cr, alpha);
+			cairo_restore(p->cr);
+		}
+		return side;
+	}
+
+	icon = gowl_bar_panel_item_get_icon(item);
+	if (icon == NULL || icon[0] == '\0')
+		return p->icon_col;      /* keep the column even when empty */
+
+	pass_set_font(p, scale, TRUE, FALSE);
+	pass_measure_text(p, icon, &w, NULL);
+	/* Centred in the column when there is one, so a glyph and an image
+	 * put their middles in the same place. */
+	pass_draw_text(p, icon,
+		p->icon_col > 0 ? x + (p->icon_col - w) / 2 : x, center,
+		gowl_bar_panel_item_has_color(item)
+			? gowl_bar_panel_item_get_color(item)
+			: GOWL_BAR_COLOR_SUBTEXT,
+		alpha, 0, PANGO_ALIGN_LEFT);
+	return p->icon_col > 0 ? p->icon_col : w;
+}
+
 static void
 pass_draw_row(PanelPass *p, GowlBarPanelItem *item, gint index,
               gint y, gint h, gboolean hovered)
 {
-	const gchar *icon, *subtitle, *value, *badge;
+	const gchar *subtitle, *value, *badge;
 	gint x, center, icon_w, right;
 	gdouble alpha;
 
@@ -635,17 +705,9 @@ pass_draw_row(PanelPass *p, GowlBarPanelItem *item, gint index,
 	                    hovered, gowl_bar_panel_item_get_selected(item),
 	                    gowl_bar_panel_item_get_active(item));
 
-	icon = gowl_bar_panel_item_get_icon(item);
-	if (icon != NULL && icon[0] != '\0') {
-		pass_set_font(p, 1.05, TRUE, FALSE);
-		pass_measure_text(p, icon, &icon_w, NULL);
-		pass_draw_text(p, icon, x, center,
-			gowl_bar_panel_item_has_color(item)
-				? gowl_bar_panel_item_get_color(item)
-				: GOWL_BAR_COLOR_SUBTEXT,
-			alpha, 0, PANGO_ALIGN_LEFT);
+	icon_w = pass_draw_icon(p, item, x, center, 1.05, alpha);
+	if (icon_w > 0)
 		x += icon_w + p->gap + 2;
-	}
 
 	badge = gowl_bar_panel_item_get_badge(item);
 	if (badge != NULL && badge[0] != '\0') {
@@ -1252,6 +1314,20 @@ pass_init(PanelPass *p, GowlBarPanel *panel, cairo_t *cr,
 	p->inner_w = ctx->width - 2 * p->pad_x;
 	if (p->inner_w < 16)
 		p->inner_w = 16;
+
+	{
+		guint i, n = gowl_bar_panel_n_items(panel);
+
+		for (i = 0; i < n; i++) {
+			GowlBarPanelItem *item = gowl_bar_panel_get_item(panel, i);
+
+			if (item != NULL
+			    && gowl_bar_panel_item_get_image(item) != NULL) {
+				p->icon_col = MAX(12, (p->row_h * 62) / 100);
+				break;
+			}
+		}
+	}
 
 	return TRUE;
 }

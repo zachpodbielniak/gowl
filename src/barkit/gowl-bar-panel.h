@@ -20,6 +20,7 @@
 #define GOWL_BAR_PANEL_H
 
 #include <glib-object.h>
+#include <cairo.h>
 
 #include "barkit/gowl-bar-theme.h"
 
@@ -105,6 +106,24 @@ const gchar *gowl_bar_panel_item_get_id (const GowlBarPanelItem *self);
 void         gowl_bar_panel_item_set_icon     (GowlBarPanelItem *self,
                                                 const gchar      *icon);
 const gchar *gowl_bar_panel_item_get_icon     (const GowlBarPanelItem *self);
+
+/**
+ * gowl_bar_panel_item_set_image:
+ * @self: a #GowlBarPanelItem
+ * @surface: (nullable): an image surface, referenced by the item
+ *
+ * An IMAGE for the icon column, where gowl_bar_panel_item_set_icon()
+ * sets a glyph.  When both are set the image wins and the glyph is the
+ * fallback, which is what lets a row ask for an application's real icon
+ * and still draw something when the theme has never heard of it.
+ *
+ * Drawn square at the row's text height and vertically centred; the
+ * caller is responsible for rendering it at a sensible resolution,
+ * since the panel does not know the output's scale.
+ */
+void             gowl_bar_panel_item_set_image (GowlBarPanelItem *self,
+                                                 cairo_surface_t  *surface);
+cairo_surface_t *gowl_bar_panel_item_get_image (const GowlBarPanelItem *self);
 void         gowl_bar_panel_item_set_title    (GowlBarPanelItem *self,
                                                 const gchar      *title);
 const gchar *gowl_bar_panel_item_get_title    (const GowlBarPanelItem *self);

@@ -535,6 +535,145 @@ test_empty_panel_renders(void)
 	fixture_clear(&f);
 }
 
+/* ---- Images in the icon column ---- */
+
+/* A solid square, standing in for an application icon. */
+static cairo_surface_t *
+fake_icon(gint side)
+{
+	cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+	                                                side, side);
+	cairo_t *cr = cairo_create(s);
+
+	cairo_set_source_rgba(cr, 1.0, 0.0, 0.0, 1.0);
+	cairo_paint(cr);
+	cairo_destroy(cr);
+	return s;
+}
+
+static void
+test_an_image_is_referenced_not_copied(void)
+{
+	GowlBarPanelItem *item;
+	cairo_surface_t *icon = fake_icon(32);
+
+	/*
+	 * A panel is rebuilt on every repaint and an icon is loaded once,
+	 * so copying the pixels here would mean decoding them again for
+	 * every frame of a menu somebody is typing into.
+	 */
+	item = gowl_bar_panel_item_new(GOWL_BAR_ITEM_ROW);
+	g_assert_null(gowl_bar_panel_item_get_image(item));
+	gowl_bar_panel_item_set_image(item, icon);
+	g_assert_true(gowl_bar_panel_item_get_image(item) == icon);
+
+	/* The item took a reference, so dropping ours leaves it alive. */
+	cairo_surface_destroy(icon);
+	g_assert_cmpint(cairo_surface_get_reference_count(
+		gowl_bar_panel_item_get_image(item)), ==, 1);
+
+	gowl_bar_panel_item_free(item);
+}
+
+static void
+test_an_image_survives_a_copy(void)
+{
+	GowlBarPanelItem *item, *copy;
+	cairo_surface_t *icon = fake_icon(32);
+
+	item = gowl_bar_panel_item_new(GOWL_BAR_ITEM_ROW);
+	gowl_bar_panel_item_set_image(item, icon);
+	copy = gowl_bar_panel_item_copy(item);
+
+	g_assert_true(gowl_bar_panel_item_get_image(copy) == icon);
+	/* Two items and the test hold it. */
+	g_assert_cmpint(cairo_surface_get_reference_count(icon), ==, 3);
+
+	gowl_bar_panel_item_free(item);
+	gowl_bar_panel_item_free(copy);
+	g_assert_cmpint(cairo_surface_get_reference_count(icon), ==, 1);
+	cairo_surface_destroy(icon);
+}
+
+/* The leftmost x with any ink, within a horizontal band. */
+static gint
+first_ink_x(cairo_surface_t *surface, gint y0, gint y1)
+{
+	const guint8 *data = cairo_image_surface_get_data(surface);
+	gint stride = cairo_image_surface_get_stride(surface);
+	gint w = cairo_image_surface_get_width(surface);
+	gint x, y;
+
+	cairo_surface_flush(surface);
+	for (x = 0; x < w; x++) {
+		for (y = y0; y < y1; y++) {
+			const guint32 *row = (const guint32 *)(data + (gsize)y * stride);
+
+			if ((row[x] >> 24) != 0)
+				return x;
+		}
+	}
+	return -1;
+}
+
+static void
+test_an_image_reserves_a_column_for_glyph_rows(void)
+{
+	Fixture f;
+	g_autoptr(GowlBarPanel) plain = NULL;
+	g_autoptr(GowlBarPanel) mixed = NULL;
+	cairo_surface_t *icon = fake_icon(32);
+	GowlBarPanelRenderCtx ctx;
+	gint plain_x, mixed_x, row_h;
+
+	fixture_init(&f);
+	row_h = gowl_bar_theme_metric(f.theme, GOWL_BAR_METRIC_ROW_HEIGHT);
+
+	/*
+	 * The same iconless row in two panels.  In the second, ANOTHER row
+	 * carries an image -- and that has to indent the first row's text
+	 * as well, or a list mixing real application icons with rows that
+	 * have none has its labels stepping in and out down the page.
+	 *
+	 * Measured in PIXELS, because the column is not in the model: it
+	 * is a decision the render pass makes, and where the text lands is
+	 * the only place it shows.
+	 */
+	plain = gowl_bar_panel_new();
+	gowl_bar_panel_add_row(plain, "a", NULL, "Row", NULL);
+	gowl_bar_panel_set_width(plain, PANEL_W);
+
+	mixed = gowl_bar_panel_new();
+	gowl_bar_panel_add_row(mixed, "a", NULL, "Row", NULL);
+	gowl_bar_panel_item_set_image(
+		gowl_bar_panel_add_row(mixed, "b", NULL, "With icon", NULL),
+		icon);
+	gowl_bar_panel_set_width(mixed, PANEL_W);
+
+	cairo_set_operator(f.cr, CAIRO_OPERATOR_CLEAR);
+	cairo_paint(f.cr);
+	cairo_set_operator(f.cr, CAIRO_OPERATOR_OVER);
+	gowl_bar_panel_render_ctx_init(&ctx, PANEL_W);
+	gowl_bar_panel_render(plain, f.cr, f.layout, f.theme, &ctx);
+	plain_x = first_ink_x(f.surface, 0, row_h);
+
+	cairo_set_operator(f.cr, CAIRO_OPERATOR_CLEAR);
+	cairo_paint(f.cr);
+	cairo_set_operator(f.cr, CAIRO_OPERATOR_OVER);
+	gowl_bar_panel_render_ctx_init(&ctx, PANEL_W);
+	gowl_bar_panel_render(mixed, f.cr, f.layout, f.theme, &ctx);
+	mixed_x = first_ink_x(f.surface, 0, row_h);
+
+	g_assert_cmpint(plain_x, >=, 0);
+	g_assert_cmpint(mixed_x, >=, 0);
+	/* Indented by about the column the image occupies. */
+	g_assert_cmpint(mixed_x, >, plain_x + 8);
+
+	cairo_surface_destroy(icon);
+	fixture_clear(&f);
+}
+
+
 int
 main(int argc, char *argv[])
 {
@@ -561,6 +700,12 @@ main(int argc, char *argv[])
 	                test_the_measure_pass_does_not_draw);
 	g_test_add_func("/bar-panel/label-wraps", test_a_label_wraps);
 	g_test_add_func("/bar-panel/empty-renders", test_empty_panel_renders);
+	g_test_add_func("/bar-panel/an-image-is-referenced",
+	                test_an_image_is_referenced_not_copied);
+	g_test_add_func("/bar-panel/an-image-survives-a-copy",
+	                test_an_image_survives_a_copy);
+	g_test_add_func("/bar-panel/an-image-reserves-a-column",
+	                test_an_image_reserves_a_column_for_glyph_rows);
 
 	return g_test_run();
 }

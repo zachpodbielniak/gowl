@@ -44,6 +44,11 @@ struct _GowlBarPanelItem {
 	gchar   *title2;
 	gchar   *value2;
 
+	/* Referenced, not owned by the setter's caller: a panel is rebuilt
+	 * far more often than an icon is loaded, and the cache the surface
+	 * came from outlives both. */
+	cairo_surface_t *image;
+
 	GowlBarColor color;
 	gboolean     has_color;
 	GowlBarColor value_color;
@@ -109,6 +114,8 @@ gowl_bar_panel_item_copy(const GowlBarPanelItem *self)
 	copy->subtitle = g_strdup(self->subtitle);
 	copy->value    = g_strdup(self->value);
 	copy->badge    = g_strdup(self->badge);
+	copy->image    = self->image != NULL
+		? cairo_surface_reference(self->image) : NULL;
 	copy->title2   = g_strdup(self->title2);
 	copy->value2   = g_strdup(self->value2);
 
@@ -168,6 +175,7 @@ gowl_bar_panel_item_free(GowlBarPanelItem *self)
 	g_free(self->badge);
 	g_free(self->title2);
 	g_free(self->value2);
+	g_clear_pointer(&self->image, cairo_surface_destroy);
 	if (self->children != NULL)
 		g_ptr_array_unref(self->children);
 	if (self->samples != NULL)
@@ -221,6 +229,38 @@ GOWL_BAR_ITEM_STRING_ACCESSOR(id)
  * @value: (nullable): a glyph
  */
 GOWL_BAR_ITEM_STRING_ACCESSOR(icon)
+
+/**
+ * gowl_bar_panel_item_set_image:
+ * @self: an item
+ * @surface: (nullable): an image surface
+ *
+ * The image is REFERENCED rather than copied.  A panel is rebuilt on
+ * every repaint and an icon is loaded once, so copying the pixels here
+ * would mean decoding them again for every frame of a menu somebody is
+ * typing into.
+ */
+void
+gowl_bar_panel_item_set_image(GowlBarPanelItem *self, cairo_surface_t *surface)
+{
+	g_return_if_fail(self != NULL);
+	if (self->image == surface)
+		return;
+	g_clear_pointer(&self->image, cairo_surface_destroy);
+	self->image = surface != NULL ? cairo_surface_reference(surface) : NULL;
+}
+
+/**
+ * gowl_bar_panel_item_get_image:
+ * @self: (nullable): an item
+ *
+ * Returns: (transfer none) (nullable): the image
+ */
+cairo_surface_t *
+gowl_bar_panel_item_get_image(const GowlBarPanelItem *self)
+{
+	return self != NULL ? self->image : NULL;
+}
 
 /**
  * gowl_bar_panel_item_set_title:

@@ -28,6 +28,7 @@
 #include "util/gowl-fx-optout.h"
 #include "tray/gowl-tray.h"
 #include "util/gowl-wayland-socket.h"
+#include "util/gowl-capture-scale.h"
 
 #ifdef GOWL_HAVE_LIBDECOR
 #include "gowl-decor.h"
@@ -3679,17 +3680,27 @@ gowl_compositor_screenshot_client(
 /**
  * gowl_compositor_screenshot_region:
  * @self: a #GowlCompositor
- * @output_name: (nullable): output name, or %NULL for focused monitor
- * @rx: region X offset within the output
- * @ry: region Y offset within the output
- * @rw: region width
- * @rh: region height
- * @out_width: (out): receives the cropped width
- * @out_height: (out): receives the cropped height
+ * @output_name: (nullable): output name, or %NULL to pick the monitor
+ *   the region starts on
+ * @rx: the region's X in LAYOUT coordinates
+ * @ry: the region's Y in LAYOUT coordinates
+ * @rw: the region's width in layout coordinates
+ * @rh: the region's height in layout coordinates
+ * @out_width: (out): receives the cropped width, in device pixels
+ * @out_height: (out): receives the cropped height, in device pixels
  * @error: (nullable): return location for a #GError
  *
- * Captures a rectangular region from the specified output.
- * The region is clamped to the output dimensions.
+ * Captures a rectangular region of the desktop.  The region is given
+ * in layout coordinates --- the same ones the cursor, a client's
+ * geometry and the selection rubber band are in --- and is clamped to
+ * the monitor it lands on.
+ *
+ * The image that comes back is in that monitor's device pixels, so on
+ * a scaled output it is larger than the region asked for: a 400x300
+ * selection on a scale-2 screen is 800x600 real pixels, which is the
+ * detail that was on the screen.  Callers that have to know the size
+ * in advance must read it back from @out_width and @out_height rather
+ * than assume it equals @rw by @rh.
  *
  * Returns: (transfer full) (nullable): cropped RGBA pixel data
  */
@@ -3706,28 +3717,67 @@ gowl_compositor_screenshot_region(
 	GError         **error
 ){
 	g_autoptr(GBytes) full = NULL;
+	GowlMonitor *mon;
 	const guint8 *src;
 	guint8 *dst;
 	gsize full_size;
+	gint mx, my, mw, mh;
 	gint fw, fh, stride, y;
+	gint cx, cy, cw, ch;
 
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
-	full = gowl_compositor_screenshot_output(self, output_name,
+	/*
+	 * Which screen is this region on?  Named outputs win; otherwise
+	 * the one under the region's top-left corner, which for a
+	 * selection is where the drag started.  xytomon() falls back to
+	 * the focused monitor when the point is in a gap between
+	 * outputs.
+	 */
+	mon = NULL;
+	if (output_name != NULL) {
+		GList *l;
+
+		for (l = self->monitors; l != NULL; l = l->next) {
+			GowlMonitor *m = GOWL_MONITOR(l->data);
+			if (m->wlr_output != NULL &&
+			    g_strcmp0(m->wlr_output->name, output_name) == 0) {
+				mon = m;
+				break;
+			}
+		}
+	} else {
+		mon = xytomon(self, (gdouble)rx, (gdouble)ry);
+	}
+
+	if (mon == NULL || mon->wlr_output == NULL) {
+		if (out_width != NULL)  *out_width  = 0;
+		if (out_height != NULL) *out_height = 0;
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+		                    "No output found for region screenshot");
+		return NULL;
+	}
+
+	gowl_monitor_get_geometry(mon, &mx, &my, &mw, &mh);
+
+	full = gowl_compositor_screenshot_output(self,
+	                                         mon->wlr_output->name,
 	                                         &fw, &fh, error);
 	if (full == NULL)
 		return NULL;
 
-	/* Clamp region to output bounds */
-	if (rx < 0) { rw += rx; rx = 0; }
-	if (ry < 0) { rh += ry; ry = 0; }
-	if (rx + rw > fw) rw = fw - rx;
-	if (ry + rh > fh) rh = fh - ry;
-
-	if (rw <= 0 || rh <= 0) {
+	/*
+	 * The region is logical and the image is physical.  On an
+	 * unscaled output those are the same numbers, which is why
+	 * cropping with the raw layout coordinates looked right for
+	 * years; on a scaled one it photographs the wrong place.
+	 */
+	if (!gowl_capture_scale_crop(mx, my, mw, mh, fw, fh,
+	                             rx, ry, rw, rh, &cx, &cy, &cw, &ch)) {
 		if (out_width != NULL)  *out_width  = 0;
 		if (out_height != NULL) *out_height = 0;
-		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+		g_set_error_literal(error, G_IO_ERROR,
+		                    G_IO_ERROR_INVALID_ARGUMENT,
 		                    "Region is empty after clamping");
 		return NULL;
 	}
@@ -3735,28 +3785,55 @@ gowl_compositor_screenshot_region(
 	src = g_bytes_get_data(full, &full_size);
 	stride = (gint)(full_size / (gsize)fh);  /* bytes per row */
 
-	dst = g_malloc((gsize)rw * 4 * (gsize)rh);
-	for (y = 0; y < rh; y++) {
-		memcpy(dst + (gsize)y * (gsize)rw * 4,
-		       src + (gsize)(ry + y) * (gsize)stride + (gsize)rx * 4,
-		       (gsize)rw * 4);
+	dst = g_malloc((gsize)cw * 4 * (gsize)ch);
+	for (y = 0; y < ch; y++) {
+		memcpy(dst + (gsize)y * (gsize)cw * 4,
+		       src + (gsize)(cy + y) * (gsize)stride + (gsize)cx * 4,
+		       (gsize)cw * 4);
 	}
 
-	if (out_width != NULL)  *out_width  = rw;
-	if (out_height != NULL) *out_height = rh;
+	if (out_width != NULL)  *out_width  = cw;
+	if (out_height != NULL) *out_height = ch;
 
-	return g_bytes_new_take(dst, (gsize)rw * 4 * (gsize)rh);
+	return g_bytes_new_take(dst, (gsize)cw * 4 * (gsize)ch);
 }
+
+/*
+ * One captured output on its way into the stitched image: the pixels,
+ * how many of them there are, and where the layout puts them.  The
+ * capture has to happen before the canvas can be sized --- its scale
+ * is read off the images --- so the results are held here in between.
+ *
+ * That does mean every output's framebuffer is in memory at once,
+ * alongside the canvas.  It is deliberate: taking the scale from
+ * wlr_output instead would save the peak, but a fractional scale
+ * rounds the layout size, and the image would then disagree with its
+ * own place on the canvas by a pixel and need resampling to fit.
+ * Three 4K screens is about 100 MB held for the length of one call.
+ */
+typedef struct {
+	GBytes     *shot;       /* owned */
+	gint        img_w;      /* device pixels */
+	gint        img_h;      /* device pixels */
+	struct wlr_box box;     /* layout coordinates */
+} GowlStitchPiece;
 
 /**
  * gowl_compositor_screenshot_all:
  * @self: a #GowlCompositor
- * @width: (out): receives the stitched image width
- * @height: (out): receives the stitched image height
+ * @width: (out): receives the stitched image width, in device pixels
+ * @height: (out): receives the stitched image height, in device pixels
  * @error: (nullable): return location for a #GError
  *
- * Captures all monitors and stitches them into a single image
- * using the output layout positions.
+ * Captures every monitor and stitches them into one image, laid out
+ * the way the output layout lays them out.
+ *
+ * The canvas is in device pixels at the highest scale any monitor
+ * runs, so the sharpest screen keeps every pixel it rendered.  A
+ * monitor at a lower scale is stretched to the area it occupies,
+ * which is what makes its windows the same apparent size on the
+ * canvas as they are on the desktop.  On the ordinary desktop, where
+ * every output shares one scale, nothing is resampled at all.
  *
  * Returns: (transfer full) (nullable): stitched RGBA pixel data
  */
@@ -3768,10 +3845,12 @@ gowl_compositor_screenshot_all(
 	GError         **error
 ){
 	GList *l;
+	GArray *pieces;
+	guint i;
 	gint min_x, min_y, max_x, max_y, cw, ch;
+	gdouble canvas_scale;
 	guint8 *canvas;
 	gsize canvas_size;
-	gboolean first;
 
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
@@ -3783,30 +3862,50 @@ gowl_compositor_screenshot_all(
 		return NULL;
 	}
 
-	/* Compute bounding box from output layout */
+	pieces = g_array_new(FALSE, FALSE, sizeof(GowlStitchPiece));
+
 	min_x = min_y = G_MAXINT;
 	max_x = max_y = G_MININT;
-	first = TRUE;
+	canvas_scale = 1.0;
 
+	/* Capture every output, and learn the canvas from what came back. */
 	for (l = self->monitors; l != NULL; l = l->next) {
 		GowlMonitor *m = GOWL_MONITOR(l->data);
-		struct wlr_box box;
+		GowlStitchPiece p;
+		gdouble s;
 
 		if (m->wlr_output == NULL)
 			continue;
 		wlr_output_layout_get_box(self->output_layout,
-		                          m->wlr_output, &box);
-		if (box.width <= 0 || box.height <= 0)
+		                          m->wlr_output, &p.box);
+		if (p.box.width <= 0 || p.box.height <= 0)
 			continue;
 
-		if (box.x < min_x) min_x = box.x;
-		if (box.y < min_y) min_y = box.y;
-		if (box.x + box.width > max_x)  max_x = box.x + box.width;
-		if (box.y + box.height > max_y) max_y = box.y + box.height;
-		first = FALSE;
+		p.img_w = 0;
+		p.img_h = 0;
+		p.shot = gowl_compositor_screenshot_output(self,
+		           m->wlr_output->name, &p.img_w, &p.img_h, NULL);
+		if (p.shot == NULL || p.img_w <= 0 || p.img_h <= 0) {
+			g_clear_pointer(&p.shot, g_bytes_unref);
+			continue;
+		}
+		g_array_append_val(pieces, p);
+
+		s = gowl_capture_scale_factor(p.box.width, p.box.height,
+		                              p.img_w, p.img_h);
+		if (s > canvas_scale)
+			canvas_scale = s;
+
+		if (p.box.x < min_x) min_x = p.box.x;
+		if (p.box.y < min_y) min_y = p.box.y;
+		if (p.box.x + p.box.width > max_x)
+			max_x = p.box.x + p.box.width;
+		if (p.box.y + p.box.height > max_y)
+			max_y = p.box.y + p.box.height;
 	}
 
-	if (first) {
+	if (pieces->len == 0) {
+		g_array_free(pieces, TRUE);
 		if (width != NULL)  *width  = 0;
 		if (height != NULL) *height = 0;
 		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
@@ -3814,49 +3913,73 @@ gowl_compositor_screenshot_all(
 		return NULL;
 	}
 
-	cw = max_x - min_x;
-	ch = max_y - min_y;
+	cw = (gint)lround((gdouble)(max_x - min_x) * canvas_scale);
+	ch = (gint)lround((gdouble)(max_y - min_y) * canvas_scale);
 	canvas_size = (gsize)cw * 4 * (gsize)ch;
 	canvas = g_malloc0(canvas_size);
 
 	/* Blit each output into the canvas */
-	for (l = self->monitors; l != NULL; l = l->next) {
-		GowlMonitor *m = GOWL_MONITOR(l->data);
-		struct wlr_box box;
-		g_autoptr(GBytes) shot = NULL;
+	for (i = 0; i < pieces->len; i++) {
+		GowlStitchPiece *p = &g_array_index(pieces, GowlStitchPiece, i);
 		const guint8 *src;
 		gsize src_size;
-		gint mw, mh, src_stride, y, ox, oy;
+		gint src_stride, y, x;
+		gint dx, dy, dw, dh;
 
-		if (m->wlr_output == NULL)
-			continue;
-		wlr_output_layout_get_box(self->output_layout,
-		                          m->wlr_output, &box);
-		if (box.width <= 0 || box.height <= 0)
-			continue;
-
-		shot = gowl_compositor_screenshot_output(self,
-		         m->wlr_output->name, &mw, &mh, NULL);
-		if (shot == NULL)
+		if (!gowl_capture_scale_place(p->box.x, p->box.y,
+		                              p->box.width, p->box.height,
+		                              min_x, min_y, canvas_scale,
+		                              &dx, &dy, &dw, &dh))
 			continue;
 
-		src = g_bytes_get_data(shot, &src_size);
-		src_stride = (gint)(src_size / (gsize)mh);
+		src = g_bytes_get_data(p->shot, &src_size);
+		src_stride = (gint)(src_size / (gsize)p->img_h);
 
-		ox = box.x - min_x;
-		oy = box.y - min_y;
+		if (dx + dw > cw) dw = cw - dx;
+		if (dy + dh > ch) dh = ch - dy;
+		if (dw <= 0 || dh <= 0)
+			continue;
 
-		for (y = 0; y < mh && (oy + y) < ch; y++) {
-			gint copy_w = mw;
-			if (ox + copy_w > cw) copy_w = cw - ox;
-			if (copy_w <= 0) continue;
+		/*
+		 * A straight row copy when the sizes already agree --- the
+		 * single-scale desktop, and the only path most people take.
+		 * Otherwise nearest-neighbour, which keeps this to honest
+		 * arithmetic in the compositor core rather than dragging a
+		 * resampling library into it.
+		 */
+		if (dw == p->img_w && dh == p->img_h) {
+			for (y = 0; y < dh; y++) {
+				memcpy(canvas + (gsize)(dy + y) * (gsize)cw * 4
+				              + (gsize)dx * 4,
+				       src + (gsize)y * (gsize)src_stride,
+				       (gsize)dw * 4);
+			}
+			continue;
+		}
 
-			memcpy(canvas + (gsize)(oy + y) * (gsize)cw * 4
-			              + (gsize)ox * 4,
-			       src + (gsize)y * (gsize)src_stride,
-			       (gsize)copy_w * 4);
+		for (y = 0; y < dh; y++) {
+			gint sy = (gint)((gint64)y * p->img_h / dh);
+			const guint8 *srow;
+			guint8 *drow;
+
+			if (sy >= p->img_h) sy = p->img_h - 1;
+			srow = src + (gsize)sy * (gsize)src_stride;
+			drow = canvas + (gsize)(dy + y) * (gsize)cw * 4
+			              + (gsize)dx * 4;
+
+			for (x = 0; x < dw; x++) {
+				gint sx = (gint)((gint64)x * p->img_w / dw);
+
+				if (sx >= p->img_w) sx = p->img_w - 1;
+				memcpy(drow + (gsize)x * 4,
+				       srow + (gsize)sx * 4, 4);
+			}
 		}
 	}
+
+	for (i = 0; i < pieces->len; i++)
+		g_bytes_unref(g_array_index(pieces, GowlStitchPiece, i).shot);
+	g_array_free(pieces, TRUE);
 
 	if (width != NULL)  *width  = cw;
 	if (height != NULL) *height = ch;

@@ -813,6 +813,19 @@ compositor thread, and a screenshot is megabytes: a client that reads
 slowly would otherwise hold the whole session for as long as it felt
 like, and one that never reads would hold it forever.
 
+**** Layout coordinates and device pixels
+
+A selection is dragged in *layout* coordinates --- the logical ones the cursor, a client's geometry and the output layout all use --- and cropped out of a framebuffer made of *device pixels*. A 3840x2160 panel at =scale: 2= is 1920x1080 of the first and 3840x2160 of the second, so the two disagree by a factor of the scale, and a monitor that is not first in the layout also disagrees by its own origin.
+
+=gowl_compositor_screenshot_region()= takes layout coordinates and crosses to device pixels itself, through =src/util/gowl-capture-scale.c=. It used to do neither, which on an unscaled single screen is indistinguishable from doing both: the numbers are equal and the origin is zero. On a scaled one it photographed a rectangle at half the distance in and half the size --- the wrong part of the screen, silently, with no error anywhere.
+
+Two consequences for callers:
+
+- The image comes back in device pixels, so it is *larger than the region asked for* on a scaled output. A 400x300 drag at scale 2 is an 800x600 image. Read the size back from =out_width= and =out_height=; do not assume it is the request. The recording module has to, because ffmpeg is told the frame size once and then reads raw bytes against it forever.
+- =gowl_compositor_screenshot_all()= stitches its canvas in device pixels at the highest scale any monitor runs, so the sharpest screen keeps every pixel it rendered and a lower-scale one is stretched to the area it occupies. With one scale across the desktop --- the ordinary case --- nothing is resampled.
+
+The arithmetic is pure and unit-tested in =tests/test-capture-scale.c=; =tests/test-screenshot-scale.c= runs it through a real headless compositor at scale 2 and checks that a marker rectangle is photographed where it actually is.
+
 *** Layout plugins and switching
 
 All layout algorithms live in their respective =modules/= directories.

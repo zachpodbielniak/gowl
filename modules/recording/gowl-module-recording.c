@@ -385,18 +385,24 @@ do_start(GowlModuleRecording *self,
 		}
 		break;
 	case GOWL_CAPTURE_MODE_AREA:
-		pw = region_w;
-		ph = region_h;
-		probe = (pw > 0 && ph > 0)
-		      ? GINT_TO_POINTER(1) /* dummy non-NULL */
-		      : NULL;
-		if (probe == NULL) {
+		/*
+		 * The selection is in layout coordinates and the frames
+		 * come back in the monitor's device pixels, so on a scaled
+		 * output a 400x300 drag is an 800x600 frame.  ffmpeg is
+		 * told the size once, up front, and then reads raw bytes
+		 * against it forever: guessing it from the selection tore
+		 * every frame of the video diagonally.  So probe for real,
+		 * exactly as the other modes do, and believe the answer.
+		 */
+		if (region_w <= 0 || region_h <= 0) {
 			g_set_error_literal(error, G_IO_ERROR,
 			    G_IO_ERROR_INVALID_ARGUMENT,
 			    "Invalid region dimensions");
 			return FALSE;
 		}
-		probe = NULL; /* no actual bytes to unref */
+		probe = gowl_compositor_screenshot_region(self->compositor,
+		            NULL, region_x, region_y, region_w, region_h,
+		            &pw, &ph, error);
 		break;
 	case GOWL_CAPTURE_MODE_ALL:
 		probe = gowl_compositor_screenshot_all(self->compositor,
@@ -408,11 +414,9 @@ do_start(GowlModuleRecording *self,
 		return FALSE;
 	}
 
-	if (mode != GOWL_CAPTURE_MODE_AREA) {
-		if (probe == NULL)
-			return FALSE;
-		g_bytes_unref(probe);
-	}
+	if (probe == NULL)
+		return FALSE;
+	g_bytes_unref(probe);
 
 	/* Generate output path */
 	if (output_path != NULL && output_path[0] != '\0') {

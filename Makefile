@@ -120,6 +120,7 @@ LIB_SRCS := \
 	src/util/gowl-systemd.c \
 	src/util/gowl-wayland-socket.c \
 	src/util/gowl-wallpaper-scale.c \
+	src/util/gowl-capture-scale.c \
 	src/core/gowl-compositor.c \
 	src/core/gowl-capture-wlroots.c \
 	src/core/gowl-input-capture.c \

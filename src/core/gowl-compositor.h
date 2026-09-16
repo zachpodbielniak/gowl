@@ -1726,16 +1726,20 @@ GBytes *gowl_compositor_screenshot_client (GowlCompositor  *self,
 /**
  * gowl_compositor_screenshot_region:
  * @self: a #GowlCompositor
- * @output_name: (nullable): output name, or %NULL for focused monitor
- * @rx: region X offset within the output
- * @ry: region Y offset within the output
- * @rw: region width
- * @rh: region height
- * @out_width: (out): receives the cropped width
- * @out_height: (out): receives the cropped height
+ * @output_name: (nullable): output name, or %NULL to pick the monitor
+ *   the region starts on
+ * @rx: the region's X in LAYOUT coordinates
+ * @ry: the region's Y in LAYOUT coordinates
+ * @rw: the region's width in layout coordinates
+ * @rh: the region's height in layout coordinates
+ * @out_width: (out): receives the cropped width, in device pixels
+ * @out_height: (out): receives the cropped height, in device pixels
  * @error: (nullable): return location for a #GError
  *
- * Captures a rectangular region from the specified output.
+ * Captures a rectangular region of the desktop.  The region is in
+ * layout coordinates; the image is in the monitor's device pixels, so
+ * on a scaled output it is bigger than the region asked for.  Read the
+ * size back rather than assuming it is @rw by @rh.
  *
  * Returns: (transfer full) (nullable): cropped RGBA pixel data
  */
@@ -1752,11 +1756,12 @@ GBytes *gowl_compositor_screenshot_region (GowlCompositor  *self,
 /**
  * gowl_compositor_screenshot_all:
  * @self: a #GowlCompositor
- * @width: (out): receives the stitched image width
- * @height: (out): receives the stitched image height
+ * @width: (out): receives the stitched image width, in device pixels
+ * @height: (out): receives the stitched image height, in device pixels
  * @error: (nullable): return location for a #GError
  *
- * Captures all monitors and stitches them into a single image.
+ * Captures all monitors and stitches them into a single image, in
+ * device pixels at the highest scale any monitor runs.
  *
  * Returns: (transfer full) (nullable): stitched RGBA pixel data
  */

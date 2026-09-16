@@ -80,7 +80,10 @@ test_orientation(void)
 					gowl_module_manager_find_module(comp->module_mgr, "scrolling"));
 				if (vertical) {
 					g_assert_cmpint(clients[3].geom.width, ==, portrait->w.width);
-					g_assert_cmpint(clients[5].geom.y, >, clients[4].geom.y);
+					/* A tall strip fills upwards: the newest window is
+					 * index 0 and sits lowest, each older one above. */
+					g_assert_cmpint(clients[5].geom.y, <, clients[4].geom.y);
+					g_assert_cmpint(clients[4].geom.y, <, clients[3].geom.y);
 				} else {
 					g_assert_cmpint(clients[3].geom.height, ==, portrait->w.height);
 					g_assert_cmpint(clients[5].geom.x, >, clients[4].geom.x);

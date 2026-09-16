@@ -15,7 +15,9 @@ typedef struct {
 	gint size;
 } ScrollMetrics;
 
-/* Work along a horizontal virtual axis, transposing for portrait outputs.
+/* Work along a horizontal virtual axis, transposing for portrait outputs
+ * and mirroring the placement along it so a tall screen fills upwards
+ * from the newest window.
  * Arrangement and focus visibility must use exactly the same measurements. */
 static ScrollMetrics
 scroll_metrics(GowlCompositor *self, GowlMonitor *m)
@@ -55,9 +57,32 @@ gowl_compositor_layout_scrolling(GowlCompositor *self, GowlMonitor *m)
 	/* The legacy scroll_x field is the offset along the current axis. */
 	m->scroll_x = CLAMP(m->scroll_x, 0, maximum);
 	for (l = clients, i = 0; l != NULL; l = l->next, i++) {
+		gint pos = metrics.area.x
+		         + i * (metrics.size + metrics.gap) - m->scroll_x;
+
+		/*
+		 * The strip runs from the newest window outwards: index 0 is
+		 * the one just opened.  Left to right that puts it on the
+		 * left, which is where reading starts and where it belongs.
+		 * Transposed for a portrait output it would put it at the
+		 * TOP, and a column of windows does not fill from the top ---
+		 * a terminal scrolls up, a chat scrolls up, and the thing you
+		 * just opened is the thing at the bottom.
+		 *
+		 * So the axis is mirrored end for end on a tall output: the
+		 * newest window sits at the bottom of the screen and each
+		 * older one above it.  Only the placement is mirrored.  The
+		 * offset, the extent and which windows are on screen are all
+		 * still measured along the same virtual axis, so scrolling
+		 * and focus need to know nothing about this.
+		 */
+		if (metrics.portrait) {
+			pos = 2 * metrics.area.x + metrics.area.width
+			    - pos - metrics.size;
+		}
+
 		gowl_layout_place_oriented(self, l->data, metrics.portrait,
-			metrics.area.x + i * (metrics.size + metrics.gap) - m->scroll_x,
-			metrics.area.y, metrics.size, metrics.area.height);
+			pos, metrics.area.y, metrics.size, metrics.area.height);
 	}
 	g_list_free(clients);
 }

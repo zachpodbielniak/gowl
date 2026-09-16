@@ -834,6 +834,10 @@ configured with =enabled: false=. Enable =scrolling= in the =modules=
 mapping to add a scrolling strip of columns (or rows on portrait monitors). CMacs loads all four by
 default. Additional active layout providers join the same registry.
 
+The strip runs from the newest window outwards --- the one just opened is first. Left to right that puts it on the left, where reading starts. On an output taller than it is wide the axis is transposed into rows, and transposing alone would put the newest window at the *top*: a column of windows does not fill that way, so the axis is mirrored end for end as well. The newest window sits at the bottom of a tall screen with each older one above it, the way a terminal or a chat fills.
+
+Only the placement is mirrored. The scroll offset, the extent of the strip and which windows are on screen are all still measured along the same virtual axis, so scrolling and focus need to know nothing about the output's shape --- and =scroll-strip= still means "further from the newest window", which on a tall screen is upwards.
+
 Layout selection and scroll offset are independent for each monitor's
 tag view; combined tag masks have their own state. Focus changes reveal
 offscreen windows, and the viewport clips content to its own monitor.

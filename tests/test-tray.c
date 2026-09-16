@@ -448,7 +448,111 @@ register_as(Fixture *f, const gchar *argument)
 	g_assert_no_error(error);
 }
 
+/* Does anybody answer on @name?  Asked of the bus rather than tracked,
+   so the test cannot disagree with it. */
+static gboolean
+name_has_owner(const gchar *name)
+{
+	g_autoptr(GDBusConnection) conn = NULL;
+	g_autoptr(GVariant) reply = NULL;
+	gboolean owned = FALSE;
+
+	conn = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
+	if (conn == NULL)
+		return FALSE;
+
+	reply = g_dbus_connection_call_sync(conn,
+		"org.freedesktop.DBus", "/org/freedesktop/DBus",
+		"org.freedesktop.DBus", "NameHasOwner",
+		g_variant_new("(s)", name), G_VARIANT_TYPE("(b)"),
+		G_DBUS_CALL_FLAGS_NONE, 3000, NULL, NULL);
+	if (reply != NULL)
+		g_variant_get(reply, "(b)", &owned);
+	return owned;
+}
+
 /* ── The cases ───────────────────────────────────────────────────── */
+
+/*
+ * Logging out and back in is a RACE for the watcher name: the outgoing
+ * session's compositor still owns it at the moment the incoming one
+ * asks for it.
+ *
+ * gowl has to stand down right then --- two watchers on one bus is how
+ * applications end up registered with the one nobody is displaying ---
+ * and then take the name when it comes free, with `serving' following
+ * it.  Holding the name while reporting not-serving is the worst of
+ * both: nothing draws a tray AND no other tray can take over, which is
+ * the state a real session was found in.
+ *
+ * The holder is a PRIVATE connection.  `g_bus_get_sync' hands out one
+ * shared session connection per process, so a holder opened that way
+ * would be the tray's own connection and the request would come back
+ * ALREADY_OWNER without ever racing anything.
+ */
+static void
+test_the_name_is_picked_up_when_it_comes_free(void)
+{
+	g_autoptr(GTestDBus) bus = NULL;
+	g_autoptr(GDBusConnection) holder = NULL;
+	g_autoptr(GError) error = NULL;
+	GowlTray *tray;
+	guint      name_id;
+	gint64     deadline;
+
+	bus = g_test_dbus_new(G_TEST_DBUS_NONE);
+	g_test_dbus_up(bus);
+
+	holder = g_dbus_connection_new_for_address_sync(
+		g_test_dbus_get_bus_address(bus),
+		G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT
+		| G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
+		NULL, NULL, &error);
+	g_assert_no_error(error);
+
+	/* The outgoing session, still on the bus. */
+	name_id = g_bus_own_name_on_connection(holder,
+		"org.kde.StatusNotifierWatcher",
+		G_BUS_NAME_OWNER_FLAGS_NONE, NULL, NULL, NULL, NULL);
+	g_assert_cmpuint(name_id, !=, 0);
+
+	deadline = g_get_monotonic_time() + 3 * G_USEC_PER_SEC;
+	while (!name_has_owner("org.kde.StatusNotifierWatcher")
+	       && g_get_monotonic_time() < deadline) {
+		g_main_context_iteration(NULL, FALSE);
+		g_usleep(2000);
+	}
+	g_assert_true(name_has_owner("org.kde.StatusNotifierWatcher"));
+
+	tray = gowl_tray_new();
+	g_assert_true(gowl_tray_start(tray, NULL, &error));
+	g_assert_no_error(error);
+
+	/* It must not fight for a name somebody else is answering on. */
+	deadline = g_get_monotonic_time() + G_USEC_PER_SEC / 2;
+	while (g_get_monotonic_time() < deadline) {
+		g_main_context_iteration(NULL, FALSE);
+		g_usleep(2000);
+	}
+	g_assert_false(gowl_tray_is_serving(tray));
+
+	/* And now the outgoing session finally exits. */
+	g_bus_unown_name(name_id);
+
+	deadline = g_get_monotonic_time() + 5 * G_USEC_PER_SEC;
+	while (!gowl_tray_is_serving(tray)
+	       && g_get_monotonic_time() < deadline) {
+		g_main_context_iteration(NULL, FALSE);
+		g_usleep(2000);
+	}
+	g_assert_true(gowl_tray_is_serving(tray));
+
+	gowl_tray_stop(tray);
+	g_object_unref(tray);
+	g_dbus_connection_close_sync(holder, NULL, NULL);
+	g_test_dbus_down(bus);
+}
+
 
 static void serving (Fixture *f);
 
@@ -780,6 +884,8 @@ main(int argc, char **argv)
 #undef CASE
 	g_test_add_func("/tray/a-pixmap-becomes-a-surface",
 	                test_a_pixmap_is_converted_for_cairo);
+	g_test_add_func("/tray/the-name-comes-free",
+	                test_the_name_is_picked_up_when_it_comes_free);
 
 	return g_test_run();
 }

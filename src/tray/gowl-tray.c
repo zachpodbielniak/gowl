@@ -1153,11 +1153,22 @@ bus_thread(gpointer data)
 		          error->message);
 	} else {
 		/*
-		 * NONE: never take the name from a tray that has it and never
-		 * queue for it.  Queueing would mean silently becoming the
-		 * watcher later, at which point every application has already
-		 * registered with the other one and none of them will register
-		 * again.
+		 * NONE: never TAKE the name from a tray that has it.
+		 *
+		 * It does queue --- DBUS_NAME_FLAG_DO_NOT_QUEUE is the opt-in
+		 * and NONE is not it --- and that is wanted rather than
+		 * tolerated.  Logging out and back in is a race with the
+		 * outgoing session's compositor, which still owns the name
+		 * when the incoming one asks; queueing is what turns that into
+		 * a tray half a second late instead of no tray until the next
+		 * reboot.  on_watcher_name_acquired() is what makes `serving'
+		 * follow the handover, and tests/test-tray.c asserts the whole
+		 * sequence against a bus of its own.
+		 *
+		 * The cost is real but smaller: an application that registered
+		 * with the tray that went away does not register again, so its
+		 * icon is missing until it restarts.  Standing down forever
+		 * would lose the same icon AND every later one.
 		 */
 		self->watcher_name_id = g_bus_own_name_on_connection(self->conn,
 			SNW_NAME, G_BUS_NAME_OWNER_FLAGS_NONE,

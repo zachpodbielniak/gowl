@@ -58,6 +58,14 @@ typedef struct {
 	gboolean         many_sizes;
 	guint            activated;  /* Activate calls seen */
 	gint             menu_event; /* last Event id, -1 for none */
+	guint            about_to_show;  /* AboutToShow calls seen */
+	guint            get_layout;     /* GetLayout calls seen */
+	/*
+	 * The Proton bridge's behaviour, and the whole point of this:
+	 * building the menu is what AboutToShow asks for, and building it
+	 * is what makes an application announce that the layout changed.
+	 */
+	gboolean         announce_on_about_to_show;
 } Fixture;
 
 /* ── The fake application ────────────────────────────────────────── */
@@ -226,11 +234,18 @@ fake_method(GDBusConnection *conn, const gchar *sender, const gchar *path,
 		return;
 	}
 	if (g_strcmp0(method, "AboutToShow") == 0) {
+		f->about_to_show++;
 		g_dbus_method_invocation_return_value(inv,
 			g_variant_new("(b)", FALSE));
+		if (f->announce_on_about_to_show) {
+			g_dbus_connection_emit_signal(f->conn, NULL, FAKE_MENU,
+				"com.canonical.dbusmenu", "LayoutUpdated",
+				g_variant_new("(ui)", 1, 0), NULL);
+		}
 		return;
 	}
 	if (g_strcmp0(method, "GetLayout") == 0) {
+		f->get_layout++;
 		g_dbus_method_invocation_return_value(inv, fake_layout());
 		return;
 	}
@@ -391,6 +406,31 @@ wait_until(Fixture *f, gboolean (*pred)(Fixture *), gint ms)
 		g_usleep(2000);
 	}
 	return pred(f);
+}
+
+/* Turn the context for a fixed time, with no predicate: some of what is
+ * being asserted is that nothing further HAPPENS. */
+static void
+settle(Fixture *f, gint ms)
+{
+	gint64 deadline = g_get_monotonic_time() + (gint64)ms * 1000;
+
+	(void)f;
+	while (g_get_monotonic_time() < deadline) {
+		g_main_context_iteration(NULL, FALSE);
+		g_usleep(2000);
+	}
+}
+
+/* The one registered item's key, for a fixture that has exactly one. */
+static gchar *
+only_key(Fixture *f)
+{
+	g_autoptr(GPtrArray) items = gowl_tray_dup_items(f->tray);
+
+	if (items == NULL || items->len == 0)
+		return NULL;
+	return g_strdup(((GowlTrayItem *)g_ptr_array_index(items, 0))->key);
 }
 
 static gboolean
@@ -859,6 +899,97 @@ test_a_pixmap_is_converted_for_cairo(void)
 	cairo_surface_destroy(surface);
 }
 
+/* ── The menu must not talk to itself ────────────────────────────── */
+
+/*
+ * A MENU READ MUST NOT MAKE THE APPLICATION ANNOUNCE ANOTHER ONE.
+ *
+ * `AboutToShow' is how an application that builds its menu on demand
+ * gets told to build it, and building it is what makes it emit
+ * `LayoutUpdated'.  Calling AboutToShow in RESPONSE to LayoutUpdated is
+ * therefore a loop with the application on the other end.
+ *
+ * It shipped that way.  On a live session it was 36,000 signals and
+ * 2,000 round trips every three seconds -- the Proton bridge at half a
+ * core, the session bus saturated, and, because this thread also serves
+ * the WATCHER, no other application able to register an icon at all.
+ * deskflow, Steam and Battle.net simply had no tray icon, and the only
+ * trace anywhere was one libappindicator timeout in the journal.
+ *
+ * The fake application here does what the bridge does, so the loop
+ * closes if the rule is broken.
+ */
+static void
+test_a_layout_change_does_not_ask_for_another(Fixture *f, gconstpointer data)
+{
+	guint settled;
+
+	(void)data;
+	serving(f);
+	fixture_app_up(f, "org.example.FakeTrayLoop");
+	f->announce_on_about_to_show = TRUE;
+	register_as(f, "org.example.FakeTrayLoop");
+	g_assert_true(wait_until(f, have_one_item, 3000));
+
+	/* Prove the menu plumbing works at all before asserting about the
+	 * signal path: a refresh reads it. */
+	{
+		g_autofree gchar *key = only_key(f);
+
+		g_assert_nonnull(key);
+		gowl_tray_menu_refresh(f->tray, key);
+		g_assert_true(wait_until(f, menu_arrived, 3000));
+	}
+
+	f->about_to_show = 0;
+	f->get_layout = 0;
+
+	/* The application announces a change, as one does whenever its
+	 * menu is rebuilt. */
+	g_dbus_connection_emit_signal(f->conn, NULL, FAKE_MENU,
+		"com.canonical.dbusmenu", "LayoutUpdated",
+		g_variant_new("(ui)", 1, 0), NULL);
+
+	settle(f, 1500);
+
+	/* The read happened -- otherwise the menu goes stale -- and it did
+	 * NOT ask the application to rebuild, so nothing came back. */
+	g_assert_cmpuint(f->get_layout, >, 0);
+	g_assert_cmpuint(f->about_to_show, ==, 0);
+
+	/* And it settled: a second look finds no more traffic. */
+	settled = f->get_layout;
+	settle(f, 1000);
+	g_assert_cmpuint(f->get_layout, ==, settled);
+}
+
+/*
+ * ... but opening the menu still asks.
+ *
+ * Dropping AboutToShow altogether would fix the loop and leave the
+ * Proton bridge's menu permanently empty, which is the bug it was added
+ * for.  The distinction is WHO is asking: a layout change is the
+ * application talking, and a refresh is somebody about to look.
+ */
+static void
+test_opening_the_menu_does_ask(Fixture *f, gconstpointer data)
+{
+	g_autofree gchar *key = NULL;
+
+	(void)data;
+	serving(f);
+	fixture_app_up(f, "org.example.FakeTrayAsk");
+	register_as(f, "org.example.FakeTrayAsk");
+	g_assert_true(wait_until(f, have_one_item, 3000));
+
+	f->about_to_show = 0;
+	key = only_key(f);
+	g_assert_nonnull(key);
+	gowl_tray_menu_refresh(f->tray, key);
+	g_assert_true(wait_until(f, menu_arrived, 3000));
+	g_assert_cmpuint(f->about_to_show, >, 0);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -880,6 +1011,9 @@ main(int argc, char **argv)
 	CASE("/tray/a-click-arrives", test_a_click_reaches_the_application);
 	CASE("/tray/the-menu-is-a-tree",
 	     test_the_menu_is_a_tree_without_mnemonics);
+	CASE("/tray/a-layout-change-does-not-ask-for-another",
+	     test_a_layout_change_does_not_ask_for_another);
+	CASE("/tray/opening-the-menu-does-ask", test_opening_the_menu_does_ask);
 
 #undef CASE
 	g_test_add_func("/tray/a-pixmap-becomes-a-surface",

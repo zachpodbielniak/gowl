@@ -930,7 +930,8 @@ menu_parse(GVariant *node)
 
 /* Bus thread.  Asks permission, then reads the whole tree. */
 static void
-tray_read_menu(GowlTray *self, const gchar *key)
+tray_read_menu(GowlTray *self, const gchar *key,
+               gboolean about_to_show)
 {
 	g_autofree gchar *bus = NULL;
 	g_autofree gchar *menu_path = NULL;
@@ -951,15 +952,34 @@ tray_read_menu(GowlTray *self, const gchar *key)
 	g_mutex_unlock(&self->lock);
 
 	/*
-	 * AboutToShow first, and its answer is ignored on purpose.  It is
-	 * how an application that builds its menu on demand gets told to
-	 * build it -- the Proton bridge's is empty until this lands -- and
-	 * an application that has not implemented it returns an error,
-	 * which is not a reason to skip the read that follows.
+	 * AboutToShow ONLY WHEN THE MENU IS ABOUT TO BE SHOWN, which is
+	 * what the method is named after and is not a pedantic reading.
+	 *
+	 * It is how an application that builds its menu on demand gets told
+	 * to build it -- the Proton bridge's is empty until this lands --
+	 * and building it is exactly what makes the application emit
+	 * `LayoutUpdated'.  Calling it in RESPONSE to LayoutUpdated is
+	 * therefore a loop with the application on the other end of it, and
+	 * it is not a slow one: measured on a live session, 36,000 signals
+	 * and 2,000 round trips every three seconds, with the bridge at 50%
+	 * of a core and the session bus saturated.
+	 *
+	 * What made that worse than a busy loop is what it did to everybody
+	 * else.  The bus thread serves the WATCHER as well, so while it was
+	 * in this storm no other application could register an item at all:
+	 * deskflow, Steam and Battle.net simply had no tray icon, and the
+	 * only trace was one libappindicator timeout in the journal.
+	 *
+	 * Its answer is ignored on purpose: an application that has not
+	 * implemented it returns an error, which is not a reason to skip
+	 * the read that follows.
 	 */
-	g_dbus_connection_call_sync(self->conn, bus, menu_path, MENU_IFACE,
-		"AboutToShow", g_variant_new("(i)", 0), NULL,
-		G_DBUS_CALL_FLAGS_NONE, GOWL_TRAY_CALL_TIMEOUT_MS, NULL, NULL);
+	if (about_to_show) {
+		g_dbus_connection_call_sync(self->conn, bus, menu_path,
+			MENU_IFACE, "AboutToShow", g_variant_new("(i)", 0),
+			NULL, G_DBUS_CALL_FLAGS_NONE,
+			GOWL_TRAY_CALL_TIMEOUT_MS, NULL, NULL);
+	}
 
 	/* Depth -1 is the whole tree.  Asking for one level and walking it
 	 * would be a round trip per submenu, each able to time out. */
@@ -1006,7 +1026,11 @@ menu_signal_cb(GDBusConnection *conn, const gchar *sender, const gchar *path,
 	if (g_strcmp0(signal, "LayoutUpdated") != 0
 	    && g_strcmp0(signal, "ItemsPropertiesUpdated") != 0)
 		return;
-	tray_read_menu(r->tray, r->key);
+	/*
+	 * A layout change is NOT somebody opening the menu, so this reads
+	 * without AboutToShow -- see tray_read_menu().
+	 */
+	tray_read_menu(r->tray, r->key, FALSE);
 }
 
 /* ── The watcher object ──────────────────────────────────────────── */
@@ -1254,7 +1278,7 @@ action_run(gpointer data)
 		return G_SOURCE_REMOVE;
 
 	if (g_strcmp0(act->method, "@menu-refresh") == 0) {
-		tray_read_menu(self, act->key);
+		tray_read_menu(self, act->key, TRUE);
 		return G_SOURCE_REMOVE;
 	}
 	if (g_strcmp0(act->method, "@menu-click") == 0) {

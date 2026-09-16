@@ -50,7 +50,8 @@ bar_tray_icon_cache_free(BarTrayIconCache *cache)
 }
 
 cairo_surface_t *
-bar_tray_icon_for(BarTrayIconCache *cache, const GowlTrayItem *item, gint size)
+bar_tray_icon_for(BarTrayIconCache *cache, const GowlTrayItem *item,
+                  gint size, const gdouble *fg)
 {
 	g_autofree gchar *cache_key = NULL;
 	cairo_surface_t *surface = NULL;
@@ -65,8 +66,11 @@ bar_tray_icon_for(BarTrayIconCache *cache, const GowlTrayItem *item, gint size)
 	 * a tray icon for a syncing or connecting application -- is not
 	 * served its old one for ever.
 	 */
-	cache_key = g_strdup_printf("%s\x1f%u\x1f%d", item->key, item->serial,
-	                            size);
+	cache_key = g_strdup_printf("%s\x1f%u\x1f%d\x1f%02x%02x%02x",
+	                            item->key, item->serial, size,
+	                            fg != NULL ? (guint)(CLAMP(fg[0], 0.0, 1.0) * 255) : 0,
+	                            fg != NULL ? (guint)(CLAMP(fg[1], 0.0, 1.0) * 255) : 0,
+	                            fg != NULL ? (guint)(CLAMP(fg[2], 0.0, 1.0) * 255) : 0);
 	if (g_hash_table_lookup_extended(cache->items, cache_key, NULL,
 	                                 (gpointer *)&surface))
 		return surface;
@@ -113,6 +117,28 @@ bar_tray_icon_for(BarTrayIconCache *cache, const GowlTrayItem *item, gint size)
 
 		if (found != NULL)
 			surface = cairo_surface_reference(found);
+	}
+
+	/*
+	 * A symbolic icon is a shape in the alpha channel and a flat
+	 * black in the colour one, and a flat black glyph on a dark bar
+	 * is a slot that looks empty --- which reads as the application
+	 * having failed to register rather than as an icon nobody can
+	 * see.  Paint it in the bar's own foreground, the way the panel
+	 * a symbolic icon was drawn for would have.
+	 *
+	 * Only a mask: an icon with any colour of its own is a picture
+	 * and keeps it.  The lookup path hands back a surface the shared
+	 * name cache owns, so the tint lands on a copy either way.
+	 */
+	if (surface != NULL && fg != NULL && gowl_bar_icon_is_mask(surface)) {
+		cairo_surface_t *tinted = gowl_bar_icon_tint(surface, fg[0],
+		                                             fg[1], fg[2]);
+
+		if (tinted != NULL) {
+			cairo_surface_destroy(surface);
+			surface = tinted;
+		}
 	}
 
 	/* Inserted even when NULL, so a name that cannot be resolved is

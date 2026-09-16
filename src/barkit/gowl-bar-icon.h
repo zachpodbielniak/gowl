@@ -91,6 +91,47 @@ cairo_surface_t *gowl_bar_icon_from_file (const gchar *path, gint size);
 cairo_surface_t *gowl_bar_icon_scale (cairo_surface_t *src, gint size);
 
 /**
+ * gowl_bar_icon_is_mask:
+ * @surface: an ARGB32 image surface, or %NULL
+ *
+ * Is this image a mask rather than a picture?
+ *
+ * A symbolic icon carries its shape in the alpha channel and nothing
+ * in the colour one: every pixel that is there at all is the same flat
+ * black (or the same flat white), and whoever draws it is expected to
+ * supply the colour.  Qt hands one over as a pixmap like any other, so
+ * an application with a symbolic tray icon ships a black glyph --- and
+ * a black glyph on a dark bar is an invisible one.
+ *
+ * The test is on the pixels, not on the icon's name: an application
+ * that calls its icon `-symbolic' is telling the truth, but so is one
+ * that hands over a monochrome glyph under any other name, and it is
+ * the pixels that decide whether it can be seen.  An icon with any
+ * colour in it --- even one flat colour, like a red dot --- is a
+ * picture and is left alone.
+ *
+ * Returns: %TRUE if every visible pixel is the same achromatic tone.
+ */
+gboolean gowl_bar_icon_is_mask (cairo_surface_t *surface);
+
+/**
+ * gowl_bar_icon_tint:
+ * @surface: an ARGB32 image surface
+ * @r: red, 0..1
+ * @g: green, 0..1
+ * @b: blue, 0..1
+ *
+ * Paint a mask in one colour, keeping its alpha.  The shape is the
+ * alpha channel, so the result is the same glyph in a colour that can
+ * be seen against the bar it is drawn on.
+ *
+ * Returns: (transfer full) (nullable): a new surface; @surface is not
+ *   modified.
+ */
+cairo_surface_t *gowl_bar_icon_tint (cairo_surface_t *surface,
+                                     gdouble r, gdouble g, gdouble b);
+
+/**
  * gowl_bar_icon_find_file:
  * @name: a themed icon name, or an absolute path
  * @theme_path: (nullable): extra directories to search first

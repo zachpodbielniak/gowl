@@ -176,7 +176,8 @@ tray_draw(GowlBarPlugin *plugin, gpointer data, cairo_t *cr,
 	for (i = 0; i < d->shown->len; i++) {
 		GowlTrayItem *item = g_ptr_array_index(d->shown, i);
 		cairo_surface_t *icon = bar_tray_icon_for(d->icons, item,
-		                                          d->icon_px);
+			d->icon_px, gowl_bar_theme_color(theme,
+			                                 GOWL_BAR_COLOR_TEXT));
 		gint ix = x + (gint)i * d->slot;
 		gint iy = y + (height - d->icon_px) / 2;
 

@@ -487,6 +487,137 @@ gowl_bar_icon_scale(cairo_surface_t *src, gint size)
 	return scale_to(src, size);
 }
 
+/*
+ * How far two channels may differ and still count as the same tone.
+ * Scaling a glyph resamples its edges, so even a pixmap that started
+ * out perfectly flat comes back with a few pixels a shade off.
+ */
+#define GOWL_BAR_ICON_MASK_SLACK (12)
+
+/* Pixels this faint are the glyph's antialiased fringe and say nothing
+ * about its colour. */
+#define GOWL_BAR_ICON_MASK_FLOOR (24)
+
+gboolean
+gowl_bar_icon_is_mask(cairo_surface_t *surface)
+{
+	const guint8 *data;
+	gint w, h, stride, x, y;
+	gint lo = 256, hi = -1;
+	gboolean seen = FALSE;
+
+	if (surface == NULL
+	    || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS
+	    || cairo_image_surface_get_format(surface) != CAIRO_FORMAT_ARGB32)
+		return FALSE;
+
+	data   = cairo_image_surface_get_data(surface);
+	w      = cairo_image_surface_get_width(surface);
+	h      = cairo_image_surface_get_height(surface);
+	stride = cairo_image_surface_get_stride(surface);
+	if (data == NULL || w <= 0 || h <= 0)
+		return FALSE;
+
+	for (y = 0; y < h; y++) {
+		const guint32 *row = (const guint32 *)(data + (gsize)y * stride);
+
+		for (x = 0; x < w; x++) {
+			guint32 px = row[x];
+			gint a = (gint)((px >> 24) & 0xff);
+			gint r, g, b, cmin, cmax;
+
+			if (a < GOWL_BAR_ICON_MASK_FLOOR)
+				continue;
+
+			/* Cairo's ARGB32 is premultiplied; undo it, or a
+			 * half-transparent white reads as a grey and every
+			 * antialiased edge looks like a second colour. */
+			r = (gint)(((px >> 16) & 0xff) * 255 / a);
+			g = (gint)(((px >>  8) & 0xff) * 255 / a);
+			b = (gint)(( px        & 0xff) * 255 / a);
+			if (r > 255) r = 255;
+			if (g > 255) g = 255;
+			if (b > 255) b = 255;
+
+			/*
+			 * One tone, across every channel and every pixel.
+			 * Tracking the extremes of the channels themselves
+			 * answers both questions at once: a pixel with any
+			 * chroma in it spreads the range as surely as a
+			 * second shade does, so a purple icon and a
+			 * greyscale photograph are both rejected here, and
+			 * both should be --- the first has a colour of its
+			 * own and the second would lose its shading.
+			 */
+			cmin = MIN(r, MIN(g, b));
+			cmax = MAX(r, MAX(g, b));
+			if (cmax > hi) hi = cmax;
+			if (cmin < lo) lo = cmin;
+			if (hi - lo > GOWL_BAR_ICON_MASK_SLACK)
+				return FALSE;
+
+			seen = TRUE;
+		}
+	}
+
+	/* A fully transparent image is not a mask of anything. */
+	return seen;
+}
+
+cairo_surface_t *
+gowl_bar_icon_tint(cairo_surface_t *surface, gdouble r, gdouble g, gdouble b)
+{
+	cairo_surface_t *out;
+	const guint8 *src;
+	guint8 *dst;
+	gint w, h, src_stride, dst_stride, x, y;
+	gint ri, gi, bi;
+
+	if (surface == NULL
+	    || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS
+	    || cairo_image_surface_get_format(surface) != CAIRO_FORMAT_ARGB32)
+		return NULL;
+
+	w = cairo_image_surface_get_width(surface);
+	h = cairo_image_surface_get_height(surface);
+	if (w <= 0 || h <= 0)
+		return NULL;
+
+	out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+	if (cairo_surface_status(out) != CAIRO_STATUS_SUCCESS) {
+		cairo_surface_destroy(out);
+		return NULL;
+	}
+
+	ri = (gint)(CLAMP(r, 0.0, 1.0) * 255.0 + 0.5);
+	gi = (gint)(CLAMP(g, 0.0, 1.0) * 255.0 + 0.5);
+	bi = (gint)(CLAMP(b, 0.0, 1.0) * 255.0 + 0.5);
+
+	src        = cairo_image_surface_get_data(surface);
+	dst        = cairo_image_surface_get_data(out);
+	src_stride = cairo_image_surface_get_stride(surface);
+	dst_stride = cairo_image_surface_get_stride(out);
+
+	for (y = 0; y < h; y++) {
+		const guint32 *srow = (const guint32 *)(src + (gsize)y * src_stride);
+		guint32 *drow = (guint32 *)(dst + (gsize)y * dst_stride);
+
+		for (x = 0; x < w; x++) {
+			guint32 a = (srow[x] >> 24) & 0xff;
+
+			/* Premultiplied, because that is what the format
+			 * says and cairo does not check. */
+			drow[x] = (a << 24)
+			        | ((guint32)((ri * a + 127) / 255) << 16)
+			        | ((guint32)((gi * a + 127) / 255) <<  8)
+			        |  (guint32)((bi * a + 127) / 255);
+		}
+	}
+
+	cairo_surface_mark_dirty(out);
+	return out;
+}
+
 cairo_surface_t *
 gowl_bar_icon_lookup(GHashTable *cache, const gchar *name,
                      const gchar *theme_path, gint size)

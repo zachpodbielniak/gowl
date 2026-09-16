@@ -1011,6 +1011,37 @@ emits =PropertiesChanged=, so the payload-free =NewIcon= and friends are
 answered with a fresh =GetAll=; and nothing at all announces that an
 item has gone, so its bus name is watched instead.
 
+**** A symbolic icon has no colour of its own
+
+An application with a symbolic tray icon hands over a pixmap like any
+other, and that pixmap is a flat black glyph: the shape lives in the
+alpha channel and the colour channel says nothing. Drawn as sent on a
+dark bar it is black on black --- a slot that looks empty, which reads
+as the application having failed to register rather than as an icon
+nobody can see. Deskflow is the case that found this; Proton Mail
+Bridge, whose icon is purple, was visible the whole time. GNOME's
+AppIndicator extension shows both because it repaints a symbolic icon
+in the panel's own foreground.
+
+=gowl_bar_icon_is_mask()= decides from the pixels rather than from the
+icon's name: an image whose visible pixels are all one achromatic tone
+carries no colour and is painted in the bar's text colour by
+=gowl_bar_icon_tint()=. Anything else is a picture and is left exactly
+as the application sent it --- a purple logo, a red attention dot, a
+greyscale glyph with real shading. The name is not the test because an
+application that calls its icon =-symbolic= is telling the truth but so
+is one that ships a monochrome glyph under any other name, and it is
+the pixels that decide whether it can be seen.
+
+Two details that are easy to get wrong and are asserted in
+=tests/test-bar-icon-mask.c=: cairo's ARGB32 is *premultiplied*, so the
+tone test has to undo that or every antialiased edge reads as a second
+shade and a plain white glyph is mistaken for a picture; and the tint
+has to write premultiplied too, because cairo does not check --- it
+renders the mistake as a bright halo. The tinted surface is a copy: the
+name lookup hands back a surface the shared icon cache owns, and
+repainting it in place would recolour every other widget's copy.
+
 *** The menu
 
 =src/menu/gowl-menu.c= is the tree the menu shows: the YAML reader, the

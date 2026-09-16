@@ -58,13 +58,20 @@ void bar_tray_icon_cache_free (BarTrayIconCache *cache);
  * item's `Id' as a name --- which is a guess, and a good one, because an
  * application's tray icon is very often installed under its own name.
  *
+ * A monochrome icon --- a symbolic one, which carries its shape in the
+ * alpha channel and hands over a flat black glyph --- is painted in
+ * @fg instead of its own colour.  Black on a dark bar is a slot that
+ * looks empty, and the application looks like it never registered at
+ * all.  An icon with any colour of its own keeps it.
+ *
  * Returns: (transfer none) (nullable): the surface, owned by @cache, or
  *   %NULL when nothing could be found --- which the caller draws as a
  *   lettered placeholder rather than as a gap.
  */
 cairo_surface_t *bar_tray_icon_for (BarTrayIconCache   *cache,
                                     const GowlTrayItem *item,
-                                    gint                size);
+                                    gint                size,
+                                    const gdouble      *fg);
 
 G_END_DECLS
 

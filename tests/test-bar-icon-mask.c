@@ -23,6 +23,17 @@
  *   must come out of the bar exactly as the application sent it.
  *   Repainting those would be worse than the bug.
  *
+ *   AND IT IS DECIDED ON THE SURFACE THAT IS ACTUALLY DRAWN.  The
+ *   first version of this file built its surfaces by hand and asked
+ *   about those.  The bar does not draw those: it premultiplies the
+ *   application's pixmap and scales it to the bar's height, and
+ *   scaling resamples a glyph's antialiased edges.  Deskflow's icon
+ *   is a flat dark tone in the pixmap and spans fourteen shades by the
+ *   time it is drawn --- which the first rule, asking for twelve,
+ *   rejected.  The icon stayed invisible and every test passed.  So
+ *   the last two cases here go through gowl_tray_item_argb32() and
+ *   gowl_bar_icon_scale() first, as the bar does.
+ *
  *   THE TINT KEEPS THE SHAPE.  Alpha is untouched, the colour is the
  *   one asked for, and the result stays premultiplied --- cairo does
  *   not check, it just renders the mistake.
@@ -32,6 +43,7 @@
 #include <cairo.h>
 
 #include "barkit/gowl-bar-icon.h"
+#include "tray/gowl-tray.h"
 
 /* Build an ARGB32 surface from a callback over (x, y). */
 typedef void (*PixelFn)(gint x, gint y, guint8 *a, guint8 *r, guint8 *g,
@@ -123,6 +135,56 @@ px_greyscale(gint x, gint y, guint8 *a, guint8 *r, guint8 *g, guint8 *b)
 	*r = *g = *b = (guint8)(x * 8);
 }
 
+/*
+ * A dark glyph with a fringe so faint it carries no information: alpha
+ * 2, which is what scaling a shape leaves around its edge.  Its stored
+ * colour rounds to 1, and un-premultiplying that reports a tone of 127
+ * --- brighter than anything actually drawn.  A reader that trusts it
+ * calls a plainly dark glyph a mid-grey picture.
+ */
+static void
+px_faint_fringe(gint x, gint y, guint8 *a, guint8 *r, guint8 *g, guint8 *b)
+{
+	gboolean body = (x >= 4 && x < 12 && y >= 4 && y < 12);
+	gboolean ring = !body && (x >= 3 && x < 13 && y >= 3 && y < 13);
+
+	if (body) {
+		*a = 255; *r = *g = *b = 64;
+	} else if (ring) {
+		*a = 2; *r = *g = *b = 128;
+	} else {
+		*a = 0; *r = *g = *b = 0;
+	}
+}
+
+/*
+ * A dark navy glyph.  Confined to the dark end exactly as a mask is,
+ * so only its chroma separates the two --- and an application that
+ * chose a dark colour deliberately must keep it.
+ */
+static void
+px_dark_navy(gint x, gint y, guint8 *a, guint8 *r, guint8 *g, guint8 *b)
+{
+	(void)x; (void)y;
+	*a = 255; *r = 8; *g = 8; *b = 90;
+}
+
+/* The same trap at the light end: pale, but unmistakably yellow. */
+static void
+px_pale_yellow(gint x, gint y, guint8 *a, guint8 *r, guint8 *g, guint8 *b)
+{
+	(void)x; (void)y;
+	*a = 255; *r = 255; *g = 240; *b = 170;
+}
+
+/* Flat mid-grey: achromatic, but nowhere near either end. */
+static void
+px_mid_grey(gint x, gint y, guint8 *a, guint8 *r, guint8 *g, guint8 *b)
+{
+	(void)x; (void)y;
+	*a = 255; *r = *g = *b = 128;
+}
+
 static void
 px_transparent(gint x, gint y, guint8 *a, guint8 *r, guint8 *g, guint8 *b)
 {
@@ -171,6 +233,60 @@ test_one_flat_colour_is_not(void)
 	cairo_surface_t *s = make_surface(16, 16, px_flat_red);
 
 	/* Flat, like a mask, but red means something. */
+	g_assert_false(gowl_bar_icon_is_mask(s));
+	cairo_surface_destroy(s);
+}
+
+static void
+test_a_faint_fringe_does_not_decide_it(void)
+{
+	cairo_surface_t *s = make_surface(16, 16, px_faint_fringe);
+
+	/*
+	 * The glyph is dark and is a mask.  The only pixels saying
+	 * otherwise are an alpha-2 fringe whose colour is a rounding
+	 * artefact, and reading those is how a mask gets mistaken for a
+	 * picture and left black on a black bar.
+	 */
+	g_assert_true(gowl_bar_icon_is_mask(s));
+	cairo_surface_destroy(s);
+}
+
+static void
+test_a_dark_coloured_glyph_is_not(void)
+{
+	cairo_surface_t *s = make_surface(16, 16, px_dark_navy);
+
+	/*
+	 * As dark as Deskflow's glyph and just as confined, so the tone
+	 * test alone would repaint it.  It has a colour of its own and
+	 * the application meant it.
+	 */
+	g_assert_false(gowl_bar_icon_is_mask(s));
+	cairo_surface_destroy(s);
+}
+
+static void
+test_a_light_coloured_glyph_is_not(void)
+{
+	cairo_surface_t *s = make_surface(16, 16, px_pale_yellow);
+
+	/* The same trap at the other end. */
+	g_assert_false(gowl_bar_icon_is_mask(s));
+	cairo_surface_destroy(s);
+}
+
+static void
+test_mid_grey_is_not(void)
+{
+	cairo_surface_t *s = make_surface(16, 16, px_mid_grey);
+
+	/*
+	 * Achromatic and perfectly flat --- a mask under the old rule ---
+	 * but it sits in the middle of the range, where an icon is
+	 * equally visible on a dark bar and a light one and nobody is
+	 * waiting to be told what colour to be.
+	 */
 	g_assert_false(gowl_bar_icon_is_mask(s));
 	cairo_surface_destroy(s);
 }
@@ -316,6 +432,105 @@ test_tint_null(void)
 	g_assert_null(gowl_bar_icon_tint(NULL, 1.0, 1.0, 1.0));
 }
 
+/* ------------------------------------------------------------------ *
+ * Through the pipeline the bar actually uses
+ * ------------------------------------------------------------------ */
+
+/*
+ * An application's pixmap as it arrives: straight (not premultiplied)
+ * ARGB, big-endian, exactly what the StatusNotifierItem property hands
+ * over.
+ *
+ * The shape is in the alpha channel.  The colour channels run from 0
+ * to @tone across the glyph rather than sitting flat at it, because
+ * that is what the real icons do --- Deskflow's three channels each
+ * hold seventeen distinct values between 0 and 64 --- and a flat
+ * fixture would be a kinder image than any application sends.  It was
+ * a rule that could not survive that variation which left the icon
+ * invisible.
+ *
+ * The caller owns the result.
+ */
+static guint8 *
+sni_pixmap(gint w, gint h, guint8 tone, gboolean colourful)
+{
+	guint8 *p = g_malloc0((gsize)w * h * 4);
+	gint x, y;
+
+	for (y = 0; y < h; y++) {
+		for (x = 0; x < w; x++) {
+			guint8 *px = p + ((gsize)y * w + x) * 4;
+			gboolean inside = (x > w / 8) && (y > h / 8)
+			                  && (x < w - w / 8) && (y < h - h / 8);
+			guint8 t = (guint8)((gint)tone * x / (w - 1));
+
+			/* A glyph with an antialiased edge, which is where
+			 * the tones spread further once it is scaled. */
+			px[0] = inside ? 255 : (x == w / 8 || y == h / 8)
+			                       ? 100 : 0;
+			px[1] = t;
+			px[2] = colourful ? (guint8)(t / 3) : t;
+			px[3] = colourful ? 255 : t;
+		}
+	}
+	return p;
+}
+
+/* Premultiply and scale, exactly as bar_tray_icon_for() does. */
+static cairo_surface_t *
+as_the_bar_draws_it(gint w, gint h, guint8 *pixmap, gint size)
+{
+	GowlTrayItem item;
+	cairo_surface_t *raw, *scaled;
+
+	memset(&item, 0, sizeof(item));
+	item.pixmap        = pixmap;
+	item.pixmap_width  = w;
+	item.pixmap_height = h;
+
+	raw = gowl_tray_item_argb32(&item);
+	g_assert_nonnull(raw);
+	scaled = gowl_bar_icon_scale(raw, size);
+	cairo_surface_destroy(raw);
+	return scaled;
+}
+
+static void
+test_deskflow_through_the_pipeline(void)
+{
+	g_autofree guint8 *pixmap = NULL;
+	cairo_surface_t *drawn;
+
+	/*
+	 * Deskflow's icon, to the numbers measured off the running
+	 * application: a 64x64 glyph, shape entirely in the alpha, and
+	 * colour channels that never leave the dark end but do not sit
+	 * still inside it.  Scaled to a bar icon the real one spans
+	 * fourteen shades --- two more than the twelve the first rule
+	 * allowed, which is the whole of why it stayed invisible.
+	 */
+	pixmap = sni_pixmap(64, 64, 64, FALSE);
+	drawn = as_the_bar_draws_it(64, 64, pixmap, 20);
+
+	g_assert_true(gowl_bar_icon_is_mask(drawn));
+	cairo_surface_destroy(drawn);
+}
+
+static void
+test_bridge_through_the_pipeline(void)
+{
+	g_autofree guint8 *pixmap = NULL;
+	cairo_surface_t *drawn;
+
+	/* Proton Mail Bridge: a coloured logo, through the same steps.
+	 * It was visible all along and must be left alone. */
+	pixmap = sni_pixmap(22, 22, 200, TRUE);
+	drawn = as_the_bar_draws_it(22, 22, pixmap, 20);
+
+	g_assert_false(gowl_bar_icon_is_mask(drawn));
+	cairo_surface_destroy(drawn);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -329,8 +544,20 @@ main(int argc, char *argv[])
 	                test_a_coloured_icon_is_not);
 	g_test_add_func("/bar-icon/mask/one-flat-colour-is-not",
 	                test_one_flat_colour_is_not);
+	g_test_add_func("/bar-icon/mask/faint-fringe-does-not-decide-it",
+	                test_a_faint_fringe_does_not_decide_it);
+	g_test_add_func("/bar-icon/mask/dark-coloured-glyph-is-not",
+	                test_a_dark_coloured_glyph_is_not);
+	g_test_add_func("/bar-icon/mask/light-coloured-glyph-is-not",
+	                test_a_light_coloured_glyph_is_not);
+	g_test_add_func("/bar-icon/mask/mid-grey-is-not",
+	                test_mid_grey_is_not);
 	g_test_add_func("/bar-icon/mask/greyscale-is-not",
 	                test_greyscale_is_not);
+	g_test_add_func("/bar-icon/mask/deskflow-through-the-pipeline",
+	                test_deskflow_through_the_pipeline);
+	g_test_add_func("/bar-icon/mask/bridge-through-the-pipeline",
+	                test_bridge_through_the_pipeline);
 	g_test_add_func("/bar-icon/mask/nothing-visible-is-not",
 	                test_nothing_visible_is_not);
 	g_test_add_func("/bar-icon/mask/null-is-not", test_null_is_not);

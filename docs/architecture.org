@@ -1024,23 +1024,50 @@ AppIndicator extension shows both because it repaints a symbolic icon
 in the panel's own foreground.
 
 =gowl_bar_icon_is_mask()= decides from the pixels rather than from the
-icon's name: an image whose visible pixels are all one achromatic tone
-carries no colour and is painted in the bar's text colour by
-=gowl_bar_icon_tint()=. Anything else is a picture and is left exactly
-as the application sent it --- a purple logo, a red attention dot, a
-greyscale glyph with real shading. The name is not the test because an
-application that calls its icon =-symbolic= is telling the truth but so
-is one that ships a monochrome glyph under any other name, and it is
-the pixels that decide whether it can be seen.
+icon's name, and asks two things of every visible pixel:
 
-Two details that are easy to get wrong and are asserted in
-=tests/test-bar-icon-mask.c=: cairo's ARGB32 is *premultiplied*, so the
-tone test has to undo that or every antialiased edge reads as a second
-shade and a plain white glyph is mistaken for a picture; and the tint
-has to write premultiplied too, because cairo does not check --- it
-renders the mistake as a bright halo. The tinted surface is a copy: the
-name lookup hands back a surface the shared icon cache owns, and
-repainting it in place would recolour every other widget's copy.
+- *no chroma* --- the channels agree to within 32. Measured through the
+  real pipeline, Deskflow's glyph comes out at 11 and Proton's logo at
+  182, so there is no ambiguous ground to tune against.
+- *confined to one end* --- every tone is dark (<= 96) or every tone is
+  light (>= 160). A mask never reaches the middle; a greyscale
+  *picture* does, and shading one flat would erase what it draws.
+
+Both together, and the image is a shape waiting to be given a colour:
+=gowl_bar_icon_tint()= paints it in the bar's text colour, keeping the
+alpha. Anything else is left exactly as the application sent it --- a
+purple logo, a red attention dot, a dark navy glyph that is dark on
+purpose.
+
+*The first version of this rule asked for one flat tone, and it did not
+work.* A glyph is antialiased and the bar scales it, which resamples
+those edges: Deskflow's icon is a flat dark tone in the pixmap and
+spans fourteen shades by the time it is drawn, two more than the twelve
+that rule allowed. It stayed black on a black bar. What separates a
+mask from a picture is not flatness --- it is chroma and confinement.
+
+Three details that are easy to get wrong, each with its own case in
+=tests/test-bar-icon-mask.c=:
+
+- cairo's ARGB32 is *premultiplied*, so the tone test has to undo that
+  or every antialiased edge reads as a second shade and a plain white
+  glyph is mistaken for a picture;
+- un-premultiplying a nearly transparent pixel multiplies its rounding
+  error without bound, so pixels below alpha 24 are skipped: a scaling
+  artefact at alpha 2 reports a tone of 127 and would sink the verdict
+  on its own;
+- the tint has to write premultiplied too, because cairo does not check
+  --- it renders the mistake as a bright halo.
+
+The tinted surface is a copy: the name lookup hands back a surface the
+shared icon cache owns, and repainting it in place would recolour every
+other widget's copy.
+
+Two of those cases run an application's pixmap through
+=gowl_tray_item_argb32()= and =gowl_bar_icon_scale()= before asking,
+because the bar does not draw the pixmap it was sent --- it draws that
+one, and the difference between them is the whole of why the first rule
+passed its tests and failed on the desktop.
 
 **** The menu, as a panel
 

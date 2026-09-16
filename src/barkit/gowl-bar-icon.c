@@ -488,14 +488,37 @@ gowl_bar_icon_scale(cairo_surface_t *src, gint size)
 }
 
 /*
- * How far two channels may differ and still count as the same tone.
- * Scaling a glyph resamples its edges, so even a pixmap that started
- * out perfectly flat comes back with a few pixels a shade off.
+ * How much a visible pixel's channels may differ before the image is
+ * carrying a colour of its own rather than just a shape.
+ *
+ * Measured through the real pipeline --- an application's pixmap,
+ * premultiplied and scaled to a bar icon --- Deskflow's monochrome
+ * glyph comes out at 11 and Proton Mail Bridge's purple logo at 182.
+ * There is no ambiguous ground between them to tune against.
  */
-#define GOWL_BAR_ICON_MASK_SLACK (12)
+#define GOWL_BAR_ICON_MASK_CHROMA (32)
 
-/* Pixels this faint are the glyph's antialiased fringe and say nothing
- * about its colour. */
+/*
+ * A mask lives at one end of the range: it is all dark, or all light,
+ * and the drawer supplies the colour.  Deskflow's glyph lands at
+ * 30..44 of 255 once scaled.
+ *
+ * This is deliberately NOT "every pixel is the same tone".  That was
+ * the first rule and it was wrong: a glyph is antialiased, scaling it
+ * resamples those edges, and Deskflow's came out spanning 14 --- two
+ * more than the twelve it was allowed, so the icon stayed black on a
+ * black bar.  What separates a mask from a picture is not flatness,
+ * it is that a mask never reaches the middle: a greyscale PICTURE
+ * does, and shading one flat would erase what it draws.
+ */
+#define GOWL_BAR_ICON_MASK_DARK  (96)
+#define GOWL_BAR_ICON_MASK_LIGHT (160)
+
+/*
+ * Pixels this faint are the glyph's antialiased fringe.
+ * Un-premultiplying one multiplies its rounding error by ten, so it
+ * says nothing trustworthy about colour.
+ */
 #define GOWL_BAR_ICON_MASK_FLOOR (24)
 
 gboolean
@@ -539,29 +562,29 @@ gowl_bar_icon_is_mask(cairo_surface_t *surface)
 			if (g > 255) g = 255;
 			if (b > 255) b = 255;
 
-			/*
-			 * One tone, across every channel and every pixel.
-			 * Tracking the extremes of the channels themselves
-			 * answers both questions at once: a pixel with any
-			 * chroma in it spreads the range as surely as a
-			 * second shade does, so a purple icon and a
-			 * greyscale photograph are both rejected here, and
-			 * both should be --- the first has a colour of its
-			 * own and the second would lose its shading.
-			 */
+			/* Any colour of its own and this is a picture. */
 			cmin = MIN(r, MIN(g, b));
 			cmax = MAX(r, MAX(g, b));
-			if (cmax > hi) hi = cmax;
-			if (cmin < lo) lo = cmin;
-			if (hi - lo > GOWL_BAR_ICON_MASK_SLACK)
+			if (cmax - cmin > GOWL_BAR_ICON_MASK_CHROMA)
 				return FALSE;
 
+			if (cmax > hi) hi = cmax;
+			if (cmin < lo) lo = cmin;
 			seen = TRUE;
 		}
 	}
 
 	/* A fully transparent image is not a mask of anything. */
-	return seen;
+	if (!seen)
+		return FALSE;
+
+	/*
+	 * All dark or all light.  An image that reaches the middle is a
+	 * greyscale picture and keeps its own tones; one that does not is
+	 * a shape waiting to be given a colour.
+	 */
+	return hi <= GOWL_BAR_ICON_MASK_DARK
+	    || lo >= GOWL_BAR_ICON_MASK_LIGHT;
 }
 
 cairo_surface_t *

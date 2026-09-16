@@ -42,6 +42,7 @@
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"
 #include "core/gowl-monitor.h"
+#include "util/gowl-capture-scale.h"
 
 #include <json-glib/json-glib.h>
 #include <drm_fourcc.h>
@@ -809,6 +810,35 @@ tool_screenshot_region(
 		return r;
 	}
 
+	/*
+	 * The arguments are layout coordinates --- the same ones
+	 * gowl_list_monitors reports and a client's geometry is in ---
+	 * and the texture is the output's framebuffer, which on a scaled
+	 * monitor has more pixels in it than the layout has units.  Cross
+	 * between them here or the crop lands somewhere else entirely.
+	 */
+	{
+		gint mx, my, mw, mh;
+		gint cx, cy, cw, ch;
+
+		gowl_monitor_get_geometry(mon, &mx, &my, &mw, &mh);
+		if (!gowl_capture_scale_crop(mx, my, mw, mh,
+		                             (gint)texture->width,
+		                             (gint)texture->height,
+		                             x, y, w, h,
+		                             &cx, &cy, &cw, &ch)) {
+			McpToolResult *r;
+
+			wlr_texture_destroy(texture);
+			wlr_output_state_finish(&state);
+			r = mcp_tool_result_new(TRUE);
+			mcp_tool_result_add_text(r,
+				"Region does not overlap the monitor");
+			return r;
+		}
+		x = cx; y = cy; w = cw; h = ch;
+	}
+
 	/* Capture only the requested region */
 	pixels = NULL;
 	if (!capture_texture_pixels(texture, x, y, w, h,
@@ -990,8 +1020,11 @@ gowl_mcp_register_screenshot_tools(
 
 		tool = mcp_tool_new("screenshot_region",
 			"Capture a rectangular region from a monitor. "
-			"Returns a base64-encoded PNG image. If 'path' is "
-			"provided, saves to file instead.");
+			"x, y, width and height are in layout coordinates "
+			"(the ones gowl_list_monitors reports); on a scaled "
+			"monitor the image returned is correspondingly "
+			"larger. Returns a base64-encoded PNG image. If "
+			"'path' is provided, saves to file instead.");
 		mcp_tool_set_read_only_hint(tool, TRUE);
 
 		json_builder_begin_object(b);

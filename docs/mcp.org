@@ -258,6 +258,8 @@ ordinary window* -- read [[file:input-recording.org][Input Recording]] before en
 
 Screenshots are returned as base64-encoded PNG images via the MCP image content type.
 
+=screenshot_region= takes its rectangle in *layout* coordinates --- the same ones =gowl_list_monitors= reports and a client's geometry is in --- not in the output's raw pixels. On a scaled monitor the image that comes back is correspondingly larger than the rectangle asked for: a 400x300 region at =scale: 2= is an 800x600 PNG. See [[file:modules.org::*Layout coordinates and device pixels][Layout coordinates and device pixels]].
+
 *** Process Introspection
 :PROPERTIES:
 :CUSTOM_ID: process-introspection

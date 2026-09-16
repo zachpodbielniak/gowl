@@ -49,7 +49,7 @@
 #define TRAY_MIN_PX  (12)
 
 typedef struct {
-	GHashTable *icons;        /* cache key -> cairo_surface_t* */
+	BarTrayIconCache *icons;  /* rendered icons, per item and per name */
 
 	/* The last draw's layout, which is also the hit test: a click
 	 * arrives in widget coordinates and has to become an item. */
@@ -117,7 +117,7 @@ tray_destroy(GowlBarPlugin *plugin, gpointer data)
 	(void)plugin;
 	if (d == NULL)
 		return;
-	g_hash_table_unref(d->icons);
+	bar_tray_icon_cache_free(d->icons);
 	g_ptr_array_unref(d->shown);
 	g_array_unref(d->menu_path);
 	g_free(d->menu_key);

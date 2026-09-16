@@ -8,6 +8,8 @@
 #define GOWL_BAR_TRAY_ICON_H
 
 #include <cairo.h>
+
+#include "barkit/gowl-bar-icon.h"
 #include <glib.h>
 
 #include "tray/gowl-tray.h"
@@ -15,11 +17,32 @@
 G_BEGIN_DECLS
 
 /**
+ * BarTrayIconCache:
+ *
+ * Two tables, because there are two questions.  @items is keyed on an
+ * item's identity AND its serial, so an application that changes its
+ * icon --- which is the entire point of a tray icon for something that
+ * syncs or connects --- is not served its old one for ever.  @names is
+ * barkit's, keyed on the name alone, and is shared across every item
+ * because a name resolves to the same file whoever asked.
+ */
+typedef struct {
+	GHashTable *items;
+	GHashTable *names;
+} BarTrayIconCache;
+
+/**
  * bar_tray_icon_cache_new:
  *
  * Returns: (transfer full): a cache of rendered tray icons
  */
-GHashTable *bar_tray_icon_cache_new (void);
+BarTrayIconCache *bar_tray_icon_cache_new (void);
+
+/**
+ * bar_tray_icon_cache_free:
+ * @cache: (transfer full) (nullable): a cache
+ */
+void bar_tray_icon_cache_free (BarTrayIconCache *cache);
 
 /**
  * bar_tray_icon_for:
@@ -39,7 +62,7 @@ GHashTable *bar_tray_icon_cache_new (void);
  *   %NULL when nothing could be found --- which the caller draws as a
  *   lettered placeholder rather than as a gap.
  */
-cairo_surface_t *bar_tray_icon_for (GHashTable         *cache,
+cairo_surface_t *bar_tray_icon_for (BarTrayIconCache   *cache,
                                     const GowlTrayItem *item,
                                     gint                size);
 

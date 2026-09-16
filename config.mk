@@ -34,7 +34,7 @@ INCLUDEDIR ?= $(PREFIX)/include
 # API.  install-headers walks this list and skips any that has no .h
 # today, so adding a subsystem means adding one word here -- and
 # forgetting to is what left src/fx and src/barkit uninstalled.
-HEADER_SUBDIRS := core boxed config module interfaces ipc tray util \
+HEADER_SUBDIRS := core boxed config menu module interfaces ipc tray util \
                   barkit fx protocols
 DATADIR ?= $(PREFIX)/share
 PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig
@@ -105,6 +105,12 @@ CFLAGS_BASE += -DWLR_USE_UNSTABLE
 CFLAGS_BASE += -DG_LOG_USE_STRUCTURED
 CFLAGS_BASE += -DG_LOG_DOMAIN=\"gowl\"
 CFLAGS_BASE += -DGOWL_DEV_INCLUDE_DIR=\"$(CURDIR)/$(BUILDDIR)/include\"
+# Where this tree's own data lives, for a binary running out of it.
+# `data/menu.yaml' cannot be found by a relative path: the process that
+# looks for it is not always gowl -- under `cmacs --gowl' the working
+# directory is the EDITOR's tree, and the menu then silently has
+# nothing in it.  Same reasoning as GOWL_DEV_INCLUDE_DIR above.
+CFLAGS_BASE += -DGOWL_DEV_DATADIR=\"$(CURDIR)/data\"
 
 # Debug/Release flags
 ifeq ($(DEBUG),1)
@@ -158,6 +164,13 @@ DEPS_REQUIRED += xkbcommon libinput
 # Pango, and the kit has to be linkable by both the compositor and a
 # standalone bar client.
 DEPS_REQUIRED += yaml-0.1 json-glib-1.0 cairo pangocairo egl gl glesv2
+# gdk-pixbuf loads a themed icon into a cairo surface for barkit
+# (src/barkit/gowl-bar-icon.c).  It is an image LOADER, not a
+# renderer: the rule against a rendering-engine dependency is about
+# libregnum/graylib/raylib and is unaffected.  The bar and wallpaper
+# modules already needed it; it moved here when the icon lookup did,
+# so the bar and the menu share one copy instead of carrying two.
+DEPS_REQUIRED += gdk-pixbuf-2.0
 
 # Optional XWayland dependencies
 #

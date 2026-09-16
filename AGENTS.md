@@ -390,6 +390,11 @@ docs/                       # Documentation (architecture, building, configurati
   `wayland-server`, `wayland-protocols`
 - `xkbcommon`, `libinput`
 - `yaml-0.1`, `json-glib-1.0`
+- `cairo`, `pangocairo` (barkit draws the bar, its panels and the menu)
+- `gdk-pixbuf-2.0` (barkit's icon lookup, `src/barkit/gowl-bar-icon.c`:
+  a themed icon name into a cairo surface, for the tray widget and the
+  menu's application rows). An image LOADER, not a renderer --- the
+  rule below is about libregnum/graylib/raylib and is unaffected.
 
 ### Optional
 - `xcb`, `xcb-icccm` (XWayland support, controlled by `BUILD_XWAYLAND`)

@@ -111,6 +111,7 @@
 /* IPC */
 #include "ipc/gowl-ipc.h"
 #include "tray/gowl-tray.h"
+#include "menu/gowl-menu.h"
 
 /* Utilities */
 #include "util/gowl-log.h"

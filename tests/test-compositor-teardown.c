@@ -79,7 +79,7 @@ static const gchar *const cmacs_modules[] = {
 	"layout-indicator",
 	"alpha", "vanitygaps", "roundcorners", "windowrules", "dropdown",
 	"scratchpad", "screenshot", "osd", "clipboard",
-	"bar"
+	"bar", "menu"
 };
 
 /* How a module case tears down. */

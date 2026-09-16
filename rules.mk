@@ -477,6 +477,7 @@ install-desktop:
 	$(INSTALL_DATA) data/logo-256.png $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gowl.png
 	$(MKDIR_P) $(DESTDIR)$(DATADIR)/gowl
 	$(INSTALL_DATA) data/default-config.yaml $(DESTDIR)$(DATADIR)/gowl/default-config.yaml
+	$(INSTALL_DATA) data/menu.yaml $(DESTDIR)$(DATADIR)/gowl/menu.yaml
 	$(MKDIR_P) $(DESTDIR)$(SYSCONFDIR)/gowl
 	@if [ ! -f $(DESTDIR)$(SYSCONFDIR)/gowl/config.yaml ]; then \
 		$(INSTALL_DATA) data/default-config.yaml $(DESTDIR)$(SYSCONFDIR)/gowl/config.yaml; \
@@ -550,6 +551,7 @@ uninstall:
 	rm -rf $(DESTDIR)$(MODULEDIR)
 	rm -rf $(DESTDIR)$(BAR_MODULEDIR)
 	rm -f $(DESTDIR)$(DATADIR)/gowl/default-bar.yaml
+	rm -f $(DESTDIR)$(DATADIR)/gowl/menu.yaml
 	rm -f $(DESTDIR)$(DATADIR)/gowl/example-bar.c
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl.desktop
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop

@@ -93,6 +93,13 @@ static const GowlBuiltinModule builtin_modules[] = {
 		" *   - magnifier: screen zoom on modifier+wheel\n"
 	},
 	{
+		"menu",
+		"One card listing everything the session can be told to do",
+		"  menu:\n"
+		"    enabled: true\n",
+		" *   - menu: one list of what the session can do, on Super+space\n"
+	},
+	{
 		"crt",
 		"Puts the whole output through a cathode ray tube",
 		"  crt:\n"

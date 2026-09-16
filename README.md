@@ -147,6 +147,8 @@ Screen sharing: `xdg-desktop-portal-gowl` serves `ScreenCast` as well as `InputC
 
 Bundled modules include: autostart, notifyd (an org.freedesktop.Notifications daemon for standalone sessions), vanitygaps, pertag, scratchpad, swallow, movestack, fibonacci, centeredmaster, and IPC.
 
+The **menu** is one card listing everything the session can be told to do — power, audio, network, layouts, backdrops, and the applications on the machine — opened with `Super+space` and driven by typing. Its tree is data, in `menu.yaml`, overlaid by `~/.config/gowl/menu.yaml`; a row is a keybind without a key, so anything bindable can be put in it. Opt in with `modules.menu.enabled: true`. See [the menu](docs/configuration.org) in the configuration reference.
+
 `make install` puts modules in `$(LIBDIR)/gowl/modules/`, and a development build loads them from `build/release/modules/`. A module is only loaded when it is set `enabled: true` under `modules:` in the YAML config. There is no per-user module directory; per-user compositor code belongs in `~/.config/gowl/config.c`.
 
 See [docs/modules.org](docs/modules.org) for the module development guide.

@@ -23,6 +23,10 @@ log-file: "~/.config/gowl/gowl.log"
 repeat-rate: 25
 repeat-delay: 600
 terminal: "gst"
+# The external application LAUNCHER a config may spawn from a keybind.
+# Not `modules.menu' below, which is gowl's own menu -- one card listing
+# what the session can do, defined in menu.yaml.  The two have nothing to
+# do with each other beyond the word.
 menu: "wofi --show drun"
 sloppyfocus: true
 # Power off the internal laptop panel (eDP/LVDS/DSI) while the lid is
@@ -603,6 +607,14 @@ keybinds:
   "Super+Shift+Ctrl+8": { action: tag_toggle, arg: "128" }
   "Super+Shift+Ctrl+9": { action: tag_toggle, arg: "256" }
 
+  # The menu: one list of everything the session can be told to do,
+  # defined in menu.yaml.  Reaches modules/menu by NAME through
+  # ipc_command, so this line needs to know nothing about it -- and does
+  # nothing at all until `modules.menu.enabled' is true.
+  "Super+space": { action: ipc_command, arg: "menu", desc: "Menu" }
+  "Super+Alt+space": { action: ipc_command, arg: "menu-open apps", desc: "Menu: applications" }
+  "Super+Ctrl+Escape": { action: ipc_command, arg: "menu-open system", desc: "Menu: system" }
+
   # Screenshot.  Reaches the screenshot module by NAME through
   # ipc_command, so this line needs to know nothing about it -- and
   # does nothing at all when the module is not loaded.  The capture is
@@ -861,6 +873,21 @@ modules:
     enabled: false  # opt in here; CMacs loads this module by default
   magnifier:
     enabled: false  # opt in here; CMacs loads this module by default
+  menu:
+    enabled: false  # opt in here; CMacs loads this module by default.
+                    # One card in the middle of the screen listing
+                    # everything the session can be told to do, from
+                    # menu.yaml -- power, audio, network, layouts,
+                    # backdrops, the applications on the machine.  Off
+                    # here because a compositor that draws a menu nobody
+                    # asked for is a compositor with an opinion; on
+                    # under `cmacs --gowl', where it is the control
+                    # surface the session would otherwise not have.
+    # width: 380        # the card, in logical pixels
+    # max-height: 0     # 0 uses 70% of the output
+    # font: ""          # defaults to the bar's font
+    # icon-size: 0      # application icons, in pixels; 0 follows
+    #                   # the theme's row height
   crt:
     enabled: false  # opt in here; CMacs loads this module by default
                     # needed for `crt: true' and for the tour's last

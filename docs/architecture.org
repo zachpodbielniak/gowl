@@ -1011,6 +1011,103 @@ emits =PropertiesChanged=, so the payload-free =NewIcon= and friends are
 answered with a fresh =GetAll=; and nothing at all announces that an
 item has gone, so its bus name is watched instead.
 
+*** The menu
+
+=src/menu/gowl-menu.c= is the tree the menu shows: the YAML reader, the
+routes, which rows are visible right now, and what happens when one is
+chosen. It draws nothing. The card on screen is =modules/menu=, and
+cmacs renders the same rows through =completing-read= --- two front ends
+over one model, which is the only arrangement in which the two cannot
+disagree about what the menu contains.
+
+*A row is a keybind without a key.* An entry carries a =GowlAction= and
+an argument, and activating it builds a =GowlKeybindEntry= and runs it
+through =gowl_compositor_run_keybind_entry()= --- the same call a key
+press makes. So anything bindable is menu-able, and the vocabulary
+cannot drift: adding an action upstream reaches the menu with no change
+here. =ipc_command= is the escape hatch that reaches any module by name.
+
+*A guard is an IPC query.* =when:=, =checked:= and =disabled:= are
+answered in-process: a program on =$PATH=, a path that exists, a module
+that is loaded, an embedder that can run Lisp, or
+=gowl_compositor_ipc_command()= and a comparison against the answer.
+Deliberately NOT a shell command, which is what omarchy uses: every
+guard in the tree is evaluated on the open path, and a vocabulary of
+forks would have to be evaluated in a batch behind the menu and would
+spend its first moments contradicting itself. The IPC surface is already
+a complete vocabulary for the session's state, so the menu needs none of
+its own and gains every command a module adds for free.
+
+An =ipc:= guard must name a QUERY and not a command, since it runs
+whenever the menu is listed: =hdr= with no argument toggles, which is
+why the read-only =hdr-state= exists beside it.
+
+*Providers make rows at open time.* =apps= (desktop entries), =windows=,
+=tags=, =layouts=, =backdrops=, =keybinds= and =tray= come from the
+session rather than from the file. Their rows are not stored, so
+activating one re-runs the provider and matches by route --- which is
+also the only correct way, since the list may have changed between being
+drawn and being chosen.
+
+Search covers them, which is most of what makes the menu a launcher, and
+that is why there is a cache. Enumerating desktop entries costs about
+18 ms, GIO does not memoise it, and search runs providers on every
+keystroke on the compositor thread. =provider_ttl()= gives =apps= five
+seconds and everything else none: a window list five seconds stale is a
+list of windows that may not be there. A declared row always outranks a
+provider row that matched as well, so an application cannot capture a
+route.
+
+*Icons are resolved on a thread of their own*, and that is not a
+refinement. Turning a name into pixels costs tens to hundreds of
+milliseconds --- finding the file used to be a walk of every icon theme
+PER NAME (100--185 ms measured), and decoding it spawns a sandboxed
+loader. A dozen rows of that on the compositor thread froze the session
+while somebody was typing, which is how it shipped. =modules/menu= now
+draws whatever is already cached and asks a worker for the rest; the
+worker answers through an eventfd on the Wayland event loop, exactly as
+the tray does, and the card redraws. Rows show their glyph for a frame
+or two and then their icon.
+
+barkit's side of the same problem: =gowl_bar_icon_find_file()= walks the
+theme directories ONCE into a name → file index (per size) instead of
+once per name. A screenful of twelve went from 1578 ms to 15 ms. The
+index is shared between the bar's tray widget and the menu's worker, so
+it has a lock.
+
+*An application's icon is a NAME here, not pixels.* A row carries
+=icon_name= --- what the desktop entry's =Icon=' says --- and the front
+end resolves it, exactly as the tray does: turning a name into an image
+needs an icon theme and a renderer, and loading a hundred and eighty of
+them to draw fourteen rows is not something a model should do.
+=modules/menu= resolves the rows it actually draws, through
+=gowl_bar_icon_lookup()=, into a cache it keeps.
+
+*The user's file is an overlay, not a replacement.*
+=~/.config/gowl/menu.yaml= is merged onto the shipped tree by id: a
+three-line entry that renames a row keeps its icon, its action, its
+guards and its position, and a new id appends. A user file that will not
+parse leaves the shipped tree standing, because an empty menu takes away
+the surface you would use to find out what went wrong.
+
+*barkit gained two things for this.* A panel item can carry an IMAGE
+(=gowl_bar_panel_item_set_image()=, a referenced cairo surface) as well
+as a glyph, and the render pass reserves a fixed icon column whenever
+any item in the panel has one --- glyphs measure to whatever width the
+font gives them, so a list mixing real icons with Nerd Font characters
+would otherwise have its labels stepping in and out down the page.
+Panels with no images keep the measured widths and look exactly as they
+did. And =src/barkit/gowl-bar-icon.c= is the icon theme specification's
+directory layout walked directly, which used to live in the bar's tray
+widget and was never about trays.
+
+*The card is barkit's panel.* =modules/menu= builds a =GowlBarPanel= and
+renders it with the same pass the bar's dropdowns use, so the palette,
+the radius, the font, the keyboard cursor, the hover wash, the hit
+rectangles and the scroll indicator are all the ones already configured.
+A control surface that does not look like the rest of the session reads
+as a different program's dialog.
+
 *** Visual effect layer
 
 =src/fx/= is the toolkit the effect modules are built on:

@@ -666,6 +666,223 @@ instead. Menu rows show their icons as text, not images. And an item in
 =Passive= status is not drawn at all, which is what the specification
 asks for.
 
+**** The menu
+:PROPERTIES:
+:CUSTOM_ID: menu
+:END:
+
+One card in the middle of the screen listing everything the session can
+be told to do --- power, audio, network, layouts, backdrops, the
+applications on the machine --- driven by typing. Opt in with
+=modules.menu.enabled: true=; the shipped keybinds then reach it, and
+until you do they do nothing at all. Under =cmacs --gowl= it is loaded by
+default, since a session with no bar and no panel has nowhere else to put
+a control surface.
+
+A tiling compositor gives you keys, which is right for the twenty things
+you do every hour and wrong for the two hundred you do every month. A
+list is the interface you can use without having remembered anything.
+
+| Key | Does |
+|-----+------|
+| =Super+space= | Open it, or close it |
+| =Super+Alt+space= | Open it at Applications |
+| =Super+Ctrl+Escape= | Open it at System |
+
+Once it is up: type to search the WHOLE tree, arrows and Page Up/Down to
+move, Return or Right to choose, Backspace or Left to go back a level,
+Escape to clear the search and then to close. The pointer works too ---
+hover selects, left click chooses, right click goes back, and a click
+outside closes.
+
+| Key | Moves |
+|-----+-------|
+| =Ctrl+j= / =Ctrl+k= | Down, up |
+| =Ctrl+l= | Into the row --- a submenu opens, an action runs |
+| =Ctrl+h= | Back out: the search first, then a level |
+
+The four are modified because plain =h j k l= go into the search, which
+is the whole point of the card. Left and right move ACROSS LEVELS rather
+than across characters: the thing being navigated is a tree. Only Ctrl
+--- =Super+j= is the session's own focus bind and the menu leaves it
+alone.
+
+| Property       | Type   | Default | Description |
+|----------------+--------+---------+-------------|
+| =width=        | int    | theme   | The card's width in logical pixels |
+| =max-height=   | int    | =0=     | =0= uses 70% of the output |
+| =font=         | string | bar's   | Overrides the font the bar theme sets |
+| =icon-size=    | int    | theme   | Application icons, in pixels |
+
+There are four settings because the card is the bar's own panel: the
+palette, the corner radius, the row height and the font all come from
+the theme that is already configured, so =palette: {name: latte}=
+restyles the menu along with everything else.
+
+***** What is in it, and where it comes from
+:PROPERTIES:
+:CUSTOM_ID: menu-yaml
+:END:
+
+The tree is data, in =menu.yaml= --- shipped at
+=$PREFIX/share/gowl/menu.yaml= and overlaid by
+=~/.config/gowl/menu.yaml=. Adding a row is three lines:
+
+#+begin_src yaml
+menu:
+  - id: mine
+    icon: ""
+    label: My thing
+    spawn: "my-script --now"
+#+end_src
+
+An entry carries =id= (the route segment; defaults to a slug of the
+label), =label=, =icon=, =title= (the header when it is open), =desc= (a
+second line, and extra text search matches), =aliases=, and exactly one
+of:
+
+| Field | Does |
+|-------+------|
+| =items:= | a submenu, nested right there |
+| =provider:= | a submenu whose rows are made when it opens |
+| =target:= | a link to another route |
+| =action:= + =arg:= | any keybind action, by its config name |
+| =command:= | an IPC command --- how a module is reached by name |
+| =spawn:= | run a program |
+| =elisp:= | evaluate Lisp; only does anything under =cmacs --gowl= |
+
+plus =keep-open: true= for a row meant to be pressed repeatedly, such as
+volume.
+
+*A menu row is a keybind without a key* --- same actions, same argument,
+same dispatcher --- so anything you can bind you can put here, and the
+two can never drift apart.
+
+***** Guards
+:PROPERTIES:
+:CUSTOM_ID: menu-guards
+:END:
+
+=when:= hides a row, =checked:= ticks it, and =disabled:= dims it, ticks
+it and makes it unselectable --- which is how an install list stays a
+catalogue of what can be installed rather than shrinking as you use it.
+Each is one of:
+
+| Guard | True when |
+|-------+-----------|
+| ={exists: PROGRAM}= | =PROGRAM= is on =$PATH= |
+| ={file: PATH}= | =PATH= exists (=~= is expanded) |
+| ={module: NAME}= | that module is loaded |
+| ={embedder: true}= | running inside cmacs, so =elisp:= would work |
+| ={ipc: "QUERY"}= | the answer is not empty, no, off, false, none or 0 |
+| ={ipc: "QUERY", is: "X"}= | the answer is exactly =X= |
+
+and any of them takes =not: true= to invert. A bare =when: false= turns a
+row off without deleting it.
+
+*There is deliberately no shell guard.* Every one of these is answered
+inside the compositor in microseconds, which is what lets the whole tree
+be evaluated on the open path; a vocabulary of forks would have to run in
+a batch behind the menu and would spend its first moments contradicting
+itself. An =ipc:= guard is the escape hatch, and it grows on its own:
+every command the compositor or a module answers is already a guard.
+
+An =ipc:= guard must name a QUERY and not a command, because it runs
+every time the menu is listed. =hdr= with no argument *toggles*; the
+read-only spelling is =hdr-state=.
+
+A submenu whose every child is hidden goes with them --- otherwise a
+machine with none of that hardware has a submenu that opens onto
+nothing. A provider-backed submenu stays, because "no windows are open"
+is a true answer.
+
+***** Providers
+:PROPERTIES:
+:CUSTOM_ID: menu-providers
+:END:
+
+A submenu with =provider: NAME= gets its rows when it opens:
+
+| Provider | Rows |
+|----------+------|
+| =apps= | desktop entries on the machine, with their real icons; choosing one launches it |
+| =windows= | the open windows; choosing one focuses it |
+| =tags= | tags 1--9, the current one ticked |
+| =layouts= | every registered layout, the current one ticked |
+| =backdrops= | every backdrop style, the current one ticked |
+| =keybinds= | every bind and what it does; choosing one runs it |
+| =tray= | what is in the system tray; choosing one activates it |
+
+The names come from the compositor, so a user file can point a submenu at
+one but cannot declare a new one.
+
+*Provider rows are searched too*, which is what makes the menu a launcher
+as well as a control surface: typing =fire= finds Firefox without your
+knowing it lives under Apps. A declared row always outranks an
+application that matched as well, so an application called =Settings=
+cannot capture the route =Setup= is reached by.
+
+The application list is *cached for five seconds*. Enumerating desktop
+entries costs about 18 ms and search runs providers on every keystroke,
+on the compositor thread --- uncached, typing six characters is a tenth
+of a second of stutter across the whole desktop. Nothing else is cached:
+a window list five seconds stale is a list of windows that may not be
+there.
+
+Application icons are the *real* ones, resolved from each entry's
+=Icon=, through the icon theme. A name no theme has --- and there are
+always a few --- falls back to a glyph rather than a gap, and the icon
+column is the same width either way so the labels line up.
+
+They are loaded on a *worker thread*, so a row shows its glyph for a
+frame or two and then its icon. Resolving one costs tens to hundreds of
+milliseconds, and doing that on the compositor thread stops the desktop
+--- which is not a hypothetical: it is how this shipped the first time.
+
+***** Your own menu.yaml
+:PROPERTIES:
+:CUSTOM_ID: menu-overlay
+:END:
+
+=~/.config/gowl/menu.yaml= is an OVERLAY, matched by id. Repeat a shipped
+id to change only the fields you name --- the row keeps its icon, its
+action, its guards and its place in the list:
+
+#+begin_src yaml
+menu:
+  - id: system
+    items:
+      - {id: reboot, label: "Reboot (are you sure?)"}
+      - {id: mine, icon: "", label: Backup now, spawn: "borg-backup"}
+#+end_src
+
+A file that will not parse leaves the shipped tree standing: a typo
+should cost you your additions, not the surface you would use to find
+out about them.
+
+***** From a script, and from Lisp
+:PROPERTIES:
+:CUSTOM_ID: menu-scripting
+:END:
+
+#+begin_src sh
+gowl menu                    # toggle at the root
+gowl menu-open system        # always open, at a route
+gowl menu-close
+gowl menu-refresh            # re-read menu.yaml
+gowl menu-list style         # what is there: route, label, kind, mark
+#+end_src
+
+A route is an id, a dotted path, or a declared alias, case-insensitive.
+Summoning a route that names an action runs it instead of opening a list
+with nothing in it.
+
+Under =cmacs --gowl= the same tree is reachable as Lisp:
+=gowl-menu-items=, =gowl-menu-activate=, =gowl-menu-title=,
+=gowl-menu-reload=. =M-x cmacs-gowl-menu= renders it with
+=completing-read=, which is the version that works in a terminal frame
+and over =emacsclient= from another machine.
+
 **** The cathode ray tube
 :PROPERTIES:
 :CUSTOM_ID: crt

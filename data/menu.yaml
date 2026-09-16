@@ -1,0 +1,466 @@
+# gowl menu -- the tree the on-screen menu shows.
+#
+# One list of everything the session can be told to do.  Opened with
+# Super+Space (when modules.menu is on), driven by typing, and defined
+# here as data rather than in code: a row is three fields in this file.
+#
+# THE SHAPE OF AN ENTRY
+#
+#   id          the route segment; defaults to a slug of the label
+#   label       what the row says
+#   icon        a glyph (these are Nerd Font); optional
+#   title       the header when the submenu is open; defaults to label
+#   desc        a second line, and extra text search matches on
+#   aliases     other names `gowl menu summon NAME' accepts
+#   items       a submenu, nested right here
+#   provider    a submenu whose rows are made at open time (below)
+#   target      a link: this row opens another route
+#   keep-open   leave the menu up after running, for a row pressed
+#               repeatedly such as volume
+#
+# WHAT A ROW DOES.  Exactly one of:
+#
+#   action: NAME   +  arg: ...    any keybind action, by its config name
+#   command: "..."                an IPC command -- the `ipc_command'
+#                                 action, which is how a module is
+#                                 reached by name
+#   spawn: "..."                  run a program
+#   elisp: "(...)"                evaluate Lisp; only does anything
+#                                 under `cmacs --gowl'
+#
+# A menu row IS a keybind without a key -- same actions, same argument,
+# same dispatcher -- so anything you can bind you can put here.
+#
+# GUARDS.  `when:' hides a row, `checked:' ticks it, `disabled:' dims it
+# and makes it unselectable.  Each is one of:
+#
+#   {exists: PROGRAM}     PROGRAM is on $PATH
+#   {file: PATH}          PATH exists (~ is expanded)
+#   {module: NAME}        that module is loaded
+#   {embedder: true}      running inside cmacs, so `elisp:' works
+#   {ipc: "QUERY"}        ask the compositor; true when the answer is
+#                         not empty, no, off, false, none or 0
+#   {ipc: "QUERY", is: "X"}   ... when the answer is exactly X
+#
+# and any of them takes `not: true' to invert.  There is deliberately no
+# shell guard: every one of these is answered inside the compositor in
+# microseconds, which is what lets the whole tree be evaluated on the
+# open path.  An `ipc:' guard is the escape hatch, and it grows on its
+# own -- every command a module answers is already a guard.
+#
+# PROVIDERS make their rows at open time: apps (desktop entries),
+# windows, tags, layouts, backdrops, keybinds and tray.
+#
+# YOUR OWN.  Drop a file at ~/.config/gowl/menu.yaml with the same
+# `menu:' shape.  It is an OVERLAY, matched by id: repeat an id to
+# change only the fields you name (a row keeps its icon, its guards and
+# its place in the list), or use a new id to add a row.  A user file
+# that will not parse leaves this one standing.
+
+menu:
+  # ── What is running, and what could be ──────────────────────────
+  - id: apps
+    icon: "󰀻"
+    label: Apps
+    desc: launch an installed application
+    aliases: [app, applications, launcher, run]
+    provider: apps
+
+  - id: windows
+    icon: "󰣆"
+    label: Windows
+    desc: focus, close or float a window
+    aliases: [window, clients]
+    items:
+      - id: focus
+        icon: "󰣆"
+        label: Focus a window
+        title: Focus
+        provider: windows
+      - id: label
+        icon: "󰌵"
+        label: Label every window
+        desc: a letter on each window; press it to focus
+        command: "hints"
+        when: {module: hints}
+      - id: overview
+        icon: "󰋁"
+        label: Overview
+        desc: every tag at once
+        command: "expo"
+        when: {module: expo}
+      - id: scratchpad
+        icon: "󰈤"
+        label: Scratchpad
+        desc: the panel that slides up over any tag
+        command: "scratchpad-toggle"
+        when: {module: scratchpad}
+      - id: close
+        icon: "󰅖"
+        label: Close this window
+        action: kill-client
+      - id: float
+        icon: "󰨤"
+        label: Float / unfloat
+        action: toggle-float
+      - id: fullscreen
+        icon: "󰊓"
+        label: Fullscreen
+        action: toggle-fullscreen
+      - id: sticky
+        icon: "󰐃"
+        label: Pin to every tag
+        action: toggle-sticky
+      - id: below
+        icon: "󰁅"
+        label: Send behind the tiling
+        desc: for a floating window you want out of the way
+        action: toggle-below
+
+  - id: tags
+    icon: "󰓹"
+    label: Tags
+    desc: which tags this screen shows
+    aliases: [tag, workspaces, workspace]
+    provider: tags
+
+  - id: layout
+    icon: "󱂬"
+    label: Layout
+    desc: how windows are arranged
+    aliases: [layouts]
+    items:
+      - id: pick
+        icon: "󱂬"
+        label: Choose a layout
+        title: Layout
+        provider: layouts
+      - id: next
+        icon: "󱂬"
+        label: Next layout
+        action: cycle-layout
+        arg: "+1"
+        keep-open: true
+      - id: wider
+        icon: "󰕰"
+        label: Grow the master area
+        action: set-mfact
+        arg: "+0.05"
+        keep-open: true
+      - id: narrower
+        icon: "󰕰"
+        label: Shrink the master area
+        action: set-mfact
+        arg: "-0.05"
+        keep-open: true
+      - id: more-master
+        icon: "󰕰"
+        label: One more master window
+        action: inc-nmaster
+        arg: "+1"
+        keep-open: true
+      - id: fewer-master
+        icon: "󰕰"
+        label: One fewer master window
+        action: inc-nmaster
+        arg: "-1"
+        keep-open: true
+      - id: promote
+        icon: "󰘖"
+        label: Promote this window to master
+        action: zoom
+      - id: vsplit
+        icon: "󰕰"
+        label: Vertical split
+        action: set-split
+        arg: vsplit
+      - id: hsplit
+        icon: "󰕰"
+        label: Horizontal split
+        action: set-split
+        arg: normal
+
+  # ── What it looks like ──────────────────────────────────────────
+  - id: style
+    icon: ""
+    label: Style
+    desc: backdrops and the tube
+    aliases: [look, appearance]
+    items:
+      - id: backdrop
+        icon: ""
+        label: Backdrop
+        desc: what shows through a translucent window
+        title: Backdrop
+        aliases: [backdrops, wallpaper-effect]
+        provider: backdrops
+      - id: next-backdrop
+        icon: ""
+        label: Next backdrop
+        desc: the same tour as Super+Shift+apostrophe
+        action: cycle-backdrop
+        keep-open: true
+      - id: crt
+        icon: "󰠹"
+        label: Cathode ray tube
+        desc: the whole screen through a CRT
+        action: toggle-crt
+        when: {module: crt}
+        checked: {ipc: "crt", is: "on"}
+  # ── Capturing the screen ────────────────────────────────────────
+  - id: capture
+    icon: ""
+    label: Capture
+    desc: screenshots and recording
+    aliases: [screenshot, screenrecord]
+    when: {module: screenshot}
+    items:
+      - id: area
+        icon: ""
+        label: Select a region
+        command: "screenshot-area"
+      - id: window
+        icon: ""
+        label: This window
+        command: "screenshot-window"
+      - id: screen
+        icon: ""
+        label: This screen
+        command: "screenshot-screen"
+      - id: all
+        icon: ""
+        label: Every screen
+        command: "screenshot-all"
+      - id: record
+        icon: "󰕧"
+        label: Record the screen
+        elisp: "(call-interactively 'cmacs-gowl-record-toggle)"
+        when: {embedder: true}
+
+  # ── The machine around the compositor ───────────────────────────
+  - id: display
+    icon: "󰍹"
+    label: Display
+    desc: brightness, HDR, screens off
+    aliases: [monitors, screen]
+    items:
+      - id: brighter
+        icon: "󰃟"
+        label: Brighter
+        spawn: "brightnessctl set 5%+"
+        when: {exists: brightnessctl}
+        keep-open: true
+      - id: dimmer
+        icon: "󰃝"
+        label: Dimmer
+        spawn: "brightnessctl set 5%-"
+        when: {exists: brightnessctl}
+        keep-open: true
+      - id: hdr
+        icon: "󰖙"
+        label: HDR on this screen
+        action: toggle-hdr
+        checked: {ipc: "hdr-state", is: "on"}
+      - id: off
+        icon: "󰐥"
+        label: Screens off
+        desc: any input half a second later turns them back on
+        action: output-power
+        arg: "off"
+
+  - id: audio
+    icon: ""
+    label: Audio
+    aliases: [sound, volume]
+    when: {exists: wpctl}
+    items:
+      - id: up
+        icon: "󰕾"
+        label: Volume up
+        spawn: "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+"
+        keep-open: true
+      - id: down
+        icon: "󰖀"
+        label: Volume down
+        spawn: "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+        keep-open: true
+      - id: mute
+        icon: "󰝟"
+        label: Mute output
+        spawn: "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+      - id: mic
+        icon: "󰍬"
+        label: Mute microphone
+        spawn: "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"
+      - id: mixer
+        icon: ""
+        label: Mixer
+        desc: the full interface, in a terminal
+        spawn: "sh -c 'exec ${TERMINAL:-gst} -e wiremix'"
+        when: {exists: wiremix}
+
+  - id: network
+    icon: "󰛳"
+    label: Network
+    aliases: [wifi, net]
+    when: {exists: nmcli}
+    items:
+      - id: editor
+        icon: "󰛳"
+        label: Networks
+        desc: nmtui, in a terminal
+        spawn: "sh -c 'exec ${TERMINAL:-gst} -e nmtui'"
+        when: {exists: nmtui}
+      - id: wifi-on
+        icon: "󰤨"
+        label: Wifi on
+        spawn: "nmcli radio wifi on"
+      - id: wifi-off
+        icon: "󰤨"
+        label: Wifi off
+        spawn: "nmcli radio wifi off"
+
+  - id: bluetooth
+    icon: "󰂯"
+    label: Bluetooth
+    when: {exists: bluetoothctl}
+    items:
+      - id: manager
+        icon: "󰂯"
+        label: Devices
+        desc: bluetuith, in a terminal
+        spawn: "sh -c 'exec ${TERMINAL:-gst} -e bluetuith'"
+        when: {exists: bluetuith}
+      - id: on
+        icon: "󰂯"
+        label: Radio on
+        spawn: "bluetoothctl power on"
+      - id: off
+        icon: "󰂯"
+        label: Radio off
+        spawn: "bluetoothctl power off"
+
+  - id: tray
+    icon: "󱊔"
+    label: Background apps
+    desc: what is in the system tray
+    aliases: [systray]
+    provider: tray
+
+  # ── Switches ────────────────────────────────────────────────────
+  - id: toggle
+    icon: "󰔡"
+    label: Toggle
+    desc: the session's switches
+    aliases: [toggles]
+    items:
+      - id: notifications
+        icon: "󰂛"
+        label: Silence notifications
+        command: "notify-dnd"
+        when: {module: notifyd}
+      - id: crt
+        icon: "󰠹"
+        label: Cathode ray tube
+        action: toggle-crt
+        when: {module: crt}
+        checked: {ipc: "crt", is: "on"}
+      - id: hdr
+        icon: "󰖙"
+        label: HDR
+        action: toggle-hdr
+      - id: below-all
+        icon: "󰁅"
+        label: Every floating window behind the tiling
+        action: toggle-below-all
+
+  # ── Finding out how it works ────────────────────────────────────
+  - id: learn
+    icon: "󰧑"
+    label: Learn
+    aliases: [help, docs]
+    items:
+      - id: keybinds
+        icon: ""
+        label: Keybindings
+        desc: every bind, and what it does
+        title: Keybindings
+        aliases: [keys, cheatsheet]
+        provider: keybinds
+      - id: manual
+        icon: ""
+        label: The gowl manual
+        spawn: "xdg-open https://git-ssh.podbielniak.com/zach/gowl"
+        when: {exists: xdg-open}
+
+  # ── Changing how it works ───────────────────────────────────────
+  - id: setup
+    icon: ""
+    label: Setup
+    aliases: [settings, config]
+    items:
+      - id: config
+        icon: ""
+        label: Edit the config
+        elisp: "(find-file \"~/.config/gowl/config.yaml\")"
+        when: {embedder: true}
+      - id: config-term
+        icon: ""
+        label: Edit the config
+        spawn: "sh -c 'exec ${TERMINAL:-gst} -e ${EDITOR:-vi} ${XDG_CONFIG_HOME:-$HOME/.config}/gowl/config.yaml'"
+        when: {embedder: false}
+      - id: menu
+        icon: "󰍜"
+        label: Edit this menu
+        elisp: "(find-file \"~/.config/gowl/menu.yaml\")"
+        when: {embedder: true}
+      - id: menu-term
+        icon: "󰍜"
+        label: Edit this menu
+        spawn: "sh -c 'exec ${TERMINAL:-gst} -e ${EDITOR:-vi} ${XDG_CONFIG_HOME:-$HOME/.config}/gowl/menu.yaml'"
+        when: {embedder: false}
+      - id: reload
+        icon: ""
+        label: Reload the config
+        action: reload-config
+      - id: refresh
+        icon: ""
+        label: Reload this menu
+        command: "menu-refresh"
+
+  # ── Ending the session ──────────────────────────────────────────
+  - id: system
+    icon: ""
+    label: System
+    desc: lock, suspend, log out, reboot, shut down
+    aliases: [power, power-menu]
+    items:
+      - id: lock
+        icon: ""
+        label: Lock
+        action: lock
+      - id: suspend
+        icon: "󰒲"
+        label: Suspend
+        spawn: "systemctl suspend"
+        when: {exists: systemctl}
+      - id: hibernate
+        icon: "󰖔"
+        label: Hibernate
+        spawn: "systemctl hibernate"
+        when: {exists: systemctl}
+      - id: logout
+        icon: "󰍃"
+        label: Log out
+        desc: ends the session and everything in it
+        action: quit
+      - id: reboot
+        icon: "󰜉"
+        label: Reboot
+        spawn: "systemctl reboot"
+        when: {exists: systemctl}
+      - id: shutdown
+        icon: "󰐥"
+        label: Shut down
+        spawn: "systemctl poweroff"
+        when: {exists: systemctl}

@@ -656,6 +656,7 @@ another.
 | =submerged=      | The wallpaper seen from under water                     |
 | =dew=            | An orb web across the window, every bead a lens         |
 | =hints=          | A letter on every window; press it to focus that window |
+| =menu=           | One card listing everything the session can be told to do |
 | =autostart=      | Runs autostart commands from config                   |
 | =notifyd=        | org.freedesktop.Notifications daemon feeding the bar   |
 | =vanitygaps=     | Adds configurable inner/outer gaps to layouts         |

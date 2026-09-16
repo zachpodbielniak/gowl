@@ -99,6 +99,7 @@ LIB_SRCS := \
 	src/util/gowl-backdrop-plan.c \
 	src/util/gowl-fx-optout.c \
 	src/tray/gowl-tray.c \
+	src/menu/gowl-menu.c \
 	src/fx/gowl-fx-gl.c \
 	src/fx/gowl-fx-capture.c \
 	src/fx/gowl-fx-sheet.c \
@@ -227,6 +228,7 @@ LIB_HDRS := \
 	src/util/gowl-easing.h \
 	src/fx/gowl-fx.h \
 	src/tray/gowl-tray.h \
+	src/menu/gowl-menu.h \
 	src/util/gowl-systemd.h \
 	src/util/gowl-wayland-socket.h \
 	src/core/gowl-compositor.h \
@@ -703,7 +705,10 @@ $(OUTDIR)/modules/crt.so: $(wildcard modules/crt/*.c modules/crt/*.h)
 # icon name needs gdk-pixbuf, which is exactly the kind of dependency the
 # generic rule is documented as not knowing about.
 $(OUTDIR)/modules/bar.so: $(wildcard modules/bar/*.c modules/bar/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+# And the menu, for pangocairo: it draws through barkit, which is
+# Pango, and the generic rule links neither.
+$(OUTDIR)/modules/menu.so: $(wildcard modules/menu/*.c modules/menu/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
@@ -732,9 +737,17 @@ TEARDOWN_MODULES := wallpaper tile monocle float scrolling animation cube \
 	fizz leaves snow hints soapfilm embers submerged dew crt \
 	layout-indicator alpha \
 	vanitygaps roundcorners windowrules dropdown scratchpad screenshot \
-	osd clipboard bar
+	osd clipboard bar menu
 $(OUTDIR)/test-compositor-teardown: $(patsubst %,$(OUTDIR)/modules/%.so,$(TEARDOWN_MODULES))
 $(OBJDIR)/tests/test-compositor-teardown.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
+# The menu model reads the shipped tree, which is the one thing about
+# it that cannot be checked by reading the code.
+$(OUTDIR)/test-menu-render: $(OUTDIR)/modules/menu.so
+$(OBJDIR)/tests/test-menu-render.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+$(OUTDIR)/test-menu-module: $(OUTDIR)/modules/menu.so
+$(OBJDIR)/tests/test-menu-module.o: TEST_CFLAGS += -DGOWL_TEST_MENU_MODULE='"$(abspath $(OUTDIR)/modules/menu.so)"'
+$(OBJDIR)/tests/test-menu.o: TEST_CFLAGS += -DGOWL_TEST_MENU_FILE='"$(abspath data/menu.yaml)"'
 
 $(OBJDIR)/tests/test-layout.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 

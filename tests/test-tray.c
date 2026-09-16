@@ -990,6 +990,37 @@ test_opening_the_menu_does_ask(Fixture *f, gconstpointer data)
 	g_assert_cmpuint(f->about_to_show, >, 0);
 }
 
+/*
+ * A BURST OF LAYOUT CHANGES COSTS ONE READ.
+ *
+ * Several applications emit LayoutUpdated several times for what is one
+ * change to a reader -- a submenu at a time, or a property per item.  A
+ * round trip per signal, on the thread that also answers the watcher, is
+ * the same failure as the loop above arriving more slowly.
+ */
+static void
+test_a_burst_of_changes_costs_one_read(Fixture *f, gconstpointer data)
+{
+	guint i;
+
+	(void)data;
+	serving(f);
+	fixture_app_up(f, "org.example.FakeTrayBurst");
+	register_as(f, "org.example.FakeTrayBurst");
+	g_assert_true(wait_until(f, have_one_item, 3000));
+
+	f->get_layout = 0;
+	for (i = 0; i < 20; i++) {
+		g_dbus_connection_emit_signal(f->conn, NULL, FAKE_MENU,
+			"com.canonical.dbusmenu", "LayoutUpdated",
+			g_variant_new("(ui)", i + 1, 0), NULL);
+	}
+	settle(f, 2000);
+
+	g_assert_cmpuint(f->get_layout, >, 0);
+	g_assert_cmpuint(f->get_layout, <=, 2);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1014,6 +1045,8 @@ main(int argc, char **argv)
 	CASE("/tray/a-layout-change-does-not-ask-for-another",
 	     test_a_layout_change_does_not_ask_for_another);
 	CASE("/tray/opening-the-menu-does-ask", test_opening_the_menu_does_ask);
+	CASE("/tray/a-burst-of-changes-costs-one-read",
+	     test_a_burst_of_changes_costs_one_read);
 
 #undef CASE
 	g_test_add_func("/tray/a-pixmap-becomes-a-surface",

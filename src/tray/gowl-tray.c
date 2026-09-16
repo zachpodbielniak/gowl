@@ -121,6 +121,10 @@ typedef struct {
 	guint             menu_sig_id; /* the menu's LayoutUpdated */
 	GowlTrayMenuItem *menu;        /* last read layout, or NULL */
 	gboolean          menu_wanted; /* a refresh is outstanding */
+	guint             menu_timer;  /* coalescing source, 0 when idle */
+	/* Unowned, and only so the entry can cancel its own timer: the
+	 * source lives in the tray's context and is found by id there. */
+	GowlTray         *tray;
 } TrayEntry;
 
 struct _GowlTray {
@@ -319,6 +323,20 @@ tray_entry_free(gpointer data)
 	g_free(e->item.pixmap);
 	if (e->menu != NULL)
 		gowl_tray_menu_item_free(e->menu);
+	/*
+	 * The coalescing timer holds an EntryRef naming this entry, so
+	 * leaving it armed past the entry's death is a read of a key that
+	 * has been freed.  Found by ID IN THE BUS THREAD'S CONTEXT:
+	 * g_source_remove() looks only in the default one and would not
+	 * find this, silently.
+	 */
+	if (e->menu_timer != 0 && e->tray != NULL && e->tray->ctx != NULL) {
+		GSource *source = g_main_context_find_source_by_id(
+			e->tray->ctx, e->menu_timer);
+
+		if (source != NULL)
+			g_source_destroy(source);
+	}
 	g_free(e);
 }
 
@@ -680,6 +698,7 @@ tray_register_item(GowlTray *self, const gchar *service, const gchar *sender)
 	props = item_get_all(self, bus, path);
 
 	e = g_new0(TrayEntry, 1);
+	e->tray = self;
 	e->item.key     = g_strdup(key);
 	e->item.service = g_strdup(bus);
 	e->item.path    = g_strdup(path);
@@ -1013,6 +1032,79 @@ tray_read_menu(GowlTray *self, const gchar *key,
 	g_mutex_unlock(&self->lock);
 }
 
+/*
+ * A layout change, coalesced.
+ *
+ * An application rebuilding its menu emits `LayoutUpdated' once per
+ * change and several applications emit it several times for what is one
+ * change to a reader -- a submenu at a time, or a property per item.
+ * Reading the whole tree for each is a round trip per signal, on the
+ * thread that also answers the watcher.
+ *
+ * One timer per item, restarted rather than stacked, so a burst of any
+ * length costs exactly one read.  The delay is short enough that a menu
+ * opened straight after a change still gets the new one, and long
+ * enough to swallow a burst.
+ */
+#define GOWL_TRAY_MENU_COALESCE_MS (250)
+
+static gboolean
+tray_menu_coalesced(gpointer data)
+{
+	EntryRef  *r = data;
+	TrayEntry *e;
+
+	g_mutex_lock(&r->tray->lock);
+	e = g_hash_table_lookup(r->tray->entries, r->key);
+	if (e != NULL)
+		e->menu_timer = 0;
+	g_mutex_unlock(&r->tray->lock);
+
+	tray_read_menu(r->tray, r->key, FALSE);
+	return G_SOURCE_REMOVE;
+}
+
+static void
+tray_menu_schedule_read(GowlTray *self, const gchar *key)
+{
+	TrayEntry *e;
+	EntryRef  *r;
+	GSource   *source;
+
+	g_mutex_lock(&self->lock);
+	e = g_hash_table_lookup(self->entries, key);
+	if (e == NULL) {
+		g_mutex_unlock(&self->lock);
+		return;
+	}
+	if (e->menu_timer != 0) {
+		/* Already waiting: the burst costs one read, not one each. */
+		g_mutex_unlock(&self->lock);
+		return;
+	}
+
+	/*
+	 * ATTACHED TO THE BUS THREAD'S CONTEXT BY NAME, not to whatever is
+	 * thread-default here.
+	 *
+	 * This runs from a GDBus signal callback, and that is NOT always
+	 * dispatched on the thread that subscribed: when the bus thread is
+	 * already inside a synchronous call, the signal arrives on another
+	 * thread whose thread-default is the GLOBAL default context.  A
+	 * g_timeout_add() there attaches the timer to that context, so the
+	 * read runs on somebody else's thread -- in a session that is the
+	 * compositor's, which then makes a blocking D-Bus call to an
+	 * application it is also serving, and waits out the timeout.
+	 */
+	r = entry_ref_new(self, key);
+	source = g_timeout_source_new(GOWL_TRAY_MENU_COALESCE_MS);
+	g_source_set_callback(source, tray_menu_coalesced, r,
+	                      (GDestroyNotify)entry_ref_free);
+	e->menu_timer = g_source_attach(source, self->ctx);
+	g_source_unref(source);
+	g_mutex_unlock(&self->lock);
+}
+
 /* The application says its menu changed. */
 static void
 menu_signal_cb(GDBusConnection *conn, const gchar *sender, const gchar *path,
@@ -1030,7 +1122,7 @@ menu_signal_cb(GDBusConnection *conn, const gchar *sender, const gchar *path,
 	 * A layout change is NOT somebody opening the menu, so this reads
 	 * without AboutToShow -- see tray_read_menu().
 	 */
-	tray_read_menu(r->tray, r->key, FALSE);
+	tray_menu_schedule_read(r->tray, r->key);
 }
 
 /* ── The watcher object ──────────────────────────────────────────── */

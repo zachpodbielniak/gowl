@@ -1786,6 +1786,23 @@ identical to the modules, which is right, because they want the same
 thing. It only ever ORs, so a rule that switched something off is never
 switched back on.
 
+That reuse is what made it worth doing, and it is also what hid a bug
+for as long as it did. =NO_ANIM= was *asked in six places and honoured
+in four*. The two that missed it were =fade_in_start()= and
+=gowl_animation_start()= --- the entrance every reveal and every open
+runs through, and the geometry animation every move and resize runs
+through --- so a window that had opted out was still set to zero
+opacity and faded back in on each reveal, and still slid to each new
+geometry. Before the opt-out existed almost nothing carried =no-anim=,
+so the gap was invisible; the moment Steam and a nested GNOME did, it
+read as those windows flashing whenever anything revealed them.
+
+Both now go through =animation_allowed()=, beside =jiggle_strength()=
+which already gated its own callers the same way. The guard belongs at
+the choke point rather than at the six call sites, because a new caller
+that forgets is precisely the bug, and there is no version of it that
+wants to animate a window which asked not to be.
+
 *The answer comes from the PROCESS, which is why it is not a window
 rule.* Three inputs:
 

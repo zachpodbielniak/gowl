@@ -202,6 +202,81 @@ test_pop_and_opacity(Fixture *f, gconstpointer data)
 	g_assert_cmpint(c->scene->node.y, ==, c->geom.y);
 }
 
+/*
+ * A window that asked for no animation is not animated.
+ *
+ * `no-anim' was asked in six places and honoured in four.  The two that
+ * missed it are the two every entrance runs through, so Steam -- which
+ * the fx opt-out puts in exactly this state -- was still set to nothing
+ * and faded back on every reveal, and still slid to each new geometry.
+ *
+ * The visible half of that is a flash on focus.  The expensive half is
+ * a menu: drawn once, dismissed a moment later, and invisible for the
+ * part of that it spent being faded in.
+ *
+ * The control runs FIRST, in the same rig and on the same client, so a
+ * rig where nothing animates at all cannot pass this.
+ */
+static void
+test_no_anim_is_not_animated(Fixture *f, gconstpointer data)
+{
+	GowlClient *c = f->client;
+	struct wlr_box moved;
+
+	/* ---- control: this rig does animate ---- */
+	gowl_animation_reveal_start(f->compositor, c);
+	g_assert_true(gowl_animation_state(c)->anim_opening);
+	g_assert_cmpfloat(c->effect_alpha, ==, 0.0f);
+	gowl_animation_open_cancel(c);
+
+	moved = c->geom;
+	moved.x += 400;
+	gowl_animation_start(f->compositor, c, &c->geom, &moved);
+	g_assert_true(gowl_animation_state(c)->anim_active);
+	gowl_animation_cancel(c);
+	gowl_client_set_effect_alpha(c, 1.0f);
+
+	/* ---- and now the same client, having opted out ---- */
+	c->rule_flags |= GOWL_CLIENT_RULE_NO_ANIM;
+
+	/*
+	 * Not set to nothing.  This is the flash: a window drawn at zero
+	 * opacity and faded back over the next tenth of a second, which on
+	 * a menu is most of the time it is on screen.
+	 */
+	gowl_animation_reveal_start(f->compositor, c);
+	g_assert_false(gowl_animation_state(c)->anim_opening);
+	g_assert_cmpfloat(c->effect_alpha, ==, 1.0f);
+
+	/* And it does not slide to a new geometry either. */
+	gowl_animation_start(f->compositor, c, &c->geom, &moved);
+	g_assert_false(gowl_animation_state(c)->anim_active);
+
+	(void)data;
+}
+
+/*
+ * The same thing through the scene-effect hook the compositor actually
+ * dispatches, rather than the entry points directly: REVEAL is sent
+ * from gowl_compositor_arrange() every time a window's node goes from
+ * disabled to enabled, which is what makes this fire on a tag switch
+ * and on a menu that has just mapped.
+ */
+static void
+test_no_anim_survives_a_reveal_event(Fixture *f, gconstpointer data)
+{
+	GowlClient *c = f->client;
+
+	(void)data;
+	c->rule_flags |= GOWL_CLIENT_RULE_NO_ANIM;
+
+	gowl_effects_client_event(f->compositor, c,
+	                          GOWL_SCENE_EFFECT_REVEAL, NULL, FALSE);
+
+	g_assert_cmpfloat(c->effect_alpha, ==, 1.0f);
+	g_assert_false(gowl_animation_state(c)->anim_opening);
+}
+
 static void
 test_tag_reveal_border(Fixture *f, gconstpointer data)
 {
@@ -747,6 +822,10 @@ main(int argc, char **argv)
 	g_test_init(&argc, &argv, NULL);
 	g_test_add("/animation/scene/pop-opacity", Fixture, NULL, setup,
 	           test_pop_and_opacity, teardown);
+	g_test_add("/animation/scene/no-anim-is-not-animated", Fixture, NULL,
+	           setup, test_no_anim_is_not_animated, teardown);
+	g_test_add("/animation/scene/no-anim-survives-a-reveal", Fixture, NULL,
+	           setup, test_no_anim_survives_a_reveal_event, teardown);
 	g_test_add("/animation/scene/tag-reveal-border", Fixture, NULL, setup,
 	           test_tag_reveal_border, teardown);
 	g_test_add("/animation/scene/tag-reveal-decoration", Fixture, GINT_TO_POINTER(1), setup,

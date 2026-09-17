@@ -150,6 +150,25 @@ open_duration(GowlCompositor *self)
 
 /* ── Opening ─────────────────────────────────────────────────────── */
 
+static gboolean
+animation_allowed(GowlCompositor *self, GowlClient *c)
+{
+	/*
+	 * `no-anim' is what a window asked for, and until this existed it
+	 * was asked in six places and honoured in four.  The two that
+	 * missed it are the two every entrance goes through, so a window
+	 * that had opted out still got faded in from nothing on every
+	 * reveal and still slid to each new geometry.
+	 *
+	 * Guarded HERE rather than at the call sites, the way
+	 * jiggle_strength() already gates the jiggle: a new caller that
+	 * forgets is the bug this is, and there is no version of it that
+	 * wants to animate a window which said not to.
+	 */
+	return gowl_animation_enabled(self) && c != NULL
+	       && !(c->rule_flags & GOWL_CLIENT_RULE_NO_ANIM);
+}
+
 static gdouble
 jiggle_strength(GowlCompositor *self, GowlClient *c)
 {
@@ -211,7 +230,12 @@ fade_in_start(GowlCompositor *self, GowlClient *c)
 {
 	gint duration;
 
-	if (!gowl_animation_enabled(self) || c->scene == NULL)
+	/*
+	 * A window that opted out must not be set to nothing and faded
+	 * back: that IS the flash, and on a menu that is drawn once and
+	 * dismissed it is the whole of the time it had to be seen.
+	 */
+	if (!animation_allowed(self, c) || c->scene == NULL)
 		return;
 
 	duration = open_duration(self);
@@ -686,7 +710,7 @@ gowl_animation_start(GowlCompositor *self, GowlClient *c,
 	g_return_if_fail(c != NULL);
 	g_return_if_fail(from != NULL && to != NULL);
 
-	if (!gowl_animation_enabled(self) || c->scene == NULL)
+	if (!animation_allowed(self, c) || c->scene == NULL)
 		return;
 
 	/* Arrange and configure acknowledgements may repeat a destination.

@@ -296,6 +296,91 @@ test_focus_stack_accepts_groups(void)
 	g_assert_false(gowl_focus_stack_accepts(1, 2));
 }
 
+/* ------------------------------------------------------------------ *
+ * Key routing while a software KVM holds the input
+ * ------------------------------------------------------------------ */
+
+/*
+ * The whole truth table, because the bug was an ORDER and an order is
+ * exactly what a truth table pins down.  The diversion used to run
+ * last, behind "has anything already handled this key", so a key that
+ * matched a local bind was claimed locally and never reached the
+ * machine the pointer was on.  Both ends running gowl share every
+ * shortcut, so that was every shortcut.
+ */
+static void
+test_key_route_uncaptured_is_all_local(void)
+{
+	/* No capture: nothing is diverted, Super+Escape least of all --
+	 * it is an ordinary bind when there is nothing to escape from. */
+	g_assert_cmpint(gowl_key_route(FALSE, FALSE, TRUE, TRUE, TRUE),
+	                ==, GOWL_KEY_ROUTE_LOCAL);
+	g_assert_cmpint(gowl_key_route(FALSE, FALSE, TRUE, TRUE, FALSE),
+	                ==, GOWL_KEY_ROUTE_LOCAL);
+	g_assert_cmpint(gowl_key_route(FALSE, TRUE, FALSE, FALSE, FALSE),
+	                ==, GOWL_KEY_ROUTE_LOCAL);
+}
+
+static void
+test_key_route_captured_goes_to_the_other_machine(void)
+{
+	/*
+	 * THE REPORTED BUG.  Super+2 with the pointer on the remote
+	 * screen: it belongs to the remote host, not to the local bind
+	 * that happens to match it.
+	 */
+	g_assert_cmpint(gowl_key_route(TRUE, FALSE, TRUE, TRUE, FALSE),
+	                ==, GOWL_KEY_ROUTE_CAPTURE);
+	/* Releases travel too, or the far end holds a key down for ever. */
+	g_assert_cmpint(gowl_key_route(TRUE, FALSE, FALSE, TRUE, FALSE),
+	                ==, GOWL_KEY_ROUTE_CAPTURE);
+	/* And a key with no modifier at all is just as much theirs. */
+	g_assert_cmpint(gowl_key_route(TRUE, FALSE, TRUE, FALSE, FALSE),
+	                ==, GOWL_KEY_ROUTE_CAPTURE);
+}
+
+static void
+test_key_route_super_escape_always_breaks_out(void)
+{
+	/*
+	 * The one exception, and the reason the order inside the rule
+	 * matters as much as the order outside it: a capture that
+	 * diverted this too would own the keyboard with no way back.
+	 */
+	g_assert_cmpint(gowl_key_route(TRUE, FALSE, TRUE, TRUE, TRUE),
+	                ==, GOWL_KEY_ROUTE_BREAK_CAPTURE);
+}
+
+static void
+test_key_route_escape_alone_does_not_break_out(void)
+{
+	/* Escape without Super is the remote machine's Escape.  A bare
+	 * Escape that broke the capture would make the far end unusable
+	 * for anything that uses the key. */
+	g_assert_cmpint(gowl_key_route(TRUE, FALSE, TRUE, FALSE, TRUE),
+	                ==, GOWL_KEY_ROUTE_CAPTURE);
+	/* And on release, Super+Escape is not the hatch either: the hatch
+	 * fires once, on the press. */
+	g_assert_cmpint(gowl_key_route(TRUE, FALSE, FALSE, TRUE, TRUE),
+	                ==, GOWL_KEY_ROUTE_CAPTURE);
+}
+
+static void
+test_key_route_injected_keys_are_never_sent_back(void)
+{
+	/*
+	 * An injected key arrived FROM the sink.  Diverting it returns it
+	 * to the sender, which is a loop between two machines that each
+	 * think the other typed it.
+	 */
+	g_assert_cmpint(gowl_key_route(TRUE, TRUE, TRUE, FALSE, FALSE),
+	                ==, GOWL_KEY_ROUTE_LOCAL);
+	/* Even injected, though, Super+Escape still breaks out: it is the
+	 * hatch, and a wedge is exactly when the keys are synthetic. */
+	g_assert_cmpint(gowl_key_route(TRUE, TRUE, TRUE, TRUE, TRUE),
+	                ==, GOWL_KEY_ROUTE_BREAK_CAPTURE);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -326,6 +411,17 @@ main(int argc, char **argv)
 
 	g_test_add_func("/focus-rules/stack-accepts/groups",
 	                test_focus_stack_accepts_groups);
+
+	g_test_add_func("/key-route/uncaptured-is-all-local",
+	                test_key_route_uncaptured_is_all_local);
+	g_test_add_func("/key-route/captured-goes-to-the-other-machine",
+	                test_key_route_captured_goes_to_the_other_machine);
+	g_test_add_func("/key-route/super-escape-always-breaks-out",
+	                test_key_route_super_escape_always_breaks_out);
+	g_test_add_func("/key-route/escape-alone-does-not-break-out",
+	                test_key_route_escape_alone_does_not_break_out);
+	g_test_add_func("/key-route/injected-keys-are-never-sent-back",
+	                test_key_route_injected_keys_are_never_sent_back);
 
 	return g_test_run();
 }

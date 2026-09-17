@@ -24,6 +24,57 @@
 G_BEGIN_DECLS
 
 /**
+ * GowlKeyRoute:
+ * @GOWL_KEY_ROUTE_LOCAL: this machine's business -- configured binds,
+ *   module binds, the embedder intercept, then the focused client
+ * @GOWL_KEY_ROUTE_CAPTURE: the OTHER machine's business: an input
+ *   capture is active, so the key goes to the sink and nothing here
+ *   runs on it
+ * @GOWL_KEY_ROUTE_BREAK_CAPTURE: Super+Escape while captured -- the
+ *   escape hatch, consumed here and sent nowhere
+ *
+ * Where a key belongs while a software KVM (deskflow) may be holding
+ * the input.
+ *
+ * This is an ordering question and it was wrong for as long as the
+ * order lived only in the sequence of `if' statements: the capture
+ * diversion sat at the BOTTOM behind `!handled', so a key matching a
+ * local bind was claimed locally and never sent.  With both machines
+ * running gowl -- which share every shortcut -- Super+2 switched a tag
+ * HERE while the pointer was on the remote screen, and the remote
+ * host could not be driven by the keyboard at all.
+ */
+typedef enum {
+	GOWL_KEY_ROUTE_LOCAL = 0,
+	GOWL_KEY_ROUTE_CAPTURE,
+	GOWL_KEY_ROUTE_BREAK_CAPTURE
+} GowlKeyRoute;
+
+/**
+ * gowl_key_route:
+ * @capture_active: an input-capture session currently holds the input
+ * @synthetic: the key was injected rather than typed
+ * @pressed: a press rather than a release
+ * @logo: the Super modifier is held
+ * @escape: one of the key's keysyms is Escape
+ *
+ * Where this key goes.  A captured keyboard belongs to the machine the
+ * pointer is on, with exactly one exception: Super+Escape breaks the
+ * capture, which is the only guaranteed way back when a KVM client
+ * wedges it.  The exception is tested FIRST for that reason.
+ *
+ * An injected key is never diverted: it arrived from the sink, and
+ * handing it back is a loop.
+ *
+ * Returns: the route
+ */
+GowlKeyRoute gowl_key_route (gboolean capture_active,
+                             gboolean synthetic,
+                             gboolean pressed,
+                             gboolean logo,
+                             gboolean escape);
+
+/**
  * GowlCloseRoute:
  * @GOWL_CLOSE_ROUTE_NONE: the client has no closable shell surface
  *   (unmapped, or mid-teardown) -- do nothing

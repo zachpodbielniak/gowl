@@ -308,8 +308,11 @@ static void on_gamma_control_set_gamma (struct wl_listener *listener,
 /* pointer constraints (definitions live beside the motion handlers) */
 static void on_new_pointer_constraint (struct wl_listener *listener,
                                        void *data);
-static void constraint_check_surface  (GowlCompositor *self,
-                                       struct wlr_surface *surface);
+static gboolean constraint_check_surface (GowlCompositor *self,
+                                          struct wlr_surface *surface);
+struct wlr_pointer_constraint_v1;
+static gboolean constraint_apply_cursor_hint (GowlCompositor *self,
+                                              struct wlr_pointer_constraint_v1 *c);
 /*
  * Needed up here by the injection entry points, which sit with the rest
  * of the inject API rather than with the motion handlers.  Injected
@@ -402,6 +405,14 @@ listener_remove(struct wl_listener *listener)
 static void
 remove_compositor_listeners(GowlCompositor *self)
 {
+	/* A pending cursor-hint resync would run after everything it
+	 * touches is gone.  Not a listener, but it has the same lifetime
+	 * problem and this is where that is dealt with. */
+	if (self->constraint_resync_idle != NULL) {
+		wl_event_source_remove(self->constraint_resync_idle);
+		self->constraint_resync_idle = NULL;
+	}
+
 	/* The renderer, the output layout and the backend. */
 	listener_remove(&self->gpu_reset);
 	listener_remove(&self->layout_change);
@@ -10807,9 +10818,67 @@ compositor_handle_key(
 	 * gowl-shortcuts-inhibit.c). */
 	inhibited = gowl_shortcuts_inhibited(self);
 
+	/*
+	 * Who does this key belong to?
+	 *
+	 * BEFORE the binds, not after.  The diversion used to sit at the
+	 * bottom behind `!handled', so a key that matched a local bind was
+	 * claimed locally and never sent at all: with the pointer on the
+	 * remote screen, Super+2 switched to tag 2 HERE and the remote host
+	 * never saw it.  Between two machines running the same compositor,
+	 * which share every shortcut, that is all of them.
+	 *
+	 * The decision is gowl_key_route() rather than the order of the
+	 * statements below it, because the order WAS the bug and a rule
+	 * expressed as a value can be read, and tested, on its own.
+	 */
+	{
+		gboolean escape = FALSE;
+
+		for (i = 0; i < nsyms; i++) {
+			if (syms[i] == XKB_KEY_Escape) {
+				escape = TRUE;
+				break;
+			}
+		}
+
+		switch (gowl_key_route(
+				self->input_capture != NULL
+				&& gowl_input_capture_is_active(self->input_capture),
+				synthetic,
+				state == WL_KEYBOARD_KEY_STATE_PRESSED,
+				(mods & WLR_MODIFIER_LOGO) != 0,
+				escape)) {
+		case GOWL_KEY_ROUTE_BREAK_CAPTURE:
+			/* The one key a capture never gets: without it a
+			 * wedged KVM client owns this keyboard for good. */
+			gowl_input_capture_deactivate(self->input_capture);
+			handled = TRUE;
+			break;
+		case GOWL_KEY_ROUTE_CAPTURE: {
+			GowlInputEvent ev;
+
+			memset(&ev, 0, sizeof ev);
+			ev.type = GOWL_INPUT_EVENT_KEY;
+			ev.time_msec = time_msec;
+			ev.keycode = raw_keycode;
+			ev.state = (state == WL_KEYBOARD_KEY_STATE_PRESSED)
+			           ? 1 : 0;
+			gowl_input_capture_emit(self->input_capture, &ev);
+			handled = TRUE;
+			break;
+		}
+		case GOWL_KEY_ROUTE_LOCAL:
+			break;
+		}
+	}
+
 	/* Configured binds: on press, and -- for a bind marked
-	 * `release' -- on release. */
-	if (!inhibited) {
+	 * `release' -- on release.  `!handled' because the capture
+	 * diversion above already claimed the key for the other machine;
+	 * the module block and the embedder intercept below have always
+	 * tested it and this one never needed to until now. */
+	if (!handled && !inhibited) {
 		gboolean pressed = state == WL_KEYBOARD_KEY_STATE_PRESSED;
 
 		/* First try the state-resolved keysyms (handles things
@@ -10948,44 +11017,6 @@ compositor_handle_key(
 			handled = TRUE;
 			break;
 		}
-	}
-
-	/* InputCapture escape hatch: Super+Escape force-deactivates capture
-	 * unconditionally, even while active.  This is the user's guaranteed
-	 * way out -- if a misbehaving KVM client (or a bug) wedges capture
-	 * active, every other key is diverted to the capture sink and the
-	 * keyboard is otherwise unusable.  Checked BEFORE the diversion below
-	 * and consumed (not forwarded anywhere) so it can always break out. */
-	if (self->input_capture != NULL
-	    && gowl_input_capture_is_active(self->input_capture)
-	    && state == WL_KEYBOARD_KEY_STATE_PRESSED
-	    && (mods & WLR_MODIFIER_LOGO)) {
-		for (i = 0; i < nsyms; i++) {
-			if (syms[i] == XKB_KEY_Escape) {
-				gowl_input_capture_deactivate(
-					self->input_capture);
-				handled = TRUE;
-				break;
-			}
-		}
-	}
-
-	/* InputCapture: while active, divert the key to the sink and consume
-	 * it (so it is not forwarded to a client).  Runs AFTER compositor and
-	 * module keybinds + the embedder intercept + the escape hatch above,
-	 * so Super+Escape can always break capture. */
-	if (!handled && !synthetic && self->input_capture != NULL
-	    && gowl_input_capture_is_active(self->input_capture)) {
-		GowlInputEvent ev;
-
-		memset(&ev, 0, sizeof ev);
-		ev.type = GOWL_INPUT_EVENT_KEY;
-		ev.time_msec = time_msec;
-		ev.keycode = raw_keycode;
-		ev.state = (state == WL_KEYBOARD_KEY_STATE_PRESSED)
-		           ? 1 : 0;
-		gowl_input_capture_emit(self->input_capture, &ev);
-		handled = TRUE;
 	}
 
 	if (!handled
@@ -11311,7 +11342,14 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 	/* Activate the constraint belonging to whatever is under the cursor
 	 * now, and deactivate any other.  Before pointerfocus, so a client
 	 * that locks the pointer on entry is told before it is entered. */
-	constraint_check_surface(self, surface);
+	if (constraint_check_surface(self, surface)) {
+		/* A lock that ended put the cursor back where its client
+		 * said it was, so what is under it is a different question
+		 * than it was a moment ago.  Focusing on the stale answer
+		 * enters the wrong surface at the wrong coordinates. */
+		xytonode(self, self->wlr_cursor->x, self->wlr_cursor->y,
+		         &surface, &c, &sx, &sy);
+	}
 
 	pointerfocus(self, c, surface, sx, sy, time_msec);
 
@@ -11339,11 +11377,83 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 /* Deactivate whatever constraint is active, if any.  Safe to call when
  * none is: the seat may have moved off the surface, the surface may have
  * gone, or the client may have destroyed the constraint. */
-static void
+/* The client owning @surface, or NULL.  Only the toplevel surfaces are
+ * searched, which is what a pointer constraint is created on. */
+static GowlClient *
+client_for_surface(GowlCompositor *self, struct wlr_surface *surface)
+{
+	GList *l;
+
+	if (surface == NULL)
+		return NULL;
+	for (l = self->clients; l != NULL; l = l->next) {
+		GowlClient *c = (GowlClient *)l->data;
+
+		if (client_surface(c) == surface)
+			return c;
+	}
+	return NULL;
+}
+
+/*
+ * Put the cursor back where the client says it is.
+ *
+ * A locked pointer does not move, so when the lock ends the cursor is
+ * wherever it froze -- while the CLIENT has spent the lock drawing its
+ * own cursor somewhere else entirely and telling us where with
+ * set_cursor_position_hint.  The protocol says to move the cursor
+ * there on deactivation, and gowl never read the hint at all.
+ *
+ * For a game this is every mouselook: press to look, release, and the
+ * pointer is back at wherever the look began instead of where the
+ * crosshair is.  Do that a few times a second -- which is what playing
+ * is -- and the cursor is somewhere different after every click.
+ *
+ * Returns: %TRUE if the cursor was moved, so the caller can resolve
+ *   what is under it again rather than act on where it used to be.
+ */
+static gboolean
+constraint_apply_cursor_hint(GowlCompositor *self,
+                             struct wlr_pointer_constraint_v1 *c)
+{
+	GowlClient *client;
+	gint sx, sy;
+
+	/*
+	 * `enabled', not the `committed' bitmask.  committed records which
+	 * fields a PARTICULAR commit carried, so it is clear again after
+	 * the next commit that does not repeat the hint -- and a client
+	 * sets the hint once and commits many times.
+	 */
+	if (c->type != WLR_POINTER_CONSTRAINT_V1_LOCKED
+	    || !c->current.cursor_hint.enabled)
+		return FALSE;
+
+	client = client_for_surface(self, c->surface);
+	if (client == NULL || client->scene_surface == NULL)
+		return FALSE;
+
+	/* The hint is surface-local; the cursor lives in the layout.  The
+	 * scene node is the only thing that knows where the surface
+	 * actually ended up. */
+	if (!wlr_scene_node_coords(&client->scene_surface->node, &sx, &sy))
+		return FALSE;
+
+	wlr_cursor_warp_closest(self->wlr_cursor, NULL,
+	                        (gdouble)sx + c->current.cursor_hint.x,
+	                        (gdouble)sy + c->current.cursor_hint.y);
+	self->prev_cursor_x = self->wlr_cursor->x;
+	self->prev_cursor_y = self->wlr_cursor->y;
+	return TRUE;
+}
+
+static gboolean
 constraint_deactivate(GowlCompositor *self)
 {
+	gboolean warped = FALSE;
+
 	if (self->active_constraint == NULL)
-		return;
+		return FALSE;
 
 	wl_list_remove(&self->active_constraint_destroy.link);
 	/* send_deactivated may destroy the constraint (for a ONESHOT
@@ -11352,22 +11462,59 @@ constraint_deactivate(GowlCompositor *self)
 		struct wlr_pointer_constraint_v1 *c = self->active_constraint;
 
 		self->active_constraint = NULL;
+		warped = constraint_apply_cursor_hint(self, c);
 		wlr_pointer_constraint_v1_send_deactivated(c);
 	}
+	return warped;
+}
+
+/* Resolve pointer focus after a cursor-hint warp, once wlroots has
+ * finished destroying the constraint that caused it. */
+static void
+constraint_resync_idle(void *data)
+{
+	GowlCompositor *self = data;
+
+	self->constraint_resync_idle = NULL;
+	gowl_compositor_motionnotify(self, inject_now_msec());
 }
 
 static void
 on_active_constraint_destroy(struct wl_listener *listener, void *data)
 {
 	GowlCompositor *self;
+	struct wlr_pointer_constraint_v1 *c = data;
 
-	(void)data;
 	self = wl_container_of(listener, self, active_constraint_destroy);
 
-	/* The constraint went away underneath us.  Just forget it: sending
-	 * deactivated to a destroyed constraint is a use-after-free. */
+	/* The constraint went away underneath us.  Forget it rather than
+	 * deactivating it: sending deactivated to a destroyed constraint
+	 * is a use-after-free. */
 	wl_list_remove(&self->active_constraint_destroy.link);
 	self->active_constraint = NULL;
+
+	/*
+	 * The hint still applies, and THIS is the path that carries it.
+	 * Destroying the locked_pointer object is how a client ends a lock
+	 * -- a game does it the moment mouselook stops -- so the
+	 * deactivate path below runs only when the pointer wanders off the
+	 * surface instead, which for a locked pointer it cannot do.  The
+	 * hint was therefore read in the one place it never happened.
+	 */
+	/*
+	 * The warp happens now; resolving what is under the cursor does
+	 * NOT.  This runs inside wlroots' destroy emission for @c, and
+	 * motionnotify would reach constraint_check_surface, which
+	 * attaches this very listener to whatever it finds -- including
+	 * the constraint being destroyed, which then aborts on
+	 * `wl_list_empty(&constraint->events.destroy.listener_list)'.
+	 *
+	 * An idle source is the first moment the emission is over.
+	 */
+	if (c != NULL && constraint_apply_cursor_hint(self, c)
+	    && self->event_loop != NULL && self->constraint_resync_idle == NULL)
+		self->constraint_resync_idle = wl_event_loop_add_idle(
+			self->event_loop, constraint_resync_idle, self);
 }
 
 /*
@@ -11375,22 +11522,23 @@ on_active_constraint_destroy(struct wl_listener *listener, void *data)
  * cursor.  Activates that surface's constraint and deactivates any
  * other, so exactly one is live at a time.
  */
-static void
+static gboolean
 constraint_check_surface(GowlCompositor *self, struct wlr_surface *surface)
 {
 	struct wlr_pointer_constraint_v1 *want = NULL;
+	gboolean warped;
 
 	if (self->pointer_constraints == NULL)
-		return;
+		return FALSE;
 
 	if (surface != NULL)
 		want = wlr_pointer_constraints_v1_constraint_for_surface(
 			self->pointer_constraints, surface, self->wlr_seat);
 
 	if (want == self->active_constraint)
-		return;
+		return FALSE;
 
-	constraint_deactivate(self);
+	warped = constraint_deactivate(self);
 
 	if (want != NULL) {
 		self->active_constraint = want;
@@ -11400,6 +11548,7 @@ constraint_check_surface(GowlCompositor *self, struct wlr_surface *surface)
 		              &self->active_constraint_destroy);
 		wlr_pointer_constraint_v1_send_activated(want);
 	}
+	return warped;
 }
 
 static void

@@ -41,6 +41,10 @@
 #define SURFACE_W (200)
 #define SURFACE_H (150)
 
+/* Where the client says its own cursor is, surface-local. */
+#define HINT_X (120)
+#define HINT_Y (90)
+
 typedef struct {
 	const gchar *socket;
 
@@ -65,6 +69,8 @@ typedef struct {
 	gint locked;
 	gint rel_events;
 	gint rel_dx;
+	gint unlock_now;   /* the test asks the client to drop the lock */
+	gint unlocked;     /* and it has */
 	gint stop;
 } Client;
 
@@ -141,6 +147,11 @@ pointer_enter(void *data, struct wl_pointer *p, uint32_t serial,
 		c->constraints, c->surface, c->pointer, NULL,
 		ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
 	zwp_locked_pointer_v1_add_listener(c->lock, &lock_listener, c);
+	/* Where this client draws its own cursor, which is the whole
+	 * point of the hint: it is not where the pointer froze. */
+	zwp_locked_pointer_v1_set_cursor_position_hint(
+		c->lock, wl_fixed_from_int(HINT_X),
+		wl_fixed_from_int(HINT_Y));
 	wl_surface_commit(c->surface);
 	wl_display_flush(c->display);
 	g_atomic_int_set(&c->entered, 1);
@@ -266,6 +277,14 @@ client_thread(gpointer data)
 	wl_display_roundtrip(c->display);
 
 	while (!g_atomic_int_get(&c->stop)) {
+		if (g_atomic_int_get(&c->unlock_now) == 1 && c->lock != NULL) {
+			g_atomic_int_set(&c->unlock_now, 2);
+			zwp_locked_pointer_v1_destroy(c->lock);
+			c->lock = NULL;
+			wl_surface_commit(c->surface);
+			wl_display_flush(c->display);
+			g_atomic_int_set(&c->unlocked, 1);
+		}
 		wl_display_dispatch_pending(c->display);
 		wl_display_flush(c->display);
 		g_usleep(2000);
@@ -427,11 +446,88 @@ locked_pointer_holds_still_and_still_reports(void)
 	rig_down(&r);
 }
 
+/*
+ * When the lock ends, the cursor goes where the client said it was.
+ *
+ * A locked pointer does not move, so at unlock the cursor sits wherever
+ * it froze -- while the client has spent the lock drawing its own
+ * cursor somewhere else and saying where with
+ * set_cursor_position_hint.  gowl never read the hint, so every
+ * mouselook ended with the pointer back at the point the look began.
+ * A game does that several times a second.
+ */
+static void
+unlocking_puts_the_cursor_where_the_client_says(void)
+{
+	Rig      r;
+	Client   c;
+	GThread *thread;
+	gint     sx, sy;
+	GowlClient *client;
+
+	if (!rig_up(&r))
+		return;
+
+	memset(&c, 0, sizeof c);
+	c.socket = r.compositor->socket_name;
+	thread = g_thread_new("pointer-hint-client", client_thread, &c);
+	pump(&r, 400);
+
+	gowl_compositor_inject_pointer_motion(r.compositor, 5, 5);
+	pump(&r, 200);
+
+	if (!await(&r, &c.entered) || !await(&r, &c.locked)) {
+		g_atomic_int_set(&c.stop, 1);
+		pump(&r, 200);
+		g_thread_join(thread);
+		g_test_skip("the client never took the lock here");
+		rig_down(&r);
+		return;
+	}
+
+	/* Where the surface actually is, so the hint can be checked in
+	 * layout coordinates rather than assumed. */
+	client = r.compositor->clients != NULL
+		? (GowlClient *)r.compositor->clients->data : NULL;
+	if (client == NULL || client->scene_surface == NULL
+	    || !wlr_scene_node_coords(&client->scene_surface->node, &sx, &sy)) {
+		g_atomic_int_set(&c.stop, 1);
+		pump(&r, 200);
+		g_thread_join(thread);
+		g_test_skip("no placed surface to measure the hint against");
+		rig_down(&r);
+		return;
+	}
+
+	/* Move while locked, so the cursor and the client's idea of it
+	 * have genuinely diverged before the lock ends. */
+	gowl_compositor_inject_pointer_motion(r.compositor, 40, 25);
+	pump(&r, 200);
+
+	g_atomic_int_set(&c.unlock_now, 1);
+	g_assert_true(await(&r, &c.unlocked));
+	pump(&r, 300);
+	/* A motion to make the compositor notice the constraint is gone. */
+	gowl_compositor_inject_pointer_motion(r.compositor, 0, 0);
+	pump(&r, 200);
+
+	g_assert_false(gowl_compositor_pointer_is_locked(r.compositor));
+	g_assert_cmpfloat(r.compositor->wlr_cursor->x, ==, (gdouble)(sx + HINT_X));
+	g_assert_cmpfloat(r.compositor->wlr_cursor->y, ==, (gdouble)(sy + HINT_Y));
+
+	g_atomic_int_set(&c.stop, 1);
+	pump(&r, 200);
+	g_thread_join(thread);
+	rig_down(&r);
+}
+
 int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
 	g_test_add_func("/pointer-lock/holds-still-and-still-reports",
 	                locked_pointer_holds_still_and_still_reports);
+	g_test_add_func("/pointer-lock/unlocking-honours-the-cursor-hint",
+	                unlocking_puts_the_cursor_where_the_client_says);
 	return g_test_run();
 }

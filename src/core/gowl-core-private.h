@@ -610,6 +610,9 @@ struct _GowlCompositor {
 	struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
 	struct wlr_pointer_constraints_v1      *pointer_constraints;
 	struct wlr_pointer_constraint_v1       *active_constraint;
+	/* Pending focus resync after a cursor-hint warp; see
+	 * on_active_constraint_destroy(). */
+	struct wl_event_source                 *constraint_resync_idle;
 	struct wl_listener new_pointer_constraint;
 	struct wl_listener active_constraint_destroy;
 

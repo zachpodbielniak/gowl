@@ -1321,6 +1321,25 @@ it read as a deskflow fault rather than a gowl one.  Nothing is logged:
 the input arrives, applications respond, and only the compositor's own
 surfaces are inert.
 
+*A captured keyboard belongs to the other machine, including its
+shortcuts.* The diversion to the capture sink used to run at the
+*bottom* of =compositor_handle_key()=, behind =!handled= --- after the
+configured binds, the module binds and the embedder intercept.  So a
+key that matched a local bind was claimed locally and never sent.  With
+=cmacs --gowl= on both ends of a deskflow pair, which share every
+shortcut, that is every shortcut: pointing at the remote screen and
+pressing Super+2 switched a tag *here* and the remote host never heard
+it.
+
+The rule is now =gowl_key_route()= in =src/core/gowl-focus-rules.c=,
+returning LOCAL, CAPTURE or BREAK_CAPTURE, and it is consulted before
+any bind runs.  It is a value rather than a position in a function
+because the position *was* the bug, and a truth table can be read and
+tested on its own (=tests/test-focus-rules.c=).  Super+Escape is the
+single exception and is tested first inside the rule, for the same
+reason it always was: a capture that diverted the escape hatch too
+would own the keyboard with no way back.
+
 *Motion was the exception, and it was the same bug one layer down.*
 =gowl_compositor_inject_pointer_motion()= moved the cursor with
 =wlr_cursor_move()= and called =motionnotify()=, and that was all: it
@@ -2282,6 +2301,44 @@ stream without locking leaves the cursor free to walk out of the
 window mid-turn.  Together they are what makes an FPS, a VM console,
 and an RDP or VNC client usable; without them the pointer escapes the
 window and the view stops turning.
+
+**** The cursor hint, and where a lock actually ends
+
+A locked pointer does not move, so when the lock ends the cursor is
+still wherever it froze --- while the client has spent the lock drawing
+its own cursor somewhere else entirely and saying where with
+=set_cursor_position_hint=.  The protocol's answer is that the
+compositor moves the cursor there on deactivation. gowl did not read
+the hint at all.
+
+This matters far more than "a client draws its own crosshair", because
+of how *Xwayland* implements =XWarpPointer=: it takes a lock and
+reports the warped position as the hint.  An X11 program that recentres
+the pointer every frame --- which is how X11 mouselook has always been
+written --- therefore makes its warps entirely through the hint.  A
+compositor that ignores it leaves the real cursor drifting wherever the
+raw motion took it, and the two positions diverge further with every
+frame the button is held.
+
+Two details, and each was wrong on its own:
+
+- *The hint is read on destroy, not only on deactivate.* Destroying the
+  =zwp_locked_pointer_v1= object is how a client ends a lock, and it is
+  what a game does the moment mouselook stops.
+  =constraint_deactivate()= runs when the pointer moves off the surface
+  instead --- which a locked pointer cannot do --- so the hint was
+  being read in the one place it could never happen.
+- *=cursor_hint.enabled=, not the =committed= bitmask.* =committed=
+  records which fields a particular commit carried, so it clears on the
+  next commit that does not repeat the hint, and a client sets the hint
+  once and commits many times.
+
+The warp happens inside wlroots' destroy emission for the constraint,
+so resolving what is now under the cursor is deferred to an idle
+source.  Doing it inline reaches =constraint_check_surface()=, which
+attaches the destroy listener to whatever it finds --- including the
+constraint being torn down, which then aborts the session on
+=wl_list_empty(&constraint->events.destroy.listener_list)=.
 
 The model is one active constraint at a time --- the protocol says so,
 and it is the only thing that makes sense for a single cursor.

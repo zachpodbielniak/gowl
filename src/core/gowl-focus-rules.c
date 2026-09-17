@@ -140,3 +140,32 @@ gowl_focus_stack_accepts(
 ){
 	return focused_group == candidate_group;
 }
+
+/*
+ * Where a key belongs while a capture may be running.
+ *
+ * The escape hatch is tested before the diversion and not after,
+ * because a capture that diverted Super+Escape too would leave no way
+ * back to this keyboard at all.
+ */
+GowlKeyRoute
+gowl_key_route(
+	gboolean capture_active,
+	gboolean synthetic,
+	gboolean pressed,
+	gboolean logo,
+	gboolean escape
+){
+	if (!capture_active)
+		return GOWL_KEY_ROUTE_LOCAL;
+
+	if (pressed && logo && escape)
+		return GOWL_KEY_ROUTE_BREAK_CAPTURE;
+
+	/* An injected key came FROM the sink.  Sending it back is a loop,
+	 * so it is handled here like any ordinary key. */
+	if (synthetic)
+		return GOWL_KEY_ROUTE_LOCAL;
+
+	return GOWL_KEY_ROUTE_CAPTURE;
+}

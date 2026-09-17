@@ -508,6 +508,18 @@ $(OUTDIR)/test-lock-input: $(OBJDIR)/tests/ext-session-lock-v1-protocol.o
 $(OBJDIR)/tests/test-lock-input.o: ext-session-lock-v1-client-protocol.h
 $(OUTDIR)/test-lock-input: TEST_LDFLAGS += $(OBJDIR)/tests/ext-session-lock-v1-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-lock-input.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
+
+# test-pointer-lock is a real pointer-constraints client: it maps a
+# toplevel, locks the pointer and counts what the compositor sends.
+POINTER_LOCK_PROTO := $(OBJDIR)/tests/pointer-constraints-unstable-v1-protocol.o \
+                      $(OBJDIR)/tests/relative-pointer-unstable-v1-protocol.o \
+                      $(OBJDIR)/tests/xdg-shell-protocol.o
+$(OUTDIR)/test-pointer-lock: $(POINTER_LOCK_PROTO)
+$(OBJDIR)/tests/test-pointer-lock.o: pointer-constraints-unstable-v1-client-protocol.h \
+                                     relative-pointer-unstable-v1-client-protocol.h \
+                                     xdg-shell-client-protocol.h
+$(OUTDIR)/test-pointer-lock: TEST_LDFLAGS += $(POINTER_LOCK_PROTO) $(shell $(PKG_CONFIG) --libs wayland-client)
+$(OBJDIR)/tests/test-pointer-lock.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 $(OUTDIR)/test-protocols: TEST_LDFLAGS += $(OBJDIR)/bar/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 

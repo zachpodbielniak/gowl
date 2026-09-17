@@ -102,6 +102,37 @@ $(OBJDIR)/tests/ext-session-lock-v1-protocol.o: ext-session-lock-v1-protocol.c e
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(TEST_CFLAGS) -Wno-unused-parameter -c $< -o $@
 
+# The two halves of a locked pointer.  Client-side code, for
+# tests/test-pointer-lock.c: the constraint and the relative stream are
+# one feature and a test of either alone proves nothing.
+pointer-constraints-unstable-v1-client-protocol.h:
+	$(WAYLAND_SCANNER) client-header \
+		$(WAYLAND_PROTOCOLS_DIR)/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml $@
+
+pointer-constraints-unstable-v1-protocol.c:
+	$(WAYLAND_SCANNER) private-code \
+		$(WAYLAND_PROTOCOLS_DIR)/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml $@
+
+relative-pointer-unstable-v1-client-protocol.h:
+	$(WAYLAND_SCANNER) client-header \
+		$(WAYLAND_PROTOCOLS_DIR)/unstable/relative-pointer/relative-pointer-unstable-v1.xml $@
+
+relative-pointer-unstable-v1-protocol.c:
+	$(WAYLAND_SCANNER) private-code \
+		$(WAYLAND_PROTOCOLS_DIR)/unstable/relative-pointer/relative-pointer-unstable-v1.xml $@
+
+$(OBJDIR)/tests/pointer-constraints-unstable-v1-protocol.o: pointer-constraints-unstable-v1-protocol.c pointer-constraints-unstable-v1-client-protocol.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(TEST_CFLAGS) -Wno-unused-parameter -c $< -o $@
+
+$(OBJDIR)/tests/relative-pointer-unstable-v1-protocol.o: relative-pointer-unstable-v1-protocol.c relative-pointer-unstable-v1-client-protocol.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(TEST_CFLAGS) -Wno-unused-parameter -c $< -o $@
+
+$(OBJDIR)/tests/xdg-shell-protocol.o: xdg-shell-protocol.c xdg-shell-client-protocol.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(TEST_CFLAGS) -Wno-unused-parameter -c $< -o $@
+
 xdg-shell-protocol.c:
 	$(WAYLAND_SCANNER) private-code \
 		$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell/xdg-shell.xml $@

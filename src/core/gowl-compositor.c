@@ -310,6 +310,21 @@ static void on_new_pointer_constraint (struct wl_listener *listener,
                                        void *data);
 static void constraint_check_surface  (GowlCompositor *self,
                                        struct wlr_surface *surface);
+/*
+ * Needed up here by the injection entry points, which sit with the rest
+ * of the inject API rather than with the motion handlers.  Injected
+ * motion is motion: it has to respect a lock and feed the relative
+ * stream exactly as a device's does, or a client that locked the
+ * pointer watches the cursor walk out from under it.
+ */
+static gboolean constraint_locks_cursor    (GowlCompositor *self);
+static gboolean constraint_allows_position (GowlCompositor *self,
+                                            gdouble x, gdouble y);
+static void     relative_pointer_send      (GowlCompositor *self,
+                                            guint32 time_msec,
+                                            gdouble dx, gdouble dy,
+                                            gdouble dx_unaccel,
+                                            gdouble dy_unaccel);
 
 
 /* layout helpers */
@@ -1782,7 +1797,22 @@ gowl_compositor_inject_pointer_motion(
 	if (self->wlr_cursor == NULL)
 		return;
 
-	wlr_cursor_move(self->wlr_cursor, NULL, dx, dy);
+	/*
+	 * The relative stream first and unconditionally: a client that has
+	 * locked the pointer reads THIS and nothing else, so an injected
+	 * motion that skipped it left a locked client with no input at all.
+	 */
+	relative_pointer_send(self, inject_now_msec(), dx, dy, dx, dy);
+
+	/* And the cursor only if it is allowed to move.  Injected motion is
+	 * motion: a lock that the device path honours and this one does not
+	 * is a cursor that walks out of a window whenever the input happens
+	 * to arrive over a protocol instead of from a mouse. */
+	if (!constraint_locks_cursor(self)
+	    && constraint_allows_position(self, self->wlr_cursor->x + dx,
+	                                  self->wlr_cursor->y + dy))
+		wlr_cursor_move(self->wlr_cursor, NULL, dx, dy);
+
 	gowl_compositor_motionnotify(self, inject_now_msec());
 	gowl_compositor_inject_frame(self);
 }
@@ -1805,9 +1835,24 @@ gowl_compositor_inject_pointer_motion_absolute(
 	if (extents.width <= 0 || extents.height <= 0)
 		return;
 
-	wlr_cursor_warp_closest(self->wlr_cursor, NULL,
-	                        extents.x + nx * extents.width,
-	                        extents.y + ny * extents.height);
+	{
+		gdouble tx = extents.x + nx * extents.width;
+		gdouble ty = extents.y + ny * extents.height;
+
+		/* The delta this warp WOULD produce, computed before
+		 * deciding whether to take it: a locked client still has to
+		 * be told how far the device moved, and reading it back off
+		 * a cursor that correctly did not move reports zero. */
+		relative_pointer_send(self, inject_now_msec(),
+		                      tx - self->wlr_cursor->x,
+		                      ty - self->wlr_cursor->y,
+		                      tx - self->wlr_cursor->x,
+		                      ty - self->wlr_cursor->y);
+
+		if (!constraint_locks_cursor(self)
+		    && constraint_allows_position(self, tx, ty))
+			wlr_cursor_warp_closest(self->wlr_cursor, NULL, tx, ty);
+	}
 	gowl_compositor_motionnotify(self, inject_now_msec());
 	gowl_compositor_inject_frame(self);
 }
@@ -11582,7 +11627,7 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 {
 	GowlCompositor *self;
 	struct wlr_pointer_motion_absolute_event *event;
-	gdouble before_x, before_y;
+	gdouble before_x, before_y, rel_dx, rel_dy;
 	gboolean was_active;
 
 	self = wl_container_of(listener, self, cursor_motion_absolute);
@@ -11595,6 +11640,24 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 
 	before_x = self->wlr_cursor->x;
 	before_y = self->wlr_cursor->y;
+
+	/*
+	 * Where this event WANTS the cursor, worked out before deciding
+	 * whether to take it.  A locked pointer does not move, and reading
+	 * the delta back off a cursor that correctly did not move reports
+	 * zero -- which left a locked client on a tablet, a VM's absolute
+	 * mouse or a KVM with no motion at all.  The device moved; the
+	 * client has to be told how far.
+	 */
+	{
+		gdouble lx = before_x, ly = before_y;
+
+		wlr_cursor_absolute_to_layout_coords(self->wlr_cursor,
+			&event->pointer->base, event->x, event->y, &lx, &ly);
+		rel_dx = lx - before_x;
+		rel_dy = ly - before_y;
+	}
+
 	/* A locked pointer does not move, even for an absolute device --
 	 * a tablet or a VM's absolute mouse must not teleport the cursor
 	 * out from under a client that has asked for the lock. */
@@ -11606,12 +11669,13 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 	 * rarely drive deskflow's egress, but keep it consistent. */
 	self->cap_motion_dx = self->wlr_cursor->x - before_x;
 	self->cap_motion_dy = self->wlr_cursor->y - before_y;
-	/* Relative motion from an absolute device is the delta the warp
-	 * produced; there is no unaccelerated variant to report, so the
-	 * same values go in both slots. */
+	/* Relative motion from an absolute device is the delta the event
+	 * asked for, not the one the cursor took: they differ exactly when
+	 * the cursor was held, which is when the client needs it most.
+	 * There is no unaccelerated variant to report, so the same values
+	 * go in both slots. */
 	relative_pointer_send(self, event->time_msec,
-	                      self->cap_motion_dx, self->cap_motion_dy,
-	                      self->cap_motion_dx, self->cap_motion_dy);
+	                      rel_dx, rel_dy, rel_dx, rel_dy);
 	if (was_active)
 		input_capture_emit_motion(self, event->time_msec,
 		                          self->cap_motion_dx,

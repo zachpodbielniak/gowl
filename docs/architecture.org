@@ -1321,6 +1321,35 @@ it read as a deskflow fault rather than a gowl one.  Nothing is logged:
 the input arrives, applications respond, and only the compositor's own
 surfaces are inert.
 
+*Motion was the exception, and it was the same bug one layer down.*
+=gowl_compositor_inject_pointer_motion()= moved the cursor with
+=wlr_cursor_move()= and called =motionnotify()=, and that was all: it
+did not consult the pointer constraints and it did not feed the
+relative-pointer stream. Both of those are what the device path does
+immediately either side of its own =wlr_cursor_move()=.
+
+The consequence is a *locked* pointer --- a game's mouselook, a VM
+console --- driven over the KVM. The client asks for the lock, gowl
+grants it, and then every injected motion walks the cursor out from
+under it while the relative stream, *which is the only input a locked
+client gets*, stays silent. The two halves read as two different faults:
+a cursor that wanders off the window, and a camera that spins, because
+the client is left deriving its own deltas from a pointer position
+nobody is holding still. Both are one line of missing code each.
+
+The absolute variants had the same hole with an extra twist: they
+computed the relative delta by subtracting the cursor position *after*
+the warp from the one before, so when the lock correctly held the
+cursor still the reported delta was exactly zero. The delta now comes
+from where the event asked the cursor to go, which is the number that
+differs from zero precisely when it matters.
+
+=tests/test-pointer-lock.c= is a real Wayland client --- it maps a
+toplevel, takes the lock on pointer enter and counts what arrives ---
+because the note in =tests/test-pointer-constraints.c= was right that a
+unit test cannot reach this, and the path went unexercised and broken
+for exactly as long as that note stood in for a test.
+
 Three things are skipped for synthetic input, and they are the only
 differences:
 

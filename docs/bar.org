@@ -253,10 +253,22 @@ Colour is computed from pressure --- text, then peach past 75%, then red past 90
 | =ip=        | The interface's address    | Network                                  |
 | =wifi=      | Signal strength            | Network                                  |
 | =vpn=       | Whether a tunnel is up     | ---                                      |
-| =bluetooth= | Connected device, or off   | Power, scan, paired devices              |
+| =bluetooth= | Connected device, or off   | Power, scan, devices found and paired    |
 | =tailscale= | Tailnet state              | Peers, exit nodes, sign-in               |
 
-=bluetooth= runs =bluetoothctl= on the worker thread --- adapter state, paired and connected devices --- and connects or disconnects from the panel. It *hides itself where there is no adapter*, so a desktop without one carries no dead icon, and it ships in the default layout for the machine that does have one. =command= overrides the tool.
+=bluetooth= runs =bluetoothctl= on the worker thread --- adapter state and the device list --- and pairs, connects or disconnects from the panel. It *hides itself where there is no adapter*, so a desktop without one carries no dead icon, and it ships in the default layout for the machine that does have one. =command= overrides the tool.
+
+**** Scanning
+
+Two things about scanning are worth knowing, because both were wrong and neither looked it.
+
+It asks for =devices= with *no filter*, not just =devices Paired= and =devices Connected=. Between them those two are every device except the ones a scan exists to find: the widget was starting a scan perfectly well and had nowhere to put what it found, which from the outside is a scan that does not scan. Devices are ordered connected, then paired, then discovered, and the cap falls on the tail of that --- in a room full of other people's headphones it is never yours that drops off the list.
+
+And the scan is *held open for a bounded window* rather than fired and forgotten. BlueZ gives a discovery session to the D-Bus client that asks for it and takes it back when that client disconnects, so a =bluetoothctl scan on= left to its own devices is a client that connects, asks and leaves. The widget runs =bluetoothctl --timeout N scan on= as queued work instead, which stays connected for the length of the scan. The bound is not optional: the worker pool is drained on the way out, so an unbounded scan is a session that takes as long to quit as the scan had left to run.
+
+A device the scan turned up has never been paired, and =connect= on one of those fails --- so its row offers to *pair* it, and says so rather than showing a bare address.
+
+The listing arithmetic is in =modules/bar/bar-bt-devices.c= so it can be tested against real =bluetoothctl= output; see =tests/test-bar-bt-devices.c=.
 
 The network panel reads what the kernel already knows, and uses =nmcli= only for the parts that genuinely need it --- so the readings still work on a machine with no NetworkManager, and only the actions disappear.
 

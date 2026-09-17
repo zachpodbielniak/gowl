@@ -27,6 +27,7 @@
 
 #include "bar-internal.h"
 #include "bar-wifi-scan.h"
+#include "bar-bt-devices.h"
 
 /**
  * SECTION:bar-plugins-net
@@ -1459,21 +1460,30 @@ static const GowlBarPluginVTable tailscale_vtable = {
  * GetManagedObjects and a walk of a nested variant for every device on
  * the machine.  Everything it runs is a setting, so a different tool
  * can be dropped in without touching this.
+ *
+ * Scanning is the part with a shape worth knowing about.  BlueZ ties a
+ * discovery session to the D-Bus client that asked for it, so a
+ * `bluetoothctl scan on' fired off and forgotten is a client that
+ * connects, asks, and leaves --- and the far end has every reason to
+ * stop scanning when it does.  The scan is held open for a bounded
+ * window instead, by a bluetoothctl that stays alive for it.
  * ---------------------------------------------------------------- */
 
 #define BT_MAX_DEVICES (12)
 
-typedef struct {
-	gchar    *mac;
-	gchar    *name;
-	gboolean  connected;
-} BtDevice;
+/* How long one press of the scan toggle scans for, in seconds.  Bounded
+ * on purpose: the worker pool is drained on the way out, so an unbounded
+ * scan is a session that takes as long to quit as the scan had left. */
+#define BT_SCAN_SECONDS (10)
+
+typedef BarBtDevice BtDevice;
 
 typedef struct {
 	gboolean  present;              /* an adapter exists at all */
 	gboolean  tool_missing;         /* bluetoothctl is not installed */
 	gboolean  powered;
-	gboolean  scanning;
+	gboolean  scanning;             /* a scan WE are holding open */
+	gboolean  discovering;          /* what the adapter reports */
 	GPtrArray *devices;             /* element-type BtDevice */
 	/*
 	 * Filled by the ASYNC poll -- each listing costs a subprocess, and
@@ -1492,23 +1502,13 @@ typedef struct {
 	GMutex    lock;
 } BtData;
 
-static void
-bt_device_free(gpointer data)
-{
-	BtDevice *d = data;
-
-	g_free(d->mac);
-	g_free(d->name);
-	g_free(d);
-}
-
 static gpointer
 bt_create(GowlBarPlugin *plugin)
 {
 	BtData *bd = g_new0(BtData, 1);
 
 	(void)plugin;
-	bd->devices = g_ptr_array_new_with_free_func(bt_device_free);
+	bd->devices = g_ptr_array_new_with_free_func(bar_bt_device_free);
 	g_mutex_init(&bd->lock);
 	return bd;
 }
@@ -1534,64 +1534,13 @@ bt_tool(GowlBarPlugin *plugin)
 	return (tool != NULL && *tool != '\0') ? tool : "bluetoothctl";
 }
 
-/*
- * `bluetoothctl devices' prints one device per line as
- *   Device AA:BB:CC:DD:EE:FF Some Name
- * The name is the rest of the line and may contain spaces, so it is
- * taken whole rather than tokenised.
- */
-static void
-bt_parse_devices(GPtrArray *devices, const gchar *out, gboolean connected)
-{
-	g_auto(GStrv) lines = NULL;
-	gint i;
-
-	if (out == NULL)
-		return;
-
-	lines = g_strsplit(out, "\n", -1);
-	for (i = 0; lines[i] != NULL; i++) {
-		const gchar *mac, *name;
-		BtDevice    *dev;
-		guint        existing;
-
-		if (!g_str_has_prefix(lines[i], "Device "))
-			continue;
-		mac = lines[i] + strlen("Device ");
-		name = strchr(mac, ' ');
-		if (name == NULL)
-			continue;
-
-		/* A device can appear in both listings; the connected pass
-		   runs second and only needs to mark what it finds. */
-		for (existing = 0; existing < devices->len; existing++) {
-			dev = g_ptr_array_index(devices, existing);
-			if (strncmp(dev->mac, mac, (gsize)(name - mac)) == 0) {
-				if (connected)
-					dev->connected = TRUE;
-				break;
-			}
-		}
-		if (existing < devices->len)
-			continue;
-
-		if (devices->len >= BT_MAX_DEVICES)
-			continue;
-
-		dev = g_new0(BtDevice, 1);
-		dev->mac = g_strndup(mac, (gsize)(name - mac));
-		dev->name = g_strdup(name + 1);
-		dev->connected = connected;
-		g_ptr_array_add(devices, dev);
-	}
-}
-
 static void
 bt_poll_async(GowlBarPlugin *plugin, gpointer data)
 {
 	BtData           *bd = data;
 	const gchar      *tool;
 	g_autofree gchar *show = NULL;
+	g_autofree gchar *all = NULL;
 	g_autofree gchar *paired = NULL;
 	g_autofree gchar *conn = NULL;
 	g_autoptr(GPtrArray) fresh = NULL;
@@ -1626,8 +1575,15 @@ bt_poll_async(GowlBarPlugin *plugin, gpointer data)
 	if (!bd->present)
 		return;
 
-	bd->powered  = (strstr(show, "Powered: yes") != NULL);
-	bd->scanning = (strstr(show, "Discovering: yes") != NULL);
+	bd->powered = (strstr(show, "Powered: yes") != NULL);
+
+	/*
+	 * What the ADAPTER says, which is not the same question as
+	 * whether we are holding a scan open: another client can be
+	 * discovering, and our own scan has a moment at each end where
+	 * the two disagree.  The toggle shows either.
+	 */
+	bd->discovering = (strstr(show, "Discovering: yes") != NULL);
 
 	/*
 	 * Built into a fresh array and swapped in under the lock, rather
@@ -1635,16 +1591,28 @@ bt_poll_async(GowlBarPlugin *plugin, gpointer data)
 	 * it right now, and freeing what it is reading is how a heap gets
 	 * corrupted.
 	 */
-	fresh = g_ptr_array_new_with_free_func(bt_device_free);
+	fresh = g_ptr_array_new_with_free_func(bar_bt_device_free);
 	if (bd->powered) {
-		argv[0] = tool; argv[1] = "devices"; argv[2] = "Paired";
+		/*
+		 * `devices' with no filter, FIRST.  The widget used to ask
+		 * only for Paired and Connected, which is every device
+		 * except the ones a scan exists to find -- so scanning
+		 * worked and had nowhere to put what it found.  The two
+		 * filtered listings then say which of these are already
+		 * yours.
+		 */
+		argv[0] = tool; argv[1] = "devices"; argv[2] = NULL;
 		argv[3] = NULL;
+		all = bar_run_argv(argv);
+
+		argv[2] = "Paired";
 		paired = bar_run_argv(argv);
-		bt_parse_devices(fresh, paired, FALSE);
 
 		argv[2] = "Connected";
 		conn = bar_run_argv(argv);
-		bt_parse_devices(fresh, conn, TRUE);
+
+		bar_bt_devices_parse(fresh, all, paired, conn,
+		                     BT_MAX_DEVICES);
 	}
 
 	g_mutex_lock(&bd->lock);
@@ -1776,8 +1744,12 @@ bt_panel(GowlBarPlugin *plugin, gpointer data)
 	if (!bd->powered)
 		return panel;
 
-	gowl_bar_panel_add_toggle(panel, "scan", "Scan for devices",
-	                          bd->scanning);
+	{
+		gboolean busy = bd->scanning || bd->discovering;
+
+		gowl_bar_panel_add_toggle(panel, "scan", "Scan for devices",
+		                          busy);
+	}
 
 	g_mutex_lock(&bd->lock);
 	i = bd->devices->len;
@@ -1795,18 +1767,69 @@ bt_panel(GowlBarPlugin *plugin, gpointer data)
 	for (i = 0; i < bd->devices->len; i++) {
 		BtDevice         *d = g_ptr_array_index(bd->devices, i);
 		g_autofree gchar *id = NULL;
+		const gchar      *detail;
 
 		/* The row id carries the index, so a click needs no lookup
 		   by name -- two devices may share one. */
 		id = g_strdup_printf("dev:%u", i);
+
+		/*
+		 * A device found by a scan says what clicking it will do.
+		 * "Not paired" and an address are the same information to
+		 * somebody who already knows bluetooth and a dead end to
+		 * everybody else.
+		 */
+		detail = d->connected ? "Connected"
+		       : (d->paired ? d->mac : "Tap to pair");
 		item = gowl_bar_panel_add_row(panel, id,
 			d->connected ? "\xef\x8a\x93" : "\xef\x8a\x94",
-			d->name, d->connected ? "Connected" : d->mac);
+			d->name, detail);
 		(void)item;
 	}
 	g_mutex_unlock(&bd->lock);
 
 	return panel;
+}
+
+/*
+ * Hold a scan open.
+ *
+ * BlueZ hands a discovery session to the D-Bus client that asked for
+ * it and takes it back when that client goes away, so the scan lasts
+ * exactly as long as something stays connected asking for it.  A
+ * bluetoothctl told to scan and left to its own devices is not that:
+ * `--timeout' is, and it bounds the scan into the bargain, which
+ * matters because the worker pool is drained on the way out.
+ *
+ * Runs on a worker thread; everything it touches here is the plugin's
+ * own and the array it refreshes is swapped under the lock.
+ */
+static void
+bt_scan_work(GowlBarPlugin *plugin, gpointer user_data)
+{
+	BtData      *bd = user_data;
+	const gchar *argv[6];
+	gchar        secs[16];
+	g_autofree gchar *out = NULL;
+
+	if (bd == NULL)
+		return;
+
+	g_snprintf(secs, sizeof(secs), "%d", BT_SCAN_SECONDS);
+	argv[0] = bt_tool(plugin);
+	argv[1] = "--timeout";
+	argv[2] = secs;
+	argv[3] = "scan";
+	argv[4] = "on";
+	argv[5] = NULL;
+	out = bar_run_argv(argv);
+
+	/* Whatever it found is in the adapter's device list now, so the
+	 * ordinary poll is what publishes it -- and the panel has to be
+	 * told to look again, since it was built when the scan started. */
+	bd->scanning = FALSE;
+	bt_poll_async(plugin, bd);
+	gowl_bar_plugin_request_panel_refresh(plugin);
 }
 
 static void
@@ -1835,10 +1858,21 @@ bt_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	}
 
 	if (g_strcmp0(item_id, "scan") == 0) {
-		line = g_strdup_printf("%s scan %s", tool,
-		                       bd->scanning ? "off" : "on");
-		gowl_bar_plugin_spawn(plugin, line);
-		bd->scanning = !bd->scanning;
+		if (bd->scanning || bd->discovering) {
+			/* Ours ends on its own timeout; this also ends one
+			 * somebody else started, which is what the toggle
+			 * showing "on" promised. */
+			line = g_strdup_printf("%s scan off", tool);
+			gowl_bar_plugin_spawn(plugin, line);
+			bd->scanning = FALSE;
+			bd->discovering = FALSE;
+		} else {
+			/* Optimistic, so the toggle moves under the finger
+			 * rather than when the first listing comes back. */
+			bd->scanning = TRUE;
+			gowl_bar_plugin_queue_work(plugin, bt_scan_work,
+			                           bd, NULL);
+		}
 		gowl_bar_plugin_request_panel_refresh(plugin);
 		return;
 	}
@@ -1853,18 +1887,33 @@ bt_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 			return;
 		}
 		d = g_ptr_array_index(bd->devices, idx);
-		line = g_strdup_printf("%s %s %s", tool,
-			d->connected ? "disconnect" : "connect", d->mac);
+
+		/*
+		 * A device a scan just turned up has never been paired, and
+		 * `connect' on one of those fails: pairing is the step that
+		 * has to happen first, and it is the whole reason to scan.
+		 */
+		if (!d->paired) {
+			line = g_strdup_printf("%s pair %s", tool, d->mac);
+		} else {
+			line = g_strdup_printf("%s %s %s", tool,
+				d->connected ? "disconnect" : "connect",
+				d->mac);
+		}
 		{
 			g_autofree gchar *name = g_strdup(d->name);
 			gboolean was = d->connected;
+			gboolean known = d->paired;
 
-			d->connected = !d->connected;
+			if (known)
+				d->connected = !d->connected;
 			g_mutex_unlock(&bd->lock);
 
 			gowl_bar_plugin_spawn(plugin, line);
 			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
-				was ? "Disconnecting" : "Connecting", name);
+				!known ? "Pairing"
+				       : (was ? "Disconnecting" : "Connecting"),
+				name);
 		}
 		gowl_bar_plugin_request_panel_refresh(plugin);
 	}

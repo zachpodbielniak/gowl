@@ -124,11 +124,51 @@ void      gowl_seat_send_scroll         (GowlSeat     *self,
  * gowl_seat_get_clipboard:
  * @self: a #GowlSeat
  *
- * Get the current clipboard text content.
+ * Get the current clipboard text content.  Blocks until the owning
+ * client has written it: gowl_seat_open_clipboard() followed by
+ * gowl_seat_read_selection_fd().  From any thread but the one that
+ * dispatches the compositor, take the compositor's lock around the
+ * open and NOT around the read -- the client can only answer while
+ * that thread is free to run.
  *
  * Returns: (transfer full) (nullable): the clipboard text, or %NULL
  */
 gchar    *gowl_seat_get_clipboard       (GowlSeat     *self);
+
+/**
+ * gowl_seat_open_clipboard:
+ * @self: a #GowlSeat
+ *
+ * Asks the clipboard's owner for its text and flushes the request.
+ * This half touches the seat and the client's connection; the read
+ * that follows touches neither.
+ *
+ * Returns: a file descriptor the text arrives on, to be handed to
+ *   gowl_seat_read_selection_fd(); -1 when there is no text selection
+ */
+gint      gowl_seat_open_clipboard      (GowlSeat     *self);
+
+/**
+ * gowl_seat_open_primary_selection:
+ * @self: a #GowlSeat
+ *
+ * As gowl_seat_open_clipboard(), for the primary selection.
+ *
+ * Returns: a file descriptor, or -1
+ */
+gint      gowl_seat_open_primary_selection (GowlSeat  *self);
+
+/**
+ * gowl_seat_read_selection_fd:
+ * @fd: a descriptor from gowl_seat_open_clipboard() or
+ *   gowl_seat_open_primary_selection(); -1 is accepted and answers %NULL
+ *
+ * Reads to end of stream and closes @fd.  Touches no compositor
+ * state, so it needs no lock and should be called without one.
+ *
+ * Returns: (transfer full) (nullable): the text, or %NULL if empty
+ */
+gchar    *gowl_seat_read_selection_fd   (gint          fd);
 
 /**
  * gowl_seat_set_clipboard:

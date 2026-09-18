@@ -519,9 +519,34 @@ GowlSeat *gowl_compositor_get_seat (GowlCompositor *self);
  * that launcher on screen and deaf: the user cannot type into it,
  * cannot dismiss it, and cannot see what else is responding.
  *
+ * This answers for the layer grab only.  An embedder wants
+ * gowl_compositor_keyboard_is_grabbed(), which also covers the X11
+ * popup grab; this stays for callers that mean the layer.
+ *
  * Returns: %TRUE if a layer surface holds the keyboard.
  */
 gboolean gowl_compositor_has_exclusive_keyboard_layer (GowlCompositor *self);
+
+/**
+ * gowl_compositor_keyboard_is_grabbed:
+ * @self: a #GowlCompositor
+ *
+ * Whether anything holds the keyboard that gowl_compositor_focus_client()
+ * would refuse to take it from: a keyboard-interactive layer surface (a
+ * launcher, an on-screen keyboard), or an X11 override-redirect popup
+ * that asked for the keyboard (Zoom's "Leave meeting" panel, a wine
+ * dialog).  Both release by themselves when the surface unmaps.
+ *
+ * An embedder that moves seat focus itself -- cmacs `--gowl' does, to
+ * hand keys to Emacs on a prefix key and to give them back -- MUST ask
+ * this first and do nothing when it returns %TRUE.  Asking only about
+ * the layer, which is what gowl_compositor_has_exclusive_keyboard_layer()
+ * answers, left the popup grab unprotected: the panel lost the keyboard
+ * to the next command Emacs ran, and Qt read that as a dismissal.
+ *
+ * Returns: %TRUE while a grab holds the keyboard.
+ */
+gboolean gowl_compositor_keyboard_is_grabbed (GowlCompositor *self);
 
 /**
  * gowl_compositor_get_cursor:

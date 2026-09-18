@@ -775,8 +775,14 @@ from the compositor's focus stack, so it calls
 =wlr_seat_keyboard_notify_enter()= directly to hand keys to Emacs on a
 prefix key.
 
-Such code *must* call =gowl_compositor_has_exclusive_keyboard_layer()=
-first and do nothing when it returns =TRUE=.  Skipping the check
+Such code *must* call =gowl_compositor_keyboard_is_grabbed()= first and
+do nothing when it returns =TRUE=.  That query answers for BOTH grabs
+the gate refuses for -- the layer one and the X11 popup one.
+=gowl_compositor_has_exclusive_keyboard_layer()= answers for the layer
+alone, and an embedder that asked only that left the popup grab
+unprotected: Zoom's "Leave meeting" panel (an override-redirect that
+wants the keyboard) lost it to the next command Emacs ran, and Qt read
+that as a dismissal (=tests/test-x11-popup-focus.c=).  Skipping the check
 produces a launcher that is mapped, drawn on top, covering the output,
 and completely deaf: the user can neither type into it, nor dismiss
 it, nor see that anything else is responding.  Under =emacs --gowl=

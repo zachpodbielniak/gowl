@@ -84,7 +84,7 @@ if [ "$enters" -gt 4 ]; then
 	echo "      arrangelayers, one for the session-lock surface)."
 	echo "      New seat-focus paths -- in gowl or in an embedder --"
 	echo "      must consult"
-	echo "      gowl_compositor_has_exclusive_keyboard_layer() first."
+	echo "      gowl_compositor_keyboard_is_grabbed() first."
 	fail=1
 fi
 

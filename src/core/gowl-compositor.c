@@ -3176,6 +3176,25 @@ gowl_compositor_has_exclusive_keyboard_layer(GowlCompositor *self)
 	return layer_grab_active(self);
 }
 
+gboolean
+gowl_compositor_keyboard_is_grabbed(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	/*
+	 * Both grabs the focus gate refuses for, and only those: the
+	 * layer one and the X11 popup one.  An embedder asking "may I move
+	 * the keyboard" needs the same answer focus_client() would give,
+	 * and it was getting half of it -- the launcher half -- so a Zoom
+	 * "Leave meeting" panel, which is an override-redirect that wants
+	 * the keyboard, lost it to the next command Emacs ran.
+	 */
+	if (layer_grab_active(self))
+		return TRUE;
+	return self->exclusive_focus != NULL
+	       && client_wants_focus(self->exclusive_focus);
+}
+
 /**
  * gowl_compositor_set_prefix_key_policy:
  *

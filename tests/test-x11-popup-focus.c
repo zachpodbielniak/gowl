@@ -182,6 +182,16 @@ a_popup_that_wants_the_keyboard_still_gets_it(void)
 	g_assert_true(x11_rig_is_override_redirect(x11_rig_keyboard_focus(&s.r)));
 	g_assert_true(s.r.compositor->exclusive_focus != NULL);
 
+	/*
+	 * And an embedder asking "may I move the keyboard" is told no.
+	 * cmacs asks before every seat-focus move it makes behind the
+	 * compositor's back, and it used to ask only about the layer grab
+	 * -- which this is not, so the answer was yes, and the panel lost
+	 * the keyboard to the next command Emacs ran.
+	 */
+	g_assert_false(gowl_compositor_has_exclusive_keyboard_layer(s.r.compositor));
+	g_assert_true(gowl_compositor_keyboard_is_grabbed(s.r.compositor));
+
 	/* The pointer wandering over it changes nothing. */
 	g_assert_true(pointer_onto_override_redirect(&s.r));
 	x11_rig_pump(&s.r, 100);
@@ -192,6 +202,7 @@ a_popup_that_wants_the_keyboard_still_gets_it(void)
 	X11_RIG_AWAIT(&s.r, x11_rig_keyboard_focus(&s.r) == parent, 3);
 	g_assert_true(x11_rig_keyboard_focus(&s.r) == parent);
 	g_assert_null(s.r.compositor->exclusive_focus);
+	g_assert_false(gowl_compositor_keyboard_is_grabbed(s.r.compositor));
 
 	x11_rig_down(&s.r);
 }

@@ -735,23 +735,23 @@ mime_array_contains(const struct wl_array *arr, const char *mime)
  *
  * Returns: (transfer full) (nullable): clipboard text, or %NULL
  */
-gchar *
-gowl_seat_get_clipboard(GowlSeat *self)
+gint
+gowl_seat_open_clipboard(GowlSeat *self)
 {
 	struct wlr_seat *seat;
 	struct wlr_data_source *source;
 	const char *mime;
 	int fds[2];
 
-	g_return_val_if_fail(GOWL_IS_SEAT(self), NULL);
+	g_return_val_if_fail(GOWL_IS_SEAT(self), -1);
 
 	seat = (struct wlr_seat *)self->wlr_seat;
 	if (seat == NULL)
-		return NULL;
+		return -1;
 
 	source = seat->selection_source;
 	if (source == NULL)
-		return NULL;
+		return -1;
 
 	/* Pick best MIME type. */
 	if (mime_array_contains(&source->mime_types,
@@ -764,15 +764,39 @@ gowl_seat_get_clipboard(GowlSeat *self)
 	                             "UTF8_STRING"))
 		mime = "UTF8_STRING";
 	else
-		return NULL;
+		return -1;
 
 	if (pipe(fds) != 0)
-		return NULL;
+		return -1;
 
 	wlr_data_source_send(source, mime, fds[1]);
 	/* send callback closes fds[1] */
 
-	return read_text_from_source_pipe(fds[0]);
+	/*
+	 * The send event is queued on the owning client's connection and
+	 * goes out on the next flush -- which, when the caller is not the
+	 * dispatch thread, is whenever that thread next wakes.  Flushing
+	 * here means the read that follows waits on the client, not on an
+	 * unrelated event.
+	 */
+	if (seat->display != NULL)
+		wl_display_flush_clients(seat->display);
+
+	return fds[0];
+}
+
+gchar *
+gowl_seat_read_selection_fd(gint fd)
+{
+	if (fd < 0)
+		return NULL;
+	return read_text_from_source_pipe(fd);
+}
+
+gchar *
+gowl_seat_get_clipboard(GowlSeat *self)
+{
+	return gowl_seat_read_selection_fd(gowl_seat_open_clipboard(self));
 }
 
 /**
@@ -881,23 +905,23 @@ gowl_seat_set_clipboard_bytes(
  *
  * Returns: (transfer full) (nullable): selection text, or %NULL
  */
-gchar *
-gowl_seat_get_primary_selection(GowlSeat *self)
+gint
+gowl_seat_open_primary_selection(GowlSeat *self)
 {
 	struct wlr_seat *seat;
 	struct wlr_primary_selection_source *source;
 	const char *mime;
 	int fds[2];
 
-	g_return_val_if_fail(GOWL_IS_SEAT(self), NULL);
+	g_return_val_if_fail(GOWL_IS_SEAT(self), -1);
 
 	seat = (struct wlr_seat *)self->wlr_seat;
 	if (seat == NULL)
-		return NULL;
+		return -1;
 
 	source = seat->primary_selection_source;
 	if (source == NULL)
-		return NULL;
+		return -1;
 
 	if (mime_array_contains(&source->mime_types,
 	                        "text/plain;charset=utf-8"))
@@ -909,14 +933,26 @@ gowl_seat_get_primary_selection(GowlSeat *self)
 	                             "UTF8_STRING"))
 		mime = "UTF8_STRING";
 	else
-		return NULL;
+		return -1;
 
 	if (pipe(fds) != 0)
-		return NULL;
+		return -1;
 
 	wlr_primary_selection_source_send(source, mime, fds[1]);
 
-	return read_text_from_source_pipe(fds[0]);
+	/* As in gowl_seat_open_clipboard(): the request leaves now, not
+	 * when the dispatch thread next happens to wake. */
+	if (seat->display != NULL)
+		wl_display_flush_clients(seat->display);
+
+	return fds[0];
+}
+
+gchar *
+gowl_seat_get_primary_selection(GowlSeat *self)
+{
+	return gowl_seat_read_selection_fd(
+		gowl_seat_open_primary_selection(self));
 }
 
 /**

@@ -702,6 +702,7 @@ refuses the change and names itself in the debug log
 |------------------------------------+---------------------------------------------------------------|
 | =GOWL_FOCUS_DENY_LOCKED=           | A session lock owns the outputs.                              |
 | =GOWL_FOCUS_DENY_EMBEDDED=         | The target is an embedded client (host-driven; see below).    |
+| =GOWL_FOCUS_DENY_PASSIVE_POPUP=    | The target is an X11 override-redirect surface that does not want the keyboard: a menu, a tooltip, a dropdown, a drag icon.  Focusing one deactivates its parent, and the parent dismisses it. |
 | =GOWL_FOCUS_DENY_LAYER_GRAB=       | A keyboard-interactive layer surface holds the keyboard.      |
 | =GOWL_FOCUS_DENY_EXCLUSIVE_CLIENT= | An X11 override-redirect popup holds an exclusive grab.       |
 
@@ -2472,6 +2473,24 @@ toplevels:
   old surface") is what keeps the dialog on screen.
 - On unmap/destroy: =exclusive_focus= is cleared and focus returns to the
   top managed client.
+- A surface that does *not* want focus -- =_NET_WM_WINDOW_TYPE= menu,
+  dropdown, popup menu, tooltip, combo, DND, notification, splash,
+  utility -- is never focused from any path: =gowl_focus_decide()=
+  refuses it as =GOWL_FOCUS_DENY_PASSIVE_POPUP=.  This is dwl's
+  =!client_is_unmanaged(c)= in =pointerfocus()= and
+  =(!client_is_unmanaged(c) || client_wants_focus(c))= in
+  =buttonpress()=, folded into the one gate.  Until 2026-09 gowl had
+  neither: sloppy focus fired the moment the pointer reached a Steam
+  or Zoom menu, =focus_client()= deactivated the parent (the
+  =!client_wants_focus(c)= guard above only protects a popup that
+  wants focus), CEF/Qt/wine read the parent's FocusOut as "clicked
+  away" and closed the menu -- and the parent flashed on every tooltip
+  crossed, deactivated on the way in and re-activated when the tooltip
+  unmapped and focus fell back.  The pointer still enters the surface;
+  only the keyboard stays where it was.  =tests/test-x11-popup-focus.c=
+  is a real X11 client under the compositor's own Xwayland that maps a
+  menu over its toplevel, drives the pointer onto it, and asks the X
+  server who has the keyboard.
 
 Set =GOWL_DEBUG_XWAYLAND=1= to log each X11 surface's type
 (override-redirect vs managed, with class/title) at =message= level --

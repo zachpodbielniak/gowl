@@ -6871,13 +6871,15 @@ gowl_compositor_focus_client(
 	 * One gate for every guard.  The decision itself is pure logic in
 	 * gowl-focus-rules.c so the truth table can be unit-tested; all
 	 * this does is gather the inputs.  Guards, in order of authority:
-	 * a locked session, an embedded (host-driven) target, a
-	 * keyboard-interactive layer surface holding the keyboard, and an
+	 * a locked session, an embedded (host-driven) target, a passive
+	 * X11 popup (a menu or tooltip that never asked for the keyboard),
+	 * a keyboard-interactive layer surface holding the keyboard, and an
 	 * X11 override-redirect popup holding an exclusive grab.
 	 */
 	decision = gowl_focus_decide(
 		self->locked,
 		c != NULL && gowl_client_get_embedded(c),
+		c != NULL && client_is_unmanaged(c) && !client_wants_focus(c),
 		layer_grab_active(self),
 		self->exclusive_focus != NULL
 		&& client_wants_focus(self->exclusive_focus),

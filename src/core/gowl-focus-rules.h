@@ -96,6 +96,11 @@ typedef enum {
  *   surface may hold the keyboard
  * @GOWL_FOCUS_DENY_EMBEDDED: the target is an embedded client, which
  *   is driven by the host (Emacs) and never takes keyboard focus
+ * @GOWL_FOCUS_DENY_PASSIVE_POPUP: the target is an X11
+ *   override-redirect surface that does not want the keyboard -- a
+ *   menu, a tooltip, a combo dropdown, a drag icon.  Focusing one
+ *   deactivates the window it belongs to, and that window dismisses
+ *   the menu.
  * @GOWL_FOCUS_DENY_LAYER_GRAB: a keyboard-interactive layer surface
  *   (a launcher, an on-screen keyboard) holds an exclusive grab
  * @GOWL_FOCUS_DENY_EXCLUSIVE_CLIENT: an X11 override-redirect popup
@@ -109,6 +114,7 @@ typedef enum {
 	GOWL_FOCUS_ALLOW = 0,
 	GOWL_FOCUS_DENY_LOCKED,
 	GOWL_FOCUS_DENY_EMBEDDED,
+	GOWL_FOCUS_DENY_PASSIVE_POPUP,
 	GOWL_FOCUS_DENY_LAYER_GRAB,
 	GOWL_FOCUS_DENY_EXCLUSIVE_CLIENT
 } GowlFocusDecision;
@@ -175,6 +181,11 @@ gboolean gowl_layer_takes_keyboard(gboolean session_locked,
  * @target_embedded: %TRUE when the focus target is an embedded client
  *   (host-driven, e.g. a cmacs `--gowl` app buffer).  Must be %FALSE
  *   when the target is %NULL (a focus *clear*)
+ * @target_passive_popup: %TRUE when the target is an X11
+ *   override-redirect surface that does not want focus -- see
+ *   wlr_xwayland_surface_override_redirect_wants_focus(); %FALSE for
+ *   every Wayland client, every managed X11 window, a popup that does
+ *   want it, and a %NULL target
  * @layer_grab_active: %TRUE when a keyboard-interactive layer surface
  *   currently owns the keyboard -- see gowl_layer_takes_keyboard()
  * @exclusive_client_active: %TRUE when an X11 override-redirect popup
@@ -188,8 +199,9 @@ gboolean gowl_layer_takes_keyboard(gboolean session_locked,
  *
  * Guards are evaluated in escalating order of authority: a locked
  * session outranks everything, embedded clients are never focusable,
- * a layer grab outranks an ordinary window, and an X11 popup grab
- * outranks the window beneath it.  Note that a focus *clear*
+ * a passive X11 popup is never focusable, a layer grab outranks an
+ * ordinary window, and an X11 popup grab outranks the window beneath
+ * it.  Note that a focus *clear*
  * (target %NULL) is refused by the grab guards too -- clearing focus
  * out from under a launcher leaves it visible, on top, and deaf.
  *
@@ -198,6 +210,7 @@ gboolean gowl_layer_takes_keyboard(gboolean session_locked,
  */
 GowlFocusDecision gowl_focus_decide(gboolean session_locked,
                                     gboolean target_embedded,
+                                    gboolean target_passive_popup,
                                     gboolean layer_grab_active,
                                     gboolean exclusive_client_active,
                                     gboolean target_is_exclusive_client);

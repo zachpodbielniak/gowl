@@ -84,6 +84,7 @@ GowlFocusDecision
 gowl_focus_decide(
 	gboolean session_locked,
 	gboolean target_embedded,
+	gboolean target_passive_popup,
 	gboolean layer_grab_active,
 	gboolean exclusive_client_active,
 	gboolean target_is_exclusive_client
@@ -96,6 +97,18 @@ gowl_focus_decide(
 
 	if (target_embedded)
 		return GOWL_FOCUS_DENY_EMBEDDED;
+
+	/*
+	 * A menu, a tooltip, a combo dropdown, a drag icon: an X11
+	 * override-redirect surface that did not ask for the keyboard.
+	 * The pointer entering one (sloppy focus) or a click on one used
+	 * to focus it, and focusing it deactivated the window it belongs
+	 * to -- which is the signal Qt, CEF and wine read as "clicked
+	 * away", so the menu closed the moment the pointer reached it.
+	 * dwl never focuses these; neither does gowl now, from any path.
+	 */
+	if (target_passive_popup)
+		return GOWL_FOCUS_DENY_PASSIVE_POPUP;
 
 	/* A launcher holding the keyboard outranks any window, including
 	 * a focus clear (target NULL).  Without this a stray refocus --
@@ -123,6 +136,8 @@ gowl_focus_decision_to_string(GowlFocusDecision decision)
 		return "denied: session locked";
 	case GOWL_FOCUS_DENY_EMBEDDED:
 		return "denied: target is an embedded client";
+	case GOWL_FOCUS_DENY_PASSIVE_POPUP:
+		return "denied: X11 popup does not take the keyboard";
 	case GOWL_FOCUS_DENY_LAYER_GRAB:
 		return "denied: layer surface holds the keyboard";
 	case GOWL_FOCUS_DENY_EXCLUSIVE_CLIENT:

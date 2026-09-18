@@ -523,6 +523,15 @@ $(OBJDIR)/tests/test-pointer-lock.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cfla
 $(OUTDIR)/test-protocols: TEST_LDFLAGS += $(OBJDIR)/bar/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 
+# test-x11-popup-focus is a real X11 client under the compositor's own
+# Xwayland: it maps a toplevel and an override-redirect menu over it,
+# drives the pointer onto the menu, and asks the X server who has the
+# keyboard.  Without xcb it builds as a skip.
+ifeq ($(XWAYLAND_AVAILABLE),1)
+$(OUTDIR)/test-x11-popup-focus: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs xcb)
+$(OBJDIR)/tests/test-x11-popup-focus.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags xcb)
+endif
+
 $(OUTDIR)/test-%: $(OBJDIR)/tests/test-%.o $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(CC) -o $@ $< $(TEST_LDFLAGS)
 

@@ -151,12 +151,12 @@ test_focus_allow_baseline(void)
 	/* Nothing in the way: an ordinary window takes focus.  The
 	 * regression case -- an xdg-toplevel must still be focusable
 	 * when no layer surface is mapped. */
-	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, FALSE, FALSE),
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE),
 	                ==, GOWL_FOCUS_ALLOW);
 
 	/* A focus *clear* (target NULL -> target_embedded FALSE) is also
 	 * allowed when nothing holds a grab. */
-	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, FALSE, TRUE),
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, FALSE, FALSE, TRUE),
 	                ==, GOWL_FOCUS_ALLOW);
 }
 
@@ -168,19 +168,19 @@ test_focus_layer_grab_blocks(void)
 	 * The compositor cannot tell a keybind from a pointer enter from
 	 * an arrange from a host embedder here, and must refuse all of
 	 * them identically. */
-	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, TRUE, FALSE, FALSE),
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, TRUE, FALSE, FALSE),
 	                ==, GOWL_FOCUS_DENY_LAYER_GRAB);
 
 	/* A focus clear is refused too.  Clearing focus out from under a
 	 * launcher leaves it visible and deaf just as surely as pointing
 	 * the keyboard at another window does. */
-	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, TRUE, FALSE, TRUE),
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, TRUE, FALSE, TRUE),
 	                ==, GOWL_FOCUS_DENY_LAYER_GRAB);
 
 	/* The layer grab outranks an X11 popup grab: whichever popup is
 	 * up, the launcher keeps the keyboard, and the reported reason
 	 * names the layer. */
-	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, TRUE, TRUE, FALSE),
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, TRUE, TRUE, FALSE),
 	                ==, GOWL_FOCUS_DENY_LAYER_GRAB);
 }
 
@@ -188,20 +188,20 @@ static void
 test_focus_guard_precedence(void)
 {
 	/* Locked outranks everything below it. */
-	g_assert_cmpint(gowl_focus_decide(TRUE, TRUE, TRUE, TRUE, FALSE),
+	g_assert_cmpint(gowl_focus_decide(TRUE, TRUE, FALSE, TRUE, TRUE, FALSE),
 	                ==, GOWL_FOCUS_DENY_LOCKED);
 
 	/* Session locked with no other guard set: still refused.  A
 	 * layer surface must not take focus while locked, and neither
 	 * must a client. */
-	g_assert_cmpint(gowl_focus_decide(TRUE, FALSE, FALSE, FALSE, FALSE),
+	g_assert_cmpint(gowl_focus_decide(TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
 	                ==, GOWL_FOCUS_DENY_LOCKED);
 
 	/* Embedded clients (cmacs --gowl app buffers) are host-driven
 	 * and never take the keyboard -- checked before the grabs. */
-	g_assert_cmpint(gowl_focus_decide(FALSE, TRUE, TRUE, TRUE, FALSE),
+	g_assert_cmpint(gowl_focus_decide(FALSE, TRUE, FALSE, TRUE, TRUE, FALSE),
 	                ==, GOWL_FOCUS_DENY_EMBEDDED);
-	g_assert_cmpint(gowl_focus_decide(FALSE, TRUE, FALSE, FALSE, FALSE),
+	g_assert_cmpint(gowl_focus_decide(FALSE, TRUE, FALSE, FALSE, FALSE, FALSE),
 	                ==, GOWL_FOCUS_DENY_EMBEDDED);
 }
 
@@ -210,40 +210,41 @@ test_focus_exclusive_client_preserved(void)
 {
 	/* Pre-existing behaviour, kept: an X11 override-redirect popup
 	 * holding a grab blocks other clients... */
-	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, TRUE, FALSE),
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, FALSE, TRUE, FALSE),
 	                ==, GOWL_FOCUS_DENY_EXCLUSIVE_CLIENT);
 
 	/* ...but focusing the popup itself just re-asserts its own grab
 	 * and is allowed. */
-	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, TRUE, TRUE),
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE),
 	                ==, GOWL_FOCUS_ALLOW);
 
 	/* An inactive exclusive_focus (popup no longer wants focus)
 	 * blocks nothing. */
-	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, FALSE, FALSE),
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE),
 	                ==, GOWL_FOCUS_ALLOW);
 }
 
 static void
 test_focus_decide_is_total(void)
 {
-	gboolean locked, embedded, layer, excl, is_excl;
+	gboolean locked, embedded, passive, layer, excl, is_excl;
 	GowlFocusDecision d;
 
-	/* Exhaustive sweep of the 32-row truth table: the gate must
+	/* Exhaustive sweep of the 64-row truth table: the gate must
 	 * always return one of the defined decisions, and must allow
 	 * exactly when no guard applies. */
 	for (locked = FALSE; locked <= TRUE; locked++)
 	for (embedded = FALSE; embedded <= TRUE; embedded++)
+	for (passive = FALSE; passive <= TRUE; passive++)
 	for (layer = FALSE; layer <= TRUE; layer++)
 	for (excl = FALSE; excl <= TRUE; excl++)
 	for (is_excl = FALSE; is_excl <= TRUE; is_excl++) {
 		gboolean expect_allow;
 
-		d = gowl_focus_decide(locked, embedded, layer, excl,
+		d = gowl_focus_decide(locked, embedded, passive, layer, excl,
 		                      is_excl);
 
-		expect_allow = !locked && !embedded && !layer
+		expect_allow = !locked && !embedded && !passive && !layer
 		               && (!excl || is_excl);
 
 		if (expect_allow)
@@ -279,6 +280,51 @@ test_focus_decision_names(void)
 		gowl_focus_decision_to_string(
 			GOWL_FOCUS_DENY_EXCLUSIVE_CLIENT),
 		"grab"));
+	g_assert_nonnull(strstr(
+		gowl_focus_decision_to_string(
+			GOWL_FOCUS_DENY_PASSIVE_POPUP),
+		"popup"));
+}
+
+static void
+test_focus_passive_popup_never_takes_focus(void)
+{
+	/* The Steam "Games" menu, Zoom's "End" dropdown, a tooltip over
+	 * Battle.net: an X11 override-redirect surface that did not ask
+	 * for the keyboard.  Sloppy focus reaching it, or a click on it,
+	 * used to focus it -- and focusing it deactivated the parent,
+	 * which is the signal the application reads as "clicked away".
+	 * The menu closed the moment the pointer arrived on it. */
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, TRUE, FALSE, FALSE,
+	                                  FALSE),
+	                ==, GOWL_FOCUS_DENY_PASSIVE_POPUP);
+
+	/* Refused whatever else is going on: the reason must still name
+	 * the popup when a grab is also up, because the grab guard would
+	 * otherwise have ALLOWED it (a passive popup is never the
+	 * exclusive client, so it is not "the popup re-asserting"). */
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, TRUE, FALSE, TRUE,
+	                                  FALSE),
+	                ==, GOWL_FOCUS_DENY_PASSIVE_POPUP);
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, TRUE, TRUE, FALSE,
+	                                  FALSE),
+	                ==, GOWL_FOCUS_DENY_PASSIVE_POPUP);
+
+	/* Locked and embedded still outrank it: they are the reasons a
+	 * report should see first. */
+	g_assert_cmpint(gowl_focus_decide(TRUE, FALSE, TRUE, FALSE, FALSE,
+	                                  FALSE),
+	                ==, GOWL_FOCUS_DENY_LOCKED);
+	g_assert_cmpint(gowl_focus_decide(FALSE, TRUE, TRUE, FALSE, FALSE,
+	                                  FALSE),
+	                ==, GOWL_FOCUS_DENY_EMBEDDED);
+
+	/* And the other kind of popup -- Zoom's "Leave meeting" panel,
+	 * which DOES want the keyboard -- is untouched: it is focused at
+	 * map and re-asserts its own grab. */
+	g_assert_cmpint(gowl_focus_decide(FALSE, FALSE, FALSE, FALSE, TRUE,
+	                                  TRUE),
+	                ==, GOWL_FOCUS_ALLOW);
 }
 
 static void
@@ -404,6 +450,8 @@ main(int argc, char **argv)
 	                test_focus_guard_precedence);
 	g_test_add_func("/focus-rules/decide/exclusive-client-preserved",
 	                test_focus_exclusive_client_preserved);
+	g_test_add_func("/focus-rules/decide/passive-popup-never-takes-focus",
+	                test_focus_passive_popup_never_takes_focus);
 	g_test_add_func("/focus-rules/decide/total",
 	                test_focus_decide_is_total);
 	g_test_add_func("/focus-rules/decide/names",

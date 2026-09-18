@@ -334,7 +334,33 @@ unmodified X11 applications run inside the session.
   small branches in the shared map / commit / resize / fullscreen /
   focus / destroy paths handle the two surface types uniformly (the
   dwl model).  Managed toplevels are tiled like XDG windows;
-  override-redirect surfaces (menus, tooltips) float.
+  override-redirect surfaces (menus, tooltips) live in their own scene
+  layer, =GOWL_SCENE_LAYER_UNMANAGED=, above =FS= -- a fullscreen
+  program's own menus are override-redirect windows too, and in
+  =FLOAT= they were drawn under the fullscreen window and under the
+  fullscreen backdrop rect, invisible and unclickable (dwl's
+  =LyrUnmanaged=).
+- What an X11 window is owed, each checked by a case in
+  =tests/test-x11-windows.c= (a real xcb client under the compositor's
+  own Xwayland, on the rig in =tests/x11-rig.h=):
+  - a *transient* (=WM_TRANSIENT_FOR=; =set_parent= for an xdg-toplevel)
+    floats over its parent, on the parent's tags and monitor, unless a
+    rule says otherwise -- =client_get_parent()= in =on_client_map=;
+  - a *floating* window that configures itself (=ConfigureWindow=
+    through the redirect) is followed, frame and all, by
+    =on_xwayland_request_configure=: granting it verbatim and leaving
+    =c->geom= behind put the border, clip and hit-test at one size and
+    the content at another.  Not while it is being dragged; a
+    fullscreen or tiled window gets its managed geometry re-asserted;
+  - an *unmanaged* window that moves after it mapped (a tooltip
+    following the pointer, a submenu re-anchored) is redrawn where it
+    went -- =on_xwayland_set_geometry=, the one place gowl learns;
+  - =UrgencyHint= in =WM_HINTS= marks the window urgent (and the bar its
+    tag) through the same flag xdg-activation sets, except on the
+    focused window -- =on_xwayland_set_hints=;
+  - a menu the pointer reaches never takes the keyboard from its
+    parent (=tests/test-x11-popup-focus.c=, and the
+    =GOWL_FOCUS_DENY_PASSIVE_POPUP= arm of the focus gate).
 - =gowl_compositor_get_xwayland_display()= returns the X display name so
   integrators (e.g. cmacs's =gowl-spawn=) can point spawned X11 clients
   at it.

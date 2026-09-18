@@ -270,6 +270,8 @@ static void on_xwayland_associate         (struct wl_listener *listener, void *d
 static void on_xwayland_dissociate        (struct wl_listener *listener, void *data);
 static void on_xwayland_request_configure (struct wl_listener *listener, void *data);
 static void on_xwayland_request_activate  (struct wl_listener *listener, void *data);
+static void on_xwayland_set_geometry      (struct wl_listener *listener, void *data);
+static void on_xwayland_set_hints         (struct wl_listener *listener, void *data);
 static void on_xwayland_request_move      (struct wl_listener *listener, void *data);
 static void on_xwayland_request_resize    (struct wl_listener *listener, void *data);
 #endif
@@ -5055,6 +5057,36 @@ client_wants_focus(GowlClient *c)
 	(void)c;
 	return FALSE;
 #endif
+}
+
+/**
+ * client_get_parent:
+ *
+ * The window @c is a dialog of, or %NULL.  An X11 window says so with
+ * WM_TRANSIENT_FOR, an xdg-toplevel with set_parent; either way the
+ * answer is the mapped #GowlClient behind that surface, and only a
+ * managed one -- a popup's parent is not something to tile against.
+ * Ported from dwl's client_get_parent().
+ */
+static GowlClient *
+client_get_parent(GowlClient *c)
+{
+	GowlClient *p = NULL;
+
+#ifdef GOWL_HAVE_XWAYLAND
+	if (c->xwayland_surface != NULL) {
+		if (c->xwayland_surface->parent != NULL)
+			p = (GowlClient *)c->xwayland_surface->parent->data;
+	} else
+#endif
+	if (c->xdg_toplevel != NULL && c->xdg_toplevel->parent != NULL
+	    && c->xdg_toplevel->parent->base != NULL)
+		p = (GowlClient *)c->xdg_toplevel->parent->base->data;
+
+	if (p == NULL || p->scene == NULL || p->mon == NULL
+	    || client_is_unmanaged(p))
+		return NULL;
+	return p;
 }
 
 /* The layer number gowl-focus-rules.h reasons about must stay the
@@ -12587,6 +12619,7 @@ static void
 on_client_map(struct wl_listener *listener, void *data)
 {
 	GowlClient *c;
+	GowlClient *parent = NULL;
 	GowlCompositor *self;
 	gint i;
 
@@ -12657,12 +12690,16 @@ on_client_map(struct wl_listener *listener, void *data)
 		c->geom.x = c->xwayland_surface->x;
 		c->geom.y = c->xwayland_surface->y;
 
-		/* Float in the FLOAT layer (the scene tree was created in
+		/* Into the UNMANAGED layer (the scene tree was created in
 		 * the TILE layer above) and enable it -- unmanaged clients
 		 * never go through arrange(), which is what enables managed
-		 * client scene nodes. */
+		 * client scene nodes.  That layer sits ABOVE FS: a fullscreen
+		 * program's own menus and tooltips are override-redirect
+		 * windows too, and in FLOAT -- under the fullscreen window
+		 * and under the fullscreen backdrop rect -- every one of
+		 * them was drawn where it could not be seen or clicked. */
 		wlr_scene_node_reparent(&c->scene->node,
-			self->layers[GOWL_SCENE_LAYER_FLOAT]);
+			self->layers[GOWL_SCENE_LAYER_UNMANAGED]);
 		wlr_scene_node_set_position(&c->scene->node,
 			c->geom.x, c->geom.y);
 		wlr_scene_node_set_enabled(&c->scene->node, TRUE);
@@ -12743,6 +12780,20 @@ on_client_map(struct wl_listener *listener, void *data)
 	 */
 	gowl_compositor_apply_fx_optout(self, c);
 
+	/*
+	 * A dialog floats over the window it belongs to, on that window's
+	 * tags and monitor.  WM_TRANSIENT_FOR on an X11 window, set_parent
+	 * on an xdg-toplevel: Steam's "Add a Non-Steam Game", a wine file
+	 * chooser, Zoom's settings.  Tiling one squeezes the window it was
+	 * opened from, and putting it on the selected tag instead of the
+	 * parent's loses it when the view has moved on.  Set before the
+	 * rules run so a rule can still say otherwise.  Ported from dwl's
+	 * mapnotify().
+	 */
+	parent = client_get_parent(c);
+	if (parent != NULL)
+		c->isfloating = TRUE;
+
 	/* Insert into client lists */
 	self->clients = g_list_prepend(self->clients, c);
 	self->fstack  = g_list_prepend(self->fstack, c);
@@ -12813,6 +12864,12 @@ on_client_map(struct wl_listener *listener, void *data)
 		target_tags = self->selmon
 			? self->selmon->tagset[self->selmon->seltags]
 			: 1;
+
+		/* A dialog goes where its parent is; a rule outranks that. */
+		if (parent != NULL) {
+			target_mon  = parent->mon;
+			target_tags = parent->tags;
+		}
 
 		if (c->pending_rule_monitor >= 0) {
 			GList *ml = g_list_nth(self->monitors,
@@ -13089,6 +13146,8 @@ on_client_destroy(struct wl_listener *listener, void *data)
 		wl_list_remove(&c->configure.link);
 		wl_list_remove(&c->request_move.link);
 		wl_list_remove(&c->request_resize.link);
+		wl_list_remove(&c->set_geometry.link);
+		wl_list_remove(&c->set_hints.link);
 		/* map/unmap are added in associate and removed in
 		 * dissociate, which wlroots emits before destroy. */
 	} else
@@ -13316,16 +13375,104 @@ on_xwayland_request_configure(struct wl_listener *listener, void *data)
 	self = c->compositor;
 	ev = (struct wlr_xwayland_surface_configure_event *)data;
 
-	/* Not yet mapped, or a floating client: honour the request
-	 * verbatim.  Otherwise re-assert the managed tiled geometry. */
-	if (c->scene == NULL || c->isfloating || c->isfullscreen) {
+	/* Not yet mapped, or unmanaged: nothing of ours to keep in step,
+	 * honour the request verbatim. */
+	if (c->scene == NULL || client_is_unmanaged(c)) {
 		wlr_xwayland_surface_configure(c->xwayland_surface,
 		                               ev->x, ev->y, ev->width,
 		                               ev->height);
 		return;
 	}
 
+	/*
+	 * A floating window that moves or resizes itself -- a game
+	 * switching resolution, a dialog growing for a longer message --
+	 * is followed, frame and all.  Granting the request verbatim and
+	 * leaving c->geom where it was, which is what this did, put the
+	 * border, the clip and the hit-test at one size and the content at
+	 * another.  Not while the pointer is dragging it: the grab owns
+	 * the geometry until the button comes up.  A fullscreen or tiled
+	 * window gets its managed geometry re-asserted instead.
+	 */
+	if (c->isfloating && !c->isfullscreen && c != self->grabbed_client) {
+		struct wlr_box want;
+
+		want.x      = ev->x - (gint)c->bw;
+		want.y      = ev->y - (gint)c->bw;
+		want.width  = ev->width + 2 * (gint)c->bw;
+		want.height = ev->height + 2 * (gint)c->bw;
+		resize_client(self, c, want, FALSE);
+		return;
+	}
+
 	resize_client(self, c, c->geom, FALSE);
+}
+
+/**
+ * on_xwayland_set_geometry:
+ *
+ * The X server moved or resized the window.  For a managed window
+ * that is our own configure coming back and c->geom already knows;
+ * an unmanaged one positions itself -- a tooltip following the
+ * pointer, a submenu re-anchored to fit on screen -- and the only
+ * place gowl learns where it went is here.  Ported from dwl's
+ * setgeometryx11().
+ */
+static void
+on_xwayland_set_geometry(struct wl_listener *listener, void *data)
+{
+	GowlClient *c;
+
+	c = wl_container_of(listener, c, set_geometry);
+	(void)data;
+
+	if (!client_is_unmanaged(c) || c->scene == NULL)
+		return;
+
+	c->geom.x      = c->xwayland_surface->x;
+	c->geom.y      = c->xwayland_surface->y;
+	c->geom.width  = c->xwayland_surface->width;
+	c->geom.height = c->xwayland_surface->height;
+	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
+}
+
+/**
+ * on_xwayland_set_hints:
+ *
+ * WM_HINTS changed.  The one bit a window manager acts on is
+ * UrgencyHint -- "your download finished" -- which is the X11 route to
+ * the same flag xdg-activation sets for Wayland clients, and which the
+ * bar draws as an urgent tag.  Not for the window that has the
+ * keyboard: it is already being looked at.  Ported from dwl's
+ * sethints().
+ */
+static void
+on_xwayland_set_hints(struct wl_listener *listener, void *data)
+{
+	GowlClient *c;
+	GowlCompositor *self;
+	gboolean urgent;
+
+	c = wl_container_of(listener, c, set_hints);
+	self = c->compositor;
+	(void)data;
+
+	if (self == NULL || c->xwayland_surface->hints == NULL
+	    || client_is_unmanaged(c))
+		return;
+	if (c == focustop(self, self->selmon))
+		return;
+
+	/* The flag bit itself, not xcb_icccm_wm_hints_get_urgency(): that
+	 * is a library call, and an embedder that links libgowl.a -- cmacs
+	 * -- would then have to link xcb-icccm too for one bit test. */
+	urgent = (c->xwayland_surface->hints->flags
+	          & XCB_ICCCM_WM_HINT_X_URGENCY) != 0;
+	c->isurgent = urgent;
+	if (c->scene != NULL)
+		client_set_border_color(self, c, urgent ? self->urgent_color
+		                                        : self->unfocus_color);
+	gowl_client_set_urgent(c, urgent);
 }
 
 /**
@@ -13446,6 +13593,10 @@ on_new_xwayland_surface(struct wl_listener *listener, void *data)
 	       on_xwayland_request_resize);
 	LISTEN(&xsurface->events.set_title,         &c->set_title,
 	       on_client_set_title);
+	LISTEN(&xsurface->events.set_geometry,      &c->set_geometry,
+	       on_xwayland_set_geometry);
+	LISTEN(&xsurface->events.set_hints,         &c->set_hints,
+	       on_xwayland_set_hints);
 
 	/* Per-surface type log.  Default level is g_debug (quiet); set
 	 * GOWL_DEBUG_XWAYLAND=1 to promote to g_message so the line lands

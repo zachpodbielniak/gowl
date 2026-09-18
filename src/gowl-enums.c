@@ -424,6 +424,7 @@ gowl_scene_layer_get_type(void)
 			{ GOWL_SCENE_LAYER_FLOAT,    "GOWL_SCENE_LAYER_FLOAT",   "float" },
 			{ GOWL_SCENE_LAYER_TOP,      "GOWL_SCENE_LAYER_TOP",     "top" },
 			{ GOWL_SCENE_LAYER_FS,       "GOWL_SCENE_LAYER_FS",      "fs" },
+			{ GOWL_SCENE_LAYER_UNMANAGED, "GOWL_SCENE_LAYER_UNMANAGED", "unmanaged" },
 			{ GOWL_SCENE_LAYER_OVERLAY,  "GOWL_SCENE_LAYER_OVERLAY", "overlay" },
 			{ GOWL_SCENE_LAYER_BLOCK,    "GOWL_SCENE_LAYER_BLOCK",   "block" },
 			{ GOWL_SCENE_LAYER_COUNT,    "GOWL_SCENE_LAYER_COUNT",   "count" },

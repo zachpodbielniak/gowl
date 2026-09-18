@@ -492,6 +492,10 @@ GType gowl_idle_state_get_type(void) G_GNUC_CONST;
  * @GOWL_SCENE_LAYER_FLOAT: Floating client windows.
  * @GOWL_SCENE_LAYER_TOP: Top layer shell surfaces.
  * @GOWL_SCENE_LAYER_FS: Fullscreen client windows.
+ * @GOWL_SCENE_LAYER_UNMANAGED: X11 override-redirect surfaces -- menus,
+ *   tooltips, dropdowns, drag icons.  Above FS so a fullscreen program's
+ *   own menus can be seen; below OVERLAY so a lock or a notification
+ *   still covers them.  dwl's LyrUnmanaged.
  * @GOWL_SCENE_LAYER_OVERLAY: Overlay layer shell surfaces.
  * @GOWL_SCENE_LAYER_BLOCK: Session lock background.
  * @GOWL_SCENE_LAYER_COUNT: Sentinel; total number of scene layers.
@@ -506,6 +510,7 @@ typedef enum {
 	GOWL_SCENE_LAYER_FLOAT,
 	GOWL_SCENE_LAYER_TOP,
 	GOWL_SCENE_LAYER_FS,
+	GOWL_SCENE_LAYER_UNMANAGED,
 	GOWL_SCENE_LAYER_OVERLAY,
 	GOWL_SCENE_LAYER_BLOCK,
 	GOWL_SCENE_LAYER_COUNT

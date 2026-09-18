@@ -527,9 +527,12 @@ $(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags 
 # Xwayland: it maps a toplevel and an override-redirect menu over it,
 # drives the pointer onto the menu, and asks the X server who has the
 # keyboard.  Without xcb it builds as a skip.
+X11_TESTS := $(OUTDIR)/test-x11-popup-focus $(OUTDIR)/test-x11-windows
+X11_TEST_OBJS := $(OBJDIR)/tests/test-x11-popup-focus.o $(OBJDIR)/tests/test-x11-windows.o
+$(X11_TEST_OBJS): tests/x11-rig.h
 ifeq ($(XWAYLAND_AVAILABLE),1)
-$(OUTDIR)/test-x11-popup-focus: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs xcb)
-$(OBJDIR)/tests/test-x11-popup-focus.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags xcb)
+$(X11_TESTS): TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs xcb xcb-icccm)
+$(X11_TEST_OBJS): TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags xcb xcb-icccm)
 endif
 
 $(OUTDIR)/test-%: $(OBJDIR)/tests/test-%.o $(OUTDIR)/$(LIB_SHARED_FULL)

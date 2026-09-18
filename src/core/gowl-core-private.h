@@ -911,6 +911,8 @@ struct _GowlClient {
 	struct wl_listener dissociate;
 	struct wl_listener activate;
 	struct wl_listener configure;
+	struct wl_listener set_geometry;  /* X11: the server moved/resized it */
+	struct wl_listener set_hints;     /* X11: WM_HINTS changed (urgency) */
 #endif
 
 	/* Mirror views: additional scene nodes that duplicate this

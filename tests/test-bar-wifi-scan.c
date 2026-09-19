@@ -69,6 +69,31 @@ test_keeps_the_strongest_sighting(void)
 
 /* Rank, then truncate.  Truncating first keeps whatever came earliest,
    which is what the old code did while claiming otherwise. */
+/* A mesh: the radio you are associated with is not the strongest
+   sighting of your own SSID.  The flag belongs to the network. */
+static void
+test_connected_survives_a_stronger_sibling(void)
+{
+	g_autoptr(GPtrArray) rows = g_ptr_array_new_with_free_func(g_free);
+	gchar *rest = NULL;
+	const gchar *weaker_first =
+		"yes:Home:40:WPA2\n"     /* the one we are on */
+		":Home:85:WPA2\n";       /* a nearer node, kept for signal */
+	const gchar *stronger_first =
+		":Home:85:WPA2\n"
+		"yes:Home:40:WPA2\n";
+
+	bar_wifi_scan_parse(rows, weaker_first, 20);
+	g_assert_cmpuint(rows->len, ==, 1);
+	row_ssid(rows, 0, &rest);
+	g_assert_cmpstr(rest, ==, "85\tWPA2\tyes");
+
+	bar_wifi_scan_parse(rows, stronger_first, 20);
+	g_assert_cmpuint(rows->len, ==, 1);
+	row_ssid(rows, 0, &rest);
+	g_assert_cmpstr(rest, ==, "85\tWPA2\tyes");
+}
+
 static void
 test_limit_keeps_the_strongest(void)
 {
@@ -169,6 +194,8 @@ main(int argc, char *argv[])
 	                test_keeps_the_strongest_sighting);
 	g_test_add_func("/bar-wifi-scan/limit-keeps-strongest",
 	                test_limit_keeps_the_strongest);
+	g_test_add_func("/bar-wifi-scan/connected-survives-a-stronger-sibling",
+	                test_connected_survives_a_stronger_sibling);
 	g_test_add_func("/bar-wifi-scan/escaped-colon",
 	                test_escaped_colon_in_ssid);
 	g_test_add_func("/bar-wifi-scan/hidden-dropped",

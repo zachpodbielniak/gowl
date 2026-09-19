@@ -26,6 +26,7 @@
 #include "barkit/gowl-bar-registry.h"
 
 #include "bar-sysinfo.h"
+#include "bar-util.h"
 
 G_BEGIN_DECLS
 
@@ -97,6 +98,26 @@ void bar_register_tray_plugins    (GowlBarRegistry *registry);
  *   there is no compositor and nothing was served
  */
 gpointer bar_plugin_monitor (GowlBarPlugin *plugin);
+
+/* --- Colour settings ---------------------------------------------- */
+
+/**
+ * bar_plugin_apply_color:
+ * @plugin: the plugin
+ * @spec: (nullable): the value of a `color' setting
+ * @fallback: the role to use when @spec is unset
+ *
+ * Applies a user's colour setting.  A palette role name becomes the
+ * plugin's role; a `#rrggbb' literal becomes a literal colour over
+ * @fallback, since a user who wrote a hex value wants exactly that
+ * colour and not the nearest role.  Anything else is warned about
+ * once and @fallback is used.  This is the one place a `<widget>-color'
+ * setting is interpreted, so every shipped widget accepts the same
+ * spellings.
+ */
+void bar_plugin_apply_color (GowlBarPlugin *plugin,
+                             const gchar   *spec,
+                             GowlBarColor   fallback);
 
 /* --- Subprocess helpers ------------------------------------------- */
 

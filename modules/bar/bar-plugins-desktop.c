@@ -28,10 +28,13 @@
 #include <string.h>
 #include <sys/wait.h>
 
+#include <wayland-server-core.h>
+
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"
 #include "core/gowl-monitor.h"
 #include "boxed/gowl-process-info.h"
+#include "barkit/gowl-bar-host.h"
 
 #include "bar-internal.h"
 #include "interfaces/gowl-recording-provider.h"
@@ -62,6 +65,10 @@ typedef struct {
 	gboolean   muted;
 	gdouble    source_volume;
 	gboolean   source_muted;
+	/* The device lists are rebuilt on the worker and walked by the
+	   panel builder on the dispatch thread; `lock' guards them, and
+	   the worker swaps fresh arrays in rather than emptying these. */
+	GMutex     lock;
 	gchar     *sink_name;
 	gchar     *source_name;
 	GPtrArray *sinks;          /* `id\tname\tactive' rows */
@@ -76,6 +83,7 @@ audio_create(GowlBarPlugin *plugin)
 
 	(void)plugin;
 	ad = g_new0(AudioData, 1);
+	g_mutex_init(&ad->lock);
 	ad->sinks      = g_ptr_array_new_with_free_func(g_free);
 	ad->sources    = g_ptr_array_new_with_free_func(g_free);
 	ad->have_wpctl = bar_have_command("wpctl");
@@ -94,6 +102,7 @@ audio_destroy(GowlBarPlugin *plugin, gpointer data)
 	g_free(ad->source_name);
 	g_ptr_array_unref(ad->sinks);
 	g_ptr_array_unref(ad->sources);
+	g_mutex_clear(&ad->lock);
 	g_free(ad);
 }
 
@@ -131,18 +140,13 @@ audio_read_volume(const gchar *target, gdouble *volume, gboolean *muted)
    is a tree drawn with box characters, so this looks for the section
    heading and then reads the indented rows until the blank line. */
 static void
-audio_read_devices(AudioData *ad, const gchar *heading, GPtrArray *out,
-                   gchar **active_name)
+audio_read_devices(const gchar *status, const gchar *heading,
+                   GPtrArray *out, gchar **active_name)
 {
-	const gchar *argv[] = { "wpctl", "status", NULL };
-	g_autofree gchar *status = NULL;
 	g_auto(GStrv) lines = NULL;
 	gboolean in_section;
 	gint i;
 
-	g_ptr_array_set_size(out, 0);
-
-	status = bar_run_argv(argv);
 	if (status == NULL)
 		return;
 
@@ -251,11 +255,32 @@ audio_poll_async(GowlBarPlugin *plugin, gpointer data)
 	                  &ad->source_muted);
 
 	/* Device enumeration costs a `wpctl status' parse, which is only
-	   worth doing while the panel that shows it is open. */
+	   worth doing while the panel that shows it is open.  One status
+	   call for both lists, built fresh and swapped in under the lock. */
 	if (gowl_bar_plugin_get_setting_bool(plugin, "panel-open", FALSE)) {
-		audio_read_devices(ad, "Sinks:", ad->sinks, &ad->sink_name);
-		audio_read_devices(ad, "Sources:", ad->sources,
-		                   &ad->source_name);
+		const gchar *argv[] = { "wpctl", "status", NULL };
+		g_autofree gchar *status = NULL;
+		g_autofree gchar *sink_name = NULL;
+		g_autofree gchar *source_name = NULL;
+		g_autoptr(GPtrArray) sinks = NULL;
+		g_autoptr(GPtrArray) sources = NULL;
+
+		status  = bar_run_argv(argv);
+		sinks   = g_ptr_array_new_with_free_func(g_free);
+		sources = g_ptr_array_new_with_free_func(g_free);
+		audio_read_devices(status, "Sinks:", sinks, &sink_name);
+		audio_read_devices(status, "Sources:", sources, &source_name);
+
+		g_mutex_lock(&ad->lock);
+		g_ptr_array_unref(ad->sinks);
+		ad->sinks = g_steal_pointer(&sinks);
+		g_ptr_array_unref(ad->sources);
+		ad->sources = g_steal_pointer(&sources);
+		g_free(ad->sink_name);
+		ad->sink_name = g_steal_pointer(&sink_name);
+		g_free(ad->source_name);
+		ad->source_name = g_steal_pointer(&source_name);
+		g_mutex_unlock(&ad->lock);
 	}
 
 	if (ad->muted)
@@ -325,6 +350,8 @@ audio_panel(GowlBarPlugin *plugin, gpointer data)
 	if (ad->muted)
 		gowl_bar_panel_item_set_color(item, GOWL_BAR_COLOR_OVERLAY);
 
+	/* The lists are the worker's to replace; hold them still. */
+	g_mutex_lock(&ad->lock);
 	for (i = 0; i < ad->sinks->len; i++) {
 		g_auto(GStrv) fields = NULL;
 		g_autofree gchar *row_id = NULL;
@@ -364,6 +391,7 @@ audio_panel(GowlBarPlugin *plugin, gpointer data)
 		gowl_bar_panel_item_set_active(item,
 			g_strcmp0(fields[2], "1") == 0);
 	}
+	g_mutex_unlock(&ad->lock);
 
 	gowl_bar_panel_add_separator(panel);
 	item = gowl_bar_panel_add_buttons(panel, "tool");
@@ -383,16 +411,20 @@ audio_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 
 	(void)button;
 
+	/* Whole percents, not a printf'd fraction: under a locale with a
+	   decimal comma "%.2f" gave wpctl `0,50', which it rejects, and
+	   the slider moved while the volume did not. */
 	if (g_strcmp0(item_id, "output") == 0) {
 		line = g_strdup_printf("wpctl set-volume @DEFAULT_AUDIO_SINK@ "
-		                       "%.2f", value);
+		                       "%d%%", (gint)(value * 100.0 + 0.5));
 		gowl_bar_plugin_spawn(plugin, line);
 		ad->volume = value;
 		return;
 	}
 	if (g_strcmp0(item_id, "input") == 0) {
 		line = g_strdup_printf("wpctl set-volume "
-		                       "@DEFAULT_AUDIO_SOURCE@ %.2f", value);
+		                       "@DEFAULT_AUDIO_SOURCE@ %d%%",
+		                       (gint)(value * 100.0 + 0.5));
 		gowl_bar_plugin_spawn(plugin, line);
 		ad->source_volume = value;
 		return;
@@ -512,12 +544,13 @@ static const GowlBarPluginVTable audio_vtable = {
  * ---------------------------------------------------------------- */
 
 typedef struct {
+	GMutex   lock;      /* the strings: rewritten on the worker, read
+	                       by the panel on the dispatch thread */
 	gchar   *artist;
 	gchar   *title;
 	gchar   *album;
 	gchar   *status;
 	gchar   *player;
-	gdouble  position;
 	gboolean have_playerctl;
 } MediaData;
 
@@ -528,6 +561,7 @@ media_create(GowlBarPlugin *plugin)
 
 	(void)plugin;
 	md = g_new0(MediaData, 1);
+	g_mutex_init(&md->lock);
 	md->have_playerctl = bar_have_command("playerctl");
 	return md;
 }
@@ -545,7 +579,22 @@ media_destroy(GowlBarPlugin *plugin, gpointer data)
 	g_free(md->album);
 	g_free(md->status);
 	g_free(md->player);
+	g_mutex_clear(&md->lock);
 	g_free(md);
+}
+
+/* Replace the five strings in one critical section. */
+static void
+media_set(MediaData *md, const gchar *status, const gchar *artist,
+          const gchar *title, const gchar *album, const gchar *player)
+{
+	g_mutex_lock(&md->lock);
+	g_free(md->status); md->status = g_strdup(status);
+	g_free(md->artist); md->artist = g_strdup(artist);
+	g_free(md->title);  md->title  = g_strdup(title);
+	g_free(md->album);  md->album  = g_strdup(album);
+	g_free(md->player); md->player = g_strdup(player);
+	g_mutex_unlock(&md->lock);
 }
 
 static gint
@@ -579,35 +628,34 @@ media_poll_async(GowlBarPlugin *plugin, gpointer data)
 
 	out = bar_run_argv_line(argv);
 	if (out == NULL) {
-		g_clear_pointer(&md->title, g_free);
+		media_set(md, "", "", NULL, "", "");
 		gowl_bar_plugin_set_label(plugin, NULL);
 		gowl_bar_plugin_set_icon(plugin, NULL);
 		return;
 	}
 
 	fields = g_strsplit(out, "\t", 5);
-	g_free(md->status);
-	md->status = g_strdup((fields[0] != NULL) ? fields[0] : "");
-	g_free(md->artist);
-	md->artist = g_strdup((fields[1] != NULL) ? fields[1] : "");
-	g_free(md->title);
-	md->title = g_strdup((fields[2] != NULL) ? fields[2] : "");
-	g_free(md->album);
-	md->album = g_strdup((fields[3] != NULL) ? fields[3] : "");
-	g_free(md->player);
-	md->player = g_strdup((fields[4] != NULL) ? fields[4] : "");
+	{
+		const gchar *f[5];
+		gint i;
 
-	if (md->title[0] == '\0') {
+		for (i = 0; i < 5; i++)
+			f[i] = (g_strv_length(fields) > (guint)i && fields[i] != NULL)
+				? fields[i] : "";
+		media_set(md, f[0], f[1], f[2], f[3], f[4]);
+	}
+
+	if (fields[2] == NULL || fields[2][0] == '\0') {
 		gowl_bar_plugin_set_label(plugin, NULL);
 		gowl_bar_plugin_set_icon(plugin, NULL);
 		return;
 	}
 
 	max_len = gowl_bar_plugin_get_setting_int(plugin, "max-length", 40);
-	if (md->artist[0] != '\0')
-		g_snprintf(buf, sizeof(buf), "%s - %s", md->artist, md->title);
+	if (fields[1] != NULL && fields[1][0] != '\0')
+		g_snprintf(buf, sizeof(buf), "%s - %s", fields[1], fields[2]);
 	else
-		g_snprintf(buf, sizeof(buf), "%s", md->title);
+		g_snprintf(buf, sizeof(buf), "%s", fields[2]);
 
 	/* Truncate on a character boundary: a byte-wise cut through a
 	   multi-byte glyph renders as a replacement box. */
@@ -620,11 +668,14 @@ media_poll_async(GowlBarPlugin *plugin, gpointer data)
 
 	gowl_bar_plugin_set_label(plugin, buf);
 	gowl_bar_plugin_set_icon(plugin,
-		(g_strcmp0(md->status, "Playing") == 0)
+		(g_strcmp0(fields[0], "Playing") == 0)
 			? "\xef\x81\x8b" : "\xef\x81\x8c");
-	gowl_bar_plugin_set_color(plugin,
-		(g_strcmp0(md->status, "Playing") == 0)
-			? GOWL_BAR_COLOR_MAUVE : GOWL_BAR_COLOR_MUTED);
+	if (g_strcmp0(fields[0], "Playing") == 0)
+		bar_plugin_apply_color(plugin,
+			gowl_bar_plugin_get_setting(plugin, "color"),
+			GOWL_BAR_COLOR_MAUVE);
+	else
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
 }
 
 static GowlBarPanel *
@@ -644,19 +695,24 @@ media_panel(GowlBarPlugin *plugin, gpointer data)
 		                        "playerctl not found");
 		return panel;
 	}
+
+	g_mutex_lock(&md->lock);
 	if (md->title == NULL || md->title[0] == '\0') {
+		g_mutex_unlock(&md->lock);
 		gowl_bar_panel_add_hero(panel, "\xef\x80\x81", "Media",
 		                        "Nothing playing");
 		return panel;
 	}
 
 	gowl_bar_panel_add_hero(panel, "\xef\x80\x81", md->title,
-		(md->artist[0] != '\0') ? md->artist : "Unknown artist");
-	if (md->album[0] != '\0')
+		(md->artist != NULL && md->artist[0] != '\0')
+			? md->artist : "Unknown artist");
+	if (md->album != NULL && md->album[0] != '\0')
 		gowl_bar_panel_add_field(panel, "Album", md->album);
 	gowl_bar_panel_add_field_pair(panel, "Player",
-		(md->player[0] != '\0') ? md->player : "--", "Status",
-		(md->status[0] != '\0') ? md->status : "--");
+		(md->player != NULL && md->player[0] != '\0') ? md->player : "--",
+		"Status",
+		(md->status != NULL && md->status[0] != '\0') ? md->status : "--");
 
 	gowl_bar_panel_add_separator(panel);
 	item = gowl_bar_panel_add_buttons(panel, "transport");
@@ -666,6 +722,7 @@ media_panel(GowlBarPlugin *plugin, gpointer data)
 		                                        : "\xe2\x96\xb6",
 		FALSE);
 	gowl_bar_panel_add_button(item, "\xe2\x8f\xad", FALSE);
+	g_mutex_unlock(&md->lock);
 
 	return panel;
 }
@@ -716,12 +773,17 @@ static gboolean
 media_scroll(GowlBarPlugin *plugin, gpointer data, gdouble delta,
              gint discrete, guint modifiers)
 {
+	gint steps;
+
 	(void)data;
-	(void)delta;
 	(void)modifiers;
 
+	/* A touchpad scrolls with no discrete steps at all -- only a
+	   delta -- and reading the direction from `discrete' alone sent
+	   every touchpad scroll to the previous track. */
+	steps = (discrete != 0) ? discrete : ((delta > 0.0) ? 1 : -1);
 	gowl_bar_plugin_spawn(plugin,
-		(discrete > 0) ? "playerctl next" : "playerctl previous");
+		(steps > 0) ? "playerctl next" : "playerctl previous");
 	return TRUE;
 }
 
@@ -743,6 +805,8 @@ static const GowlBarPluginVTable media_vtable = {
  * ---------------------------------------------------------------- */
 
 typedef struct {
+	GMutex     lock;       /* guards `running': rebuilt on the worker,
+	                          walked by the panel on the dispatch thread */
 	GPtrArray *running;    /* `id\tname\timage\tstatus' rows */
 	gint       total;
 	gboolean   have_podman;
@@ -755,6 +819,7 @@ podman_create(GowlBarPlugin *plugin)
 
 	(void)plugin;
 	pd = g_new0(PodmanData, 1);
+	g_mutex_init(&pd->lock);
 	pd->running = g_ptr_array_new_with_free_func(g_free);
 	return pd;
 }
@@ -768,6 +833,7 @@ podman_destroy(GowlBarPlugin *plugin, gpointer data)
 	if (pd == NULL)
 		return;
 	g_ptr_array_unref(pd->running);
+	g_mutex_clear(&pd->lock);
 	g_free(pd);
 }
 
@@ -789,8 +855,9 @@ podman_poll_async(GowlBarPlugin *plugin, gpointer data)
 	};
 	g_autofree gchar *out = NULL;
 	g_auto(GStrv) lines = NULL;
+	g_autoptr(GPtrArray) fresh = NULL;
 	gchar buf[32];
-	gint running, i;
+	gint running, total, i;
 
 	pd->have_podman = bar_have_command("podman");
 	if (!pd->have_podman) {
@@ -800,31 +867,63 @@ podman_poll_async(GowlBarPlugin *plugin, gpointer data)
 	}
 
 	out = bar_run_argv(argv);
-	g_ptr_array_set_size(pd->running, 0);
+	fresh = g_ptr_array_new_with_free_func(g_free);
 	running = 0;
-	pd->total = 0;
+	total = 0;
 
 	if (out != NULL) {
 		lines = g_strsplit(out, "\n", -1);
 		for (i = 0; lines[i] != NULL; i++) {
 			if (lines[i][0] == '\0')
 				continue;
-			pd->total++;
+			total++;
 			if (strncmp(lines[i], "\t", 1) == 0)
 				continue;
-			g_ptr_array_add(pd->running, g_strdup(lines[i]));
 			if (strstr(lines[i], "\tUp ") != NULL)
 				running++;
-			if (pd->running->len >= 24)
-				break;
+			if (fresh->len < 24)
+				g_ptr_array_add(fresh, g_strdup(lines[i]));
 		}
 	}
+
+	g_mutex_lock(&pd->lock);
+	g_ptr_array_unref(pd->running);
+	pd->running = g_steal_pointer(&fresh);
+	pd->total = total;
+	g_mutex_unlock(&pd->lock);
 
 	g_snprintf(buf, sizeof(buf), "POD %d", running);
 	gowl_bar_plugin_set_label(plugin, buf);
 	gowl_bar_plugin_set_icon(plugin, "\xef\x8c\x88");
-	gowl_bar_plugin_set_color(plugin,
-		(running > 0) ? GOWL_BAR_COLOR_PEACH : GOWL_BAR_COLOR_MUTED);
+	if (running > 0)
+		bar_plugin_apply_color(plugin,
+			gowl_bar_plugin_get_setting(plugin, "color"),
+			GOWL_BAR_COLOR_PEACH);
+	else
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+}
+
+/* Re-list on the worker after a start, stop or prune, and rebuild the
+   panel from what podman now says.  Refreshing the panel straight
+   after spawning the verb showed the OLD state until the next poll,
+   which is thirty seconds away -- a stop button that appeared to do
+   nothing for half a minute. */
+static void
+podman_refresh_work(GowlBarPlugin *plugin, gpointer user_data)
+{
+	PodmanData *pd = user_data;
+	const gchar *verb = gowl_bar_plugin_get_setting(plugin, "pending-verb");
+
+	if (verb != NULL && verb[0] != '\0') {
+		g_autofree gchar *out = NULL;
+
+		/* The verb itself runs here too, synchronously, so the
+		   listing that follows sees its result. */
+		out = bar_run_shell_line(verb);
+		gowl_bar_plugin_set_setting(plugin, "pending-verb", NULL);
+	}
+	podman_poll_async(plugin, pd);
+	gowl_bar_plugin_request_panel_refresh(plugin);
 }
 
 static GowlBarPanel *
@@ -847,6 +946,7 @@ podman_panel(GowlBarPlugin *plugin, gpointer data)
 		return panel;
 	}
 
+	g_mutex_lock(&pd->lock);
 	running = 0;
 	for (i = 0; i < pd->running->len; i++) {
 		if (strstr(g_ptr_array_index(pd->running, i), "\tUp ") != NULL)
@@ -861,6 +961,7 @@ podman_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_add_field(panel, "Defined", buf);
 
 	if (pd->running->len == 0) {
+		g_mutex_unlock(&pd->lock);
 		gowl_bar_panel_add_label(panel, "No containers");
 		return panel;
 	}
@@ -879,7 +980,12 @@ podman_panel(GowlBarPlugin *plugin, gpointer data)
 			continue;
 		up = (strncmp(fields[3], "Up", 2) == 0);
 
-		row_id = g_strdup_printf("container:%s", fields[1]);
+		/* The state travels in the id: the click has to know which
+		   verb to run, and `podman start X || podman stop X' never
+		   stopped anything, because starting a running container
+		   succeeds. */
+		row_id = g_strdup_printf("container:%s:%s", up ? "up" : "down",
+		                         fields[1]);
 		item = gowl_bar_panel_add_row(panel, row_id,
 			up ? "\xef\x81\x98" : "\xef\x81\x97",
 			fields[1], fields[2]);
@@ -889,6 +995,7 @@ podman_panel(GowlBarPlugin *plugin, gpointer data)
 		gowl_bar_panel_item_set_color(item,
 			up ? GOWL_BAR_COLOR_GREEN : GOWL_BAR_COLOR_OVERLAY);
 	}
+	g_mutex_unlock(&pd->lock);
 
 	gowl_bar_panel_add_separator(panel);
 	item = gowl_bar_panel_add_buttons(panel, "tool");
@@ -906,11 +1013,19 @@ podman_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	g_autofree gchar *quoted = NULL;
 	g_autofree gchar *line = NULL;
 
-	(void)pd;
 	(void)value;
 
 	if (item_id != NULL && g_str_has_prefix(item_id, "container:")) {
-		const gchar *name = item_id + strlen("container:");
+		const gchar *rest = item_id + strlen("container:");
+		const gchar *name;
+		gboolean up;
+
+		/* container:<up|down>:<name> */
+		up = g_str_has_prefix(rest, "up:");
+		name = strchr(rest, ':');
+		if (name == NULL || name[1] == '\0')
+			return;
+		name++;
 
 		quoted = g_shell_quote(name);
 		/* Left starts or stops, right opens the logs.  Two verbs
@@ -924,13 +1039,19 @@ podman_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 				term = "gst";
 			line = g_strdup_printf("%s -e podman logs -f %s", term,
 			                       quoted);
-		} else {
-			line = g_strdup_printf(
-				"sh -c 'podman start %s || podman stop %s'",
-				quoted, quoted);
+			gowl_bar_plugin_spawn(plugin, line);
+			return;
 		}
-		gowl_bar_plugin_spawn(plugin, line);
-		gowl_bar_plugin_refresh_panel(plugin);
+
+		/* Run on the worker, then re-list, so the row flips when
+		   podman has actually done it. */
+		line = g_strdup_printf("podman %s %s", up ? "stop" : "start",
+		                       quoted);
+		gowl_bar_plugin_set_setting(plugin, "pending-verb", line);
+		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+			up ? "Stopping" : "Starting", name);
+		gowl_bar_plugin_queue_work(plugin, podman_refresh_work, pd,
+		                           NULL);
 		return;
 	}
 
@@ -938,12 +1059,16 @@ podman_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 		return;
 
 	if (index == 0) {
-		gowl_bar_plugin_refresh_panel(plugin);
+		gowl_bar_plugin_queue_work(plugin, podman_refresh_work, pd,
+		                           NULL);
 	} else if (index == 1) {
-		gowl_bar_plugin_spawn(plugin, "podman container prune -f");
+		gowl_bar_plugin_set_setting(plugin, "pending-verb",
+		                            "podman container prune -f");
 		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
 			"Pruning containers",
 			"Stopped containers are being removed.");
+		gowl_bar_plugin_queue_work(plugin, podman_refresh_work, pd,
+		                           NULL);
 	}
 }
 
@@ -965,6 +1090,8 @@ static const GowlBarPluginVTable podman_vtable = {
  * ---------------------------------------------------------------- */
 
 typedef struct {
+	GMutex lock;        /* the strings and the forecast: rewritten on
+	                       the worker, read by the panel */
 	gchar *current;     /* the bar's short form */
 	gchar *location;
 	gchar *condition;
@@ -981,6 +1108,7 @@ weather_create(GowlBarPlugin *plugin)
 	WeatherData *wd;
 
 	wd = g_new0(WeatherData, 1);
+	g_mutex_init(&wd->lock);
 	wd->forecast = g_ptr_array_new_with_free_func(g_free);
 	/*
 	 * Something to show before the first fetch lands.
@@ -1013,6 +1141,7 @@ weather_destroy(GowlBarPlugin *plugin, gpointer data)
 	g_free(wd->wind);
 	g_free(wd->humidity);
 	g_ptr_array_unref(wd->forecast);
+	g_mutex_clear(&wd->lock);
 	g_free(wd);
 }
 
@@ -1031,9 +1160,10 @@ weather_poll_async(GowlBarPlugin *plugin, gpointer data)
 	WeatherData *wd = data;
 	const gchar *location;
 	const gchar *units;
+	g_autofree gchar *escaped = NULL;
 	g_autofree gchar *url = NULL;
 	g_autofree gchar *out = NULL;
-	g_auto(GStrv) lines = NULL;
+	g_autoptr(GPtrArray) forecast = NULL;
 	const gchar *argv[] = { "curl", "-sf", "--max-time", "8", NULL, NULL };
 	gint i;
 
@@ -1042,6 +1172,8 @@ weather_poll_async(GowlBarPlugin *plugin, gpointer data)
 		   measures zero and is dropped from the bar, which is
 		   indistinguishable from never having been configured. */
 		gowl_bar_plugin_set_label(plugin, "no curl");
+		gowl_bar_plugin_set_tooltip(plugin,
+			"Weather needs curl, which is not installed");
 		return;
 	}
 
@@ -1050,6 +1182,9 @@ weather_poll_async(GowlBarPlugin *plugin, gpointer data)
 		location = gowl_bar_plugin_get_setting(plugin, "location");
 	if (location == NULL)
 		location = "";
+	/* Into the URL escaped: `weather:New York' is a location with a
+	   space, and curl refuses a URL with a raw one. */
+	escaped = g_uri_escape_string(location, NULL, FALSE);
 
 	units = gowl_bar_plugin_get_setting(plugin, "units");
 	if (units == NULL)
@@ -1060,7 +1195,7 @@ weather_poll_async(GowlBarPlugin *plugin, gpointer data)
 	   round trip while the user is looking at it. */
 	url = g_strdup_printf(
 		"wttr.in/%s?format=%%c\\t%%t\\t%%f\\t%%w\\t%%h\\t%%l&%s",
-		location, units);
+		escaped, units);
 	argv[4] = url;
 
 	out = bar_run_argv_line(argv);
@@ -1069,10 +1204,16 @@ weather_poll_async(GowlBarPlugin *plugin, gpointer data)
 
 		fields = g_strsplit(out, "\t", 6);
 		if (g_strv_length(fields) >= 6) {
+			g_autofree gchar *current = NULL;
+
+			current = g_strdup_printf("%s %s",
+				g_strstrip(fields[0]), g_strstrip(fields[1]));
+
+			g_mutex_lock(&wd->lock);
 			g_free(wd->condition);
-			wd->condition = g_strdup(g_strstrip(fields[0]));
+			wd->condition = g_strdup(fields[0]);
 			g_free(wd->temp);
-			wd->temp = g_strdup(g_strstrip(fields[1]));
+			wd->temp = g_strdup(fields[1]);
 			g_free(wd->feels_like);
 			wd->feels_like = g_strdup(g_strstrip(fields[2]));
 			g_free(wd->wind);
@@ -1081,15 +1222,27 @@ weather_poll_async(GowlBarPlugin *plugin, gpointer data)
 			wd->humidity = g_strdup(g_strstrip(fields[4]));
 			g_free(wd->location);
 			wd->location = g_strdup(g_strstrip(fields[5]));
-
 			g_free(wd->current);
-			wd->current = g_strdup_printf("%s %s", wd->condition,
-			                              wd->temp);
-			gowl_bar_plugin_set_label(plugin, wd->current);
+			wd->current = g_strdup(current);
+			g_mutex_unlock(&wd->lock);
+
+			gowl_bar_plugin_set_label(plugin, current);
+			gowl_bar_plugin_set_tooltip(plugin, fields[5]);
 		}
+	} else if (gowl_bar_plugin_get_setting(plugin, "weather-failed")
+	           == NULL) {
+		/* Keep the last reading on the bar, but say it is stale
+		   where a hover can see it. */
+		gowl_bar_plugin_set_setting(plugin, "weather-failed", "1");
+		gowl_bar_plugin_set_tooltip(plugin,
+			"Weather: wttr.in did not answer; showing the last "
+			"reading");
 	}
+	if (out != NULL)
+		gowl_bar_plugin_set_setting(plugin, "weather-failed", NULL);
 
 	/* The three-day outlook, as one more line-oriented request. */
+	forecast = g_ptr_array_new_with_free_func(g_free);
 	{
 		g_autofree gchar *furl = NULL;
 		g_autofree gchar *fout = NULL;
@@ -1097,11 +1250,10 @@ weather_poll_async(GowlBarPlugin *plugin, gpointer data)
 		                         NULL, NULL };
 
 		furl = g_strdup_printf(
-			"wttr.in/%s?format=j1&%s", location, units);
+			"wttr.in/%s?format=j1&%s", escaped, units);
 		fargv[4] = furl;
 		fout = bar_run_argv(fargv);
 
-		g_ptr_array_set_size(wd->forecast, 0);
 		if (fout != NULL) {
 			const gchar *p = fout;
 
@@ -1160,13 +1312,42 @@ weather_poll_async(GowlBarPlugin *plugin, gpointer data)
 					lo = g_strndup(s, (gsize)(e - s));
 				}
 
-				g_ptr_array_add(wd->forecast,
+				g_ptr_array_add(forecast,
 					g_strdup_printf("%s\t%s\t%s", d, hi,
 					                lo));
 				p = mint;
 			}
 		}
 	}
+
+	/* A failed forecast fetch keeps the old one: an empty panel
+	   section is worse than yesterday's outlook.  Swapped, never
+	   emptied in place -- the panel may be reading it. */
+	if (forecast->len > 0) {
+		g_mutex_lock(&wd->lock);
+		g_ptr_array_unref(wd->forecast);
+		wd->forecast = g_steal_pointer(&forecast);
+		g_mutex_unlock(&wd->lock);
+	}
+}
+
+/* `2026-09-18' as `Fri 18', which is what a three-day outlook is read
+   by; the ISO date is what wttr.in sends. */
+static gchar *
+weather_day_label(const gchar *iso_date)
+{
+	gint y = 0, m = 0, d = 0;
+	GDateTime *dt;
+	gchar *label;
+
+	if (iso_date == NULL || sscanf(iso_date, "%d-%d-%d", &y, &m, &d) != 3)
+		return g_strdup((iso_date != NULL) ? iso_date : "--");
+	dt = g_date_time_new_local(y, m, d, 0, 0, 0.0);
+	if (dt == NULL)
+		return g_strdup(iso_date);
+	label = g_date_time_format(dt, "%a %-d");
+	g_date_time_unref(dt);
+	return label;
 }
 
 static GowlBarPanel *
@@ -1181,7 +1362,9 @@ weather_panel(GowlBarPlugin *plugin, gpointer data)
 	panel = gowl_bar_panel_new();
 	gowl_bar_panel_set_width(panel, 420);
 
+	g_mutex_lock(&wd->lock);
 	if (wd->temp == NULL) {
+		g_mutex_unlock(&wd->lock);
 		gowl_bar_panel_add_hero(panel, "\xef\x83\x82", "Weather",
 		                        "No reading yet");
 		return panel;
@@ -1205,16 +1388,19 @@ weather_panel(GowlBarPlugin *plugin, gpointer data)
 		for (i = 0; i < wd->forecast->len; i++) {
 			g_auto(GStrv) fields = NULL;
 			g_autofree gchar *range = NULL;
+			g_autofree gchar *day = NULL;
 
 			fields = g_strsplit(
 				g_ptr_array_index(wd->forecast, i), "\t", 3);
 			if (g_strv_length(fields) < 3)
 				continue;
+			day = weather_day_label(fields[0]);
 			range = g_strdup_printf("%s\xc2\xb0 / %s\xc2\xb0",
 			                        fields[1], fields[2]);
-			gowl_bar_panel_add_field(panel, fields[0], range);
+			gowl_bar_panel_add_field(panel, day, range);
 		}
 	}
+	g_mutex_unlock(&wd->lock);
 
 	return panel;
 }
@@ -1237,8 +1423,11 @@ static const GowlBarPluginVTable weather_vtable = {
  * ---------------------------------------------------------------- */
 
 typedef struct {
-	gchar *cwd;      /* written on the dispatch thread, read by the
-	                    worker; only ever a whole-pointer swap */
+	GMutex lock;     /* `cwd' is written on the dispatch thread and
+	                    read on the worker; a freed pointer is not "a
+	                    whole-pointer swap", whatever the old comment
+	                    said */
+	gchar *cwd;
 	gchar *branch;
 	gint   dirty;
 } GitData;
@@ -1246,8 +1435,11 @@ typedef struct {
 static gpointer
 git_create(GowlBarPlugin *plugin)
 {
+	GitData *gd = g_new0(GitData, 1);
+
 	(void)plugin;
-	return g_new0(GitData, 1);
+	g_mutex_init(&gd->lock);
+	return gd;
 }
 
 static void
@@ -1260,6 +1452,7 @@ git_destroy(GowlBarPlugin *plugin, gpointer data)
 		return;
 	g_free(gd->cwd);
 	g_free(gd->branch);
+	g_mutex_clear(&gd->lock);
 	g_free(gd);
 }
 
@@ -1296,8 +1489,10 @@ git_poll(GowlBarPlugin *plugin, gpointer data)
 	if (info == NULL)
 		return;
 	if (info->cwd != NULL) {
+		g_mutex_lock(&gd->lock);
 		g_free(gd->cwd);
 		gd->cwd = g_strdup(info->cwd);
+		g_mutex_unlock(&gd->lock);
 	}
 	gowl_process_info_free(info);
 }
@@ -1306,46 +1501,37 @@ static void
 git_poll_async(GowlBarPlugin *plugin, gpointer data)
 {
 	GitData *gd = data;
-	gchar dir[PATH_MAX];
-	gchar head_path[PATH_MAX];
+	g_autofree gchar *cwd = NULL;
+	g_autofree gchar *head_path = NULL;
 	g_autofree gchar *head = NULL;
-	const gchar *branch;
+	g_autofree gchar *branch = NULL;
 	gchar buf[160];
+	gint dirty = 0;
 
-	if (gd->cwd == NULL) {
+	g_mutex_lock(&gd->lock);
+	cwd = g_strdup(gd->cwd);
+	g_mutex_unlock(&gd->lock);
+
+	if (cwd == NULL) {
 		gowl_bar_plugin_set_label(plugin, NULL);
 		return;
 	}
 
-	/* Walk up to the repository root the cheap way; `git rev-parse'
-	   would be a subprocess per tick just to find the directory. */
-	g_strlcpy(dir, gd->cwd, sizeof(dir));
-	while (dir[0] != '\0') {
-		gchar *slash;
-
-		g_snprintf(head_path, sizeof(head_path), "%s/.git/HEAD", dir);
-		if (g_file_test(head_path, G_FILE_TEST_EXISTS))
-			break;
-		slash = strrchr(dir, '/');
-		if (slash == NULL || slash == dir) {
-			dir[0] = '\0';
-			break;
-		}
-		*slash = '\0';
-	}
-
-	if (dir[0] == '\0') {
+	/*
+	 * Walk up to the working tree the cheap way; `git rev-parse'
+	 * would be a subprocess per tick just to find the directory.
+	 * bar_git_head_path() knows that `.git' may be a FILE -- a
+	 * worktree, which is where feature work happens here -- so the
+	 * widget no longer goes blank in every trees/<branch> checkout.
+	 */
+	head_path = bar_git_head_path(cwd);
+	if (head_path == NULL ||
+	    !g_file_get_contents(head_path, &head, NULL, NULL)) {
 		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_tooltip(plugin, "Not in a git repository");
 		return;
 	}
-
-	if (!g_file_get_contents(head_path, &head, NULL, NULL)) {
-		gowl_bar_plugin_set_label(plugin, NULL);
-		return;
-	}
-	g_strstrip(head);
-	branch = (strncmp(head, "ref: refs/heads/", 16) == 0)
-		? head + 16 : head;
+	branch = bar_git_ref_label(head);
 
 	{
 		const gchar *argv[] = { "git", "-C", NULL, "status",
@@ -1353,28 +1539,41 @@ git_poll_async(GowlBarPlugin *plugin, gpointer data)
 		g_autofree gchar *status = NULL;
 		const gchar *p;
 
-		argv[2] = dir;
+		argv[2] = cwd;
 		status = bar_run_argv(argv);
-		gd->dirty = 0;
 		if (status != NULL) {
 			for (p = status; *p != '\0'; p++) {
 				if (*p == '\n')
-					gd->dirty++;
+					dirty++;
 			}
 		}
 	}
 
+	g_mutex_lock(&gd->lock);
 	g_free(gd->branch);
 	gd->branch = g_strdup(branch);
+	gd->dirty = dirty;
+	g_mutex_unlock(&gd->lock);
 
-	if (gd->dirty > 0)
-		g_snprintf(buf, sizeof(buf), "%s*%d", branch, gd->dirty);
+	if (dirty > 0)
+		g_snprintf(buf, sizeof(buf), "%s*%d", branch, dirty);
 	else
 		g_snprintf(buf, sizeof(buf), "%s", branch);
 	gowl_bar_plugin_set_label(plugin, buf);
 	gowl_bar_plugin_set_icon(plugin, "\xef\x90\x98");
-	gowl_bar_plugin_set_color(plugin,
-		(gd->dirty > 0) ? GOWL_BAR_COLOR_YELLOW : GOWL_BAR_COLOR_TEXT);
+	{
+		g_autofree gchar *tip = NULL;
+
+		tip = g_strdup_printf("%s on %s%s", cwd, branch,
+			(dirty > 0) ? " (uncommitted changes)" : "");
+		gowl_bar_plugin_set_tooltip(plugin, tip);
+	}
+	if (dirty > 0)
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_YELLOW);
+	else
+		bar_plugin_apply_color(plugin,
+			gowl_bar_plugin_get_setting(plugin, "color"),
+			GOWL_BAR_COLOR_TEXT);
 }
 
 static const GowlBarPluginVTable git_vtable = {
@@ -1399,7 +1598,57 @@ keymap_interval(GowlBarPlugin *plugin, gpointer data)
 {
 	(void)plugin;
 	(void)data;
-	return 10;
+	return 2;
+}
+
+/*
+ * The compositor's own keyboard, on the dispatch thread where it may
+ * be asked.  This is the layout the keys actually produce -- switched
+ * with the configured toggle, per the gowl config -- where `localectl'
+ * reports the SYSTEM default, which is what the console boots with and
+ * need not be what the session is typing in at all.  The systemd
+ * answer stays as the fallback for a bar hosted with no compositor.
+ */
+static void
+keymap_poll(GowlBarPlugin *plugin, gpointer data)
+{
+	const BarEnv *env = bar_env();
+	const gchar *name = NULL;
+	guint index = 0;
+
+	(void)data;
+
+	if (env != NULL && env->compositor != NULL)
+		name = gowl_compositor_get_keyboard_layout(
+			GOWL_COMPOSITOR(env->compositor), &index);
+
+	if (name == NULL || name[0] == '\0') {
+		/* Nothing to ask here; the worker asks localectl. */
+		gowl_bar_plugin_set_setting(plugin, "keymap-fallback", "1");
+		return;
+	}
+	gowl_bar_plugin_set_setting(plugin, "keymap-fallback", NULL);
+
+	if (gowl_bar_plugin_get_setting_bool(plugin, "short", TRUE)) {
+		/* "English (US)" is what xkb calls it; the bar has room for
+		   "US".  The part in parentheses is the variant and reads
+		   as the code most people know the layout by. */
+		const gchar *open = strchr(name, '(');
+		const gchar *close = (open != NULL) ? strchr(open, ')') : NULL;
+		g_autofree gchar *shown = NULL;
+
+		if (open != NULL && close != NULL && close > open + 1)
+			shown = g_strndup(open + 1, (gsize)(close - open - 1));
+		else
+			shown = g_strdup(name);
+		gowl_bar_plugin_set_label(plugin, shown);
+	} else {
+		gowl_bar_plugin_set_label(plugin, name);
+	}
+	gowl_bar_plugin_set_tooltip(plugin, name);
+	bar_plugin_apply_color(plugin,
+		gowl_bar_plugin_get_setting(plugin, "color"),
+		GOWL_BAR_COLOR_TEXT);
 }
 
 static void
@@ -1409,6 +1658,9 @@ keymap_poll_async(GowlBarPlugin *plugin, gpointer data)
 
 	(void)data;
 
+	if (!gowl_bar_plugin_get_setting_bool(plugin, "keymap-fallback",
+	                                      FALSE))
+		return;
 	if (!bar_have_command("localectl"))
 		return;
 	{
@@ -1448,7 +1700,7 @@ keymap_poll_async(GowlBarPlugin *plugin, gpointer data)
 static const GowlBarPluginVTable keymap_vtable = {
 	sizeof(GowlBarPluginVTable),
 	NULL, NULL, NULL, NULL, NULL,
-	keymap_interval, NULL, keymap_poll_async,
+	keymap_interval, keymap_poll, keymap_poll_async,
 	NULL, NULL, NULL, NULL,
 	NULL, NULL,
 	NULL, NULL,
@@ -1542,6 +1794,7 @@ display_find_backlight(DisplayData *dd)
 {
 	g_autoptr(GDir) dir = NULL;
 	const gchar *name;
+	g_autofree gchar *first = NULL;
 
 	if (dd->backlight != NULL)
 		return;
@@ -1549,10 +1802,31 @@ display_find_backlight(DisplayData *dd)
 	dir = g_dir_open("/sys/class/backlight", 0, NULL);
 	if (dir == NULL)
 		return;
-	name = g_dir_read_name(dir);
-	if (name == NULL)
-		return;
-	dd->backlight = g_strdup(name);
+
+	/*
+	 * A laptop can expose two: the GPU's own (type `raw', which is
+	 * the one that works) and the firmware's acpi_video0 (`firmware',
+	 * which on many machines accepts writes and changes nothing).
+	 * The kernel documents `raw' as the native interface; take it
+	 * when it is there and whatever came first otherwise.
+	 */
+	while ((name = g_dir_read_name(dir)) != NULL) {
+		g_autofree gchar *type_path = NULL;
+		g_autofree gchar *type = NULL;
+
+		type_path = g_build_filename("/sys/class/backlight", name,
+		                             "type", NULL);
+		if (g_file_get_contents(type_path, &type, NULL, NULL)) {
+			g_strstrip(type);
+			if (strcmp(type, "raw") == 0) {
+				dd->backlight = g_strdup(name);
+				return;
+			}
+		}
+		if (first == NULL)
+			first = g_strdup(name);
+	}
+	dd->backlight = g_steal_pointer(&first);
 }
 
 static void
@@ -1614,6 +1888,16 @@ display_poll(GowlBarPlugin *plugin, gpointer data)
  * it, so the two cannot drift into offering one scale and applying
  * another.
  */
+static const struct {
+	const gchar *label;
+	gdouble      value;
+} display_text_sizes[] = {
+	{ "S",  0.85 },
+	{ "M",  1.0  },
+	{ "L",  1.2  },
+	{ "XL", 1.45 }
+};
+
 static const struct {
 	const gchar *label;
 	gdouble      value;
@@ -1689,11 +1973,23 @@ display_panel(GowlBarPlugin *plugin, gpointer data)
 
 	gowl_bar_panel_add_separator(panel);
 	gowl_bar_panel_add_section(panel, "Text size");
-	item = gowl_bar_panel_add_buttons(panel, "text-size");
-	gowl_bar_panel_add_button(item, "S", FALSE);
-	gowl_bar_panel_add_button(item, "M", TRUE);
-	gowl_bar_panel_add_button(item, "L", FALSE);
-	gowl_bar_panel_add_button(item, "XL", FALSE);
+	{
+		/* Lit from the theme's actual scale, not a hard-coded "M":
+		   the buttons used to show medium whatever had been chosen. */
+		GowlBarHost *host = gowl_bar_plugin_get_host(plugin);
+		const GowlBarTheme *theme = (host != NULL)
+			? gowl_bar_host_get_theme(host) : NULL;
+		gdouble cur = (theme != NULL)
+			? gowl_bar_theme_get_scale(theme) : 1.0;
+		gsize i;
+
+		item = gowl_bar_panel_add_buttons(panel, "text-size");
+		for (i = 0; i < G_N_ELEMENTS(display_text_sizes); i++) {
+			gowl_bar_panel_add_button(item,
+				display_text_sizes[i].label,
+				ABS(cur - display_text_sizes[i].value) < 0.01);
+		}
+	}
 
 	/*
 	 * Output scale.  These apply immediately through
@@ -1868,7 +2164,7 @@ static void
 display_apply_gamma(GowlBarPlugin *plugin, DisplayData *dd)
 {
 	gchar  temp[16];
-	gchar  bright[16];
+	gchar  bright[G_ASCII_DTOSTR_BUF_SIZE];
 	gchar *argv[7];
 	g_autoptr(GError) error = NULL;
 	GPid   pid = 0;
@@ -1888,9 +2184,11 @@ display_apply_gamma(GowlBarPlugin *plugin, DisplayData *dd)
 	}
 
 	/* -P resets whatever was on the ramp before applying, so a
-	   replacement never compounds with what it replaced. */
+	   replacement never compounds with what it replaced.  The
+	   brightness is formatted in the C locale: gammastep parses a
+	   dot, and a decimal-comma locale gave it `0,50'. */
 	g_snprintf(temp, sizeof(temp), "%d", dd->gamma_temp);
-	g_snprintf(bright, sizeof(bright), "%.2f", dd->gamma_brightness);
+	g_ascii_formatd(bright, sizeof(bright), "%.2f", dd->gamma_brightness);
 	argv[0] = (gchar *)"gammastep";
 	argv[1] = (gchar *)"-P";
 	argv[2] = (gchar *)"-O";
@@ -1970,16 +2268,17 @@ display_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	}
 
 	if (g_strcmp0(item_id, "text-size") == 0) {
-		const gdouble scales[4] = { 0.85, 1.0, 1.2, 1.45 };
-		g_autofree gchar *scale = NULL;
+		gchar scale[G_ASCII_DTOSTR_BUF_SIZE];
 
-		if (index < 0 || index > 3)
+		if (index < 0 || (gsize)index >= G_N_ELEMENTS(display_text_sizes))
 			return;
 		/* The theme scale is a bar setting, so this goes back
 		   through the module's own configuration path rather than
 		   reaching into the theme: a change made here should look
-		   exactly like one made in the config file. */
-		scale = g_strdup_printf("%.2f", scales[index]);
+		   exactly like one made in the config file.  Formatted in
+		   the C locale, since the setting is parsed that way. */
+		g_ascii_formatd(scale, sizeof(scale), "%.2f",
+		                display_text_sizes[index].value);
 		/*
 		 * Applied through the host, so a change made here takes the
 		 * same path as one written in the config file and the bar
@@ -2200,6 +2499,18 @@ typedef struct {
 	 * does not make the bar slow, it freezes the editor.
 	 */
 	gboolean  running;
+	/*
+	 * The wf-recorder THIS widget started, by pid.
+	 *
+	 * Stopped by that pid and never by name: `pkill -INT wf-recorder'
+	 * would also stop one the user started in a terminal, and the
+	 * display widget already refuses to pattern-kill its gammastep for
+	 * the same reason.  Spawned G_SPAWN_DO_NOT_REAP_CHILD so the pid
+	 * cannot be recycled before display-style reaping collects it.
+	 */
+	GPid      pid;
+	GSList   *reap;
+	gint64    last_check;   /* when pidof last ran, for the throttle */
 } RecorderData;
 
 static gpointer
@@ -2207,6 +2518,36 @@ recorder_create(GowlBarPlugin *plugin)
 {
 	(void)plugin;
 	return g_new0(RecorderData, 1);
+}
+
+/* Wait on the children that have gone, and notice our own going. */
+static void
+recorder_reap(RecorderData *rd)
+{
+	GSList *kept = NULL;
+	GSList *l;
+
+	for (l = rd->reap; l != NULL; l = l->next) {
+		GPid  pid = (GPid)GPOINTER_TO_INT(l->data);
+		pid_t done = waitpid((pid_t)pid, NULL, WNOHANG);
+
+		if (done > 0 || (done < 0 && errno == ECHILD)) {
+			g_spawn_close_pid(pid);
+			continue;
+		}
+		kept = g_slist_prepend(kept, l->data);
+	}
+	g_slist_free(rd->reap);
+	rd->reap = kept;
+
+	if (rd->pid != 0) {
+		pid_t done = waitpid((pid_t)rd->pid, NULL, WNOHANG);
+
+		if (done > 0 || (done < 0 && errno == ECHILD)) {
+			g_spawn_close_pid(rd->pid);
+			rd->pid = 0;
+		}
+	}
 }
 
 static void
@@ -2217,6 +2558,16 @@ recorder_destroy(GowlBarPlugin *plugin, gpointer data)
 	(void)plugin;
 	if (rd == NULL)
 		return;
+	/* A recording outliving its widget is still a file being
+	   written; ask it to finish cleanly rather than orphan it. */
+	if (rd->pid != 0) {
+		kill((pid_t)rd->pid, SIGINT);
+		rd->reap = g_slist_prepend(rd->reap,
+			GINT_TO_POINTER((gint)rd->pid));
+		rd->pid = 0;
+	}
+	recorder_reap(rd);
+	g_slist_free(rd->reap);
 	g_free(rd->scope);
 	g_free(rd);
 }
@@ -2225,9 +2576,9 @@ recorder_destroy(GowlBarPlugin *plugin, gpointer data)
  * Whether a recording is running, from the cache the async poll fills.
  *
  * The compositor's own provider can be asked for nothing -- it is a
- * pointer dereference -- so that part stays live.  Only the external
- * recorder costs a process, and that answer is whatever the last async
- * poll saw.
+ * pointer dereference -- so that part stays live, and so is our own
+ * child's pid.  Only a recorder somebody else started costs a process
+ * to find, and that answer is whatever the last async poll saw.
  */
 static gboolean
 recorder_running(GowlBarPlugin *plugin, RecorderData *rd)
@@ -2249,11 +2600,17 @@ recorder_running(GowlBarPlugin *plugin, RecorderData *rd)
 			return TRUE;
 	}
 
+	if (rd != NULL && rd->pid != 0)
+		return TRUE;
 	return rd != NULL && rd->running;
 }
 
 /*
- * The one thing here that costs a subprocess, on the worker thread.
+ * The one thing here that costs a subprocess, on the worker thread --
+ * and only every few seconds while idle.  The widget polls once a
+ * second to keep its elapsed clock honest, and forking pidof on every
+ * one of those was a process a second for the life of the session to
+ * notice a recording somebody started by hand.
  */
 static void
 recorder_poll_async(GowlBarPlugin *plugin, gpointer data)
@@ -2262,10 +2619,18 @@ recorder_poll_async(GowlBarPlugin *plugin, gpointer data)
 	const gchar      *proc;
 	g_autofree gchar *line = NULL;
 	g_autofree gchar *out = NULL;
+	gint64            now = g_get_monotonic_time();
 
-	if (rd == NULL || !bar_have_command("pidof")) {
-		if (rd != NULL)
-			rd->running = FALSE;
+	if (rd == NULL)
+		return;
+	if (rd->pid != 0)
+		return;    /* ours is known without asking */
+	if (!rd->running && now - rd->last_check < 5 * G_USEC_PER_SEC)
+		return;
+	rd->last_check = now;
+
+	if (!bar_have_command("pidof")) {
+		rd->running = FALSE;
 		return;
 	}
 
@@ -2286,6 +2651,8 @@ recorder_poll(GowlBarPlugin *plugin, gpointer data)
 
 	if (rd == NULL)
 		return;
+
+	recorder_reap(rd);
 
 	if (!recorder_running(plugin, rd)) {
 		if (rd->started != 0) {
@@ -2472,6 +2839,18 @@ recorder_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	if (g_strcmp0(item_id, "stop") == 0) {
 		const BarEnv *env = bar_env();
 
+		/* Ours first, by pid.  SIGINT is how wf-recorder is told to
+		   finish the file. */
+		if (rd != NULL && rd->pid != 0) {
+			kill((pid_t)rd->pid, SIGINT);
+			rd->reap = g_slist_prepend(rd->reap,
+				GINT_TO_POINTER((gint)rd->pid));
+			rd->pid = 0;
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
+				"Recording stopped", rd->scope);
+			return;
+		}
+
 		if (env != NULL && env->compositor != NULL) {
 			GowlCompositor        *comp;
 			GowlRecordingProvider *prov;
@@ -2491,10 +2870,15 @@ recorder_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 				return;
 			}
 		}
+		/* A recorder this widget did not start -- one the poll
+		   found by name -- can only be stopped by name.  The user
+		   pressed Stop on a widget that showed it running, so
+		   that is what they asked for; a recording of our own
+		   never reaches this line. */
 		proc = gowl_bar_plugin_get_setting(plugin, "process");
 		if (proc == NULL || *proc == '\0')
 			proc = "wf-recorder";
-		line = g_strdup_printf("pkill -INT %s", proc);
+		line = g_strdup_printf("pkill -INT -x %s", proc);
 		gowl_bar_plugin_spawn(plugin, line);
 		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
 			"Recording stopped", NULL);
@@ -2542,18 +2926,71 @@ recorder_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	if (dir == NULL || *dir == '\0')
 		dir = "~/Videos";
 
-	if (geom != NULL)
-		line = g_strdup_printf(
-			"mkdir -p %s && wf-recorder -g \"%s\" "
-			"-f %s/rec-$(date +%%F-%%H%%M%%S).mp4",
-			dir, geom, dir);
-	else
-		line = g_strdup_printf(
-			"mkdir -p %s && wf-recorder "
-			"-f %s/rec-$(date +%%F-%%H%%M%%S).mp4",
-			dir, dir);
+	/*
+	 * Started here, by this widget, so it is ours to stop by pid.
+	 * The directory and the file name are made in C rather than by
+	 * `mkdir -p ... && ... $(date ...)': that line was spawned
+	 * through an argv parser that knows no `&&' and no `$(...)', so
+	 * mkdir got them as arguments and nothing was ever recorded.
+	 * Only the region needs a shell -- for slurp's output -- and it
+	 * `exec's the recorder, so the pid we hold is wf-recorder's.
+	 */
+	{
+		g_autofree gchar *expanded = bar_expand_tilde(dir);
+		g_autofree gchar *stamp = NULL;
+		g_autofree gchar *path = NULL;
+		g_autoptr(GDateTime) now = g_date_time_new_now_local();
+		g_autoptr(GError) error = NULL;
+		gchar *argv[8];
+		gint n = 0;
+		GPid pid = 0;
 
-	gowl_bar_plugin_spawn(plugin, line);
+		if (g_mkdir_with_parents(expanded, 0755) != 0) {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+				"Cannot record", "The recording directory "
+				"cannot be created.");
+			return;
+		}
+		stamp = g_date_time_format(now, "%F-%H%M%S");
+		path = g_strdup_printf("%s/rec-%s.mp4", expanded, stamp);
+
+		if (geom != NULL && strcmp(geom, "$(slurp)") == 0) {
+			g_autofree gchar *qpath = g_shell_quote(path);
+
+			line = g_strdup_printf(
+				"exec wf-recorder -g \"$(slurp)\" -f %s", qpath);
+			argv[n++] = (gchar *)"/bin/sh";
+			argv[n++] = (gchar *)"-c";
+			argv[n++] = line;
+		} else {
+			argv[n++] = (gchar *)"wf-recorder";
+			if (geom != NULL) {
+				argv[n++] = (gchar *)"-g";
+				argv[n++] = geom;
+			}
+			argv[n++] = (gchar *)"-f";
+			argv[n++] = path;
+		}
+		argv[n] = NULL;
+
+		if (!g_spawn_async(NULL, argv, NULL,
+		                   G_SPAWN_SEARCH_PATH |
+		                   G_SPAWN_DO_NOT_REAP_CHILD |
+		                   G_SPAWN_STDOUT_TO_DEV_NULL |
+		                   G_SPAWN_STDERR_TO_DEV_NULL,
+		                   NULL, NULL, &pid, &error)) {
+			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
+				"Cannot record", error->message);
+			return;
+		}
+		if (rd != NULL) {
+			if (rd->pid != 0)
+				rd->reap = g_slist_prepend(rd->reap,
+					GINT_TO_POINTER((gint)rd->pid));
+			rd->pid = pid;
+		}
+	}
+
 	if (rd != NULL) {
 		g_free(rd->scope);
 		rd->scope = g_steal_pointer(&scope);
@@ -2667,8 +3104,10 @@ static gboolean shot_annotate_after(GowlBarPlugin *plugin);
 static gchar *
 shot_cmacs_line(const gchar *path)
 {
+	g_autofree gchar *quoted = bar_elisp_quote(path);
+
 	return g_strdup_printf(
-		"emacsctl eval '(cmacs-screenshot-annotate \"%s\")'", path);
+		"emacsctl eval '(cmacs-screenshot-annotate \"%s\")'", quoted);
 }
 
 /*
@@ -2999,32 +3438,35 @@ shot_capture_native(GowlBarPlugin *plugin, gint index)
  * A capture deferred by one frame, holding its plugin weakly: the bar
  * can be reloaded in the 120ms between closing the panel and taking
  * the picture.
+ *
+ * On the COMPOSITOR's event loop, not GLib's.  Under cmacs the default
+ * GMainContext is the Emacs thread's, so a GLib timeout added here fired
+ * shot_take() on the editor's thread -- walking the client list and
+ * calling the screenshot provider with no lock held, beside the
+ * dispatch thread that owns them.  wl_event_loop_add_timer() fires
+ * where every other plugin callback runs.
  */
 typedef struct {
-	GWeakRef plugin;
-	gint     index;
+	GWeakRef                plugin;
+	gint                    index;
+	struct wl_event_source *source;
 } ShotDeferred;
 
 static void shot_take(GowlBarPlugin *plugin, gint index);
 
-static void
-shot_deferred_free(gpointer user_data)
-{
-	ShotDeferred *d = user_data;
-
-	g_weak_ref_clear(&d->plugin);
-	g_free(d);
-}
-
-static gboolean
-shot_deferred_fire(gpointer user_data)
+static int
+shot_deferred_fire(void *user_data)
 {
 	ShotDeferred            *d = user_data;
 	g_autoptr(GowlBarPlugin) plugin = g_weak_ref_get(&d->plugin);
 
 	if (plugin != NULL)
 		shot_take(plugin, d->index);
-	return G_SOURCE_REMOVE;
+
+	wl_event_source_remove(d->source);
+	g_weak_ref_clear(&d->plugin);
+	g_free(d);
+	return 0;
 }
 
 static void
@@ -3090,12 +3532,31 @@ shot_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	 * being right and being wrong.
 	 */
 	{
-		ShotDeferred *d = g_new0(ShotDeferred, 1);
+		const BarEnv *env = bar_env();
+		struct wl_event_loop *loop = NULL;
+		ShotDeferred *d;
 
+		if (env != NULL && env->compositor != NULL)
+			loop = gowl_compositor_get_event_loop(
+				GOWL_COMPOSITOR(env->compositor));
+		if (loop == NULL) {
+			/* No compositor loop to defer on: take it now, with
+			   the panel possibly still in the picture. */
+			shot_take(plugin, index);
+			return;
+		}
+
+		d = g_new0(ShotDeferred, 1);
 		g_weak_ref_init(&d->plugin, plugin);
-		d->index = index;
-		g_timeout_add_full(G_PRIORITY_DEFAULT, 120,
-		                   shot_deferred_fire, d, shot_deferred_free);
+		d->index  = index;
+		d->source = wl_event_loop_add_timer(loop, shot_deferred_fire, d);
+		if (d->source == NULL) {
+			g_weak_ref_clear(&d->plugin);
+			g_free(d);
+			shot_take(plugin, index);
+			return;
+		}
+		wl_event_source_timer_update(d->source, 120);
 	}
 	return;
 }

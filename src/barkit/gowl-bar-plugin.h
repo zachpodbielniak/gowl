@@ -181,6 +181,11 @@ void gowl_bar_plugin_configure (GowlBarPlugin *self, GHashTable *settings);
  * @self: a plugin
  * @key: a setting name
  *
+ * Thread-safe, from a worker as much as from the dispatch thread.  The
+ * pointer is borrowed: a value replaced while it is held is retired
+ * rather than freed, so it stays readable for the length of a poll,
+ * but it must not be kept across calls -- copy it if it has to live.
+ *
  * Returns: (transfer none) (nullable): the value, or %NULL
  */
 const gchar *gowl_bar_plugin_get_setting (GowlBarPlugin *self,
@@ -381,6 +386,35 @@ gchar *gowl_bar_plugin_dup_tooltip (GowlBarPlugin *self);
 void         gowl_bar_plugin_set_color (GowlBarPlugin *self,
                                          GowlBarColor   color);
 GowlBarColor gowl_bar_plugin_get_color (GowlBarPlugin *self);
+
+/**
+ * gowl_bar_plugin_set_color_rgba:
+ * @self: a plugin
+ * @rgba: (array fixed-size=4) (nullable): a literal colour, or %NULL
+ *
+ * A literal in place of a role, for a configuration that names a hex
+ * colour.  It does not follow the palette -- that is the point of it
+ * -- and the next gowl_bar_plugin_set_color() replaces it.  Prefer a
+ * role in a plugin's own code; this exists for the user's settings.
+ */
+void     gowl_bar_plugin_set_color_rgba (GowlBarPlugin *self,
+                                          const gdouble *rgba);
+gboolean gowl_bar_plugin_get_color_rgba (GowlBarPlugin *self,
+                                          gdouble       *rgba);
+
+/**
+ * gowl_bar_plugin_cairo_set_color:
+ * @self: a plugin
+ * @theme: the active theme
+ * @cr: the target context
+ *
+ * Selects the plugin's colour -- the literal if one is set, else the
+ * role -- as @cr's source.  A draw callback uses this rather than
+ * gowl_bar_theme_cairo_set() with the role.
+ */
+void gowl_bar_plugin_cairo_set_color (GowlBarPlugin      *self,
+                                       const GowlBarTheme *theme,
+                                       cairo_t            *cr);
 
 /**
  * gowl_bar_plugin_set_visible:

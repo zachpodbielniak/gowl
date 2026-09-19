@@ -463,16 +463,37 @@ bar_expand_tilde(const gchar *path)
  *
  * Returns: (transfer full) (nullable): the first line of output
  */
-gchar *
-bar_run_shell_line(const gchar *cmdline)
+/*
+ * Turn a command line into an argv.
+ *
+ * g_shell_parse_argv() splits words and honours quotes and nothing
+ * else: `$(slurp)' reaches the program as a literal argument, `&&'
+ * as another, and a pipe as a third.  Every one of those was in a
+ * shipped command -- the recorder's fallback was `mkdir -p ~/Videos
+ * && wf-recorder -g "$(slurp)" ...', so mkdir was handed `&&' and
+ * nothing recorded -- and the documented `button.command' example had
+ * the same shape.  A line that needs a shell is given one; a line
+ * that does not is run directly, which keeps the parse error for a
+ * mistyped simple command and spares the common case a process.
+ *
+ * `~' is expanded here for the direct case and by sh in the other.
+ */
+static gchar **
+bar_command_argv(const gchar *cmdline, GError **error)
 {
-	g_auto(GStrv) argv = NULL;
+	gchar **argv;
 	gint argc = 0;
 	gint i;
 
-	if (cmdline == NULL || cmdline[0] == '\0')
-		return NULL;
-	if (!g_shell_parse_argv(cmdline, &argc, &argv, NULL))
+	if (bar_shell_needs_sh(cmdline)) {
+		argv = g_new0(gchar *, 4);
+		argv[0] = g_strdup("/bin/sh");
+		argv[1] = g_strdup("-c");
+		argv[2] = g_strdup(cmdline);
+		return argv;
+	}
+
+	if (!g_shell_parse_argv(cmdline, &argc, &argv, error))
 		return NULL;
 
 	/* Shell parsing does not expand `~', and a bar command written by
@@ -484,6 +505,19 @@ bar_run_shell_line(const gchar *cmdline)
 		g_free(argv[i]);
 		argv[i] = expanded;
 	}
+	return argv;
+}
+
+gchar *
+bar_run_shell_line(const gchar *cmdline)
+{
+	g_auto(GStrv) argv = NULL;
+
+	if (cmdline == NULL || cmdline[0] == '\0')
+		return NULL;
+	argv = bar_command_argv(cmdline, NULL);
+	if (argv == NULL)
+		return NULL;
 
 	return bar_run_argv_line((const gchar * const *)argv);
 }
@@ -497,22 +531,14 @@ bar_spawn_shell(const gchar *cmdline)
 {
 	g_auto(GStrv) argv = NULL;
 	g_autoptr(GError) error = NULL;
-	gint argc = 0;
-	gint i;
 
 	if (cmdline == NULL || cmdline[0] == '\0')
 		return;
-	if (!g_shell_parse_argv(cmdline, &argc, &argv, &error)) {
+	argv = bar_command_argv(cmdline, &error);
+	if (argv == NULL) {
 		g_warning("gowl-bar: cannot parse command '%s': %s", cmdline,
 		          error->message);
 		return;
-	}
-	for (i = 0; i < argc; i++) {
-		gchar *expanded;
-
-		expanded = bar_expand_tilde(argv[i]);
-		g_free(argv[i]);
-		argv[i] = expanded;
 	}
 
 	if (!g_spawn_async(NULL, argv, NULL,
@@ -959,6 +985,41 @@ bar_plugin_serve_all(GowlBarInstance *bar, gpointer monitor)
  *
  * Returns: (transfer none) (nullable): the output
  */
+void
+bar_plugin_apply_color(GowlBarPlugin *plugin, const gchar *spec,
+                       GowlBarColor fallback)
+{
+	GowlBarColor role;
+	gdouble rgba[4];
+
+	if (spec == NULL || spec[0] == '\0') {
+		gowl_bar_plugin_set_color(plugin, fallback);
+		return;
+	}
+	if (gowl_bar_theme_color_from_name(spec, &role)) {
+		gowl_bar_plugin_set_color(plugin, role);
+		return;
+	}
+	if (gowl_bar_color_parse(spec, rgba)) {
+		/* The role first, as the fallback the literal sits over;
+		   set_color() clears any literal, so the order matters. */
+		gowl_bar_plugin_set_color(plugin, fallback);
+		gowl_bar_plugin_set_color_rgba(plugin, rgba);
+		return;
+	}
+
+	/* Neither a role nor a colour.  Once, not every poll: the setting
+	   does not change between polls and a warning a second is noise. */
+	if (g_strcmp0(gowl_bar_plugin_get_setting(plugin, "color-warned"),
+	              spec) != 0) {
+		gowl_bar_plugin_set_setting(plugin, "color-warned", spec);
+		g_warning("gowl-bar: %s: '%s' is neither a palette role nor "
+		          "a #rrggbb colour", gowl_bar_plugin_get_id(plugin),
+		          spec);
+	}
+	gowl_bar_plugin_set_color(plugin, fallback);
+}
+
 gpointer
 bar_plugin_monitor(GowlBarPlugin *plugin)
 {

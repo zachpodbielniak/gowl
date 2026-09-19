@@ -62,30 +62,15 @@ core_compositor(void)
 	return GOWL_COMPOSITOR(env->compositor);
 }
 
-/* Resolve a colour setting to a theme role.  A plugin's `color'
-   setting names a role, not a literal, so the palette still governs
-   it --- but a hex literal is accepted and parsed too, because a user
-   who wants exactly that colour should get exactly that colour. */
+/* The `color' setting: a palette role, or a literal the user meant
+   exactly.  One helper for every shipped widget, so they all accept
+   the same spellings -- see bar_plugin_apply_color(). */
 static void
 core_apply_color_setting(GowlBarPlugin *plugin, GowlBarColor fallback)
 {
-	const gchar *spec;
-	GowlBarColor role;
-
-	spec = gowl_bar_plugin_get_setting(plugin, "color");
-	if (spec == NULL || spec[0] == '\0') {
-		gowl_bar_plugin_set_color(plugin, fallback);
-		return;
-	}
-	if (gowl_bar_theme_color_from_name(spec, &role)) {
-		gowl_bar_plugin_set_color(plugin, role);
-		return;
-	}
-	/* A literal cannot be expressed as a role, so the closest the
-	   plugin API allows is to leave the fallback and let the bar's
-	   own per-item colouring take over.  Warn once rather than
-	   silently ignoring it. */
-	gowl_bar_plugin_set_color(plugin, fallback);
+	bar_plugin_apply_color(plugin,
+	                       gowl_bar_plugin_get_setting(plugin, "color"),
+	                       fallback);
 }
 
 /* Look up a colour setting as a literal RGBA, falling back to a theme
@@ -407,6 +392,8 @@ title_configure(GowlBarPlugin *plugin, gpointer data, GHashTable *settings)
 	if (value != NULL)
 		gowl_bar_color_parse(value, td->delimiter_color);
 
+	core_apply_color_setting(plugin, GOWL_BAR_COLOR_TEXT);
+
 	td->palette_size = 0;
 	td->have_palette = FALSE;
 	value = gowl_bar_plugin_get_setting(plugin, "palette");
@@ -503,8 +490,7 @@ title_draw(GowlBarPlugin *plugin, gpointer data, cairo_t *cr,
 
 	if (!td->have_palette) {
 		pango_layout_set_attributes(layout, NULL);
-		gowl_bar_theme_cairo_set(theme, cr,
-		                         gowl_bar_plugin_get_color(plugin));
+		gowl_bar_plugin_cairo_set_color(plugin, theme, cr);
 		pango_layout_get_pixel_extents(layout, NULL, &logical);
 		cairo_move_to(cr, x + pad, y + (height - logical.height) / 2);
 		pango_cairo_show_layout(cr, layout);
@@ -701,11 +687,13 @@ clock_destroy(GowlBarPlugin *plugin, gpointer data)
 static gint
 clock_interval(GowlBarPlugin *plugin, gpointer data)
 {
-	(void)plugin;
 	(void)data;
 	/* Once a second would repaint the bar sixty times a minute to
-	   change a digit once; the tick's own floor keeps a seconds
-	   format honest if the user asks for one. */
+	   change a digit once -- unless the format shows seconds, in
+	   which case anything slower shows them jumping in fives. */
+	if (bar_strftime_has_seconds(
+		    gowl_bar_plugin_get_setting(plugin, "format")))
+		return 1;
 	return 5;
 }
 
@@ -781,8 +769,9 @@ clock_add_calendar(GowlBarPanel *panel, ClockData *cd)
 		GowlBarPanelItem *cell;
 		gchar buf[16];
 
-		g_snprintf(buf, sizeof(buf), "%d",
-		           g_date_time_get_week_of_year(cursor));
+		/* The ISO week the row is mostly in: a Sunday-first row's
+		   Sunday belongs to the week BEFORE its other six days. */
+		g_snprintf(buf, sizeof(buf), "%d", bar_iso_week_of_row(cursor));
 		cell = gowl_bar_panel_item_new(GOWL_BAR_ITEM_LABEL);
 		gowl_bar_panel_item_set_title(cell, buf);
 		gowl_bar_panel_item_add_child(grid, cell);
@@ -921,25 +910,13 @@ clock_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	}
 }
 
-static gboolean
-clock_scroll(GowlBarPlugin *plugin, gpointer data, gdouble delta,
-             gint discrete, guint modifiers)
-{
-	(void)plugin;
-	(void)data;
-	(void)delta;
-	(void)discrete;
-	(void)modifiers;
-	return FALSE;
-}
-
 static const GowlBarPluginVTable clock_vtable = {
 	sizeof(GowlBarPluginVTable),
 	clock_create, clock_destroy,
 	NULL, NULL, NULL,
 	clock_interval, clock_poll, NULL,
 	NULL, NULL,
-	NULL, clock_scroll,
+	NULL, NULL,
 	clock_panel, clock_action,
 	NULL, NULL,
 	NULL,
@@ -1145,20 +1122,10 @@ toggle_apply(GowlBarPlugin *plugin, ToggleData *td)
 		gowl_bar_plugin_set_tooltip(plugin, tip);
 	}
 
-	{
-		const gchar *spec;
-		GowlBarColor role;
-
-		spec = gowl_bar_plugin_get_setting(plugin,
-			td->active ? "color-on" : "color-off");
-		if (spec != NULL &&
-		    gowl_bar_theme_color_from_name(spec, &role))
-			gowl_bar_plugin_set_color(plugin, role);
-		else
-			gowl_bar_plugin_set_color(plugin,
-				td->active ? GOWL_BAR_COLOR_ACCENT
-				           : GOWL_BAR_COLOR_MUTED);
-	}
+	bar_plugin_apply_color(plugin,
+		gowl_bar_plugin_get_setting(plugin,
+			td->active ? "color-on" : "color-off"),
+		td->active ? GOWL_BAR_COLOR_ACCENT : GOWL_BAR_COLOR_MUTED);
 }
 
 static void
@@ -1270,26 +1237,11 @@ cmd_poll_async(GowlBarPlugin *plugin, gpointer data)
 		return;
 
 	out = bar_run_shell_line(command);
-	if (out != NULL) {
-		/* Strip ANSI escapes rather than rendering them: the old
-		   bar coloured them, but a widget that changes colour
-		   from a script's output fights the palette, and the
-		   `color' setting expresses the same intent properly. */
-		gchar *src, *dst;
-
-		src = dst = out;
-		while (*src != '\0') {
-			if (*src == '\033') {
-				while (*src != '\0' && *src != 'm')
-					src++;
-				if (*src == 'm')
-					src++;
-				continue;
-			}
-			*dst++ = *src++;
-		}
-		*dst = '\0';
-	}
+	/* Strip ANSI escapes rather than rendering them: the old bar
+	   coloured them, but a widget that changes colour from a
+	   script's output fights the palette, and the `color' setting
+	   expresses the same intent properly. */
+	bar_strip_ansi(out);
 	gowl_bar_plugin_set_label(plugin, out);
 }
 
@@ -1304,9 +1256,14 @@ cmd_click(GowlBarPlugin *plugin, gpointer data, guint button, gint x, gint y,
 	(void)y;
 	(void)modifiers;
 
+	/* The same three slots a button has, so the two generic widgets
+	   are configured the same way.  `on-click' is the left button's
+	   name here because `command' is the polled one. */
 	command = NULL;
 	if (button == BTN_RIGHT)
 		command = gowl_bar_plugin_get_setting(plugin, "command-right");
+	else if (button == BTN_MIDDLE)
+		command = gowl_bar_plugin_get_setting(plugin, "command-middle");
 	if (command == NULL)
 		command = gowl_bar_plugin_get_setting(plugin, "on-click");
 	if (command == NULL || command[0] == '\0')
@@ -1387,7 +1344,7 @@ void
 bar_register_core_plugins(GowlBarRegistry *registry)
 {
 	gowl_bar_registry_register_vtable(registry, "tags", "Tags",
-		"dwm-style tag indicator for the focused monitor",
+		"dwm-style tag row for the output it is drawn on",
 		&tags_vtable);
 	gowl_bar_registry_register_vtable(registry, "title", "Window title",
 		"The focused window's title, optionally colourised",

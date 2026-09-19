@@ -47,7 +47,20 @@ typedef struct {
 	   gowl_bar_plugin_get_monitor(). */
 	gpointer      monitor;
 
-	GHashTable   *settings;    /* gchar* -> gchar* */
+	/*
+	 * gchar* -> gchar*, read by every thread the plugin runs on and
+	 * written by both: a panel_opened sets `panel-open' on the
+	 * dispatch thread while a poll_async on a worker reads `param',
+	 * and a worker sets `auth-notified' while a click reads a colour.
+	 * So the table is behind `lock', and a value that is replaced is
+	 * not freed but retired to `stale' -- get_setting() hands out a
+	 * borrowed pointer, and the worker that borrowed it may still be
+	 * reading when the dispatch thread writes the next value.  The
+	 * graveyard is bounded; a pointer held across hundreds of setting
+	 * changes is not a case that arises.
+	 */
+	GHashTable   *settings;
+	GPtrArray    *stale;
 
 	/* Presentation state.  Written from worker threads, read from the
 	   compositor thread during a paint, so everything under here is
@@ -58,6 +71,11 @@ typedef struct {
 	gchar        *tooltip;
 	GowlBarColor  color;
 	gboolean      has_color;
+	/* A literal colour, when a setting named one.  It overrides the
+	   role for drawing but the role stays as the fallback, and any
+	   later set_color() drops it: the last call wins. */
+	gdouble       rgba[4];
+	gboolean      has_rgba;
 
 	gboolean      visible;
 	gboolean      active;
@@ -185,8 +203,18 @@ gowl_bar_plugin_finalize(GObject *object)
 	g_free(priv->label);
 	g_free(priv->icon);
 	g_free(priv->tooltip);
-	if (priv->settings != NULL)
+	if (priv->settings != NULL) {
+		GHashTableIter iter;
+		gpointer v;
+
+		/* Values are not the table's to free; see `stale'. */
+		g_hash_table_iter_init(&iter, priv->settings);
+		while (g_hash_table_iter_next(&iter, NULL, &v))
+			g_free(v);
 		g_hash_table_unref(priv->settings);
+	}
+	if (priv->stale != NULL)
+		g_ptr_array_unref(priv->stale);
 	g_mutex_clear(&priv->lock);
 
 	G_OBJECT_CLASS(gowl_bar_plugin_parent_class)->finalize(object);
@@ -317,7 +345,8 @@ gowl_bar_plugin_init(GowlBarPlugin *self)
 
 	g_mutex_init(&priv->lock);
 	priv->settings = g_hash_table_new_full(g_str_hash, g_str_equal,
-	                                       g_free, g_free);
+	                                       g_free, NULL);
+	priv->stale    = g_ptr_array_new_with_free_func(g_free);
 	priv->color   = GOWL_BAR_COLOR_TEXT;
 	priv->visible = TRUE;
 	priv->dirty   = 1;
@@ -464,10 +493,41 @@ gowl_bar_plugin_is_active(GowlBarPlugin *self)
 	return PRIV(self)->active;
 }
 
+/* How many retired values to keep before the oldest is really freed. */
+#define PLUGIN_STALE_SETTINGS (256)
+
+/* Store @value under @key, retiring whatever was there.  Under the
+   lock; the caller holds it. */
+static void
+plugin_settings_put_locked(GowlBarPluginPrivate *priv, const gchar *key,
+                           const gchar *value)
+{
+	gpointer old_key = NULL, old_value = NULL;
+
+	if (g_hash_table_steal_extended(priv->settings, key, &old_key,
+	                                &old_value)) {
+		g_free(old_key);
+		if (old_value != NULL)
+			g_ptr_array_add(priv->stale, old_value);
+	}
+	if (value != NULL)
+		g_hash_table_insert(priv->settings, g_strdup(key),
+		                    g_strdup(value));
+
+	if (priv->stale->len > PLUGIN_STALE_SETTINGS)
+		g_ptr_array_remove_range(priv->stale, 0,
+			priv->stale->len - PLUGIN_STALE_SETTINGS);
+}
+
 /**
  * gowl_bar_plugin_configure:
  * @self: a plugin
  * @settings: (element-type utf8 utf8) (nullable): the settings map
+ *
+ * The @configure callback is handed the live table for compatibility,
+ * but a plugin reads it with gowl_bar_plugin_get_setting(), which
+ * takes the lock; iterating the table from the callback is not safe
+ * against a worker writing a setting.
  */
 void
 gowl_bar_plugin_configure(GowlBarPlugin *self, GHashTable *settings)
@@ -483,11 +543,11 @@ gowl_bar_plugin_configure(GowlBarPlugin *self, GHashTable *settings)
 		GHashTableIter iter;
 		gpointer k, v;
 
+		g_mutex_lock(&priv->lock);
 		g_hash_table_iter_init(&iter, settings);
-		while (g_hash_table_iter_next(&iter, &k, &v)) {
-			g_hash_table_insert(priv->settings, g_strdup(k),
-			                    g_strdup(v));
-		}
+		while (g_hash_table_iter_next(&iter, &k, &v))
+			plugin_settings_put_locked(priv, k, v);
+		g_mutex_unlock(&priv->lock);
 	}
 
 	klass = GOWL_BAR_PLUGIN_GET_CLASS(self);
@@ -507,10 +567,17 @@ gowl_bar_plugin_configure(GowlBarPlugin *self, GHashTable *settings)
 const gchar *
 gowl_bar_plugin_get_setting(GowlBarPlugin *self, const gchar *key)
 {
+	GowlBarPluginPrivate *priv;
+	const gchar *value;
+
 	g_return_val_if_fail(GOWL_IS_BAR_PLUGIN(self), NULL);
 	g_return_val_if_fail(key != NULL, NULL);
 
-	return (const gchar *)g_hash_table_lookup(PRIV(self)->settings, key);
+	priv = PRIV(self);
+	g_mutex_lock(&priv->lock);
+	value = (const gchar *)g_hash_table_lookup(priv->settings, key);
+	g_mutex_unlock(&priv->lock);
+	return value;
 }
 
 /**
@@ -601,14 +668,15 @@ void
 gowl_bar_plugin_set_setting(GowlBarPlugin *self, const gchar *key,
                             const gchar *value)
 {
+	GowlBarPluginPrivate *priv;
+
 	g_return_if_fail(GOWL_IS_BAR_PLUGIN(self));
 	g_return_if_fail(key != NULL);
 
-	if (value == NULL)
-		g_hash_table_remove(PRIV(self)->settings, key);
-	else
-		g_hash_table_insert(PRIV(self)->settings, g_strdup(key),
-		                    g_strdup(value));
+	priv = PRIV(self);
+	g_mutex_lock(&priv->lock);
+	plugin_settings_put_locked(priv, key, value);
+	g_mutex_unlock(&priv->lock);
 }
 
 /* ----------------------------------------------------------------
@@ -1015,15 +1083,107 @@ gowl_bar_plugin_set_color(GowlBarPlugin *self, GowlBarColor color)
 
 	priv = PRIV(self);
 	g_mutex_lock(&priv->lock);
-	changed = (!priv->has_color || priv->color != color);
+	changed = (!priv->has_color || priv->color != color ||
+	           priv->has_rgba);
 	priv->color     = color;
 	priv->has_color = TRUE;
+	priv->has_rgba  = FALSE;
 	g_mutex_unlock(&priv->lock);
 
 	if (changed) {
 		g_atomic_int_set(&priv->dirty, 1);
 		g_signal_emit(self, plugin_signals[SIGNAL_CHANGED], 0);
 	}
+}
+
+/**
+ * gowl_bar_plugin_set_color_rgba:
+ * @self: a plugin
+ * @rgba: (array fixed-size=4) (nullable): a literal colour, or %NULL
+ *   to go back to the theme role
+ *
+ * A colour that is not a theme role, for a `cpu-color: "#fab387"'
+ * written by a user who wants exactly that.  It overrides the role
+ * when the label is drawn and does not follow the palette; a later
+ * gowl_bar_plugin_set_color() replaces it.  Thread-safe.
+ */
+void
+gowl_bar_plugin_set_color_rgba(GowlBarPlugin *self, const gdouble *rgba)
+{
+	GowlBarPluginPrivate *priv;
+	gboolean changed;
+
+	g_return_if_fail(GOWL_IS_BAR_PLUGIN(self));
+
+	priv = PRIV(self);
+	g_mutex_lock(&priv->lock);
+	if (rgba == NULL) {
+		changed = priv->has_rgba;
+		priv->has_rgba = FALSE;
+	} else {
+		changed = (!priv->has_rgba ||
+		           memcmp(priv->rgba, rgba, sizeof(priv->rgba)) != 0);
+		memcpy(priv->rgba, rgba, sizeof(priv->rgba));
+		priv->has_rgba = TRUE;
+	}
+	g_mutex_unlock(&priv->lock);
+
+	if (changed) {
+		g_atomic_int_set(&priv->dirty, 1);
+		g_signal_emit(self, plugin_signals[SIGNAL_CHANGED], 0);
+	}
+}
+
+/**
+ * gowl_bar_plugin_get_color_rgba:
+ * @self: a plugin
+ * @rgba: (out caller-allocates) (array fixed-size=4): the literal
+ *
+ * Returns: %TRUE when a literal colour is set, and fills @rgba
+ */
+gboolean
+gowl_bar_plugin_get_color_rgba(GowlBarPlugin *self, gdouble *rgba)
+{
+	GowlBarPluginPrivate *priv;
+	gboolean has;
+
+	g_return_val_if_fail(GOWL_IS_BAR_PLUGIN(self), FALSE);
+	g_return_val_if_fail(rgba != NULL, FALSE);
+
+	priv = PRIV(self);
+	g_mutex_lock(&priv->lock);
+	has = priv->has_rgba;
+	if (has)
+		memcpy(rgba, priv->rgba, sizeof(priv->rgba));
+	g_mutex_unlock(&priv->lock);
+	return has;
+}
+
+/**
+ * gowl_bar_plugin_cairo_set_color:
+ * @self: a plugin
+ * @theme: the active theme
+ * @cr: the target context
+ *
+ * Selects the plugin's colour as @cr's source: the literal when one
+ * is set, otherwise the theme role.  What a draw callback should use
+ * in place of gowl_bar_theme_cairo_set() with the role, so a literal
+ * chosen in the configuration is honoured by every widget.
+ */
+void
+gowl_bar_plugin_cairo_set_color(GowlBarPlugin *self,
+                                const GowlBarTheme *theme, cairo_t *cr)
+{
+	gdouble rgba[4];
+
+	g_return_if_fail(GOWL_IS_BAR_PLUGIN(self));
+	g_return_if_fail(cr != NULL);
+
+	if (gowl_bar_plugin_get_color_rgba(self, rgba)) {
+		cairo_set_source_rgba(cr, rgba[0], rgba[1], rgba[2], rgba[3]);
+		return;
+	}
+	gowl_bar_theme_cairo_set(theme, cr, gowl_bar_plugin_get_color(self));
 }
 
 /**
@@ -1556,7 +1716,6 @@ gowl_bar_plugin_draw_text(GowlBarPlugin *self, cairo_t *cr,
 	g_autofree gchar *icon = NULL;
 	PangoFontDescription *desc;
 	PangoRectangle logical;
-	GowlBarColor color;
 	gint pad, cur_x, center_y, radius;
 
 	g_return_if_fail(GOWL_IS_BAR_PLUGIN(self));
@@ -1564,7 +1723,6 @@ gowl_bar_plugin_draw_text(GowlBarPlugin *self, cairo_t *cr,
 	g_return_if_fail(layout != NULL);
 
 	icon  = gowl_bar_plugin_dup_icon(self);
-	color = gowl_bar_plugin_get_color(self);
 
 	pad      = gowl_bar_theme_metric(theme, GOWL_BAR_METRIC_ITEM_PAD);
 	radius   = gowl_bar_theme_metric(theme, GOWL_BAR_METRIC_RADIUS);
@@ -1597,7 +1755,7 @@ gowl_bar_plugin_draw_text(GowlBarPlugin *self, cairo_t *cr,
 		desc = plugin_apply_font(layout, theme, TRUE);
 		pango_layout_set_text(layout, icon, -1);
 		pango_layout_get_pixel_extents(layout, NULL, &logical);
-		gowl_bar_theme_cairo_set(theme, cr, color);
+		gowl_bar_plugin_cairo_set_color(self, theme, cr);
 		cairo_move_to(cr, cur_x, center_y - logical.height / 2);
 		pango_cairo_show_layout(cr, layout);
 		cur_x += logical.width;
@@ -1610,7 +1768,7 @@ gowl_bar_plugin_draw_text(GowlBarPlugin *self, cairo_t *cr,
 		desc = plugin_apply_font(layout, theme, FALSE);
 		pango_layout_set_text(layout, label, -1);
 		pango_layout_get_pixel_extents(layout, NULL, &logical);
-		gowl_bar_theme_cairo_set(theme, cr, color);
+		gowl_bar_plugin_cairo_set_color(self, theme, cr);
 		cairo_move_to(cr, cur_x, center_y - logical.height / 2);
 		pango_cairo_show_layout(cr, layout);
 		pango_font_description_free(desc);
@@ -1646,6 +1804,20 @@ gowl_bar_plugin_signature(GowlBarPlugin *self, GString *out)
 	                       (gint)gowl_bar_plugin_get_color(self),
 	                       (icon != NULL) ? icon : "",
 	                       (label != NULL) ? label : "");
+
+	/* A literal colour decides the picture as much as the role does,
+	   so a change to it must repaint too. */
+	{
+		gdouble rgba[4];
+
+		if (gowl_bar_plugin_get_color_rgba(self, rgba)) {
+			g_string_append_printf(out, "|#%02x%02x%02x%02x",
+				(guint)(CLAMP(rgba[0], 0.0, 1.0) * 255.0 + 0.5),
+				(guint)(CLAMP(rgba[1], 0.0, 1.0) * 255.0 + 0.5),
+				(guint)(CLAMP(rgba[2], 0.0, 1.0) * 255.0 + 0.5),
+				(guint)(CLAMP(rgba[3], 0.0, 1.0) * 255.0 + 0.5));
+		}
+	}
 
 	klass = GOWL_BAR_PLUGIN_GET_CLASS(self);
 	if (klass->signature != NULL) {

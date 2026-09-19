@@ -96,6 +96,27 @@ bar_wifi_scan_parse(GPtrArray *out, const gchar *nmcli_output, guint limit)
 				seen = g_hash_table_lookup(best, ssid);
 				if (seen == NULL
 				    || strength > GPOINTER_TO_INT(seen)) {
+					const gchar *prev;
+					gboolean was_active = FALSE;
+
+					/*
+					 * "Connected" belongs to the NETWORK, not
+					 * to the radio: on a mesh the BSS you are
+					 * associated with is often not the
+					 * strongest sighting of the same SSID, and
+					 * keeping only the strongest row dropped
+					 * the active flag with the weaker one --
+					 * so the panel showed the network you were
+					 * on as one you could connect to.
+					 */
+					prev = g_hash_table_lookup(rows, ssid);
+					if (prev != NULL) {
+						const gchar *tail;
+
+						tail = strrchr(prev, '\t');
+						was_active = (tail != NULL &&
+							g_strcmp0(tail + 1, "yes") == 0);
+					}
 					g_hash_table_insert(best,
 						g_strdup(ssid),
 						GINT_TO_POINTER(strength));
@@ -103,7 +124,26 @@ bar_wifi_scan_parse(GPtrArray *out, const gchar *nmcli_output, guint limit)
 						g_strdup(ssid),
 						g_strdup_printf(
 							"%s\t%s\t%s\t%s",
-							ssid, sig, sec, act));
+							ssid, sig, sec,
+							was_active ? "yes" : act));
+				} else if (g_strcmp0(act, "yes") == 0) {
+					/* A weaker sighting that is the one we are
+					   on: mark the row we kept. */
+					const gchar *prev;
+
+					prev = g_hash_table_lookup(rows, ssid);
+					if (prev != NULL) {
+						g_auto(GStrv) f = NULL;
+
+						f = g_strsplit(prev, "\t", 4);
+						if (g_strv_length(f) == 4) {
+							g_hash_table_insert(rows,
+								g_strdup(ssid),
+								g_strdup_printf(
+									"%s\t%s\t%s\tyes",
+									f[0], f[1], f[2]));
+						}
+					}
 				}
 			}
 		}

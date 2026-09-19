@@ -85,6 +85,7 @@ gboolean bar_sysinfo_disk (BarSysinfo *self, const gchar *mount,
 
 gint    bar_sysinfo_battery_percent (BarSysinfo *self);
 gboolean bar_sysinfo_battery_charging (BarSysinfo *self);
+gboolean bar_sysinfo_battery_full     (BarSysinfo *self);
 /**
  * bar_sysinfo_battery_minutes:
  * @self: the reader

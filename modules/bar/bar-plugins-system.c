@@ -58,27 +58,29 @@ sys_pressure_color(gdouble fraction)
 	return GOWL_BAR_COLOR_TEXT;
 }
 
-/* Apply a `color' setting if the user set one, otherwise a computed
-   pressure colour.  An explicit choice always wins: a user who
-   coloured their cpu widget green wants it green. */
+/*
+ * The widget's colour for a 0..1 pressure reading.
+ *
+ * A `color' setting is the CALM colour -- what the widget wears while
+ * the reading is ordinary -- and the pressure ladder still fires over
+ * it.  It used to win outright, which with the shipped layout
+ * colouring cpu green, memory blue and disk yellow meant no shipped
+ * bar ever showed a pressure warning: a processor pinned at 100% was
+ * exactly as green as an idle one.  A user who wants a widget that
+ * never changes colour has the readings that do not carry pressure.
+ */
 static void
 sys_set_color(GowlBarPlugin *plugin, gdouble fraction,
               GowlBarColor fallback)
 {
-	const gchar *spec;
-	GowlBarColor role;
-
-	spec = gowl_bar_plugin_get_setting(plugin, "color");
-	if (spec != NULL && gowl_bar_theme_color_from_name(spec, &role)) {
-		gowl_bar_plugin_set_color(plugin, role);
-		return;
-	}
-	if (fraction >= 0.0) {
+	if (fraction >= 0.75) {
 		gowl_bar_plugin_set_color(plugin,
 		                          sys_pressure_color(fraction));
 		return;
 	}
-	gowl_bar_plugin_set_color(plugin, fallback);
+	bar_plugin_apply_color(plugin,
+	                       gowl_bar_plugin_get_setting(plugin, "color"),
+	                       fallback);
 }
 
 /* Whether the widget should show its icon.  Off by default because the
@@ -169,10 +171,12 @@ sys_build_panel(GowlBarPlugin *plugin, const gchar *focus)
 		const gchar *mount;
 
 		mount = gowl_bar_plugin_get_setting(plugin, "param");
-		if (mount == NULL)
+		if (mount == NULL || mount[0] == '\0')
 			mount = disk_default_mount();
-		bar_sysinfo_disk(info, mount, &free_gb, &total_gb);
-		g_snprintf(buf, sizeof(buf), "%ld GB", free_gb);
+		if (bar_sysinfo_disk(info, mount, &free_gb, &total_gb))
+			g_snprintf(buf, sizeof(buf), "%ld GB", free_gb);
+		else
+			g_strlcpy(buf, "--", sizeof(buf));
 		g_snprintf(buf2, sizeof(buf2), "Free on %s", mount);
 		gowl_bar_panel_add_hero(panel, "\xef\x82\xa0", buf, buf2);
 	} else {
@@ -359,10 +363,14 @@ sys_panel_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	command = gowl_bar_plugin_get_setting(plugin, keys[index]);
 	if (command == NULL) {
 		if (!bar_have_command(defaults[index])) {
+			g_autofree gchar *body = NULL;
+
+			body = g_strdup_printf("%s is not installed.  Set the "
+				"widget's %s setting to the program you want "
+				"this button to run.", defaults[index],
+				keys[index]);
 			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_NORMAL,
-				"No tool configured",
-				"Set the widget's monitor-command setting to "
-				"the program you want this button to run.");
+				"No tool configured", body);
 			return;
 		}
 		/* A terminal tool needs a terminal; the session's own is
@@ -881,14 +889,101 @@ battery_poll(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_plugin_set_label(plugin, buf);
 	sys_set_icon(plugin, battery_glyph(pct, charging));
 
+	/* Low is a warning and wins; charging is green; otherwise the
+	   configured colour -- the shipped `battery-color: teal' was
+	   silently ignored here while every other system widget honoured
+	   its own. */
 	if (!charging && pct <= 10)
 		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_RED);
 	else if (!charging && pct <= 25)
 		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_PEACH);
-	else if (charging)
+	else if (charging && !bar_sysinfo_battery_full(info))
 		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_GREEN);
 	else
-		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_TEXT);
+		bar_plugin_apply_color(plugin,
+			gowl_bar_plugin_get_setting(plugin, "color"),
+			GOWL_BAR_COLOR_TEXT);
+}
+
+/* ----------------------------------------------------------------
+ * The power profile, off the compositor thread
+ *
+ * Asking for it is a subprocess, and the panel that shows it is built
+ * on the compositor's dispatch thread while it holds cmacs_gowl_mutex:
+ * powerprofilesctl talks to a daemon over D-Bus, so the editor froze
+ * for that round trip every time the power panel opened.  The async
+ * poll reads it into this cache and the panel reads the cache; a
+ * change made from the panel is run on the worker and re-read there.
+ * ---------------------------------------------------------------- */
+
+typedef struct {
+	GMutex  lock;
+	gchar  *profile;     /* the active profile, or NULL when unknown */
+	gboolean answered;   /* whether either interface has ever replied */
+} PowerData;
+
+static gpointer
+power_create(GowlBarPlugin *plugin)
+{
+	PowerData *pd = g_new0(PowerData, 1);
+
+	(void)plugin;
+	g_mutex_init(&pd->lock);
+	return pd;
+}
+
+static void
+power_destroy(GowlBarPlugin *plugin, gpointer data)
+{
+	PowerData *pd = data;
+
+	(void)plugin;
+	if (pd == NULL)
+		return;
+	g_free(pd->profile);
+	g_mutex_clear(&pd->lock);
+	g_free(pd);
+}
+
+static gchar *power_profile_get(void);
+
+static void
+power_read_profile(PowerData *pd)
+{
+	gchar *profile;
+
+	if (pd == NULL)
+		return;
+	profile = power_profile_get();
+	g_mutex_lock(&pd->lock);
+	g_free(pd->profile);
+	pd->profile  = profile;
+	pd->answered = (profile != NULL);
+	g_mutex_unlock(&pd->lock);
+}
+
+static void
+power_poll_async(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)plugin;
+	power_read_profile(data);
+}
+
+static gchar *
+power_dup_profile(PowerData *pd, gboolean *answered)
+{
+	gchar *copy;
+
+	if (answered != NULL)
+		*answered = FALSE;
+	if (pd == NULL)
+		return NULL;
+	g_mutex_lock(&pd->lock);
+	copy = g_strdup(pd->profile);
+	if (answered != NULL)
+		*answered = pd->answered;
+	g_mutex_unlock(&pd->lock);
+	return copy;
 }
 
 /*
@@ -978,7 +1073,8 @@ power_panel(GowlBarPlugin *plugin, gpointer data)
 	if (pct >= 0) {
 		g_snprintf(buf, sizeof(buf), "%d%%", pct);
 		gowl_bar_panel_add_hero(panel, battery_glyph(pct, charging),
-			buf, charging ? "Charging" : "On battery");
+			buf, bar_sysinfo_battery_full(info) ? "Full"
+			     : charging ? "Charging" : "On battery");
 
 		item = gowl_bar_panel_add_progress(panel, "Charge",
 		                                   (gdouble)pct / 100.0);
@@ -1011,9 +1107,12 @@ power_panel(GowlBarPlugin *plugin, gpointer data)
 		g_autofree gchar *profile = NULL;
 		const gchar *names[3] = { "power-saver", "balanced",
 		                          "performance" };
+		gboolean answered = FALSE;
 		gint i;
 
-		profile = power_profile_get();
+		/* From the cache the async poll fills, never a subprocess
+		   here: this runs on the compositor thread. */
+		profile = power_dup_profile(data, &answered);
 		item = gowl_bar_panel_add_buttons(panel, "profile");
 		for (i = 0; i < 3; i++) {
 			gowl_bar_panel_add_button(item, names[i],
@@ -1022,9 +1121,11 @@ power_panel(GowlBarPlugin *plugin, gpointer data)
 		if (profile == NULL) {
 			/* Nothing answers on either interface, so say so
 			   rather than offering three controls that do
-			   nothing. */
-			gowl_bar_panel_add_label(panel,
-				"no power-profiles service is running");
+			   nothing -- or, before the first poll has come
+			   back, say that instead. */
+			gowl_bar_panel_add_label(panel, answered
+				? "no power-profiles service is running"
+				: "asking for the active profile...");
 		}
 	}
 
@@ -1038,25 +1139,52 @@ power_panel(GowlBarPlugin *plugin, gpointer data)
 	return panel;
 }
 
+/* Runs on the worker: apply the profile, wait for it, and re-read so
+   the panel shows what the daemon actually did rather than what was
+   asked.  The button is lit optimistically in the meantime. */
+static void
+power_set_profile_work(GowlBarPlugin *plugin, gpointer user_data)
+{
+	const gchar *line = user_data;
+	g_autofree gchar *out = NULL;
+	PowerData *pd = NULL;
+
+	if (GOWL_IS_BAR_PLUGIN_PROXY(plugin))
+		pd = gowl_bar_plugin_proxy_get_data(GOWL_BAR_PLUGIN_PROXY(plugin));
+
+	out = bar_run_shell_line(line);
+	power_read_profile(pd);
+	gowl_bar_plugin_request_panel_refresh(plugin);
+}
+
 static void
 power_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
              gint index, gdouble value, guint button)
 {
-	(void)data;
+	PowerData *pd = data;
+
 	(void)value;
 	(void)button;
 
 	if (g_strcmp0(item_id, "profile") == 0) {
 		const gchar *names[3] = { "power-saver", "balanced",
 		                          "performance" };
-		g_autofree gchar *line = NULL;
+		gchar *line;
 
 		if (index < 0 || index > 2)
 			return;
 		line = power_profile_set_command(names[index]);
 		if (line == NULL)
 			return;
-		gowl_bar_plugin_spawn(plugin, line);
+		if (pd != NULL) {
+			g_mutex_lock(&pd->lock);
+			g_free(pd->profile);
+			pd->profile = g_strdup(names[index]);
+			g_mutex_unlock(&pd->lock);
+		}
+		gowl_bar_plugin_queue_work(plugin, power_set_profile_work,
+		                           line, g_free);
+		gowl_bar_plugin_request_panel_refresh(plugin);
 		return;
 	}
 
@@ -1090,8 +1218,8 @@ power_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 
 static const GowlBarPluginVTable battery_vtable = {
 	sizeof(GowlBarPluginVTable),
-	NULL, NULL, NULL, NULL, NULL,
-	sys_interval_slow, battery_poll, NULL,
+	power_create, power_destroy, NULL, NULL, NULL,
+	sys_interval_slow, battery_poll, power_poll_async,
 	NULL, NULL, NULL, NULL,
 	power_panel, power_action,
 	NULL, NULL,
@@ -1123,8 +1251,8 @@ power_poll(GowlBarPlugin *plugin, gpointer data)
 
 static const GowlBarPluginVTable power_vtable = {
 	sizeof(GowlBarPluginVTable),
-	NULL, NULL, NULL, NULL, NULL,
-	sys_interval_slow, power_poll, NULL,
+	power_create, power_destroy, NULL, NULL, NULL,
+	sys_interval_slow, power_poll, power_poll_async,
 	NULL, NULL, NULL, NULL,
 	power_panel, power_action,
 	NULL, NULL,

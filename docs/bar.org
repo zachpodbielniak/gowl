@@ -107,6 +107,8 @@ modules:
     weather.units: "m"
 #+end_src
 
+A colour is a palette role (=green=, =mauve=, =text= ...) or a =#rrggbb= literal. A role follows the palette when it changes; a literal is exactly that colour and stays so, which is the point of writing one. Every shipped widget accepts both, through the same code, so there is no widget where a literal quietly does nothing. For the readings that carry pressure --- processor, memory, disk, temperature, battery --- the setting is the *calm* colour; see [[#system-colour][the note under System]].
+
 *** The bottom bar
 :PROPERTIES:
 :CUSTOM_ID: the-bottom-bar
@@ -224,6 +226,13 @@ Run =gowl bar-plugins= for the live list, which includes anything you have insta
 
 =title= takes =delimiters=, =palette= and =delimiter-color= to colourise a path or a buffer name by segment, and =max-width= to stop a maximised terminal's title pushing everything else off the bar.
 
+*** Clock
+| Widget  | Shows                       | Panel                                  |
+|---------+-----------------------------+----------------------------------------|
+| =clock= | The time, in =format=       | Today, the year's progress, a calendar |
+
+=format= is a strftime string. The widget refreshes every five seconds --- once a second would repaint the bar sixty times a minute to change a digit once --- *unless the format shows seconds* (=%S=, =%T=, =%X= and so on), when it ticks every second. The calendar panel starts its rows on Sunday and prints the ISO week number beside each; ISO weeks start on Monday, so the number is the week of the row's Monday, which is the week six of its seven days are in.
+
 *** System
 | Widget    | Shows                          | Panel               |
 |-----------+--------------------------------+---------------------|
@@ -243,14 +252,23 @@ Run =gowl bar-plugins= for the live list, which includes anything you have insta
 
 All of the system widgets open the *same* panel, with the hero changed to match whichever one you clicked. A click on the memory widget and a click on the temperature widget should both take you to the place where you can see what the machine is doing.
 
-Colour is computed from pressure --- text, then peach past 75%, then red past 90% --- unless you set an explicit =<widget>-color=, which always wins.
+Colour is computed from pressure --- text, then peach past 75%, then red past 90%.
+
+An explicit =<widget>-color= is the *calm* colour: what the widget wears while the reading is ordinary. The pressure colours still fire over it. It used to win outright, and since the shipped layout colours cpu green, memory blue and disk yellow, no shipped bar ever showed a pressure warning --- a processor pinned at 100% was exactly as green as an idle one. The readings without a pressure ladder (host, user, uptime, io) keep the colour unconditionally.
+:PROPERTIES:
+:CUSTOM_ID: system-colour
+:END:
+
+=temp= reads the processor's own sensor, found by asking each hwmon device its name (=coretemp=, =k10temp=, =zenpower=, the ARM =cpu_thermal= zones) rather than taking the lowest-numbered one --- hwmon numbering is enumeration order, and on a laptop hwmon0 is as likely the AC adapter as anything. =io= measures the busiest real whole disk (whatever =/sys/block= lists, less loop, zram and device-mapper) unless =io:<device>= names one. =battery='s panel shows time until full while charging and time until empty otherwise; the two were the same number before, which made "until full" meaningless.
+
+The power profile in the panel is read on the worker thread and cached. Asking =powerprofilesctl= is a D-Bus round trip, and the panel is built on the compositor's dispatch thread while it holds the editor's lock: opening the power panel used to freeze cmacs for that round trip.
 
 *** Network
 | Widget      | Shows                      | Panel                                    |
 |-------------+----------------------------+------------------------------------------|
 | =network=   | SSID or address            | Ping, rates, totals, signal, DNS, Wi-Fi list |
 | =net=       | Throughput                 | Network                                  |
-| =ip=        | The interface's address    | Network                                  |
+| =ip=        | The default route's address | Network                                 |
 | =wifi=      | Signal strength            | Network                                  |
 | =vpn=       | Whether a tunnel is up     | ---                                      |
 | =bluetooth= | Connected device, or off   | Power, scan, devices found and paired    |
@@ -272,6 +290,12 @@ The listing arithmetic is in =modules/bar/bar-bt-devices.c= so it can be tested 
 
 The network panel reads what the kernel already knows, and uses =nmcli= only for the parts that genuinely need it --- so the readings still work on a machine with no NetworkManager, and only the actions disappear.
 
+=net=, =ip= and =wifi= open the same panel as =network= and fill it with the same data, gathered on the worker without the ping until the panel is open (their dropdown used to be served from a struct nothing filled, and read "Offline, Timeout, 100%" on a healthy machine). A =network= widget with no ping binary is not peach: peach means the ping *failed*, and the panel says "No ping" instead.
+
+The DNS provider buttons light from the connection profile's actual =ipv4.dns=, read while the panel is open, and a change is written to the *profile* and reapplied to the device --- =nmcli device modify= alone changed the live device only, so the choice was gone on the next reconnect. A connection carrying servers the panel does not offer shows as "custom" with none of the four lit.
+
+=vpn= lights for any WireGuard device (by its =DEVTYPE=) or tun/tap device (by its =tun_flags=) that is up, whatever it is called; it used to test three fixed names. =ignore= is a list of interfaces that do not count and defaults to =tailscale0=, which has a widget of its own. The tunnel names are the hover text.
+
 **** Tailscale
 :PROPERTIES:
 :CUSTOM_ID: tailscale
@@ -284,6 +308,7 @@ On a Tailscale-native image that is the case you most want a prompt for: the mac
 | Host                    | Widget                      | Panel                                |
 |-------------------------+-----------------------------+--------------------------------------|
 | Not installed           | hidden                      | ---                                  |
+| Installed, daemon not running | shown, dimmed, =down= | *tailscaled is not running*          |
 | Installed, never joined | shown, yellow, =set up=     | *Join a tailnet*                     |
 | Join waiting on browser | shown, yellow               | *Open the sign-in page*, and the URL |
 | Joined, tailnet down    | shown, dimmed               | the switch, peers, exit nodes        |
@@ -321,6 +346,8 @@ The widget keeps polling while hidden, so installing Tailscale makes it appear w
 
 Membership is read from =HaveNodeKey= in =tailscale status --json=, which stays true across a =tailscale down= and goes false only on a host that never joined or was logged out. The whole reply is read once per refresh and every field pulled out of it, rather than shelling out per value.
 
+A host whose =tailscale= command is installed but whose daemon gives no answer is its own state, dimmed with a =down= label, rather than yellow "set up" --- which is what a joined machine with tailscaled stopped used to be shown as. The hero's switch shows a spinner only until the next status read, whichever way that read comes out; it used to spin for ever. *Refresh* asks =tailscale= again on the worker rather than redrawing the cached answer.
+
 *** Desktop
 | Widget     | Shows                        | Panel                                   |
 |------------+------------------------------+-----------------------------------------|
@@ -329,12 +356,24 @@ Membership is read from =HaveNodeKey= in =tailscale status --json=, which stays 
 | =podman=   | Running containers           | Container list, start/stop, logs        |
 | =weather=  | Conditions and temperature   | Feels-like, wind, three-day forecast    |
 | =git=      | The focused window's branch  | ---                                     |
-| =keymap=   | Keyboard layout              | ---                                     |
+| =keymap=   | The compositor's keyboard layout | ---                                 |
 | =display=  | Brightness                   | Brightness, text size, night light, HDR |
 | =notifications= | Unread count, or DND     | Do not disturb, last, history, clear    |
 | =clipboard= | Entries held             | The history: pick, yank, delete         |
 | =screenshot= | A camera; lit while selecting | Screen / Window / Selection          |
 | =recorder= | Elapsed time while recording | Screen / Window / Region, and Stop      |
+
+**** Audio, media, podman, weather, git, keymap
+
+=audio= sends the slider's value to =wpctl= as a whole percentage. It used to be a printf'd fraction, which under a decimal-comma locale arrived as =0,50= and was refused: the slider moved and the volume did not. The wheel over =media= reads the scroll's delta when there are no discrete steps, so a touchpad can skip forward as well as back.
+
+=podman='s rows carry the container's state, so a click runs =podman stop= on a running one and =podman start= on a stopped one. The old =podman start X || podman stop X= never stopped anything, because starting a running container succeeds. The verb runs on the worker and the list is re-read behind it, so the row flips when podman has actually done it rather than at the next thirty-second poll; *Refresh* re-lists the same way.
+
+=weather:New York= works: the location is URL-escaped, and the forecast rows are labelled =Fri 18= rather than =2026-09-18=. A fetch that fails keeps the last reading on the bar and says so in the hover text.
+
+=git= finds the working tree by walking up to a =.git= that may be a *file* --- a worktree under =trees/= or a submodule, whose =.git= reads =gitdir: <path>= --- as well as a directory. It showed no branch at all in every worktree before. A detached HEAD shows the first eight characters of the commit.
+
+=keymap= asks the compositor which layout its keyboard is on, which is the one your keys produce after a layout toggle. =localectl= --- the old source --- reports the system default, which is what the console boots with. It is still the fallback for a bar hosted with no compositor. =short= (the default) shows the part in parentheses, =US= for =English (US)=; the full name is the hover text.
 
 **** Display
 
@@ -378,6 +417,12 @@ replacement is started *before* the old one is asked to quit, because
 the compositor hands the gamma control to whoever asked last; stopping
 first would flash the screen to full brightness for as long as the next
 gammastep takes to start, which across a drag is a strobe.
+
+Where a machine exposes two backlights --- the GPU's own, of type
+=raw=, and the firmware's =acpi_video0= --- the =raw= one is used.  The
+kernel documents it as the native interface, and the firmware one on
+many laptops accepts the write and changes nothing.  The *Text size*
+buttons light from the theme's actual scale rather than always "M".
 
 **** Clipboard history
 
@@ -476,6 +521,10 @@ The same three captures are on the keyboard by default, reaching the module by n
 
 The wheel over =audio= changes the volume and over =display= changes the brightness --- whichever brightness that output actually has, the backlight or the software ramp. A bar widget may claim the wheel without a modifier only because the pointer is over it --- there is no ambiguity about what it means.
 
+**** Recorder
+
+=recorder= prefers the compositor's own recording module and falls back to =wf-recorder=. A fallback recording is started *by this widget*, so it is stopped by its pid with =SIGINT= --- never =pkill= by name, which would also stop a recorder you started in a terminal. The directory is created and the file named in C; the old command line did both through =mkdir -p ... && ... $(date ...)= and was spawned through an argv parser that knows neither =&&= nor =$(...)=, so mkdir received them as arguments and nothing was recorded. Only *Region* needs a shell, for slurp's output, and that shell =exec=s the recorder so the pid held is wf-recorder's. A recorder somebody else started is found by =pidof= every five seconds while idle (it was once a second, a process a second for the life of the session) and, since the widget showed it running, *Stop* stops it by name: that is what was asked.
+
 *** Generic
 These are how you add something the shipped set does not cover, without writing any C:
 
@@ -503,9 +552,11 @@ modules:
 |-----------+-------------------------------------------------------------|
 | =button=  | A glyph that runs a command; separate left/right/middle     |
 | =toggle=  | A stateful button, polled by =state-command=                |
-| =cmd=     | The first line of a command's output                        |
+| =cmd=     | The first line of a command's output; =on-click=, =command-right=, =command-middle= |
 | =label=   | Static text                                                 |
 | =spacer=  | Fixed empty width, optionally a divider rule                |
+
+A command line that uses anything only a shell understands --- =$(...)=, a variable, a pipe, =&&=, a redirection, a glob --- is run through =sh -c=. One that does not is run directly, as an argv, with =~= expanded. So the example above works as written: it used to be split into words and handed to =wf-recorder= with a literal =$(slurp)= as its geometry. The same rule applies to every command a shipped widget runs and to =gowl_bar_plugin_spawn()=. =cmd= strips every ANSI escape from the line it shows, not only the colour ones; an =ESC [ K= used to swallow the text up to the next letter =m=.
 
 ** Panels
 :PROPERTIES:
@@ -634,11 +685,27 @@ may be walking those strings at that moment. The result is a corrupted
 heap that surfaces much later, in an unrelated thread, as an abort with
 nothing in the backtrace pointing here.
 
-The shipped =bluetooth= and =clipboard= widgets show the shape: the
-worker builds a *fresh* array and swaps it in under a =GMutex=, and
-every reader takes the same lock. A key handler copies the strings it
-needs out from under the lock before running anything slow, so the
-worker is never blocked on a file read.
+Every shipped widget that keeps strings or arrays across the two
+threads does this: the worker builds a *fresh* array (or gathers into
+locals) and swaps it in under a =GMutex=, and every reader --- the
+panel builder, a click, a key --- takes the same lock for the few
+microseconds it needs. A key handler copies the strings it needs out
+from under the lock before running anything slow, so the worker is
+never blocked on a file read. =bluetooth= and =clipboard= were the
+first; =network=, =tailscale=, =audio=, =media=, =podman=, =weather=
+and =git= all freed strings on the worker while the panel read them
+until they were brought in line.
+
+**** Deferring work
+
+Never =g_timeout_add()= or =g_idle_add()= from a plugin. Under cmacs
+the default =GMainContext= belongs to the *Emacs* thread, so the
+callback fires beside the compositor with no lock held --- the
+screenshot widget deferred its capture by a frame that way and walked
+the client list from the editor's thread. Defer on the compositor's own
+loop, =gowl_compositor_get_event_loop()= with
+=wl_event_loop_add_timer()=, which fires where every other plugin
+callback runs. A source guard now refuses the GLib forms.
 
 *** Which output you are on
 :PROPERTIES:
@@ -727,6 +794,8 @@ gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_PEACH);
 #+end_src
 
 A widget that writes =#fab387= stays that colour when the user switches to Latte. A widget that names =GOWL_BAR_COLOR_PEACH= follows. The shipped plugins are held to this by a source guard.
+
+The *user* may want a literal, and =gowl_bar_plugin_set_color_rgba()= is for that: a =color= setting that parses as =#rrggbb= is applied over the role, and the next =set_color()= drops it. Read the setting through =bar_plugin_apply_color()= (shipped plugins) or the same three-way test --- role name, hex literal, else the fallback --- so a literal does not silently do nothing. A draw callback that paints text itself selects the colour with =gowl_bar_plugin_cairo_set_color()= rather than the role, or the literal is lost again there.
 
 *** Panels
 :PROPERTIES:
@@ -903,10 +972,15 @@ Clear a quarantine with =gowl bar-plugin-clear <name>= once you have fixed the p
 :CUSTOM_ID: source-guards
 :END:
 
-=tests/test-bar-guard.sh= (run by =make test=) asserts five properties that no unit test can reach and that all fail silently:
+=tests/test-bar-guard.sh= (run by =make test=) asserts properties that no unit test can reach and that all fail silently:
 
 1. Every plugin entry point still runs under the fault guard.
 2. The registry still keeps unloaded modules resident rather than closing them.
 3. Panels and toasts still use the OVERLAY scene layer, so they float over fullscreen windows.
 4. No shipped plugin hard-codes a colour.
-5. No shipped plugin spawns synchronously --- that would be on the compositor's dispatch thread.
+5. No shipped plugin spawns synchronously --- that would be on the compositor's dispatch thread --- and no sync poll reaches a blocking helper.
+6. Plugins sharing a panel share its =panel_opened= and =panel_closed=.
+7. No shipped plugin defers onto the GLib main context; see [[#which-thread][Deferring work]].
+8. No float is printf'd into a =wpctl=, =gammastep=, =brightnessctl= or =playerctl= command line, where a decimal-comma locale would break it.
+9. Colour settings are interpreted in one place, =bar_plugin_apply_color()=, so a hex literal works everywhere.
+10. Every setting a plugin writes is read somewhere, every tooltip is drawn, the toggle sets one, and the compositor's own recorder stays reachable.

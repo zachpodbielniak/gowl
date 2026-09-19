@@ -126,8 +126,16 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-bar-wifi-scan` -- nmcli output to a network list: one entry per
   NETWORK (nmcli emits one row per BSS, so a dual-band router or a mesh
   repeats an SSID), ranked before truncation, escaped colons, hidden
-  networks dropped. Runs against real `nmcli` output via
-  `GOWL_TEST_NMCLI_WIFI`
+  networks dropped, and the ACTIVE flag survives a stronger sighting of
+  the same SSID (on a mesh you are rarely on the nearest node). Runs
+  against real `nmcli` output via `GOWL_TEST_NMCLI_WIFI`
+- `test-bar-util` -- the pure helpers behind the shipped bar plugins,
+  `modules/bar/bar-util.c`: which command lines need a shell (an argv
+  parser hands `$(slurp)` and `&&` to the program as arguments); ANSI
+  stripping that removes every CSI/OSC sequence rather than skipping to
+  the next `m`; which strftime formats show seconds; the git HEAD of a
+  worktree or submodule, whose `.git` is a FILE; ISO week numbers for a
+  Sunday-first calendar row; Elisp string quoting
 - `test-blur-geom` -- Where the blur backdrop crops the wallpaper, when it
   is rebuilt, and
   the one invariant that matters: the source box must lie inside the

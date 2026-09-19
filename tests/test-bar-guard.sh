@@ -205,6 +205,52 @@ for f in modules/bar/bar-plugins-*.c; do
 	done
 done
 
+# 7. No plugin defers work onto GLib's main context.
+#
+# Under cmacs the default GMainContext belongs to the EMACS thread, not
+# the compositor's dispatch thread, so a g_timeout_add() or g_idle_add()
+# in a plugin fires its callback beside the compositor with no lock
+# held.  The screenshot widget deferred its capture that way and walked
+# the client list from the editor's thread.  The compositor's own event
+# loop -- gowl_compositor_get_event_loop() -- is where a plugin defers.
+for f in modules/bar/bar-plugins-*.c; do
+	if grep -qE '\bg_(timeout|idle)_add(_full|_seconds)?\(' "$f"; then
+		grep -nE '\bg_(timeout|idle)_add(_full|_seconds)?\(' "$f" >&2
+		fail "$f defers onto the GLib main context; use the compositor's wl_event_loop"
+	fi
+done
+
+# 8. A subprocess command line never carries a locale-formatted float.
+#
+# wpctl, gammastep and the theme-scale setting all parse a decimal
+# POINT; "%.2f" under a decimal-comma locale hands them `0,50', which
+# they reject -- a slider that moves while the volume does not.  A
+# float that leaves the process goes through g_ascii_formatd() or is
+# sent as a whole number.
+for f in modules/bar/bar-plugins-*.c; do
+	bad=$(grep -nE 'g_strdup_printf\([^;]*(wpctl|gammastep|brightnessctl|playerctl)[^;]*%[0-9]*\.[0-9]+f' "$f" || true)
+	if [ -n "$bad" ]; then
+		echo "$bad" >&2
+		fail "$f formats a float into a command line; use g_ascii_formatd or an integer"
+	fi
+done
+
+# 9. Every `<widget>-color' goes through one interpreter.
+#
+# A colour setting is read by the shipped widgets in one place,
+# bar_plugin_apply_color(), which is what makes a hex literal work in
+# every widget rather than in the ones that happened to parse it.  A
+# plugin file reading "color" and handing the string to
+# gowl_bar_theme_color_from_name() itself accepts roles only and drops
+# a literal on the floor -- which is what every widget did before.
+for f in modules/bar/bar-plugins-*.c; do
+	if awk '/get_setting\(plugin, *"color(-on|-off)?"\)/ { want = NR }
+	        want && NR <= want + 3 && /gowl_bar_theme_color_from_name/ { found = 1 }
+	        END { exit !found }' "$f"; then
+		fail "$f interprets a colour setting itself; use bar_plugin_apply_color()"
+	fi
+done
+
 # The compositor's own recorder must stay reachable.
 #
 # gowl_recording_provider_start() had NO callers anywhere in the tree:

@@ -50,33 +50,50 @@ net_info(void)
 	return (env != NULL) ? env->sysinfo : NULL;
 }
 
+/* A short sysfs string, trimmed, or NULL. */
+static gchar *
+read_str_file_trim(const gchar *path)
+{
+	g_autofree gchar *contents = NULL;
+
+	if (!g_file_get_contents(path, &contents, NULL, NULL))
+		return NULL;
+	g_strstrip(contents);
+	if (contents[0] == '\0')
+		return NULL;
+	return g_steal_pointer(&contents);
+}
+
 /* ----------------------------------------------------------------
  * Shared network state
  *
  * One struct per widget instance.  Everything in it is written by the
- * async poll and read by the sync poll, the panel builder and clicks.
- *
- * The host serialises LESS than this comment used to claim.  An
- * async_inflight flag stops a plugin's async poll overlapping ITSELF,
- * and that is all: the poll runs on a worker while the dispatch thread
- * is free to build a panel from the same struct.  Anything that frees
- * what the other side may be reading -- rebuilding a GPtrArray of heap
- * structs, say -- needs a lock of its own.  Scalars written by one
- * thread and read by the other are the only case that is safe without
- * one, which is what this struct sticks to.
+ * async poll on a worker and read by the sync poll, the panel builder
+ * and clicks on the dispatch thread, and the host serialises NONE of
+ * that: its async_inflight flag only stops a plugin's async poll
+ * overlapping itself.  So every pointer in here is behind `lock'.  The
+ * worker gathers into locals -- subprocesses and all -- and swaps them
+ * in under the lock in one short critical section; the readers take
+ * the same lock for the few microseconds a panel takes to build.  This
+ * struct used to free and rewrite its strings on the worker while the
+ * panel builder was reading them, which is the heap corruption the
+ * plugin documentation warns every third-party widget about.
  * ---------------------------------------------------------------- */
 
 typedef struct {
+	GMutex   lock;
+
 	gchar   *iface;
 	gchar   *ipv4;
 	gchar   *gateway;
 	gchar   *ssid;
+	gchar   *connection;    /* NetworkManager's name for the link */
 	gboolean wireless;
 	gboolean online;
 	gint     signal_dbm;
 	gdouble  quality;
-	gdouble  ping_ms;
-	gint     packet_loss;
+	gdouble  ping_ms;       /* < 0 when unknown or timed out */
+	gint     packet_loss;   /* 0, 100, or -1 when ping was not run */
 	glong    rx_total, tx_total;
 	glong    rx_rate, tx_rate;
 
@@ -84,8 +101,8 @@ typedef struct {
 	   rows straight out of nmcli's terse output. */
 	GPtrArray *scan;
 	gboolean   have_nmcli;
-	gchar     *dns_mode;
-	gboolean   busy;
+	gboolean   have_ping;
+	gchar     *dns_mode;    /* dhcp, cloudflare, google, quad9, custom */
 } NetData;
 
 static gpointer
@@ -95,10 +112,12 @@ net_create(GowlBarPlugin *plugin)
 
 	(void)plugin;
 	nd = g_new0(NetData, 1);
+	g_mutex_init(&nd->lock);
 	nd->scan = g_ptr_array_new_with_free_func(g_free);
 	nd->ping_ms = -1.0;
 	nd->packet_loss = -1;
 	nd->have_nmcli = bar_have_command("nmcli");
+	nd->have_ping  = bar_have_command("ping");
 	return nd;
 }
 
@@ -114,8 +133,10 @@ net_destroy(GowlBarPlugin *plugin, gpointer data)
 	g_free(nd->ipv4);
 	g_free(nd->gateway);
 	g_free(nd->ssid);
+	g_free(nd->connection);
 	g_free(nd->dns_mode);
 	g_ptr_array_unref(nd->scan);
+	g_mutex_clear(&nd->lock);
 	g_free(nd);
 }
 
@@ -129,154 +150,318 @@ net_interval(GowlBarPlugin *plugin, gpointer data)
 
 /* Measure the round trip to a well-known address.  One packet with a
    one-second deadline: the panel wants a number, not a latency study,
-   and a longer wait would hold a worker thread open. */
-static void
-net_measure_ping(NetData *nd, const gchar *host)
+   and a longer wait would hold a worker thread open.  Returns the
+   loss: 0, 100, or -1 when there is no ping to run. */
+static gint
+net_measure_ping(NetData *nd, const gchar *host, gdouble *ms_out)
 {
 	const gchar *argv[] = { "ping", "-c", "1", "-W", "1", NULL, NULL };
 	g_autofree gchar *out = NULL;
 	const gchar *p;
 
-	argv[5] = (host != NULL && host[0] != '\0') ? host : "1.1.1.1";
+	*ms_out = -1.0;
+	if (!nd->have_ping)
+		return -1;
 
-	nd->ping_ms     = -1.0;
-	nd->packet_loss = 100;
+	argv[5] = (host != NULL && host[0] != '\0') ? host : "1.1.1.1";
 
 	out = bar_run_argv(argv);
 	if (out == NULL)
-		return;
+		return 100;
 
 	p = strstr(out, "time=");
-	if (p != NULL) {
-		nd->ping_ms = g_ascii_strtod(p + 5, NULL);
-		nd->packet_loss = 0;
-	}
+	if (p == NULL)
+		return 100;
+	*ms_out = g_ascii_strtod(p + 5, NULL);
+	return 0;
 }
 
 /* Pull the visible networks out of nmcli.  The parsing lives in
    bar-wifi-scan.c so it can be tested against real output: that is
-   where the duplicate-SSID and ranking bugs were. */
+   where the duplicate-SSID and ranking bugs were.  Fills @out, which
+   the caller swaps in under the lock. */
 static void
-net_scan_wifi(NetData *nd)
+net_scan_wifi(NetData *nd, GPtrArray *out)
 {
 	const gchar *argv[] = {
 		"nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL,SECURITY",
 		"device", "wifi", "list", NULL
 	};
-	g_autofree gchar *out = NULL;
+	g_autofree gchar *raw = NULL;
 
 	if (!nd->have_nmcli) {
-		g_ptr_array_set_size(nd->scan, 0);
+		g_ptr_array_set_size(out, 0);
 		return;
 	}
 
-	out = bar_run_argv(argv);
-	bar_wifi_scan_parse(nd->scan, out, 20);
+	raw = bar_run_argv(argv);
+	bar_wifi_scan_parse(out, raw, 20);
 }
 
-static void
-net_poll_async(GowlBarPlugin *plugin, gpointer data)
+/* NetworkManager's name for the active connection on @iface. */
+static gchar *
+net_connection_name(const gchar *iface)
 {
-	NetData *nd = data;
+	const gchar *argv[] = {
+		"nmcli", "-t", "-f", "GENERAL.CONNECTION", "device", "show",
+		NULL, NULL
+	};
+	g_autofree gchar *out = NULL;
+	const gchar *colon;
+
+	argv[6] = iface;
+	out = bar_run_argv_line(argv);
+	if (out == NULL)
+		return NULL;
+	colon = strchr(out, ':');
+	return g_strdup((colon != NULL) ? colon + 1 : out);
+}
+
+/*
+ * Which of the panel's DNS choices the connection is actually using.
+ *
+ * The panel used to light "DHCP" until a button was pressed and then
+ * whatever was pressed, without ever asking -- so a connection set to
+ * Cloudflare yesterday read as DHCP today.  Read from the connection
+ * profile, which is where the panel writes it.
+ */
+static gchar *
+net_read_dns_mode(const gchar *connection)
+{
+	const gchar *argv[] = {
+		"nmcli", "-g", "ipv4.dns,ipv4.ignore-auto-dns", "connection",
+		"show", NULL, NULL
+	};
+	g_autofree gchar *out = NULL;
+	g_auto(GStrv) lines = NULL;
+	const gchar *servers, *ignore_auto;
+
+	if (connection == NULL || connection[0] == '\0')
+		return NULL;
+	argv[5] = connection;
+	out = bar_run_argv(argv);
+	if (out == NULL)
+		return NULL;
+
+	lines = g_strsplit(out, "\n", -1);
+	servers     = (lines[0] != NULL) ? lines[0] : "";
+	ignore_auto = (lines[0] != NULL && lines[1] != NULL) ? lines[1] : "";
+
+	if (servers[0] == '\0' || g_strcmp0(ignore_auto, "yes") != 0)
+		return g_strdup("dhcp");
+	if (strstr(servers, "1.1.1.1") != NULL)
+		return g_strdup("cloudflare");
+	if (strstr(servers, "8.8.8.8") != NULL)
+		return g_strdup("google");
+	if (strstr(servers, "9.9.9.9") != NULL)
+		return g_strdup("quad9");
+	return g_strdup("custom");
+}
+
+/*
+ * Everything the panel shows, gathered on the worker and swapped in.
+ *
+ * @with_ping is whether to measure latency this time: the `network'
+ * widget's whole colour is the ping, so it always does; the lighter
+ * widgets sharing the panel only ping while the panel is open, or
+ * every one of them would be a packet every few seconds for a number
+ * nobody is looking at.  The wifi scan and the DNS lookup are likewise
+ * panel-only, and for the same reason the scan's own comment gives: a
+ * background scan every interval disrupts the connection it measures.
+ */
+static void
+net_gather(GowlBarPlugin *plugin, NetData *nd, gboolean with_ping)
+{
 	BarSysinfo *info = net_info();
-	g_autofree gchar *iface = NULL;
 	const gchar *configured;
-	gchar buf[128];
-	gchar rx_buf[32], tx_buf[32];
+	g_autofree gchar *iface = NULL;
+	g_autofree gchar *ipv4 = NULL;
+	g_autofree gchar *gateway = NULL;
+	g_autofree gchar *ssid = NULL;
+	g_autofree gchar *connection = NULL;
+	g_autofree gchar *dns_mode = NULL;
+	g_autoptr(GPtrArray) scan = NULL;
+	gboolean wireless = FALSE, online, panel_open;
+	gint signal_dbm = 0, packet_loss = -1;
+	gdouble quality = 0.0, ping_ms = -1.0;
+	glong rx_total = 0, tx_total = 0, rx_rate = 0, tx_rate = 0;
 
 	if (info == NULL)
 		return;
+
+	panel_open = gowl_bar_plugin_get_setting_bool(plugin, "panel-open",
+	                                              FALSE);
 
 	configured = gowl_bar_plugin_get_setting(plugin, "param");
 	if (configured != NULL && configured[0] != '\0')
 		iface = g_strdup(configured);
 	else
 		iface = bar_sysinfo_default_route_iface(info);
+	online = (iface != NULL);
 
-	g_free(nd->iface);
-	nd->iface = g_strdup(iface);
-	nd->online = (iface != NULL);
-
-	if (iface != NULL) {
-		nd->wireless = bar_sysinfo_iface_is_wireless(info, iface);
-		g_free(nd->ipv4);
-		nd->ipv4 = bar_sysinfo_ipv4(info, iface);
-		g_free(nd->gateway);
-		nd->gateway = bar_sysinfo_default_gateway(info);
-		bar_sysinfo_iface_bytes(info, iface, &nd->rx_total,
-		                        &nd->tx_total);
-		bar_sysinfo_net(info, iface, &nd->rx_rate, &nd->tx_rate);
+	if (online) {
+		wireless = bar_sysinfo_iface_is_wireless(info, iface);
+		ipv4     = bar_sysinfo_ipv4(info, iface);
+		gateway  = bar_sysinfo_default_gateway(info);
+		bar_sysinfo_iface_bytes(info, iface, &rx_total, &tx_total);
+		bar_sysinfo_net(info, iface, &rx_rate, &tx_rate);
 	}
 
-	if (nd->wireless) {
+	if (wireless) {
 		const gchar *wifi_iface = NULL;
 
-		bar_sysinfo_wifi(info, &wifi_iface, &nd->signal_dbm,
-		                 &nd->quality);
-		if (nd->have_nmcli) {
-			const gchar *argv[] = {
-				"nmcli", "-t", "-f", "GENERAL.CONNECTION",
-				"device", "show", NULL, NULL
-			};
-			g_autofree gchar *out = NULL;
-
-			argv[6] = iface;
-			out = bar_run_argv_line(argv);
-			if (out != NULL) {
-				const gchar *colon = strchr(out, ':');
-
-				g_free(nd->ssid);
-				nd->ssid = g_strdup((colon != NULL)
-				                    ? colon + 1 : out);
-			}
-		}
+		bar_sysinfo_wifi(info, &wifi_iface, &signal_dbm, &quality);
 	}
 
-	net_measure_ping(nd,
-		gowl_bar_plugin_get_setting(plugin, "ping-host"));
+	/* nmcli is only asked while it has something to answer that the
+	   kernel cannot: the connection's name (which is the SSID on
+	   wireless) and, while the panel is up, its DNS. */
+	if (online && nd->have_nmcli && (wireless || panel_open)) {
+		connection = net_connection_name(iface);
+		if (wireless)
+			ssid = g_strdup(connection);
+		if (panel_open)
+			dns_mode = net_read_dns_mode(connection);
+	}
 
-	/* Only rescan while the panel is showing: a background wifi scan
-	   every five seconds disrupts the connection it is measuring. */
-	if (gowl_bar_plugin_get_setting_bool(plugin, "panel-open", FALSE))
-		net_scan_wifi(nd);
+	if (with_ping || panel_open) {
+		packet_loss = net_measure_ping(nd,
+			gowl_bar_plugin_get_setting(plugin, "ping-host"),
+			&ping_ms);
+	}
 
-	if (!nd->online) {
+	if (wireless && panel_open) {
+		scan = g_ptr_array_new_with_free_func(g_free);
+		net_scan_wifi(nd, scan);
+	}
+
+	g_mutex_lock(&nd->lock);
+	g_free(nd->iface);      nd->iface      = g_steal_pointer(&iface);
+	g_free(nd->ipv4);       nd->ipv4       = g_steal_pointer(&ipv4);
+	g_free(nd->gateway);    nd->gateway    = g_steal_pointer(&gateway);
+	g_free(nd->ssid);       nd->ssid       = g_steal_pointer(&ssid);
+	g_free(nd->connection); nd->connection = g_steal_pointer(&connection);
+	nd->wireless   = wireless;
+	nd->online     = online;
+	nd->signal_dbm = signal_dbm;
+	nd->quality    = quality;
+	nd->rx_total   = rx_total;
+	nd->tx_total   = tx_total;
+	nd->rx_rate    = rx_rate;
+	nd->tx_rate    = tx_rate;
+	if (with_ping || panel_open) {
+		nd->ping_ms     = ping_ms;
+		nd->packet_loss = packet_loss;
+	}
+	if (dns_mode != NULL) {
+		g_free(nd->dns_mode);
+		nd->dns_mode = g_steal_pointer(&dns_mode);
+	}
+	if (scan != NULL) {
+		g_ptr_array_unref(nd->scan);
+		nd->scan = g_steal_pointer(&scan);
+	} else if (!panel_open && nd->scan->len > 0) {
+		/* Not "empty the list" -- swap an empty one in, so a panel
+		   that closed mid-build is not walking freed rows. */
+		g_ptr_array_unref(nd->scan);
+		nd->scan = g_ptr_array_new_with_free_func(g_free);
+	}
+	g_mutex_unlock(&nd->lock);
+}
+
+/* The `network' widget's label, from the state just gathered. */
+static void
+net_apply_label(GowlBarPlugin *plugin, NetData *nd)
+{
+	gchar buf[128];
+	gchar rx_buf[32], tx_buf[32];
+	gboolean online, wireless;
+	gint packet_loss;
+	g_autofree gchar *ssid = NULL;
+	g_autofree gchar *ipv4 = NULL;
+	g_autofree gchar *iface = NULL;
+	glong rx_rate, tx_rate;
+
+	g_mutex_lock(&nd->lock);
+	online      = nd->online;
+	wireless    = nd->wireless;
+	packet_loss = nd->packet_loss;
+	ssid        = g_strdup(nd->ssid);
+	ipv4        = g_strdup(nd->ipv4);
+	iface       = g_strdup(nd->iface);
+	rx_rate     = nd->rx_rate;
+	tx_rate     = nd->tx_rate;
+	g_mutex_unlock(&nd->lock);
+
+	if (!online) {
 		gowl_bar_plugin_set_label(plugin, "offline");
 		gowl_bar_plugin_set_icon(plugin, "\xef\x87\xab");
 		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_RED);
+		gowl_bar_plugin_set_tooltip(plugin, "No default route");
 		return;
 	}
 
 	if (gowl_bar_plugin_get_setting_bool(plugin, "show-rates", FALSE)) {
-		bar_sysinfo_format_rate(nd->rx_rate, rx_buf, sizeof(rx_buf));
-		bar_sysinfo_format_rate(nd->tx_rate, tx_buf, sizeof(tx_buf));
+		bar_sysinfo_format_rate(rx_rate, rx_buf, sizeof(rx_buf));
+		bar_sysinfo_format_rate(tx_rate, tx_buf, sizeof(tx_buf));
 		g_snprintf(buf, sizeof(buf),
 		           "\xe2\x86\x93%s \xe2\x86\x91%s", rx_buf, tx_buf);
-	} else if (nd->wireless && nd->ssid != NULL) {
-		g_snprintf(buf, sizeof(buf), "%s", nd->ssid);
-	} else if (nd->ipv4 != NULL) {
-		g_snprintf(buf, sizeof(buf), "%s", nd->ipv4);
+	} else if (wireless && ssid != NULL) {
+		g_snprintf(buf, sizeof(buf), "%s", ssid);
+	} else if (ipv4 != NULL) {
+		g_snprintf(buf, sizeof(buf), "%s", ipv4);
 	} else {
-		g_snprintf(buf, sizeof(buf), "%s", nd->iface);
+		g_snprintf(buf, sizeof(buf), "%s", iface);
 	}
 
 	gowl_bar_plugin_set_label(plugin, buf);
 	gowl_bar_plugin_set_icon(plugin,
-		nd->wireless ? "\xef\x87\xab" : "\xef\x9b\xbf");
-	gowl_bar_plugin_set_color(plugin,
-		(nd->packet_loss == 0) ? GOWL_BAR_COLOR_TEXT
-		                       : GOWL_BAR_COLOR_PEACH);
+		wireless ? "\xef\x87\xab" : "\xef\x9b\xbf");
+	/* Peach means "the ping failed", so without a ping there is
+	   nothing to be peach about: the widget used to sit peach for
+	   ever on a host with no ping binary. */
+	if (packet_loss > 0)
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_PEACH);
+	else
+		bar_plugin_apply_color(plugin,
+			gowl_bar_plugin_get_setting(plugin, "color"),
+			GOWL_BAR_COLOR_TEXT);
+	{
+		g_autofree gchar *tip = NULL;
+
+		tip = g_strdup_printf("%s%s%s", iface,
+			(ipv4 != NULL) ? "  " : "",
+			(ipv4 != NULL) ? ipv4 : "");
+		gowl_bar_plugin_set_tooltip(plugin, tip);
+	}
+}
+
+static void
+net_poll_async(GowlBarPlugin *plugin, gpointer data)
+{
+	NetData *nd = data;
+
+	net_gather(plugin, nd, TRUE);
+	net_apply_label(plugin, nd);
+}
+
+/* The widgets that only borrow the panel gather without pinging unless
+   the panel is open, and set their own labels in their sync polls. */
+static void
+net_light_poll_async(GowlBarPlugin *plugin, gpointer data)
+{
+	net_gather(plugin, data, FALSE);
 }
 
 /* Runs on the host's worker thread; see net_panel_opened(). */
 static void
-net_scan_work(GowlBarPlugin *plugin, gpointer user_data)
+net_open_work(GowlBarPlugin *plugin, gpointer user_data)
 {
 	NetData *nd = user_data;
 
 	if (nd == NULL)
 		return;
-	net_scan_wifi(nd);
+	net_gather(plugin, nd, TRUE);
 	/* A panel is built once when it opens, so a scan finishing later
 	   has to ask for it to be rebuilt or the list never appears. */
 	gowl_bar_plugin_request_panel_refresh(plugin);
@@ -287,23 +472,19 @@ net_panel_opened(GowlBarPlugin *plugin, gpointer data)
 {
 	NetData *nd = data;
 
-	(void)nd;
 	/* The async poll reads this to decide whether to scan; setting it
 	   here rather than scanning inline keeps the scan off the
 	   compositor thread. */
 	gowl_bar_plugin_set_setting(plugin, "panel-open", "true");
 
 	/*
-	 * Scan NOW, off the compositor thread, rather than waiting for the
-	 * next poll.
-	 *
-	 * The poll interval is 30 seconds, so setting the flag and leaving
-	 * it there meant the panel could sit on "scanning" for half a
-	 * minute -- long enough to read as broken rather than slow.
-	 * queue_work runs on the host's worker, so nmcli still never
-	 * blocks the compositor.
+	 * Gather NOW, off the compositor thread, rather than waiting for
+	 * the next poll: the lighter widgets poll every thirty seconds,
+	 * and a panel that sits on "scanning" for half a minute reads as
+	 * broken rather than slow.  queue_work runs on the host's worker,
+	 * so nmcli and ping still never block the compositor.
 	 */
-	gowl_bar_plugin_queue_work(plugin, net_scan_work, nd, NULL);
+	gowl_bar_plugin_queue_work(plugin, net_open_work, nd, NULL);
 	gowl_bar_plugin_request_redraw(plugin);
 }
 
@@ -334,10 +515,15 @@ net_panel(GowlBarPlugin *plugin, gpointer data)
 	panel = gowl_bar_panel_new();
 	gowl_bar_panel_set_width(panel, 440);
 
+	/* Held for the whole build: every string below belongs to the
+	   struct, and the worker may replace them at any moment.  The
+	   build is a few hundred microseconds; the worker waits. */
+	g_mutex_lock(&nd->lock);
+
 	/* Hero: what you are connected through, and its whimsical
 	   subtitle --- the panel is a utility, and a little character in
 	   the one line that never carries data costs nothing. */
-	if (nd->wireless) {
+	if (nd->online && nd->wireless) {
 		gowl_bar_panel_add_hero(panel, "\xef\x87\xab",
 			(nd->ssid != NULL) ? nd->ssid : "Wi-Fi",
 			"Routing crumbs");
@@ -349,17 +535,22 @@ net_panel(GowlBarPlugin *plugin, gpointer data)
 		                        "Nothing routing");
 	}
 
-	if (nd->ping_ms >= 0.0)
-		g_snprintf(buf, sizeof(buf), "%.1f ms", nd->ping_ms);
-	else
-		g_strlcpy(buf, "Timeout", sizeof(buf));
-	g_snprintf(buf2, sizeof(buf2), "%d%%",
-	           (nd->packet_loss >= 0) ? nd->packet_loss : 100);
+	if (nd->packet_loss < 0) {
+		g_strlcpy(buf, nd->have_ping ? "Measuring..." : "No ping",
+		          sizeof(buf));
+		g_strlcpy(buf2, "--", sizeof(buf2));
+	} else {
+		if (nd->ping_ms >= 0.0)
+			g_snprintf(buf, sizeof(buf), "%.1f ms", nd->ping_ms);
+		else
+			g_strlcpy(buf, "Timeout", sizeof(buf));
+		g_snprintf(buf2, sizeof(buf2), "%d%%", nd->packet_loss);
+	}
 	item = gowl_bar_panel_add_field_pair(panel, "Ping", buf,
 	                                     "Packet Loss", buf2);
 	gowl_bar_panel_item_set_value_color(item,
-		(nd->packet_loss == 0) ? GOWL_BAR_COLOR_SUBTEXT
-		                       : GOWL_BAR_COLOR_RED);
+		(nd->packet_loss > 0) ? GOWL_BAR_COLOR_RED
+		                      : GOWL_BAR_COLOR_SUBTEXT);
 
 	{
 		gchar rx_buf[32], tx_buf[32];
@@ -380,6 +571,11 @@ net_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_add_field_pair(panel, "IP Address",
 		(nd->ipv4 != NULL) ? nd->ipv4 : "--", "Gateway",
 		(nd->gateway != NULL) ? nd->gateway : "--");
+	if (nd->iface != NULL) {
+		gowl_bar_panel_add_field_pair(panel, "Interface", nd->iface,
+			"Connection",
+			(nd->connection != NULL) ? nd->connection : "--");
+	}
 
 	if (nd->wireless && nd->signal_dbm != 0) {
 		g_snprintf(buf, sizeof(buf), "%d dBm", nd->signal_dbm);
@@ -408,21 +604,29 @@ net_panel(GowlBarPlugin *plugin, gpointer data)
 		}
 	}
 
-	gowl_bar_panel_add_separator(panel);
-	gowl_bar_panel_add_section(panel, "DNS provider");
-	item = gowl_bar_panel_add_buttons(panel, "dns");
-	gowl_bar_panel_add_button(item, "DHCP",
-		g_strcmp0(nd->dns_mode, "dhcp") == 0 || nd->dns_mode == NULL);
-	gowl_bar_panel_add_button(item, "Cloudflare",
-		g_strcmp0(nd->dns_mode, "cloudflare") == 0);
-	gowl_bar_panel_add_button(item, "Google",
-		g_strcmp0(nd->dns_mode, "google") == 0);
-	gowl_bar_panel_add_button(item, "Quad9",
-		g_strcmp0(nd->dns_mode, "quad9") == 0);
-	if (!nd->have_nmcli) {
+	if (nd->have_nmcli && nd->online) {
+		gowl_bar_panel_add_separator(panel);
+		gowl_bar_panel_add_section(panel, "DNS provider");
+		item = gowl_bar_panel_add_buttons(panel, "dns");
+		gowl_bar_panel_add_button(item, "DHCP",
+			g_strcmp0(nd->dns_mode, "dhcp") == 0);
+		gowl_bar_panel_add_button(item, "Cloudflare",
+			g_strcmp0(nd->dns_mode, "cloudflare") == 0);
+		gowl_bar_panel_add_button(item, "Google",
+			g_strcmp0(nd->dns_mode, "google") == 0);
+		gowl_bar_panel_add_button(item, "Quad9",
+			g_strcmp0(nd->dns_mode, "quad9") == 0);
+		if (nd->dns_mode == NULL)
+			gowl_bar_panel_add_label(panel,
+				"reading the connection's DNS...");
+		else if (g_strcmp0(nd->dns_mode, "custom") == 0)
+			gowl_bar_panel_add_label(panel,
+				"custom servers are set on this connection");
+	} else if (!nd->have_nmcli) {
+		gowl_bar_panel_add_separator(panel);
 		gowl_bar_panel_add_label(panel,
-			"nmcli is not installed, so DNS cannot be changed "
-			"from here");
+			"nmcli is not installed, so DNS and Wi-Fi cannot be "
+			"changed from here");
 	}
 
 	if (nd->wireless && nd->have_nmcli) {
@@ -472,6 +676,8 @@ net_panel(GowlBarPlugin *plugin, gpointer data)
 		}
 	}
 
+	g_mutex_unlock(&nd->lock);
+
 	gowl_bar_panel_add_separator(panel);
 	item = gowl_bar_panel_add_buttons(panel, "tool");
 	gowl_bar_panel_add_button(item, "Rescan", FALSE);
@@ -496,28 +702,49 @@ net_panel_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 		};
 		const gchar *modes[4] = { "dhcp", "cloudflare", "google",
 		                          "quad9" };
+		g_autofree gchar *iface = NULL;
+		g_autofree gchar *connection = NULL;
+		g_autofree gchar *qconn = NULL;
+		g_autofree gchar *qiface = NULL;
 		g_autofree gchar *line = NULL;
 
-		if (index < 0 || index > 3 || !nd->have_nmcli ||
-		    nd->iface == NULL)
+		if (index < 0 || index > 3 || !nd->have_nmcli)
 			return;
 
+		g_mutex_lock(&nd->lock);
+		iface      = g_strdup(nd->iface);
+		connection = g_strdup(nd->connection);
 		g_free(nd->dns_mode);
 		nd->dns_mode = g_strdup(modes[index]);
+		g_mutex_unlock(&nd->lock);
 
+		if (iface == NULL || connection == NULL)
+			return;
+
+		/*
+		 * On the CONNECTION PROFILE, then reapplied to the device.
+		 * `nmcli device modify' changes the live device only, so the
+		 * choice was gone the next time the link came up -- a DNS
+		 * provider that silently reverted on every reconnect.
+		 */
+		qconn  = g_shell_quote(connection);
+		qiface = g_shell_quote(iface);
 		if (index == 0) {
 			line = g_strdup_printf(
-				"nmcli device modify %s ipv4.ignore-auto-dns no",
-				nd->iface);
+				"nmcli connection modify %s ipv4.dns '' "
+				"ipv4.ignore-auto-dns no && "
+				"nmcli device reapply %s", qconn, qiface);
 		} else {
 			line = g_strdup_printf(
-				"nmcli device modify %s ipv4.dns %s "
-				"ipv4.ignore-auto-dns yes",
-				nd->iface, servers[index]);
+				"nmcli connection modify %s ipv4.dns %s "
+				"ipv4.ignore-auto-dns yes && "
+				"nmcli device reapply %s",
+				qconn, servers[index], qiface);
 		}
 		gowl_bar_plugin_spawn(plugin, line);
 		gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
 			"DNS provider changed", modes[index]);
+		gowl_bar_plugin_request_panel_refresh(plugin);
 		return;
 	}
 
@@ -545,7 +772,10 @@ net_panel_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 			if (nd->have_nmcli)
 				gowl_bar_plugin_spawn(plugin,
 					"nmcli device wifi rescan");
-			gowl_bar_plugin_refresh_panel(plugin);
+			/* And look again once the scan has had a moment:
+			   the list is read on the worker, not here. */
+			gowl_bar_plugin_queue_work(plugin, net_open_work, nd,
+			                           NULL);
 		} else if (index == 1) {
 			const gchar *cmd;
 
@@ -602,13 +832,23 @@ rate_poll(GowlBarPlugin *plugin, gpointer data)
 	g_snprintf(buf, sizeof(buf), "\xe2\x86\x93%s \xe2\x86\x91%s",
 	           rx_buf, tx_buf);
 	gowl_bar_plugin_set_label(plugin, buf);
+	bar_plugin_apply_color(plugin,
+		gowl_bar_plugin_get_setting(plugin, "color"),
+		GOWL_BAR_COLOR_TEXT);
 }
 
+/*
+ * The three light widgets share the network panel, so they share its
+ * data too -- through net_light_poll_async, which gathers without
+ * pinging.  They used to serve net_panel with a NetData nothing ever
+ * filled: an `ip' widget's dropdown said "Offline", "Timeout" and
+ * "100%" on a machine that was fine.
+ */
 static const GowlBarPluginVTable rate_vtable = {
 	sizeof(GowlBarPluginVTable),
 	net_create, net_destroy,
 	NULL, NULL, NULL,
-	rate_interval, rate_poll, NULL,
+	rate_interval, rate_poll, net_light_poll_async,
 	NULL, NULL,
 	NULL, NULL,
 	net_panel, net_panel_action,
@@ -633,25 +873,41 @@ static void
 ip_poll(GowlBarPlugin *plugin, gpointer data)
 {
 	BarSysinfo *info = net_info();
+	const gchar *configured;
+	g_autofree gchar *iface = NULL;
 	g_autofree gchar *addr = NULL;
 
 	(void)data;
 
 	if (info == NULL)
 		return;
-	addr = bar_sysinfo_ipv4(info,
-		gowl_bar_plugin_get_setting(plugin, "param"));
+
+	/* The default route's interface, not the first one with an
+	   address: on a host with podman, libvirt or a tailnet that first
+	   one is a bridge or a tunnel, and the widget showed 10.88.0.1. */
+	configured = gowl_bar_plugin_get_setting(plugin, "param");
+	if (configured != NULL && configured[0] != '\0')
+		iface = g_strdup(configured);
+	else
+		iface = bar_sysinfo_default_route_iface(info);
+
+	addr = bar_sysinfo_ipv4(info, iface);
 	gowl_bar_plugin_set_label(plugin,
 	                          (addr != NULL) ? addr : "no address");
-	gowl_bar_plugin_set_color(plugin,
-		(addr != NULL) ? GOWL_BAR_COLOR_TEXT : GOWL_BAR_COLOR_MUTED);
+	gowl_bar_plugin_set_tooltip(plugin, iface);
+	if (addr != NULL)
+		bar_plugin_apply_color(plugin,
+			gowl_bar_plugin_get_setting(plugin, "color"),
+			GOWL_BAR_COLOR_TEXT);
+	else
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
 }
 
 static const GowlBarPluginVTable ip_vtable = {
 	sizeof(GowlBarPluginVTable),
 	net_create, net_destroy,
 	NULL, NULL, NULL,
-	ip_interval, ip_poll, NULL,
+	ip_interval, ip_poll, net_light_poll_async,
 	NULL, NULL,
 	NULL, NULL,
 	net_panel, net_panel_action,
@@ -679,17 +935,22 @@ wifi_poll(GowlBarPlugin *plugin, gpointer data)
 	}
 	g_snprintf(buf, sizeof(buf), "WiFi %ddBm", dbm);
 	gowl_bar_plugin_set_label(plugin, buf);
-	gowl_bar_plugin_set_color(plugin,
-		(quality > 0.6) ? GOWL_BAR_COLOR_TEXT
-		: (quality > 0.3) ? GOWL_BAR_COLOR_YELLOW
-		: GOWL_BAR_COLOR_RED);
+	gowl_bar_plugin_set_tooltip(plugin, iface);
+	if (quality > 0.6)
+		bar_plugin_apply_color(plugin,
+			gowl_bar_plugin_get_setting(plugin, "color"),
+			GOWL_BAR_COLOR_TEXT);
+	else
+		gowl_bar_plugin_set_color(plugin,
+			(quality > 0.3) ? GOWL_BAR_COLOR_YELLOW
+			                : GOWL_BAR_COLOR_RED);
 }
 
 static const GowlBarPluginVTable wifi_vtable = {
 	sizeof(GowlBarPluginVTable),
 	net_create, net_destroy,
 	NULL, NULL, NULL,
-	ip_interval, wifi_poll, NULL,
+	ip_interval, wifi_poll, net_light_poll_async,
 	NULL, NULL,
 	NULL, NULL,
 	net_panel, net_panel_action,
@@ -702,23 +963,98 @@ static const GowlBarPluginVTable wifi_vtable = {
  * vpn
  * ---------------------------------------------------------------- */
 
+/*
+ * Whether @name is a tunnel: a WireGuard device by its DEVTYPE, or a
+ * tun/tap device by the flags file only those have.  The kernel is the
+ * authority, whatever created it -- the widget used to test for three
+ * hard-coded names (tun0, wg0, proton0) and missed wg-home, tun1 and
+ * every OpenVPN client that names its own device.
+ */
+static gboolean
+vpn_iface_is_tunnel(const gchar *name)
+{
+	g_autofree gchar *uevent_path = NULL;
+	g_autofree gchar *tun_path = NULL;
+	g_autofree gchar *uevent = NULL;
+
+	tun_path = g_build_filename("/sys/class/net", name, "tun_flags", NULL);
+	if (g_file_test(tun_path, G_FILE_TEST_EXISTS))
+		return TRUE;
+
+	uevent_path = g_build_filename("/sys/class/net", name, "uevent", NULL);
+	if (g_file_get_contents(uevent_path, &uevent, NULL, NULL) &&
+	    strstr(uevent, "DEVTYPE=wireguard") != NULL)
+		return TRUE;
+
+	return g_str_has_prefix(name, "ppp") || g_str_has_prefix(name, "ipsec");
+}
+
 static void
 vpn_poll(GowlBarPlugin *plugin, gpointer data)
 {
-	gboolean up;
+	g_autoptr(GDir) dir = NULL;
+	g_autoptr(GString) names = g_string_new(NULL);
+	g_auto(GStrv) ignore = NULL;
+	const gchar *entry;
+	const gchar *ignore_spec;
+	gint n = 0;
 
 	(void)data;
 
-	/* The kernel is the authority here: a tun or wireguard interface
-	   exists or it does not, whatever created it. */
-	up = g_file_test("/sys/class/net/tun0", G_FILE_TEST_IS_DIR) ||
-	     g_file_test("/sys/class/net/wg0", G_FILE_TEST_IS_DIR) ||
-	     g_file_test("/sys/class/net/proton0", G_FILE_TEST_IS_DIR);
+	/* Tailscale is a tunnel too, and has a widget of its own; a
+	   "VPN" light that is on whenever the tailnet is would say
+	   nothing.  The list is a setting because somebody's VPN IS
+	   their tailnet. */
+	ignore_spec = gowl_bar_plugin_get_setting(plugin, "ignore");
+	ignore = g_strsplit_set((ignore_spec != NULL) ? ignore_spec
+	                                              : "tailscale0", " ,", -1);
 
-	gowl_bar_plugin_set_label(plugin, up ? "VPN" : NULL);
-	gowl_bar_plugin_set_icon(plugin, up ? "\xef\x82\xa3" : NULL);
-	gowl_bar_plugin_set_color(plugin,
-		up ? GOWL_BAR_COLOR_GREEN : GOWL_BAR_COLOR_MUTED);
+	dir = g_dir_open("/sys/class/net", 0, NULL);
+	while (dir != NULL && (entry = g_dir_read_name(dir)) != NULL) {
+		g_autofree gchar *oper_path = NULL;
+		g_autofree gchar *oper = NULL;
+		gint i;
+		gboolean skip = FALSE;
+
+		for (i = 0; ignore[i] != NULL; i++)
+			if (strcmp(ignore[i], entry) == 0)
+				skip = TRUE;
+		if (skip || !vpn_iface_is_tunnel(entry))
+			continue;
+
+		/* A tunnel that exists but is down is a client that is
+		   still connecting or has just failed: not "VPN on". */
+		oper_path = g_build_filename("/sys/class/net", entry,
+		                             "operstate", NULL);
+		oper = read_str_file_trim(oper_path);
+		if (oper != NULL && strcmp(oper, "down") == 0)
+			continue;
+
+		if (names->len > 0)
+			g_string_append(names, ", ");
+		g_string_append(names, entry);
+		n++;
+	}
+
+	if (n == 0) {
+		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_icon(plugin, NULL);
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+		gowl_bar_plugin_set_tooltip(plugin, "No VPN tunnel is up");
+		return;
+	}
+
+	{
+		const gchar *label = gowl_bar_plugin_get_setting(plugin, "label");
+
+		gowl_bar_plugin_set_label(plugin,
+			(label != NULL && label[0] != '\0') ? label : "VPN");
+	}
+	gowl_bar_plugin_set_icon(plugin, "\xef\x82\xa3");
+	bar_plugin_apply_color(plugin,
+		gowl_bar_plugin_get_setting(plugin, "color"),
+		GOWL_BAR_COLOR_GREEN);
+	gowl_bar_plugin_set_tooltip(plugin, names->str);
 }
 
 static const GowlBarPluginVTable vpn_vtable = {
@@ -737,7 +1073,16 @@ static const GowlBarPluginVTable vpn_vtable = {
  * ---------------------------------------------------------------- */
 
 typedef struct {
+	/* Guards every pointer and array below: the async poll rebuilds
+	   them on a worker while the panel walks them on the dispatch
+	   thread, and the host serialises none of that. */
+	GMutex   lock;
 	gboolean installed;
+	/* The binary is there but `tailscale status' gets no answer:
+	   tailscaled is not running.  Distinct from never-joined, which
+	   it used to be shown as -- a yellow "set up" on a host that had
+	   joined years ago and merely had the daemon stopped. */
+	gboolean daemon_down;
 	gboolean active;
 	gboolean needs_login;
 	/* Whether this host has ever joined a tailnet.  Installed is not
@@ -765,6 +1110,7 @@ ts_create(GowlBarPlugin *plugin)
 
 	(void)plugin;
 	td = g_new0(TailscaleData, 1);
+	g_mutex_init(&td->lock);
 	td->peers      = g_ptr_array_new_with_free_func(g_free);
 	td->exit_nodes = g_ptr_array_new_with_free_func(g_free);
 	return td;
@@ -786,6 +1132,7 @@ ts_destroy(GowlBarPlugin *plugin, gpointer data)
 	g_free(td->last_error);
 	g_ptr_array_unref(td->peers);
 	g_ptr_array_unref(td->exit_nodes);
+	g_mutex_clear(&td->lock);
 	g_free(td);
 }
 
@@ -799,10 +1146,16 @@ ts_interval(GowlBarPlugin *plugin, gpointer data)
 /* The peer walk.  Each callback gets one peer object, brace-matched by
    the kit's reader, so a field missing from a peer cannot be answered
    from the next one. */
+typedef struct {
+	GPtrArray *peers;
+	GPtrArray *exit_nodes;
+	gchar     *exit_node;
+} TsPeers;
+
 static gboolean
 ts_collect_peer(const gchar *obj, guint index, gpointer user_data)
 {
-	TailscaleData *td = user_data;
+	TsPeers *td = user_data;
 	g_autofree gchar *name = NULL;
 	g_autofree gchar *host = NULL;
 	g_autofree gchar *os = NULL;
@@ -872,14 +1225,15 @@ ts_collect_peer(const gchar *obj, guint index, gpointer user_data)
 	return (td->peers->len < 60);
 }
 
+/* Fresh arrays, filled here and swapped into the plugin's struct
+   under its lock by the caller. */
 static void
-ts_parse_peers(TailscaleData *td, const gchar *json)
+ts_parse_peers(TsPeers *out, const gchar *json)
 {
-	g_ptr_array_set_size(td->peers, 0);
-	g_ptr_array_set_size(td->exit_nodes, 0);
-	g_clear_pointer(&td->exit_node, g_free);
-
-	gowl_bar_json_foreach_object(json, "Peer", ts_collect_peer, td);
+	out->peers      = g_ptr_array_new_with_free_func(g_free);
+	out->exit_nodes = g_ptr_array_new_with_free_func(g_free);
+	out->exit_node  = NULL;
+	gowl_bar_json_foreach_object(json, "Peer", ts_collect_peer, out);
 }
 
 /*
@@ -934,13 +1288,24 @@ ts_apply_visibility(GowlBarPlugin *plugin, TailscaleData *td)
    confirms membership instead of showing it and taking it away. */
 /* The bar's icon, label and colour for the state we are in.  Three
    states worth telling apart: on, off, and never set up. */
+static void ts_apply_state_locked(GowlBarPlugin *plugin, TailscaleData *td);
+
 static void
 ts_apply_state(GowlBarPlugin *plugin, TailscaleData *td)
 {
-	gboolean labels;
-
 	if (!gowl_bar_plugin_get_visible(plugin))
 		return;
+	/* The strings read below are the worker's to replace; a refresh
+	   queued from the panel can run beside the host's own poll. */
+	g_mutex_lock(&td->lock);
+	ts_apply_state_locked(plugin, td);
+	g_mutex_unlock(&td->lock);
+}
+
+static void
+ts_apply_state_locked(GowlBarPlugin *plugin, TailscaleData *td)
+{
+	gboolean labels;
 
 	labels = gowl_bar_plugin_get_setting_bool(plugin, "labels", FALSE);
 	gowl_bar_plugin_set_icon(plugin, "\xef\x95\x82");
@@ -948,6 +1313,15 @@ ts_apply_state(GowlBarPlugin *plugin, TailscaleData *td)
 	if (!td->installed) {
 		gowl_bar_plugin_set_label(plugin, labels ? "n/a" : NULL);
 		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_OVERLAY);
+		gowl_bar_plugin_set_tooltip(plugin, "Tailscale is not installed");
+		return;
+	}
+
+	if (td->daemon_down) {
+		gowl_bar_plugin_set_label(plugin, labels ? "down" : NULL);
+		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+		gowl_bar_plugin_set_tooltip(plugin,
+			"Tailscale: tailscaled is not running");
 		return;
 	}
 
@@ -958,20 +1332,33 @@ ts_apply_state(GowlBarPlugin *plugin, TailscaleData *td)
 		   something to do rather than something broken. */
 		gowl_bar_plugin_set_label(plugin, labels ? "set up" : NULL);
 		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_YELLOW);
+		gowl_bar_plugin_set_tooltip(plugin,
+			(td->auth_url != NULL) ? "Tailscale: waiting for sign-in"
+			                       : "Tailscale: not set up yet");
 		return;
 	}
 
 	if (td->active) {
+		g_autofree gchar *tip = NULL;
+
 		gowl_bar_plugin_set_label(plugin,
 			labels ? ((td->self_name != NULL) ? td->self_name
 			                                  : "tailscale")
 			       : NULL);
-		gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_TEAL);
+		bar_plugin_apply_color(plugin,
+			gowl_bar_plugin_get_setting(plugin, "color"),
+			GOWL_BAR_COLOR_TEAL);
+		tip = g_strdup_printf("Tailscale: %s%s%s",
+			(td->self_name != NULL) ? td->self_name : "up",
+			(td->self_ip != NULL) ? "  " : "",
+			(td->self_ip != NULL) ? td->self_ip : "");
+		gowl_bar_plugin_set_tooltip(plugin, tip);
 		return;
 	}
 
 	gowl_bar_plugin_set_label(plugin, labels ? "off" : NULL);
 	gowl_bar_plugin_set_color(plugin, GOWL_BAR_COLOR_MUTED);
+	gowl_bar_plugin_set_tooltip(plugin, "Tailscale is down");
 }
 
 static void
@@ -988,10 +1375,17 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 	const gchar *argv[] = { "tailscale", "status", "--json", NULL };
 	g_autofree gchar *json = NULL;
 	g_autofree gchar *state = NULL;
+	g_autofree gchar *auth_url = NULL;
+	g_autofree gchar *self_name = NULL;
+	g_autofree gchar *self_ip = NULL;
+	TsPeers peers;
+	gboolean active, needs_login, joined;
 
 	td->installed = bar_have_command("tailscale");
 	if (!td->installed) {
 		td->joined = FALSE;
+		td->daemon_down = FALSE;
+		td->busy = FALSE;
 		ts_apply_visibility(plugin, td);
 		ts_apply_state(plugin, td);
 		return;
@@ -1003,33 +1397,27 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 		   widget depends on whether this host uses Tailscale at
 		   all, which the last successful poll already told us. */
 		td->active = FALSE;
+		td->daemon_down = TRUE;
+		td->busy = FALSE;
 		ts_apply_visibility(plugin, td);
 		ts_apply_state(plugin, td);
 		return;
 	}
+	td->daemon_down = FALSE;
 
 	state = gowl_bar_json_string(json, "BackendState");
-	td->active      = (g_strcmp0(state, "Running") == 0);
-	td->needs_login = (g_strcmp0(state, "NeedsLogin") == 0);
+	active      = (g_strcmp0(state, "Running") == 0);
+	needs_login = (g_strcmp0(state, "NeedsLogin") == 0);
 
 	/* HaveNodeKey is the honest "is this a tailnet member" flag: it
 	   stays true across `tailscale down' and goes false only on a
 	   host that has never joined or has been logged out. */
-	td->joined = gowl_bar_json_bool(json, "HaveNodeKey", FALSE) ||
-	             td->active;
+	joined = gowl_bar_json_bool(json, "HaveNodeKey", FALSE) || active;
 
 	/* Populated only while a join is waiting on the browser. */
-	g_free(td->auth_url);
-	td->auth_url = gowl_bar_json_string(json, "AuthURL");
-	if (td->auth_url != NULL && td->auth_url[0] == '\0')
-		g_clear_pointer(&td->auth_url, g_free);
-
-	ts_apply_visibility(plugin, td);
-	if (!gowl_bar_plugin_get_visible(plugin))
-		return;
-
-	g_free(td->status_text);
-	td->status_text = g_strdup((state != NULL) ? state : "Unknown");
+	auth_url = gowl_bar_json_string(json, "AuthURL");
+	if (auth_url != NULL && auth_url[0] == '\0')
+		g_clear_pointer(&auth_url, g_free);
 
 	{
 		g_autofree gchar *self = NULL;
@@ -1048,12 +1436,9 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 				if (dot != NULL)
 					*dot = '\0';
 			}
-			g_free(td->self_name);
-			td->self_name = (dns != NULL && dns[0] != '\0')
+			self_name = (dns != NULL && dns[0] != '\0')
 				? g_strdup(dns) : g_strdup(host);
 
-			g_free(td->self_ip);
-			td->self_ip = NULL;
 			ips = gowl_bar_json_string_array(self, "TailscaleIPs",
 			                                 NULL);
 			if (ips != NULL) {
@@ -1061,20 +1446,40 @@ ts_poll_async(GowlBarPlugin *plugin, gpointer data)
 
 				for (i = 0; ips[i] != NULL; i++) {
 					if (g_str_has_prefix(ips[i], "100.")) {
-						g_free(td->self_ip);
-						td->self_ip =
-							g_strdup(ips[i]);
+						g_free(self_ip);
+						self_ip = g_strdup(ips[i]);
 						break;
 					}
-					if (td->self_ip == NULL)
-						td->self_ip =
-							g_strdup(ips[i]);
+					if (self_ip == NULL)
+						self_ip = g_strdup(ips[i]);
 				}
 			}
 		}
 	}
 
-	ts_parse_peers(td, json);
+	ts_parse_peers(&peers, json);
+
+	/* Everything the panel reads, swapped in one go. */
+	g_mutex_lock(&td->lock);
+	td->active      = active;
+	td->needs_login = needs_login;
+	td->joined      = joined;
+	g_free(td->auth_url);    td->auth_url    = g_steal_pointer(&auth_url);
+	g_free(td->status_text);
+	td->status_text = g_strdup((state != NULL) ? state : "Unknown");
+	g_free(td->self_name);   td->self_name   = g_steal_pointer(&self_name);
+	g_free(td->self_ip);     td->self_ip     = g_steal_pointer(&self_ip);
+	g_free(td->exit_node);   td->exit_node   = peers.exit_node;
+	g_ptr_array_unref(td->peers);       td->peers      = peers.peers;
+	g_ptr_array_unref(td->exit_nodes);  td->exit_nodes = peers.exit_nodes;
+	/* Whatever was asked for has either happened or not by now: a
+	   spinner that never stopped is what this used to be. */
+	td->busy = FALSE;
+	g_mutex_unlock(&td->lock);
+
+	ts_apply_visibility(plugin, td);
+	if (!gowl_bar_plugin_get_visible(plugin))
+		return;
 
 	ts_apply_state(plugin, td);
 
@@ -1131,6 +1536,19 @@ ts_panel(GowlBarPlugin *plugin, gpointer data)
 			"Install the tailscale package to use this widget.");
 		return panel;
 	}
+	if (td->daemon_down) {
+		gowl_bar_panel_add_hero(panel, "\xef\x95\x82", "Tailscale",
+		                        "tailscaled is not running");
+		gowl_bar_panel_add_label(panel,
+			"The tailscale command is installed but its daemon "
+			"gave no answer.  Start the tailscaled service.");
+		return panel;
+	}
+
+	/* Held across the build: every string and row below belongs to
+	   the struct the worker rebuilds. */
+	g_mutex_lock(&td->lock);
+
 	if (!td->joined) {
 		/*
 		 * The set-up panel.  This is the whole reason the widget is
@@ -1159,6 +1577,7 @@ ts_panel(GowlBarPlugin *plugin, gpointer data)
 			item = gowl_bar_panel_add_buttons(panel, "auth-tool");
 			gowl_bar_panel_add_button(item, "Copy link", FALSE);
 			gowl_bar_panel_add_button(item, "Cancel", FALSE);
+			g_mutex_unlock(&td->lock);
 			return panel;
 		}
 
@@ -1178,6 +1597,7 @@ ts_panel(GowlBarPlugin *plugin, gpointer data)
 			"Asks for your password once");
 		gowl_bar_panel_item_set_color(item, GOWL_BAR_COLOR_SUBTEXT);
 
+		g_mutex_unlock(&td->lock);
 		return panel;
 	}
 
@@ -1268,7 +1688,16 @@ ts_panel(GowlBarPlugin *plugin, gpointer data)
 	gowl_bar_panel_add_button(item, "Refresh", FALSE);
 	gowl_bar_panel_add_button(item, "Admin", FALSE);
 
+	g_mutex_unlock(&td->lock);
 	return panel;
+}
+
+/* Re-read the status on the worker and rebuild the panel from it. */
+static void
+ts_refresh_work(GowlBarPlugin *plugin, gpointer user_data)
+{
+	ts_poll_async(plugin, user_data);
+	gowl_bar_plugin_request_panel_refresh(plugin);
 }
 
 static void
@@ -1305,10 +1734,14 @@ ts_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	if (g_strcmp0(item_id, "auth") == 0) {
 		g_autofree gchar *quoted = NULL;
 		g_autofree gchar *line = NULL;
+		g_autofree gchar *url = NULL;
 
-		if (td->auth_url == NULL)
+		g_mutex_lock(&td->lock);
+		url = g_strdup(td->auth_url);
+		g_mutex_unlock(&td->lock);
+		if (url == NULL)
 			return;
-		quoted = g_shell_quote(td->auth_url);
+		quoted = g_shell_quote(url);
 		line = g_strdup_printf("%s %s",
 			(gowl_bar_plugin_get_setting(plugin, "browser-command")
 			 != NULL)
@@ -1321,15 +1754,24 @@ ts_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	}
 
 	if (g_strcmp0(item_id, "auth-tool") == 0) {
-		if (index == 0 && td->auth_url != NULL) {
+		g_autofree gchar *url = NULL;
+
+		g_mutex_lock(&td->lock);
+		url = g_strdup(td->auth_url);
+		if (index == 1)
+			g_clear_pointer(&td->auth_url, g_free);
+		g_mutex_unlock(&td->lock);
+
+		if (index == 0 && url != NULL) {
 			g_autofree gchar *quoted = NULL;
 			g_autofree gchar *line = NULL;
 			const gchar *copy;
 
 			copy = gowl_bar_plugin_get_setting(plugin,
 			                                   "copy-command");
-			quoted = g_shell_quote(td->auth_url);
-			line = g_strdup_printf("sh -c 'printf %%s %s | %s'",
+			quoted = g_shell_quote(url);
+			/* A pipe, so the spawn helper gives it a shell. */
+			line = g_strdup_printf("printf %%s %s | %s",
 				quoted, (copy != NULL) ? copy : "wl-copy");
 			gowl_bar_plugin_spawn(plugin, line);
 			gowl_bar_plugin_notify(plugin, GOWL_BAR_TOAST_LOW,
@@ -1337,7 +1779,6 @@ ts_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 				"clipboard.");
 		} else if (index == 1) {
 			gowl_bar_plugin_spawn(plugin, "tailscale logout");
-			g_clear_pointer(&td->auth_url, g_free);
 		}
 		return;
 	}
@@ -1400,7 +1841,10 @@ ts_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 				td->active ? "tailscale down" : "tailscale up");
 			break;
 		case 1:
-			gowl_bar_plugin_refresh_panel(plugin);
+			/* Ask again, on the worker: rebuilding the panel from
+			   the cache is not a refresh. */
+			gowl_bar_plugin_queue_work(plugin, ts_refresh_work, td,
+			                           NULL);
 			break;
 		case 2:
 			gowl_bar_plugin_spawn(plugin,

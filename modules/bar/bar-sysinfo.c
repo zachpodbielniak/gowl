@@ -70,6 +70,7 @@ struct _BarSysinfo {
 	/* Battery */
 	gint     battery_percent;
 	gboolean battery_charging;
+	gboolean battery_full;
 	gint     battery_minutes;
 	time_t   battery_time;
 
@@ -351,6 +352,7 @@ read_battery(BarSysinfo *self, time_t now)
 	self->battery_percent  = -1;
 	self->battery_minutes  = -1;
 	self->battery_charging = FALSE;
+	self->battery_full     = FALSE;
 
 	for (i = 0; names[i] != NULL; i++) {
 		g_autofree gchar *base = NULL;
@@ -372,38 +374,151 @@ read_battery(BarSysinfo *self, time_t now)
 		status_path = g_build_filename(base, "status", NULL);
 		status = read_str_file(status_path);
 		if (status != NULL &&
-		    (g_ascii_strcasecmp(status, "Charging") == 0 ||
-		     g_ascii_strcasecmp(status, "Full") == 0))
+		    g_ascii_strcasecmp(status, "Full") == 0) {
+			/* Plugged in and done: on mains, so it reads as
+			   charging for colour and glyph, but there is no
+			   "until full" to compute and no "remaining" either. */
 			self->battery_charging = TRUE;
+			self->battery_full     = TRUE;
+		} else if (status != NULL &&
+		           g_ascii_strcasecmp(status, "Charging") == 0) {
+			self->battery_charging = TRUE;
+		}
 
-		/* Runtime left, from whichever pair of units this battery
-		   reports.  Charge (uAh) and energy (uWh) are both common
-		   and a machine exposes exactly one of them. */
-		{
+		/*
+		 * Runtime left, from whichever pair of units this battery
+		 * reports.  Charge (uAh) and energy (uWh) are both common
+		 * and a machine exposes exactly one of them.
+		 *
+		 * Which way the clock runs depends on the state: on
+		 * battery it is what is left divided by the draw; on the
+		 * charger it is what is MISSING divided by the current
+		 * going in.  The panel labelled the first "Until full"
+		 * while charging, which was the time to empty at the
+		 * charging current -- a number with no meaning at all.
+		 */
+		if (!self->battery_full) {
 			g_autofree gchar *now_path = NULL;
+			g_autofree gchar *full_path = NULL;
 			g_autofree gchar *rate_path = NULL;
-			gint level = 0, rate = 0;
+			gint level = 0, full = 0, rate = 0;
 
 			now_path  = g_build_filename(base, "charge_now", NULL);
+			full_path = g_build_filename(base, "charge_full", NULL);
 			rate_path = g_build_filename(base, "current_now", NULL);
 			if (!read_int_file(now_path, &level)) {
 				g_free(now_path);
+				g_free(full_path);
 				g_free(rate_path);
 				now_path  = g_build_filename(base,
 					"energy_now", NULL);
+				full_path = g_build_filename(base,
+					"energy_full", NULL);
 				rate_path = g_build_filename(base,
 					"power_now", NULL);
 				if (!read_int_file(now_path, &level))
 					level = 0;
 			}
-			if (level > 0 && read_int_file(rate_path, &rate) &&
-			    rate > 0) {
+			if (self->battery_charging) {
+				if (read_int_file(full_path, &full) &&
+				    full > level &&
+				    read_int_file(rate_path, &rate) && rate > 0) {
+					self->battery_minutes = (gint)
+						(((gint64)(full - level) * 60)
+						 / rate);
+				}
+			} else if (level > 0 &&
+			           read_int_file(rate_path, &rate) &&
+			           rate > 0) {
 				self->battery_minutes =
 					(gint)(((gint64)level * 60) / rate);
 			}
 		}
 		break;
 	}
+}
+
+/*
+ * The CPU's own sensor, found by asking each hwmon what it is.
+ *
+ * hwmon numbering is enumeration order, not importance: on the laptop
+ * this was written on hwmon0 is the AC adapter, hwmon1 the fan and
+ * hwmon2 acpitz, so "the first of hwmon0..2 with a temp1_input" gave
+ * the ACPI thermal zone and the real package sensor (k10temp, at
+ * hwmon10) was never read.  The drivers that report the CPU package
+ * have well-known names, so those are preferred by name; a thermal
+ * zone typed x86_pkg_temp is the same reading through the other
+ * interface; and only then does the first temperature of any kind
+ * stand in, which is still better than nothing on an unknown board.
+ */
+static gchar *
+find_cpu_temp_path(void)
+{
+	const gchar *cpu_names[] = {
+		"coretemp", "k10temp", "zenpower", "cpu_thermal",
+		"cpu-thermal", "soc_thermal", "macsmc_hwmon", "applesmc",
+		NULL
+	};
+	g_autoptr(GDir) dir = NULL;
+	const gchar *entry;
+	g_autofree gchar *first_any = NULL;
+	gint i;
+
+	dir = g_dir_open("/sys/class/hwmon", 0, NULL);
+	if (dir != NULL) {
+		while ((entry = g_dir_read_name(dir)) != NULL) {
+			g_autofree gchar *name_path = NULL;
+			g_autofree gchar *name = NULL;
+			g_autofree gchar *temp = NULL;
+
+			name_path = g_build_filename("/sys/class/hwmon", entry,
+			                             "name", NULL);
+			temp = g_build_filename("/sys/class/hwmon", entry,
+			                        "temp1_input", NULL);
+			if (!g_file_test(temp, G_FILE_TEST_EXISTS))
+				continue;
+			name = read_str_file(name_path);
+			for (i = 0; name != NULL && cpu_names[i] != NULL; i++) {
+				if (g_ascii_strcasecmp(name, cpu_names[i]) == 0)
+					return g_steal_pointer(&temp);
+			}
+			if (first_any == NULL)
+				first_any = g_steal_pointer(&temp);
+		}
+	}
+
+	/* The thermal zones: the package zone by type, else zone 0. */
+	{
+		g_autoptr(GDir) tz = g_dir_open("/sys/class/thermal", 0, NULL);
+
+		if (tz != NULL) {
+			while ((entry = g_dir_read_name(tz)) != NULL) {
+				g_autofree gchar *type_path = NULL;
+				g_autofree gchar *type = NULL;
+
+				if (!g_str_has_prefix(entry, "thermal_zone"))
+					continue;
+				type_path = g_build_filename("/sys/class/thermal",
+				                             entry, "type", NULL);
+				type = read_str_file(type_path);
+				if (type != NULL &&
+				    (strcmp(type, "x86_pkg_temp") == 0 ||
+				     strcmp(type, "cpu-thermal") == 0 ||
+				     strcmp(type, "cpu_thermal") == 0)) {
+					return g_build_filename(
+						"/sys/class/thermal", entry,
+						"temp", NULL);
+				}
+			}
+		}
+	}
+
+	if (first_any != NULL)
+		return g_steal_pointer(&first_any);
+	if (g_file_test("/sys/class/thermal/thermal_zone0/temp",
+	                G_FILE_TEST_EXISTS))
+		return g_strdup("/sys/class/thermal/thermal_zone0/temp");
+	return NULL;
 }
 
 static void
@@ -416,21 +531,7 @@ read_temp(BarSysinfo *self, time_t now)
 	self->temp_time = now;
 
 	if (self->temp_path == NULL) {
-		const gchar *paths[] = {
-			"/sys/class/hwmon/hwmon0/temp1_input",
-			"/sys/class/hwmon/hwmon1/temp1_input",
-			"/sys/class/hwmon/hwmon2/temp1_input",
-			"/sys/class/thermal/thermal_zone0/temp",
-			NULL
-		};
-		gint i;
-
-		for (i = 0; paths[i] != NULL; i++) {
-			if (g_file_test(paths[i], G_FILE_TEST_EXISTS)) {
-				self->temp_path = g_strdup(paths[i]);
-				break;
-			}
-		}
+		self->temp_path = find_cpu_temp_path();
 		if (self->temp_path == NULL)
 			return;
 	}
@@ -439,28 +540,38 @@ read_temp(BarSysinfo *self, time_t now)
 		self->temp_mc = mc;
 }
 
+/* amdgpu is the driver that reports utilisation this way; the cards
+   are found rather than numbered, since card0 is often the one with
+   no display attached.  A connector entry (card1-eDP-1) has no
+   device/ and is skipped by the read failing. */
 static void
 read_gpu(BarSysinfo *self, time_t now)
 {
-	const gchar *paths[] = {
-		"/sys/class/drm/card0/device/gpu_busy_percent",
-		"/sys/class/drm/card1/device/gpu_busy_percent",
-		"/sys/class/drm/card2/device/gpu_busy_percent",
-		NULL
-	};
-	gint i, pct;
+	g_autoptr(GDir) dir = NULL;
+	const gchar *entry;
+	gint pct;
 
 	if (now - self->gpu_time < 5)
 		return;
 	self->gpu_time = now;
 
-	for (i = 0; paths[i] != NULL; i++) {
-		if (read_int_file(paths[i], &pct)) {
+	self->gpu_percent = -1;
+	dir = g_dir_open("/sys/class/drm", 0, NULL);
+	if (dir == NULL)
+		return;
+	while ((entry = g_dir_read_name(dir)) != NULL) {
+		g_autofree gchar *path = NULL;
+
+		if (!g_str_has_prefix(entry, "card") ||
+		    strchr(entry, '-') != NULL)
+			continue;
+		path = g_build_filename("/sys/class/drm", entry, "device",
+		                        "gpu_busy_percent", NULL);
+		if (read_int_file(path, &pct)) {
 			self->gpu_percent = pct;
 			return;
 		}
 	}
-	self->gpu_percent = -1;
 }
 
 /* Sum an interface's counters out of /proc/net/dev.  With @want NULL
@@ -533,12 +644,30 @@ scan_net_dev(const gchar *want, gchar **found, glong *rx_out, glong *tx_out)
 	return TRUE;
 }
 
+static gboolean read_default_route(gchar **iface_out, gchar **gateway_out);
+
 static void
 read_net(BarSysinfo *self, const gchar *iface, time_t now)
 {
 	g_autofree gchar *found = NULL;
+	g_autofree gchar *resolved = NULL;
 	glong rx, tx;
 	gboolean restart;
+
+	/*
+	 * "No interface named" means the one the default route leaves by,
+	 * which is what "the network" is on any machine with one.  It is
+	 * resolved to a NAME here rather than left as NULL, so a `net'
+	 * widget with no parameter and a `network' widget naming the same
+	 * interface agree on what they are measuring: with NULL kept
+	 * distinct the two took turns restarting the counters and both
+	 * read zero for ever.  The busiest interface is the fallback for
+	 * a host with no default route at all.
+	 */
+	if (iface == NULL) {
+		if (read_default_route(&resolved, NULL))
+			iface = resolved;
+	}
 
 	/* A different interface than last time invalidates the previous
 	   counters entirely; without this the first sample after a switch
@@ -594,6 +723,22 @@ read_net(BarSysinfo *self, const gchar *iface, time_t now)
 	self->net_time    = now;
 }
 
+/* A real whole disk: listed in /sys/block and not a loop, RAM, zram
+   or device-mapper node, whose traffic is somebody else's counted
+   twice. */
+static gboolean
+io_is_whole_disk(const gchar *name)
+{
+	g_autofree gchar *path = NULL;
+
+	if (g_str_has_prefix(name, "loop") || g_str_has_prefix(name, "ram") ||
+	    g_str_has_prefix(name, "zram") || g_str_has_prefix(name, "dm-") ||
+	    g_str_has_prefix(name, "md") || g_str_has_prefix(name, "sr"))
+		return FALSE;
+	path = g_build_filename("/sys/block", name, NULL);
+	return g_file_test(path, G_FILE_TEST_IS_DIR);
+}
+
 static void
 read_io(BarSysinfo *self, const gchar *device, time_t now)
 {
@@ -630,16 +775,22 @@ read_io(BarSysinfo *self, const gchar *device, time_t now)
 			break;
 		}
 
-		/* Whole disks only: a partition's counters double-count
-		   what its parent already reported. */
-		if ((strncmp(name, "sd", 2) == 0 && strlen(name) == 3) ||
-		    (strncmp(name, "vd", 2) == 0 && strlen(name) == 3) ||
-		    (strncmp(name, "nvme", 4) == 0 &&
-		     strchr(name, 'p') == NULL)) {
+		/*
+		 * Whole disks only: a partition's counters double-count
+		 * what its parent already reported.  The kernel's own list
+		 * of whole disks is /sys/block, which is the test -- a name
+		 * pattern got mmcblk, dm and md wrong and the first "sd?"
+		 * in diskstats order was as likely an idle USB stick as the
+		 * system disk.  Virtual devices are skipped, and of the
+		 * real ones the one that has moved the most data is the
+		 * one the machine actually runs on.
+		 */
+		if (!io_is_whole_disk(name))
+			continue;
+		if (!found || rd + wr > rd_sect + wr_sect) {
 			rd_sect = rd;
 			wr_sect = wr;
 			found = TRUE;
-			break;
 		}
 	}
 	fclose(f);
@@ -946,10 +1097,25 @@ bar_sysinfo_battery_charging(BarSysinfo *self)
 }
 
 /**
+ * bar_sysinfo_battery_full:
+ * @self: the reader
+ *
+ * Returns: %TRUE when the battery reports itself full on the charger
+ */
+gboolean
+bar_sysinfo_battery_full(BarSysinfo *self)
+{
+	g_return_val_if_fail(self != NULL, FALSE);
+	read_battery(self, time(NULL));
+	return self->battery_full;
+}
+
+/**
  * bar_sysinfo_battery_minutes:
  * @self: the reader
  *
- * Returns: minutes of runtime left, or -1
+ * Returns: minutes of runtime left -- until empty on battery, until
+ *   full on the charger -- or -1
  */
 gint
 bar_sysinfo_battery_minutes(BarSysinfo *self)

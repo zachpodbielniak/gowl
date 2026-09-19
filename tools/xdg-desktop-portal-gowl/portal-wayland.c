@@ -187,8 +187,8 @@ cap_axis(void *data, struct zgowl_input_capture_v1 *cap,
 
 	(void)cap;
 	(void)time;
-	(void)discrete;
-	portal_eis_scroll(self->eis, axis, wl_fixed_to_double(value));
+	portal_eis_scroll(self->eis, axis, wl_fixed_to_double(value),
+	                  discrete);
 	portal_eis_frame(self->eis);
 }
 

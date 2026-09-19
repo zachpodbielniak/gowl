@@ -764,12 +764,33 @@ portal_eis_button(PortalEis *self, uint32_t button, bool pressed)
 	eis_device_button_button(self->device, button, pressed);
 }
 
+/*
+ * A wheel notch goes out as a notch.
+ *
+ * @discrete is the wheel amount in 120ths, the unit wlroots, libei and
+ * wl_pointer.axis_value120 all share; a non-zero value means the
+ * compositor saw a wheel and the receiver is told so with
+ * eis_device_scroll_discrete().  It used to be dropped on the floor and
+ * every scroll sent as a continuous delta -- the exact fault the
+ * ingress direction had, seen from the other end: the remote
+ * compositor then had no notch to hand its clients and had to guess,
+ * and a client that trusts the source scrolled by nothing.  Zero means
+ * a touchpad or a smooth device, and the continuous delta is right.
+ */
 void
-portal_eis_scroll(PortalEis *self, uint32_t axis, double value)
+portal_eis_scroll(PortalEis *self, uint32_t axis, double value,
+                  int32_t discrete)
 {
 	if (!streaming_ok(self))
 		return;
 	/* axis 0 == vertical, 1 == horizontal. */
+	if (discrete != 0) {
+		if (axis == 1)
+			eis_device_scroll_discrete(self->device, discrete, 0);
+		else
+			eis_device_scroll_discrete(self->device, 0, discrete);
+		return;
+	}
 	if (axis == 1)
 		eis_device_scroll_delta(self->device, value, 0.0);
 	else

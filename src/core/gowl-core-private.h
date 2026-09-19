@@ -573,6 +573,14 @@ struct _GowlCompositor {
 	 * crosses an edge barrier (it pins at the edge); barrier-crossing must
 	 * test prev + raw-delta (the DESIRED, unclamped target) instead. */
 	GowlInputCapture *input_capture;
+	gulong            input_capture_active_handler;
+	/* The surface that had the keyboard when capture activated.  Its
+	 * focus is cleared for the duration -- a wl_keyboard.leave is how a
+	 * client learns that every key it saw pressed is now released, and
+	 * the releases themselves are on their way to the other machine --
+	 * and handed back on deactivation, with whatever is still held. */
+	struct wlr_surface *capture_kb_focus;
+	struct wl_listener  capture_kb_focus_destroy;
 	gdouble           prev_cursor_x;
 	gdouble           prev_cursor_y;
 	gdouble           cap_motion_dx;

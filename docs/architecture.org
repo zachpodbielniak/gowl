@@ -2435,6 +2435,11 @@ In the motion handlers:
   which measures the relative delta from the device's *previous
   position* rather than from the cursor (see [[#injected-input-path]]
   for why that matters under a lock).
+- an active constraint of either kind *suppresses the InputCapture
+  barrier test*.  That test runs on the raw delta precisely because the
+  cursor clamps at the edge, so a held cursor was no protection: a
+  mouselook flick towards the edge handed the machine to the KVM's
+  other end mid-game.  See =docs/input-capture.org=.
 
 =tests/test-pointer-lock.c= exercises all of it with a real client:
 the lock from the relative and the layout-absolute injectors, the

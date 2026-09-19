@@ -68,6 +68,24 @@ for ev in EIS_EVENT_DEVICE_START_EMULATING \
 	fi
 done
 
+# 2b. A wheel notch leaves as a notch.  The capture protocol carries the
+#     discrete amount (120ths, the unit libei shares); the portal used to
+#     take it off the wire and throw it away, sending every scroll as a
+#     continuous delta -- the ingress bug seen from the other end, where
+#     the remote compositor then announced a wheel with no wheel amount
+#     and clients that trust the source scrolled by nothing.
+if ! awk '/^portal_eis_scroll\(/,/^}/' "$eis" | sed 's,/\*.*\*/,,' \
+		| grep -vE '^[[:space:]]*\*' | grep -q 'eis_device_scroll_discrete('; then
+	echo "FAIL: portal_eis_scroll() never calls eis_device_scroll_discrete;"
+	echo "      the receiver gets every wheel notch as a continuous delta"
+	fail=1
+fi
+if awk '/^cap_axis\(/,/^}/' "$wl" | grep -q '(void)discrete'; then
+	echo "FAIL: portal-wayland.c cap_axis discards the discrete amount"
+	echo "      the compositor sent"
+	fail=1
+fi
+
 # 3. The injection device needs regions or a client cannot address an
 #    absolute position on it.  Both devices build them from the zones.
 if ! grep -q 'eis_device_new_region' "$eis"; then

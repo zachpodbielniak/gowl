@@ -333,6 +333,10 @@ static void     relative_pointer_send      (GowlCompositor *self,
 static gboolean constraint_resolve_target  (GowlCompositor *self,
                                             gdouble        *x,
                                             gdouble        *y);
+static void     capture_focus_forget       (GowlCompositor *self);
+static void     capture_focus_restore      (GowlCompositor *self);
+static GowlClient *client_for_surface      (GowlCompositor *self,
+                                            struct wlr_surface *surface);
 static void     absolute_motion_note       (GowlCompositor *self,
                                             gdouble         tx,
                                             gdouble         ty);
@@ -546,6 +550,17 @@ gowl_compositor_dispose(GObject *object)
 		gowl_ext_workspace_manager_unregister(
 			self->ext_workspace_manager);
 		self->ext_workspace_manager = NULL;
+	}
+
+	/* Before the protocol goes: its sessions detach through
+	 * gowl_compositor_set_input_capture(NULL), which wants the handler
+	 * and the remembered surface in a known state. */
+	capture_focus_forget(self);
+	if (self->input_capture != NULL
+	    && self->input_capture_active_handler != 0) {
+		g_signal_handler_disconnect(self->input_capture,
+			self->input_capture_active_handler);
+		self->input_capture_active_handler = 0;
 	}
 
 	if (self->input_capture_protocol != NULL) {
@@ -1413,6 +1428,105 @@ gowl_compositor_set_custom_action_handler(
 	self->custom_action_data = user_data;
 }
 
+/* Forget the surface remembered at activation, without touching it. */
+static void
+capture_focus_forget(GowlCompositor *self)
+{
+	if (self->capture_kb_focus == NULL)
+		return;
+	wl_list_remove(&self->capture_kb_focus_destroy.link);
+	self->capture_kb_focus = NULL;
+}
+
+static void
+on_capture_kb_focus_destroy(struct wl_listener *listener, void *data)
+{
+	GowlCompositor *self;
+
+	(void)data;
+	self = wl_container_of(listener, self, capture_kb_focus_destroy);
+	capture_focus_forget(self);
+}
+
+/*
+ * Capture activated: take the keyboard away from the local client.
+ *
+ * A key pressed before the crossing was delivered locally; its release
+ * arrives after it and is diverted to the other machine, so the local
+ * client never hears it.  Held Shift stays held, and an ordinary key
+ * auto-repeats in the window under the frozen cursor for as long as
+ * the pointer is away.  wl_keyboard.leave is the protocol's answer: a
+ * client that receives it treats every key as released.  The surface
+ * is remembered so the same one gets the keyboard back.
+ */
+static void
+capture_focus_drop(GowlCompositor *self)
+{
+	struct wlr_surface *focused;
+
+	if (self->wlr_seat == NULL)
+		return;
+	capture_focus_forget(self);
+	/* A grabbed keyboard -- a launcher's, an X11 popup's, the lock
+	 * screen's -- is not a client's to lose.  The focus gate would
+	 * refuse to hand it back, so it is not taken.  Every key is
+	 * diverted regardless; only the leave is withheld. */
+	if (self->locked || gowl_compositor_keyboard_is_grabbed(self))
+		return;
+	focused = self->wlr_seat->keyboard_state.focused_surface;
+	if (focused == NULL)
+		return;
+	self->capture_kb_focus = focused;
+	self->capture_kb_focus_destroy.notify = on_capture_kb_focus_destroy;
+	wl_signal_add(&focused->events.destroy, &self->capture_kb_focus_destroy);
+	wlr_seat_keyboard_notify_clear_focus(self->wlr_seat);
+}
+
+/*
+ * Capture released: give the keyboard back, with the truth.
+ *
+ * Through gowl_compositor_focus_client(), the gated path, and not a
+ * seat enter of our own: tests/test-close-guard.sh allows the seat's
+ * keyboard focus to move from four vetted places only, because a fifth
+ * that skipped the focus gate is how a launcher ends up visible but
+ * deaf.  Its enter carries the keys the keyboard currently has down
+ * and the current modifiers, so a key still physically held is pressed
+ * again for the client and a modifier or lock toggled while the
+ * pointer was away is corrected -- the local seat heard none of those
+ * changes, because on_kb_modifiers diverts them too.  Nothing is done
+ * if something else focused a surface in the meantime; that decision
+ * was made deliberately and later.
+ */
+static void
+capture_focus_restore(GowlCompositor *self)
+{
+	struct wlr_surface *surface = self->capture_kb_focus;
+	GowlClient         *c;
+
+	capture_focus_forget(self);
+	if (surface == NULL || self->wlr_seat == NULL
+	    || self->wlr_seat->keyboard_state.focused_surface != NULL)
+		return;
+
+	c = client_for_surface(self, surface);
+	if (c != NULL)
+		gowl_compositor_focus_client(self, c, FALSE);
+}
+
+static void
+on_input_capture_active_changed(GowlInputCapture *capture,
+                                gboolean          active,
+                                gpointer          user_data)
+{
+	GowlCompositor *self = (GowlCompositor *)user_data;
+
+	(void)capture;
+	if (active)
+		capture_focus_drop(self);
+	else
+		capture_focus_restore(self);
+}
+
 void
 gowl_compositor_set_input_capture(
 	GowlCompositor   *self,
@@ -1420,7 +1534,25 @@ gowl_compositor_set_input_capture(
 ){
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
+	if (self->input_capture == capture)
+		return;
+
+	if (self->input_capture != NULL) {
+		if (self->input_capture_active_handler != 0)
+			g_signal_handler_disconnect(self->input_capture,
+				self->input_capture_active_handler);
+		self->input_capture_active_handler = 0;
+		/* A session torn down mid-capture never deactivates; the
+		 * keyboard still has to come back. */
+		capture_focus_restore(self);
+	}
+
 	self->input_capture = capture;
+
+	if (capture != NULL)
+		self->input_capture_active_handler = g_signal_connect(capture,
+			"active-changed",
+			G_CALLBACK(on_input_capture_active_changed), self);
 }
 
 GowlInputCapture *
@@ -1892,6 +2024,22 @@ gowl_compositor_warp_cursor(
 	wlr_cursor_warp_closest(self->wlr_cursor, NULL, x, y);
 	self->prev_cursor_x = self->wlr_cursor->x;
 	self->prev_cursor_y = self->wlr_cursor->y;
+
+	/*
+	 * A warp is not motion.  The raw delta of the last event is still
+	 * in cap_motion_dx/dy -- motionnotify returns before consuming it
+	 * while capture is active, and the release that brings the pointer
+	 * back is exactly what follows an active capture -- so a stale
+	 * delta pointing off the screen would re-cross the barrier from
+	 * the release point and send the pointer straight back.
+	 *
+	 * Then resolve what is under the cursor NOW, rather than leaving
+	 * the previous window with pointer focus until the hand moves: the
+	 * release point is wherever the remote left off, on any output.
+	 */
+	self->cap_motion_dx = 0.0;
+	self->cap_motion_dy = 0.0;
+	gowl_compositor_motionnotify(self, inject_now_msec());
 }
 
 /*
@@ -11346,12 +11494,25 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 		 * straddles the barrier line.  The desired (unclamped) target
 		 * prev + delta does straddle it, so the push past the edge
 		 * registers as a crossing and capture activates. */
-		gowl_input_capture_check_crossing(
-			self->input_capture,
-			self->prev_cursor_x,
-			self->prev_cursor_y,
-			self->prev_cursor_x + self->cap_motion_dx,
-			self->prev_cursor_y + self->cap_motion_dy);
+		/*
+		 * Not while a client holds the pointer.  A LOCKED pointer
+		 * does not move, so the raw delta below is the only thing
+		 * that could still reach a barrier -- and it does: a
+		 * mouselook flick towards the screen edge, with the cursor
+		 * frozen a few pixels from it, crossed the barrier and
+		 * handed the keyboard and mouse to the other machine in the
+		 * middle of a game.  A CONFINED pointer cannot reach the
+		 * edge either, by the client's own request.  The device path
+		 * and the KVM egress are one path here: the same constraint
+		 * that keeps the cursor in keeps the machine.
+		 */
+		if (self->active_constraint == NULL)
+			gowl_input_capture_check_crossing(
+				self->input_capture,
+				self->prev_cursor_x,
+				self->prev_cursor_y,
+				self->prev_cursor_x + self->cap_motion_dx,
+				self->prev_cursor_y + self->cap_motion_dy);
 		if (gowl_input_capture_is_active(self->input_capture)) {
 			/* Re-warp the cursor back to the frozen point; the
 			 * relative delta has already been pushed to the sink by

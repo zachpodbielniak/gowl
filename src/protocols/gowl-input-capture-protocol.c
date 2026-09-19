@@ -311,14 +311,17 @@ capture_release(struct wl_client   *client,
 	if (s == NULL)
 		return;
 
+	/* Deactivate FIRST.  The warp resolves pointer focus where the
+	 * cursor lands, and motionnotify on an active capture does the
+	 * opposite: it drags the cursor back to the frozen point. */
+	gowl_input_capture_deactivate(s->capture);
+
 	/* Optionally warp the cursor to the requested release point (the
 	 * point, in layout coordinates, the remote left off at). */
 	if (has_position)
 		gowl_compositor_warp_cursor(
 			(GowlCompositor *)s->proto->compositor,
 			wl_fixed_to_double(x), wl_fixed_to_double(y));
-
-	gowl_input_capture_deactivate(s->capture);
 }
 
 static void

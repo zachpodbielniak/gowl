@@ -31,6 +31,8 @@
 #include <wayland-server-core.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_pointer.h>
+#include <wlr/interfaces/wlr_pointer.h>
 
 #include "xdg-shell-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
@@ -38,6 +40,10 @@
 
 #include "gowl.h"
 #include "core/gowl-core-private.h"
+#include "core/gowl-input-capture.h"
+#include "core/gowl-monitor.h"
+#include "boxed/gowl-input-zone.h"
+#include "boxed/gowl-input-barrier.h"
 
 #define SURFACE_W (200)
 #define SURFACE_H (150)
@@ -320,10 +326,17 @@ client_thread(gpointer data)
 	wl_display_roundtrip(c->display);
 
 	while (!g_atomic_int_get(&c->stop)) {
-		if (g_atomic_int_get(&c->unlock_now) == 1 && c->lock != NULL) {
+		if (g_atomic_int_get(&c->unlock_now) == 1
+		    && (c->lock != NULL || c->confine != NULL)) {
 			g_atomic_int_set(&c->unlock_now, 2);
-			zwp_locked_pointer_v1_destroy(c->lock);
-			c->lock = NULL;
+			if (c->lock != NULL) {
+				zwp_locked_pointer_v1_destroy(c->lock);
+				c->lock = NULL;
+			}
+			if (c->confine != NULL) {
+				zwp_confined_pointer_v1_destroy(c->confine);
+				c->confine = NULL;
+			}
 			wl_surface_commit(c->surface);
 			wl_display_flush(c->display);
 			g_atomic_int_set(&c->unlocked, 1);
@@ -564,6 +577,226 @@ unlocking_puts_the_cursor_where_the_client_says(void)
 	rig_down(&r);
 }
 
+/* ---------------------------------------------------------------
+ * The KVM egress: a barrier on the right edge, and a physical pointer
+ * --------------------------------------------------------------- */
+
+static const struct wlr_pointer_impl fake_pointer_impl = {
+	.name = "pointer-lock-test",
+};
+
+/*
+ * A motion event as the backend would deliver it: through wlr_cursor's
+ * motion signal into on_cursor_motion().  The injectors cannot stand in
+ * for this -- injected motion never arms a barrier, by design -- and
+ * the barrier test needs the raw delta only the device path records.
+ */
+static void
+physical_motion(Rig *r, struct wlr_pointer *pointer, gdouble dx, gdouble dy)
+{
+	struct wlr_pointer_motion_event ev;
+
+	memset(&ev, 0, sizeof ev);
+	ev.pointer = pointer;
+	ev.time_msec = (guint32)(g_get_monotonic_time() / 1000);
+	ev.delta_x = dx;
+	ev.delta_y = dy;
+	ev.unaccel_dx = dx;
+	ev.unaccel_dy = dy;
+	wl_signal_emit_mutable(&r->compositor->wlr_cursor->events.motion, &ev);
+}
+
+/* Arm a capture session with one barrier along the right edge of the
+ * layout, as a KVM server whose other machine sits to the right would.
+ * The caller owns the returned object and detaches it before unref. */
+static GowlInputCapture *
+arm_right_edge_barrier(Rig *r)
+{
+	GowlInputCapture *cap;
+	GList *mons, *l, *zones = NULL, *barriers = NULL;
+	gint right = 0, top = G_MAXINT, bottom = G_MININT;
+
+	mons = gowl_compositor_get_monitors(r->compositor);
+	for (l = mons; l != NULL; l = l->next) {
+		gint x, y, w, h;
+
+		gowl_monitor_get_geometry((GowlMonitor *)l->data, &x, &y, &w, &h);
+		zones = g_list_append(zones,
+			gowl_input_zone_new((guint)w, (guint)h, x, y, "test"));
+		if (x + w > right) {
+			right = x + w;
+			top = y;
+			bottom = y + h;
+		}
+	}
+	g_assert_nonnull(zones);
+
+	cap = gowl_input_capture_new();
+	gowl_input_capture_set_zones(cap, zones);
+	g_list_free_full(zones, (GDestroyNotify)gowl_input_zone_free);
+
+	barriers = g_list_append(NULL,
+		gowl_input_barrier_new(1, right, top, right, bottom));
+	g_assert_true(gowl_input_capture_set_barriers(cap, barriers, NULL, NULL));
+	g_list_free_full(barriers, (GDestroyNotify)gowl_input_barrier_free);
+
+	gowl_compositor_set_input_capture(r->compositor, cap);
+	gowl_input_capture_enable(cap);
+	return cap;
+}
+
+/*
+ * A locked pointer does not cross a barrier.
+ *
+ * The cursor is frozen, so the only thing that can still reach the edge
+ * is the raw delta the barrier test uses -- and it did.  A mouselook
+ * flick towards the edge, with the cursor locked a few pixels from it,
+ * handed the keyboard and mouse to the other machine mid-game.  The
+ * same motion once the lock is gone must still cross, or the test is
+ * proving the barrier was never armed.
+ */
+static void
+locked_pointer_does_not_cross_a_barrier(void)
+{
+	Rig      r;
+	Client   c;
+	GThread *thread;
+	GowlInputCapture *cap;
+	struct wlr_pointer pointer;
+
+	if (!rig_up(&r))
+		return;
+
+	memset(&c, 0, sizeof c);
+	c.socket = r.compositor->socket_name;
+	thread = g_thread_new("pointer-lock-barrier-client", client_thread, &c);
+	pump(&r, 400);
+
+	gowl_compositor_inject_pointer_motion(r.compositor, 5, 5);
+	pump(&r, 200);
+
+	if (!await(&r, &c.entered) || !await(&r, &c.locked)) {
+		g_atomic_int_set(&c.stop, 1);
+		pump(&r, 200);
+		g_thread_join(thread);
+		g_test_skip("the client never took the lock here");
+		rig_down(&r);
+		return;
+	}
+	g_assert_true(gowl_compositor_pointer_is_locked(r.compositor));
+
+	cap = arm_right_edge_barrier(&r);
+	wlr_pointer_init(&pointer, &fake_pointer_impl, "fake");
+
+	/* A hard flick right, far past the edge, while locked. */
+	physical_motion(&r, &pointer, 5000, 0);
+	pump(&r, 100);
+	g_assert_false(gowl_input_capture_is_active(cap));
+
+	/* Drop the lock; the same flick now crosses. */
+	g_atomic_int_set(&c.unlock_now, 1);
+	g_assert_true(await(&r, &c.unlocked));
+	pump(&r, 300);
+	gowl_compositor_inject_pointer_motion(r.compositor, 0, 0);
+	pump(&r, 200);
+	g_assert_false(gowl_compositor_pointer_is_locked(r.compositor));
+
+	physical_motion(&r, &pointer, 5000, 0);
+	pump(&r, 100);
+	g_assert_true(gowl_input_capture_is_active(cap));
+
+	gowl_input_capture_deactivate(cap);
+	gowl_compositor_set_input_capture(r.compositor, NULL);
+	g_object_unref(cap);
+	wlr_pointer_finish(&pointer);
+
+	g_atomic_int_set(&c.stop, 1);
+	pump(&r, 200);
+	g_thread_join(thread);
+	rig_down(&r);
+}
+
+/*
+ * The keyboard leaves with the pointer and comes back with it.
+ *
+ * A key pressed before the crossing was delivered locally and its
+ * release is diverted, so without a wl_keyboard.leave the local client
+ * keeps the key down -- Shift stays held, a letter auto-repeats in the
+ * window under the frozen cursor for as long as the pointer is away.
+ * On release the same surface gets the keyboard back, and the enter
+ * carries whatever is still physically held.
+ */
+static void
+capture_takes_the_keyboard_and_gives_it_back(void)
+{
+	Rig      r;
+	Client   c;
+	GThread *thread;
+	GowlInputCapture *cap;
+	struct wlr_pointer pointer;
+	struct wlr_surface *had_keyboard;
+
+	if (!rig_up(&r))
+		return;
+
+	memset(&c, 0, sizeof c);
+	c.socket = r.compositor->socket_name;
+	c.use_confine = TRUE;   /* any client; a confinement is dropped below */
+	thread = g_thread_new("pointer-capture-kb-client", client_thread, &c);
+	pump(&r, 400);
+
+	gowl_compositor_inject_pointer_motion(r.compositor, 5, 5);
+	pump(&r, 200);
+	if (!await(&r, &c.entered)) {
+		g_atomic_int_set(&c.stop, 1);
+		pump(&r, 200);
+		g_thread_join(thread);
+		g_test_skip("the client never mapped here");
+		rig_down(&r);
+		return;
+	}
+
+	/* The mapped window has the keyboard. */
+	had_keyboard = r.compositor->wlr_seat->keyboard_state.focused_surface;
+	g_assert_nonnull(had_keyboard);
+
+	/* A confined pointer must not cross either; this doubles as that
+	 * check before the constraint is taken away. */
+	cap = arm_right_edge_barrier(&r);
+	wlr_pointer_init(&pointer, &fake_pointer_impl, "fake");
+	g_assert_true(await(&r, &c.confined));
+	physical_motion(&r, &pointer, 5000, 0);
+	pump(&r, 100);
+	g_assert_false(gowl_input_capture_is_active(cap));
+
+	/* End the confinement, then cross for real. */
+	g_atomic_int_set(&c.unlock_now, 1);
+	g_assert_true(await(&r, &c.unlocked));
+	pump(&r, 300);
+	gowl_compositor_inject_pointer_motion(r.compositor, 0, 0);
+	pump(&r, 200);
+	g_assert_null(gowl_compositor_get_active_pointer_constraint(r.compositor));
+
+	physical_motion(&r, &pointer, 5000, 0);
+	pump(&r, 100);
+	g_assert_true(gowl_input_capture_is_active(cap));
+	g_assert_null(r.compositor->wlr_seat->keyboard_state.focused_surface);
+
+	gowl_input_capture_deactivate(cap);
+	pump(&r, 100);
+	g_assert_true(r.compositor->wlr_seat->keyboard_state.focused_surface
+	              == had_keyboard);
+
+	gowl_compositor_set_input_capture(r.compositor, NULL);
+	g_object_unref(cap);
+	wlr_pointer_finish(&pointer);
+
+	g_atomic_int_set(&c.stop, 1);
+	pump(&r, 200);
+	g_thread_join(thread);
+	rig_down(&r);
+}
+
 /*
  * The layout-absolute injector is the request a software KVM sends for
  * EVERY pointer move once it knows the compositor speaks version 2 of
@@ -730,5 +963,9 @@ main(int argc, char **argv)
 	                layout_absolute_holds_still_and_reports_increments);
 	g_test_add_func("/pointer-lock/confined-pointer-slides-along-the-edge",
 	                confined_pointer_slides_along_the_edge);
+	g_test_add_func("/pointer-lock/locked-pointer-does-not-cross-a-barrier",
+	                locked_pointer_does_not_cross_a_barrier);
+	g_test_add_func("/pointer-lock/capture-takes-the-keyboard-and-gives-it-back",
+	                capture_takes_the_keyboard_and_gives_it_back);
 	return g_test_run();
 }

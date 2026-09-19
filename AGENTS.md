@@ -234,6 +234,10 @@ tests. These assert invariants no unit test can reach:
 > cursor a lock is holding still (that reports cumulative distance and a
 > mouselook accelerates). The lock fix once landed on two of the three
 > routes and a test drove only the relative one; the guard now names each.
+> The egress mirrors it: a held (locked/confined) pointer never crosses a
+> barrier, activation clears keyboard focus and deactivation re-enters the
+> same surface (`GowlInputCapture::active-changed`), release deactivates
+> BEFORE the warp, and a wheel notch leaves as `eis_device_scroll_discrete`.
 
 > **A captured image that outlives the frame needs a buffer you own.**
 > `gowl_fx_capture_to_buffer()` returns a slot of the *output's* swapchain

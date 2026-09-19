@@ -92,6 +92,67 @@ compositor implements the same protocol in both cases.
    gowl emits =deactivated=, restores local input, and optionally warps the
    cursor to the release point.
 
+*** A pointer a client holds does not cross
+
+The barrier test runs on the *raw* delta, not on the cursor, because the
+cursor clamps at the screen edge and would never straddle an edge barrier.
+That is right for a free pointer and wrong for a held one: a client with a
+=LOCKED= pointer keeps the cursor still, so the raw delta was the only thing
+that could still reach the barrier -- and it did. A mouselook flick towards
+the edge, with the cursor frozen a few pixels from it, handed the keyboard
+and mouse to the other machine in the middle of a game. The same applies to
+a =CONFINED= pointer, which cannot reach the edge by the client's own
+request. =motionnotify= now skips the crossing test while any constraint is
+active: the constraint that keeps the cursor in keeps the machine.
+=tests/test-pointer-lock.c= drives a fake physical pointer at an armed
+barrier with the lock held and then without it.
+
+*** The keyboard leaves with the pointer
+
+While capture is active every key and every modifier change is diverted to
+the sink and the local seat hears nothing. A key pressed *before* the
+crossing was delivered locally; its release comes after and goes to the
+other machine, so the local client keeps the key down -- Shift stays held,
+a letter auto-repeats in the window under the frozen cursor for as long as
+the pointer is away -- and a lock toggled while away is stale when it
+returns.
+
+On activation the compositor clears keyboard focus (=wl_keyboard.leave= is
+how a client learns that every key it saw pressed is now released) and
+remembers the surface -- unless a launcher, an X11 popup or the lock screen
+holds the keyboard, which is not a client's to lose; on deactivation it
+refocuses the same client through =gowl_compositor_focus_client()=, the
+gated path (=tests/test-close-guard.sh= allows no other), whose enter
+carries the keys the keyboard still has down and the current modifiers, so
+a key physically held across the whole excursion is pressed again and a
+toggled lock is corrected. Nothing is done if something else took focus
+meanwhile. The compositor hears about activation through
+=GowlInputCapture::active-changed=, a signal added because the one
+activation callback slot belongs to the protocol session.
+
+*** Release resolves focus where the cursor lands
+
+=Release= with a cursor position warps the cursor there. The warp used to
+happen *before* deactivation and without resolving pointer focus, so the
+window that had the pointer when it left kept it until the hand moved, and
+the raw delta of the last captured motion was still in
+=cap_motion_dx/dy= -- =motionnotify= returns before consuming it while
+capture is active -- ready to re-cross the barrier from the release point.
+The glue now deactivates first, and =gowl_compositor_warp_cursor()= zeroes
+the stale delta and runs =motionnotify= itself.
+
+*** A wheel notch leaves as a notch
+
+The capture protocol's =axis= event carries the discrete amount in 120ths,
+the unit wlroots, libei and =wl_pointer.axis_value120= share. The portal
+took it off the wire and threw it away, sending every scroll with
+=eis_device_scroll_delta()=. That is the [[#injected-scroll][ingress bug]]
+seen from the other end: the remote compositor had no notch to hand its
+clients and had to guess. A non-zero discrete amount now goes out with
+=eis_device_scroll_discrete()= and nothing else, as Mutter does for a
+wheel; zero means a touchpad and the continuous delta is right.
+=tests/test-portal-guard.sh= pins both ends.
+
 *** EIS device geometry: regions are REQUIRED
 :PROPERTIES:
 :CUSTOM_ID: input-capture-eis-regions

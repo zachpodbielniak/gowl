@@ -55,6 +55,13 @@ struct _GowlInputCapture {
 
 G_DEFINE_TYPE(GowlInputCapture, gowl_input_capture, G_TYPE_OBJECT)
 
+enum {
+	SIGNAL_ACTIVE_CHANGED,
+	N_SIGNALS
+};
+
+static guint signals[N_SIGNALS];
+
 static void
 gowl_input_capture_finalize(GObject *object)
 {
@@ -70,6 +77,25 @@ static void
 gowl_input_capture_class_init(GowlInputCaptureClass *klass)
 {
 	G_OBJECT_CLASS(klass)->finalize = gowl_input_capture_finalize;
+
+	/**
+	 * GowlInputCapture::active-changed:
+	 * @self: the #GowlInputCapture
+	 * @active: %TRUE when a barrier was just crossed, %FALSE when the
+	 *   capture was released
+	 *
+	 * Fired alongside the activation callback, for a second listener.
+	 *
+	 * The callback slot belongs to the protocol session, which turns
+	 * an activation into a Wayland event for the portal.  The
+	 * compositor needs to hear the same thing for its own reasons --
+	 * a key held across the crossing has to be released to the local
+	 * client, and given back when the pointer returns -- and the two
+	 * must not have to share one function pointer.
+	 */
+	signals[SIGNAL_ACTIVE_CHANGED] = g_signal_new("active-changed",
+		G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0, NULL, NULL,
+		NULL, G_TYPE_NONE, 1, G_TYPE_BOOLEAN);
 }
 
 static void
@@ -642,6 +668,7 @@ do_activate(GowlInputCapture *self, gdouble x, gdouble y, guint32 barrier_id)
 	if (self->activation_cb != NULL)
 		self->activation_cb(self, self->activation_id, x, y,
 		                    barrier_id, TRUE, self->activation_data);
+	g_signal_emit(self, signals[SIGNAL_ACTIVE_CHANGED], 0, TRUE);
 }
 
 /**
@@ -725,6 +752,7 @@ gowl_input_capture_deactivate(GowlInputCapture *self)
 	if (self->activation_cb != NULL)
 		self->activation_cb(self, self->activation_id, 0.0, 0.0,
 		                    0, FALSE, self->activation_data);
+	g_signal_emit(self, signals[SIGNAL_ACTIVE_CHANGED], 0, FALSE);
 }
 
 /**

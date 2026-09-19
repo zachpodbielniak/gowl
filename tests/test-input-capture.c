@@ -873,6 +873,44 @@ test_emit_event_kinds_roundtrip(void)
 	g_object_unref(c);
 }
 
+/* The signal fires with the callback, both ways.  The compositor hangs
+ * its keyboard hand-off on this, and a signal that fired on activation
+ * only would leave the keyboard away for good. */
+static void
+on_active_changed_count(GowlInputCapture *c, gboolean active, gpointer data)
+{
+	gint *log = data;
+
+	(void)c;
+	log[0]++;
+	log[1] = active ? 1 : 0;
+}
+
+static void
+test_active_changed_signal(void)
+{
+	ActCounter ac = { 0 };
+	GowlInputCapture *c = make_armed_left_barrier(&ac);
+	gint log[2] = { 0, -1 };
+
+	g_signal_connect(c, "active-changed",
+	                 G_CALLBACK(on_active_changed_count), log);
+
+	g_assert_true(gowl_input_capture_check_crossing(c, 5, 500, -5, 500));
+	g_assert_cmpint(log[0], ==, 1);
+	g_assert_cmpint(log[1], ==, 1);
+
+	gowl_input_capture_deactivate(c);
+	g_assert_cmpint(log[0], ==, 2);
+	g_assert_cmpint(log[1], ==, 0);
+
+	/* Idempotent paths stay silent. */
+	gowl_input_capture_deactivate(c);
+	g_assert_cmpint(log[0], ==, 2);
+
+	g_object_unref(c);
+}
+
 static void
 test_capture_gtype_is_object(void)
 {
@@ -988,6 +1026,8 @@ main(int argc, char *argv[])
 	                test_emit_no_sink_safe);
 	g_test_add_func("/inputcapture/emit/event-kinds",
 	                test_emit_event_kinds_roundtrip);
+	g_test_add_func("/inputcapture/state/active-changed-signal",
+	                test_active_changed_signal);
 	g_test_add_func("/inputcapture/gtype", test_capture_gtype_is_object);
 
 	return g_test_run();

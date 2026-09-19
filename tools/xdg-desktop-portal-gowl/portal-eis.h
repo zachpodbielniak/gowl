@@ -122,7 +122,7 @@ void        portal_eis_rel_motion (PortalEis *self, double dx, double dy);
 void        portal_eis_button     (PortalEis *self, uint32_t button,
                                    bool pressed);
 void        portal_eis_scroll     (PortalEis *self, uint32_t axis,
-                                   double value);
+                                   double value, int32_t discrete);
 void        portal_eis_key        (PortalEis *self, uint32_t keycode,
                                    bool pressed);
 void        portal_eis_modifiers  (PortalEis *self, uint32_t depressed,

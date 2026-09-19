@@ -709,17 +709,61 @@ Escape to clear the search and then to close. The pointer works too ---
 hover selects, left click chooses, right click goes back, and a click
 outside closes.
 
+Backspace with nothing typed goes up a level, and at the root it does
+nothing: the card stays. It used to close, which meant holding Backspace
+to clear a search ran straight through the empty box and shut the menu.
+Escape closes; so does the key that opened it.
+
 | Key | Moves |
 |-----+-------|
-| =Ctrl+j= / =Ctrl+k= | Down, up |
+| =Ctrl+j= / =Ctrl+k=, =Ctrl+n= / =Ctrl+p=, =Tab= / =Shift+Tab= | Down, up |
 | =Ctrl+l= | Into the row --- a submenu opens, an action runs |
 | =Ctrl+h= | Back out: the search first, then a level |
+| =Ctrl+u= | Clear the search |
+| =Ctrl+w= | Delete the last word of the search |
+| =Ctrl+g= | Close |
+| =Alt+1= .. =Alt+9= | Choose the first .. ninth row outright |
 
-The four are modified because plain =h j k l= go into the search, which
-is the whole point of the card. Left and right move ACROSS LEVELS rather
-than across characters: the thing being navigated is a tree. Only Ctrl
---- =Super+j= is the session's own focus bind and the menu leaves it
-alone.
+The letters are modified because plain =h j k l= go into the search,
+which is the whole point of the card; =n p u w g= are what the same
+hands press at a prompt. Left and right move ACROSS LEVELS rather than
+across characters: the thing being navigated is a tree. Only Ctrl ---
+=Super+j= is the session's own focus bind and the menu leaves it alone.
+
+***** Searching
+
+Matching is fuzzy in tiers, best first: the whole label, a prefix, the
+start of a word, anywhere in one piece, and the letters in order with
+gaps --- so =frx= finds Firefox and =nsg= finds "Add a Non-Steam Game".
+The characters that carried the match are drawn bold in the accent
+colour, so a row that appeared can be seen to have earned it. Within a
+tier, what you have chosen before ranks first; the tiers themselves
+never move for it, so the ranking stays one you can predict.
+
+The text itself can be the answer:
+
+| Typed | Row |
+|-------+-----|
+| ==2*21= or =17*23= | The sum, worked out; Return copies it to the clipboard |
+| =!make -C ~/src= | Run it in a shell, detached |
+| =example.org=, =https://...= | Open it in the browser |
+| =~/notes=, =/var/log= | Open the folder or file (if it exists) |
+
+The calculator knows =+ - * / % ^=, parentheses, decimals, =pi= and
+=e=, and =sqrt abs floor ceil round=. It is for the sum you would
+otherwise open a terminal for, and nothing more.
+
+***** Recent
+
+The root lists the five rows you chose most recently above everything
+else, and a row's use count ranks it among equal matches when you
+search. Choices are kept in =$XDG_STATE_HOME/gowl/menu-recent.tsv=,
+capped at two hundred; a row that no longer exists --- an uninstalled
+application --- drops out on its own. =gowl menu-forget= (and the
+=Forget recent choices= row under Setup) clears it; =recent: 0= turns
+the section off; =GOWL_MENU_NO_HISTORY= in the environment keeps
+nothing at all, which is what the tests set. A =keep-open= row such as
+volume up is never recorded: pressing it nine times is one choice.
 
 | Property       | Type   | Default | Description |
 |----------------+--------+---------+-------------|
@@ -727,11 +771,19 @@ alone.
 | =max-height=   | int    | =0=     | =0= uses 70% of the output |
 | =font=         | string | bar's   | Overrides the font the bar theme sets |
 | =icon-size=    | int    | theme   | Application icons, in pixels |
+| =animate=      | bool   | =true=  | Fade and rise on open, 140 ms |
+| =hints=        | bool   | =true=  | The key hints in the footer |
+| =recent=       | int    | =5=     | Recent rows at the root; =0= for none |
 
-There are four settings because the card is the bar's own panel: the
+There are few settings because the card is the bar's own panel: the
 palette, the corner radius, the row height and the font all come from
 the theme that is already configured, so =palette: {name: latte}=
-restyles the menu along with everything else.
+restyles the menu along with everything else. The header --- the title,
+the count, the search box with its caret and the accent rule under it
+--- is the module's own drawing, since barkit's hero is a label and a
+search field is not. The card sits a little above the middle of the
+output, as launchers do, so a list that grows grows downward, and it
+closes itself if the output it opened on goes away.
 
 ***** What is in it, and where it comes from
 :PROPERTIES:

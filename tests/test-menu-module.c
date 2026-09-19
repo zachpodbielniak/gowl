@@ -328,11 +328,101 @@ test_backspace_goes_up_on_an_empty_filter(Fixture *f, gconstpointer data)
 	g_assert_cmpstr(before, ==, "OK open");
 	g_free(run(f, "menu-close", NULL));
 
-	/* And backspace at the root is the way out. */
+	/*
+	 * And at the root, Backspace does NOTHING: the card stays.  It
+	 * used to close, so holding Backspace to clear a search ran past
+	 * the empty box and shut the menu -- the one motion a search box
+	 * invites, ending in the one outcome nobody meant.  The toggle
+	 * that follows therefore CLOSES, which is how "still open" reads
+	 * through this interface.
+	 */
 	g_free(run(f, "menu-open", NULL));
 	g_assert_true(key(f, XKB_KEY_BackSpace));
+	g_assert_true(key(f, XKB_KEY_BackSpace));
 	after = run(f, "menu", NULL);
-	g_assert_cmpstr(after, ==, "OK open");
+	g_assert_cmpstr(after, ==, "OK closed");
+}
+
+/* Type, then hold Backspace past the end of it: the search empties,
+ * the root comes back, and the card is still up. */
+static void
+test_backspacing_through_a_search_stays_open(Fixture *f, gconstpointer data)
+{
+	g_autofree gchar *reply = NULL;
+	gint i;
+
+	NEED_MODULE(f);
+
+	g_free(run(f, "menu-open", NULL));
+	g_assert_true(key(f, XKB_KEY_l));
+	g_assert_true(key(f, XKB_KEY_o));
+	for (i = 0; i < 6; i++)
+		g_assert_true(key(f, XKB_KEY_BackSpace));
+	g_assert_true(is_open(f));
+
+	/* Escape is the way out, and only from an empty box. */
+	g_assert_true(key(f, XKB_KEY_x));
+	g_assert_true(key(f, XKB_KEY_Escape));
+	g_assert_true(is_open(f));
+	g_assert_true(key(f, XKB_KEY_Escape));
+	reply = run(f, "menu", NULL);
+	g_assert_cmpstr(reply, ==, "OK open");
+	g_free(run(f, "menu-close", NULL));
+}
+
+/* Alt+N chooses the Nth row without moving the cursor to it first. */
+static void
+test_alt_number_picks_a_row(Fixture *f, gconstpointer data)
+{
+	g_autofree gchar *reply = NULL;
+
+	NEED_MODULE(f);
+
+	/* The root: style, system.  Alt+2 enters System. */
+	g_free(run(f, "menu-open", NULL));
+	g_assert_true(gowl_keybind_handler_handle_key(
+		GOWL_KEYBIND_HANDLER(f->module), WLR_MODIFIER_ALT, XKB_KEY_2,
+		TRUE));
+	reply = run(f, "menu", "system");
+	g_assert_cmpstr(reply, ==, "OK closed");
+}
+
+/* Ctrl+u clears the search and Ctrl+g closes, as at a prompt. */
+static void
+test_prompt_keys(Fixture *f, gconstpointer data)
+{
+	NEED_MODULE(f);
+
+	g_free(run(f, "menu-open", NULL));
+	g_assert_true(key(f, XKB_KEY_l));
+	g_assert_true(key(f, XKB_KEY_o));
+	g_assert_true(ctrl_key(f, XKB_KEY_u));
+	/* Cleared: the first Escape now closes, where with text it would
+	 * only have emptied the box. */
+	g_assert_true(key(f, XKB_KEY_Escape));
+	g_assert_false(is_open(f));
+
+	g_free(run(f, "menu-open", NULL));
+	g_assert_true(ctrl_key(f, XKB_KEY_g));
+	g_assert_false(is_open(f));
+}
+
+/* A sum typed into the box is answered by a row of its own. */
+static void
+test_a_sum_is_answered(Fixture *f, gconstpointer data)
+{
+	g_autofree gchar *listing = NULL;
+
+	NEED_MODULE(f);
+
+	g_free(run(f, "menu-open", NULL));
+	g_assert_true(key(f, XKB_KEY_equal));
+	g_assert_true(key(f, XKB_KEY_6));
+	g_assert_true(key(f, XKB_KEY_asterisk));
+	g_assert_true(key(f, XKB_KEY_7));
+	/* Return on the answer copies it and keeps the card up. */
+	g_assert_true(key(f, XKB_KEY_Return));
+	g_assert_true(is_open(f));
 	g_free(run(f, "menu-close", NULL));
 }
 
@@ -610,6 +700,7 @@ int
 main(int argc, char *argv[])
 {
 	g_test_init(&argc, &argv, NULL);
+	g_setenv("GOWL_MENU_NO_HISTORY", "1", TRUE);
 
 #define ADD(path, fn) \
 	g_test_add(path, Fixture, NULL, fixture_setup, fn, fixture_teardown)
@@ -640,6 +731,11 @@ main(int argc, char *argv[])
 	ADD("/menu-module/the-cursor-skips-a-disabled-row",
 	    test_the_cursor_skips_a_disabled_row);
 	ADD("/menu-module/typing-filters", test_typing_filters);
+	ADD("/menu-module/backspacing-through-a-search-stays-open",
+	    test_backspacing_through_a_search_stays_open);
+	ADD("/menu-module/alt-number-picks-a-row", test_alt_number_picks_a_row);
+	ADD("/menu-module/prompt-keys", test_prompt_keys);
+	ADD("/menu-module/a-sum-is-answered", test_a_sum_is_answered);
 	ADD("/menu-module/a-modifier-does-not-type", test_a_modifier_does_not_type);
 
 	ADD("/menu-module/ctrl-j-and-k-move-the-cursor",

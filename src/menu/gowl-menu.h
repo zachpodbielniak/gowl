@@ -374,6 +374,94 @@ GowlMenuResult gowl_menu_activate (GowlMenu       *self,
                                     const gchar    *route,
                                     gchar         **out_route);
 
+/**
+ * gowl_menu_match:
+ * @label: the text being searched
+ * @needle: what was typed, any case
+ * @positions: (element-type guint) (nullable): filled with the byte
+ *   offsets in @label of the characters that matched, in order
+ *
+ * How well @label answers @needle.  The tiers, best first: the whole
+ * label (0), a prefix (10), the start of a word (20), anywhere in one
+ * piece (30), and the letters in order with gaps between (40) -- so
+ * `frx' finds Firefox and `sysm' finds System, with the letters that
+ * carried the match reported so the row can show them.  Coarse on
+ * purpose: a ranking nobody can predict is worse than an alphabetical
+ * one.
+ *
+ * Returns: the tier, or -1 when @label does not match
+ */
+gint gowl_menu_match (const gchar *label,
+                      const gchar *needle,
+                      GArray      *positions);
+
+/**
+ * gowl_menu_calc:
+ * @expression: arithmetic, e.g. "2 * (3 + 4) / 7"
+ * @out: (out): the value
+ *
+ * The menu's calculator: + - * / % ^, parentheses, unary minus,
+ * decimals, `pi' and `e', and sqrt(), abs(), floor(), ceil(), round().
+ * Nothing else -- it is for the sum you would otherwise open a
+ * terminal for, not a language.
+ *
+ * Returns: %TRUE when @expression parsed and evaluated
+ */
+gboolean gowl_menu_calc (const gchar *expression, gdouble *out);
+
+/**
+ * gowl_menu_format_number:
+ * @value: a number
+ *
+ * Returns: (transfer full): @value as the calculator shows it: no
+ *   trailing zeros, at most ten significant digits, in the C locale
+ */
+gchar *gowl_menu_format_number (gdouble value);
+
+/**
+ * gowl_menu_note_used:
+ * @self: a #GowlMenu
+ * @route: the route that was just chosen
+ *
+ * Records a choice, for the Recent rows and for search ranking.  Kept
+ * in `$XDG_STATE_HOME/gowl/menu-recent.tsv'; `GOWL_MENU_HISTORY' names
+ * another file, and `GOWL_MENU_NO_HISTORY' keeps nothing.
+ */
+void gowl_menu_note_used (GowlMenu *self, const gchar *route);
+
+/**
+ * gowl_menu_get_uses:
+ * @self: a #GowlMenu
+ * @route: a route
+ *
+ * Returns: how many times @route has been chosen
+ */
+guint gowl_menu_get_uses (GowlMenu *self, const gchar *route);
+
+/**
+ * gowl_menu_forget_history:
+ * @self: a #GowlMenu
+ *
+ * Drops every recorded choice, on disk too.
+ */
+void gowl_menu_forget_history (GowlMenu *self);
+
+/**
+ * gowl_menu_recent:
+ * @self: a #GowlMenu
+ * @compositor: (nullable): for provider rows and guards
+ * @max: how many at most
+ *
+ * The most recently chosen rows that still exist, most recent first.
+ * A row a provider made -- an application, say -- is looked up again
+ * through its provider, so a program that was uninstalled drops out.
+ *
+ * Returns: (transfer full) (element-type GowlMenuRow): the rows
+ */
+GPtrArray *gowl_menu_recent (GowlMenu       *self,
+                              GowlCompositor *compositor,
+                              guint           max);
+
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GowlMenuRow, gowl_menu_row_free)
 
 G_END_DECLS

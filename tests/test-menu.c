@@ -37,6 +37,7 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <string.h>
+#include <math.h>
 
 #include "menu/gowl-menu.h"
 #include "core/gowl-core-private.h"
@@ -1202,11 +1203,293 @@ test_a_dead_end_row_says_so(void)
 	g_assert_true(row_named(rows, "Does something")->runnable);
 }
 
+
+/* ── Matching ───────────────────────────────────────────────────── */
+
+static gchar *
+positions_text(GArray *positions)
+{
+	GString *out = g_string_new(NULL);
+	guint i;
+
+	for (i = 0; i < positions->len; i++) {
+		if (i > 0)
+			g_string_append_c(out, ',');
+		g_string_append_printf(out, "%u", g_array_index(positions, guint, i));
+	}
+	return g_string_free(out, FALSE);
+}
+
+/* The tiers, and the letters each one reports. */
+static void
+test_match_tiers_and_positions(void)
+{
+	g_autoptr(GArray) pos = g_array_new(FALSE, FALSE, sizeof(guint));
+	g_autofree gchar *p1 = NULL;
+	g_autofree gchar *p2 = NULL;
+	g_autofree gchar *p3 = NULL;
+	g_autofree gchar *p4 = NULL;
+
+	g_assert_cmpint(gowl_menu_match("Firefox", "firefox", pos), ==, 0);
+	g_assert_cmpint(gowl_menu_match("Firefox", "fire", pos), ==, 10);
+	p1 = positions_text(pos);
+	g_assert_cmpstr(p1, ==, "0,1,2,3");
+
+	/* The start of a word beats the middle of one: `st' on "Add a
+	 * Non-Steam Game" is the S of Steam, not the st of ... nothing
+	 * earlier, but on "Restart System" it is the S of System. */
+	g_assert_cmpint(gowl_menu_match("Restart System", "sy", pos), ==, 20);
+	p2 = positions_text(pos);
+	g_assert_cmpstr(p2, ==, "8,9");
+	g_assert_cmpint(gowl_menu_match("Restart System", "star", pos), ==, 30);
+	p3 = positions_text(pos);
+	g_assert_cmpstr(p3, ==, "2,3,4,5");
+
+	/* Letters in order with gaps, preferring word starts. */
+	g_assert_cmpint(gowl_menu_match("Add a Non-Steam Game", "nsg", pos), ==, 40);
+	p4 = positions_text(pos);
+	g_assert_cmpstr(p4, ==, "6,10,16");
+	g_assert_cmpint(gowl_menu_match("Firefox", "frx", NULL), ==, 40);
+
+	/* And not at all. */
+	g_assert_cmpint(gowl_menu_match("Firefox", "xrf", pos), ==, -1);
+	g_assert_cmpuint(pos->len, ==, 0);
+	g_assert_cmpint(gowl_menu_match("Firefox", "", NULL), ==, -1);
+	g_assert_cmpint(gowl_menu_match(NULL, "f", NULL), ==, -1);
+
+	/* Case does not matter, and a space splits the needle into words
+	 * that are each found on their own: `cath' is a prefix (10) and
+	 * `ray' a word start (20), so the row is a word-start match. */
+	g_assert_cmpint(gowl_menu_match("Cathode ray tube", "CATH ray", pos), ==, 20);
+	{
+		g_autofree gchar *p5 = positions_text(pos);
+
+		g_assert_cmpstr(p5, ==, "0,1,2,3,8,9,10");
+	}
+	g_assert_cmpint(gowl_menu_match("Cathode ray tube", "cath", NULL), ==, 10);
+	g_assert_cmpint(gowl_menu_match("Cathode ray tube", "ray cath", NULL), ==, 20);
+	g_assert_cmpint(gowl_menu_match("Cathode ray tube", "cath zebra", NULL), ==, -1);
+}
+
+/* Fuzzy finds what substring search never did, and ranks below it. */
+static void
+test_search_is_fuzzy_but_ranks_exact_first(void)
+{
+	g_autoptr(GowlMenu) menu = sample_menu();
+	g_autoptr(GPtrArray) rows = gowl_menu_search(menu, NULL, "crt");
+	g_autoptr(GPtrArray) both = NULL;
+
+	/* c-r-t is in "Cathode ray tube" only as initials. */
+	g_assert_nonnull(row_named(rows, "Cathode ray tube"));
+
+	/* `lock' is Lock exactly and also the l-o-c-k of nothing else
+	 * here; the exact one is first. */
+	both = gowl_menu_search(menu, NULL, "lo");
+	g_assert_cmpuint(both->len, >, 0);
+	g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(both, 0))->label,
+	                ==, "Lock");
+}
+
+/* ── The calculator ────────────────────────────────────────────── */
+
+static void
+test_calc(void)
+{
+	gdouble v = 0;
+
+	g_assert_true(gowl_menu_calc("2+2", &v));
+	g_assert_cmpfloat(v, ==, 4.0);
+	g_assert_true(gowl_menu_calc(" 2 * (3 + 4) / 7 ", &v));
+	g_assert_cmpfloat(v, ==, 2.0);
+	g_assert_true(gowl_menu_calc("-3^2", &v));
+	g_assert_cmpfloat(v, ==, -9.0);       /* the power binds tighter */
+	g_assert_true(gowl_menu_calc("(-3)^2", &v));
+	g_assert_cmpfloat(v, ==, 9.0);
+	g_assert_true(gowl_menu_calc("2^3^2", &v));
+	g_assert_cmpfloat(v, ==, 512.0);      /* right associative */
+	g_assert_true(gowl_menu_calc("10 % 4", &v));
+	g_assert_cmpfloat(v, ==, 2.0);
+	g_assert_true(gowl_menu_calc("sqrt(16) + abs(-2)", &v));
+	g_assert_cmpfloat(v, ==, 6.0);
+	g_assert_true(gowl_menu_calc("round(2.5) + floor(1.9) + ceil(1.1)", &v));
+	g_assert_cmpfloat(v, ==, 6.0);
+	g_assert_true(gowl_menu_calc("2 * pi", &v));
+	g_assert_cmpfloat(fabs(v - 2 * G_PI), <, 1e-9);
+	g_assert_true(gowl_menu_calc("1.5 x 4", &v));
+	g_assert_cmpfloat(v, ==, 6.0);
+
+	g_assert_false(gowl_menu_calc("1/0", &v));
+	g_assert_false(gowl_menu_calc("2 +", &v));
+	g_assert_false(gowl_menu_calc("(2", &v));
+	g_assert_false(gowl_menu_calc("foo(2)", &v));
+	g_assert_false(gowl_menu_calc("", &v));
+	g_assert_false(gowl_menu_calc("rm -rf /", &v));
+}
+
+static void
+test_number_formatting(void)
+{
+	g_autofree gchar *a = gowl_menu_format_number(4.0);
+	g_autofree gchar *b = gowl_menu_format_number(2.5);
+	g_autofree gchar *c = gowl_menu_format_number(1.0 / 3.0);
+	g_autofree gchar *d = gowl_menu_format_number(-1234567.0);
+
+	g_assert_cmpstr(a, ==, "4");
+	g_assert_cmpstr(b, ==, "2.5");
+	g_assert_cmpstr(c, ==, "0.3333333333");
+	g_assert_cmpstr(d, ==, "-1234567");
+}
+
+/* ── Rows made from the typed text ─────────────────────────────── */
+
+static void
+test_typed_text_makes_rows(void)
+{
+	g_autoptr(GowlMenu) menu = sample_menu();
+	g_autoptr(GPtrArray) sum = gowl_menu_search(menu, NULL, "=6*7");
+	g_autoptr(GPtrArray) bare = gowl_menu_search(menu, NULL, "6*7");
+	g_autoptr(GPtrArray) cmd = gowl_menu_search(menu, NULL, "!true");
+	g_autoptr(GPtrArray) url = gowl_menu_search(menu, NULL, "example.org");
+	g_autoptr(GPtrArray) home = gowl_menu_search(menu, NULL, "~");
+	g_autoptr(GPtrArray) word = gowl_menu_search(menu, NULL, "1password");
+	const GowlMenuRow *row;
+
+	/* `=' makes the sum the ONLY row; a bare sum leads the results. */
+	g_assert_cmpuint(sum->len, ==, 1);
+	row = g_ptr_array_index(sum, 0);
+	g_assert_cmpstr(row->route, ==, "calc:42");
+	g_assert_cmpstr(row->label, ==, "42");
+	g_assert_cmpuint(bare->len, >=, 1);
+	row = g_ptr_array_index(bare, 0);
+	g_assert_cmpstr(row->route, ==, "calc:42");
+
+	g_assert_cmpuint(cmd->len, ==, 1);
+	row = g_ptr_array_index(cmd, 0);
+	g_assert_cmpstr(row->route, ==, "run:true");
+
+	g_assert_cmpuint(url->len, >=, 1);
+	row = g_ptr_array_index(url, 0);
+	g_assert_cmpstr(row->route, ==, "open:https://example.org");
+
+	g_assert_cmpuint(home->len, >=, 1);
+	row = g_ptr_array_index(home, 0);
+	g_assert_true(g_str_has_prefix(row->route, "open:/"));
+
+	/* Digits inside a word are a word, not a sum. */
+	g_assert_true(word->len == 0
+	              || !g_str_has_prefix(((GowlMenuRow *)g_ptr_array_index(word, 0))->route, "calc:"));
+}
+
+/* Choosing the sum copies it and keeps the card; the command runs. */
+static void
+test_typed_rows_activate(void)
+{
+	g_autoptr(GowlMenu) menu = sample_menu();
+	GowlCompositor *comp = bare_compositor();
+
+	/* No seat on a bare compositor: the copy has nowhere to go, but
+	 * the row still answers "ran, stay open" rather than "nothing". */
+	g_assert_cmpint(gowl_menu_activate(menu, comp, "calc:42", NULL),
+	                ==, GOWL_MENU_RESULT_RAN_OPEN);
+	g_assert_cmpint(gowl_menu_activate(menu, comp, "run:true", NULL),
+	                ==, GOWL_MENU_RESULT_RAN);
+	g_assert_cmpint(gowl_menu_activate(menu, comp, "calc:", NULL),
+	                ==, GOWL_MENU_RESULT_NONE);
+	g_object_unref(comp);
+}
+
+/* ── History ───────────────────────────────────────────────────── */
+
+static void
+test_recent_remembers_and_ranks(void)
+{
+	g_autofree gchar *dir = g_dir_make_tmp("gowl-menu-hist-XXXXXX", NULL);
+	g_autofree gchar *file = g_build_filename(dir, "recent.tsv", NULL);
+	GowlCompositor *comp = bare_compositor();
+	g_autoptr(GowlMenu) menu = NULL;
+	g_autoptr(GPtrArray) recent = NULL;
+	g_autoptr(GPtrArray) again = NULL;
+
+	g_unsetenv("GOWL_MENU_NO_HISTORY");
+	g_setenv("GOWL_MENU_HISTORY", file, TRUE);
+	menu = sample_menu();
+
+	g_assert_cmpuint(gowl_menu_recent(menu, comp, 5)->len, ==, 0);
+
+	/* Lock, then Backdrop; a keep-open row is not recorded. */
+	gowl_menu_activate(menu, comp, "system.lock", NULL);
+	gowl_menu_activate(menu, comp, "style.backdrop", NULL);
+	gowl_menu_activate(menu, comp, "system.louder", NULL);
+	g_assert_cmpuint(gowl_menu_get_uses(menu, "system.lock"), ==, 1);
+	g_assert_cmpuint(gowl_menu_get_uses(menu, "system.louder"), ==, 0);
+
+	recent = gowl_menu_recent(menu, comp, 5);
+	g_assert_cmpuint(recent->len, ==, 2);
+	/* Most recent first, and it carries its path. */
+	g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(recent, 0))->route,
+	                ==, "style.backdrop");
+	g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(recent, 0))->detail,
+	                ==, "Style");
+
+	/* Persisted: a fresh model reads it back. */
+	g_assert_true(g_file_test(file, G_FILE_TEST_EXISTS));
+	{
+		g_autoptr(GowlMenu) reloaded = sample_menu();
+
+		g_assert_cmpuint(gowl_menu_get_uses(reloaded, "system.lock"),
+		                 ==, 1);
+	}
+
+	/*
+	 * Ranking.  `o' is somewhere inside Backdrop, Cathode ray tube,
+	 * Lock, Volume up and No Id At All alike -- one tier for all of
+	 * them -- so tree order decides and Backdrop, chosen once like
+	 * Lock, leads.  Choose Lock twice more and it leads instead: use
+	 * reorders equals.  It never promotes across tiers: `backdrop'
+	 * still puts the exact Backdrop above the word-start Next
+	 * backdrop however often the latter is chosen.
+	 */
+	{
+		g_autoptr(GPtrArray) rows = gowl_menu_search(menu, comp, "o");
+
+		g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(rows, 0))->label,
+		                ==, "Backdrop");
+	}
+	gowl_menu_activate(menu, comp, "system.lock", NULL);
+	gowl_menu_activate(menu, comp, "system.lock", NULL);
+	{
+		g_autoptr(GPtrArray) rows = gowl_menu_search(menu, comp, "o");
+
+		g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(rows, 0))->label,
+		                ==, "Lock");
+	}
+	gowl_menu_activate(menu, comp, "style.next-backdrop", NULL);
+	gowl_menu_activate(menu, comp, "style.next-backdrop", NULL);
+	gowl_menu_activate(menu, comp, "style.next-backdrop", NULL);
+	{
+		g_autoptr(GPtrArray) rows = gowl_menu_search(menu, comp, "backdrop");
+
+		g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(rows, 0))->label,
+		                ==, "Backdrop");
+	}
+
+	gowl_menu_forget_history(menu);
+	again = gowl_menu_recent(menu, comp, 5);
+	g_assert_cmpuint(again->len, ==, 0);
+	g_assert_false(g_file_test(file, G_FILE_TEST_EXISTS));
+
+	g_setenv("GOWL_MENU_NO_HISTORY", "1", TRUE);
+	g_unsetenv("GOWL_MENU_HISTORY");
+	g_rmdir(dir);
+	g_object_unref(comp);
+}
+
 int
 main(int argc, char *argv[])
 {
 	g_test_init(&argc, &argv, NULL);
 	g_log_set_writer_func(capture_writer, NULL, NULL);
+	g_setenv("GOWL_MENU_NO_HISTORY", "1", TRUE);
 	apps_fixture_up();
 
 	g_test_add_func("/menu/nesting-makes-the-route",
@@ -1274,6 +1557,17 @@ main(int argc, char *argv[])
 	                test_an_action_runs_and_closes);
 	g_test_add_func("/menu/keep-open-leaves-the-menu-up",
 	                test_keep_open_leaves_the_menu_up);
+	g_test_add_func("/menu/match-tiers-and-positions",
+	                test_match_tiers_and_positions);
+	g_test_add_func("/menu/search-is-fuzzy-but-ranks-exact-first",
+	                test_search_is_fuzzy_but_ranks_exact_first);
+	g_test_add_func("/menu/calc", test_calc);
+	g_test_add_func("/menu/number-formatting", test_number_formatting);
+	g_test_add_func("/menu/typed-text-makes-rows",
+	                test_typed_text_makes_rows);
+	g_test_add_func("/menu/typed-rows-activate", test_typed_rows_activate);
+	g_test_add_func("/menu/recent-remembers-and-ranks",
+	                test_recent_remembers_and_ranks);
 	g_test_add_func("/menu/an-unknown-route-does-nothing",
 	                test_an_unknown_route_does_nothing);
 

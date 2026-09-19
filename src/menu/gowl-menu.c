@@ -56,7 +56,11 @@
 #include "tray/gowl-tray.h"
 #include "gowl-enums.h"
 
+#include "core/gowl-seat.h"
+
 #include <gio/gio.h>
+#include <glib/gstdio.h>
+#include <math.h>
 #include <string.h>
 
 /* yaml-glib headers -- available via -Ideps/yaml-glib/src */
@@ -263,6 +267,10 @@ struct _GowlMenu {
 	 * seconds stale is a list of windows that may not be there.
 	 */
 	GHashTable    *provider_cache;   /* name -> CachedRows *, owned */
+
+	/* What was chosen, how often and when: route -> UseRecord *.
+	 * Loaded from disk the first time anything asks. */
+	GHashTable    *history;
 };
 
 typedef struct {
@@ -308,6 +316,7 @@ gowl_menu_finalize(GObject *object)
 	g_clear_pointer(&self->by_route, g_hash_table_unref);
 	g_clear_pointer(&self->by_alias, g_hash_table_unref);
 	g_clear_pointer(&self->provider_cache, g_hash_table_unref);
+	g_clear_pointer(&self->history, g_hash_table_unref);
 	g_clear_pointer(&self->root, entry_free);
 	g_clear_pointer(&self->source, g_free);
 	G_OBJECT_CLASS(gowl_menu_parent_class)->finalize(object);
@@ -1611,6 +1620,902 @@ gowl_menu_list(GowlMenu *self, GowlCompositor *comp, const gchar *route)
 	return out;
 }
 
+static gboolean run_entry_action(GowlCompositor *comp, GowlAction action,
+                                 const gchar *arg);
+
+/* ────────────────────────────────────────────────────────────────────
+ * Matching
+ * ──────────────────────────────────────────────────────────────────── */
+
+/* Whether the character before @p in @text starts a word: the start of
+ * the string, or after a space, a dash, an underscore, a dot or a
+ * slash.  Case changes count too, so `nS' finds the S of nonSteam. */
+static gboolean
+match_word_start(const gchar *text, const gchar *p)
+{
+	const gchar *prev;
+	gunichar before, here;
+
+	if (p == text)
+		return TRUE;
+	prev = g_utf8_prev_char(p);
+	before = g_utf8_get_char(prev);
+	here = g_utf8_get_char(p);
+	if (g_unichar_isspace(before) || before == '-' || before == '_'
+	    || before == '.' || before == '/' || before == '(' || before == ':')
+		return TRUE;
+	return g_unichar_islower(before) && g_unichar_isupper(here);
+}
+
+/* Contiguous match of @needle (lower-cased characters) at @p.  Fills
+ * @positions and returns TRUE when every character matched. */
+static gboolean
+match_here(const gchar *p, const gunichar *needle, guint n, GArray *positions,
+           const gchar *text)
+{
+	guint i;
+
+	for (i = 0; i < n; i++) {
+		gunichar c;
+
+		if (*p == '\0')
+			return FALSE;
+		c = g_unichar_tolower(g_utf8_get_char(p));
+		if (c != needle[i])
+			return FALSE;
+		if (positions != NULL) {
+			guint off = (guint)(p - text);
+
+			g_array_append_val(positions, off);
+		}
+		p = g_utf8_next_char(p);
+	}
+	return TRUE;
+}
+
+/* Whether @want[0..n) can be found in order, with gaps, from @from. */
+static gboolean
+match_subseq_possible(const gchar *from, const gunichar *want, guint n)
+{
+	const gchar *q = from;
+	guint i;
+
+	for (i = 0; i < n; i++) {
+		for (; *q != '\0'; q = g_utf8_next_char(q)) {
+			if (g_unichar_tolower(g_utf8_get_char(q)) == want[i])
+				break;
+		}
+		if (*q == '\0')
+			return FALSE;
+		q = g_utf8_next_char(q);
+	}
+	return TRUE;
+}
+
+static gint match_one_word(const gchar *label, const gunichar *want,
+                           guint n, GArray *positions);
+
+gint
+gowl_menu_match(const gchar *label, const gchar *needle, GArray *positions)
+{
+	g_autofree gunichar *want = NULL;
+	guint n = 0;
+	const gchar *p;
+	gint worst = -1;
+	gboolean any = FALSE;
+
+	if (positions != NULL)
+		g_array_set_size(positions, 0);
+	if (label == NULL || needle == NULL)
+		return -1;
+
+	/*
+	 * Word by word.  A space in what was typed separates words, each
+	 * of which must be found somewhere in the label on its own; the
+	 * row's tier is that of its worst word, and the letters lit are
+	 * every word's.  `cath ray' therefore finds "Cathode ray tube"
+	 * although the two are not adjacent in it.
+	 */
+	want = g_new0(gunichar, strlen(needle) + 1);
+	for (p = needle; ; p = g_utf8_next_char(p)) {
+		gunichar c = (*p != '\0') ? g_utf8_get_char(p) : 0;
+
+		if (c != 0 && !g_unichar_isspace(c)) {
+			want[n++] = g_unichar_tolower(c);
+			continue;
+		}
+		if (n > 0) {
+			gint tier = match_one_word(label, want, n, positions);
+
+			if (tier < 0) {
+				if (positions != NULL)
+					g_array_set_size(positions, 0);
+				return -1;
+			}
+			worst = MAX(worst, tier);
+			any = TRUE;
+			n = 0;
+		}
+		if (c == 0)
+			break;
+	}
+	return any ? worst : -1;
+}
+
+/* One word of the needle against the whole label.  Positions are
+ * APPENDED, so a multi-word match accumulates them. */
+static gint
+match_one_word(const gchar *label, const gunichar *want, guint n,
+               GArray *positions)
+{
+	const gchar *p;
+	gboolean whole;
+	guint i;
+	guint start_len = positions != NULL ? positions->len : 0;
+
+	/* Exact and prefix: one contiguous run from the start. */
+	if (match_here(label, want, n, positions, label)) {
+		whole = (label[0] != '\0');
+		for (p = label, i = 0; *p != '\0'; p = g_utf8_next_char(p))
+			i++;
+		if (whole && i == n)
+			return 0;
+		return 10;
+	}
+	if (positions != NULL)
+		g_array_set_size(positions, start_len);
+
+	/* Word start, then anywhere. */
+	{
+		const gchar *first_any = NULL;
+
+		for (p = label; *p != '\0'; p = g_utf8_next_char(p)) {
+			if (match_here(p, want, n, NULL, label)) {
+				if (match_word_start(label, p)) {
+					match_here(p, want, n, positions, label);
+					return 20;
+				}
+				if (first_any == NULL)
+					first_any = p;
+			}
+		}
+		if (first_any != NULL) {
+			match_here(first_any, want, n, positions, label);
+			return 30;
+		}
+	}
+
+	/*
+	 * In order with gaps.  Greedy, but each needle character prefers
+	 * a word start when one is ahead in the label AND the rest of the
+	 * needle can still be found after it -- so `nsg' on "Add a
+	 * Non-Steam Game" lands on N, S and G, while `cath' on "Cathode
+	 * ray tube" does not jump its t to "tube" and lose the h.
+	 */
+	if (!match_subseq_possible(label, want, n))
+		return -1;
+	{
+		const gchar *cur = label;
+
+		for (i = 0; i < n; i++) {
+			const gchar *hit = NULL;
+			const gchar *q;
+
+			for (q = cur; *q != '\0'; q = g_utf8_next_char(q)) {
+				gunichar c = g_unichar_tolower(g_utf8_get_char(q));
+
+				if (c != want[i])
+					continue;
+				if (hit == NULL)
+					hit = q;
+				if (match_word_start(label, q)
+				    && match_subseq_possible(g_utf8_next_char(q),
+				                             want + i + 1, n - i - 1)) {
+					hit = q;
+					break;
+				}
+			}
+			if (hit == NULL) {
+				if (positions != NULL)
+					g_array_set_size(positions, start_len);
+				return -1;
+			}
+			if (positions != NULL) {
+				guint off = (guint)(hit - label);
+
+				g_array_append_val(positions, off);
+			}
+			cur = g_utf8_next_char(hit);
+		}
+	}
+	return 40;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ * The calculator
+ *
+ * A recursive-descent evaluator over doubles.  Small on purpose: the
+ * menu answers "what is 17 * 23" so a terminal need not be opened for
+ * it, and every operator past that is a reason to open one.
+ * ──────────────────────────────────────────────────────────────────── */
+
+typedef struct {
+	const gchar *p;
+	gboolean     ok;
+	gint         depth;
+} CalcState;
+
+static gdouble calc_expr(CalcState *st);
+
+static void
+calc_skip(CalcState *st)
+{
+	while (*st->p == ' ' || *st->p == '\t')
+		st->p++;
+}
+
+static gdouble
+calc_atom(CalcState *st)
+{
+	gdouble v = 0.0;
+
+	calc_skip(st);
+	if (++st->depth > 64) {
+		st->ok = FALSE;
+		return 0.0;
+	}
+
+	if (*st->p == '(') {
+		st->p++;
+		v = calc_expr(st);
+		calc_skip(st);
+		if (*st->p != ')') {
+			st->ok = FALSE;
+		} else {
+			st->p++;
+		}
+	} else if (*st->p == '-') {
+		st->p++;
+		v = -calc_atom(st);
+	} else if (*st->p == '+') {
+		st->p++;
+		v = calc_atom(st);
+	} else if (g_ascii_isdigit(*st->p) || *st->p == '.') {
+		gchar *end = NULL;
+
+		v = g_ascii_strtod(st->p, &end);
+		if (end == st->p)
+			st->ok = FALSE;
+		st->p = end;
+	} else if (g_ascii_isalpha(*st->p)) {
+		const gchar *start = st->p;
+		g_autofree gchar *name = NULL;
+
+		while (g_ascii_isalpha(*st->p))
+			st->p++;
+		name = g_ascii_strdown(start, st->p - start);
+		calc_skip(st);
+		if (g_strcmp0(name, "pi") == 0) {
+			v = G_PI;
+		} else if (g_strcmp0(name, "e") == 0) {
+			v = G_E;
+		} else if (*st->p == '(') {
+			gdouble arg;
+
+			st->p++;
+			arg = calc_expr(st);
+			calc_skip(st);
+			if (*st->p != ')') {
+				st->ok = FALSE;
+			} else {
+				st->p++;
+			}
+			if (g_strcmp0(name, "sqrt") == 0)
+				v = sqrt(arg);
+			else if (g_strcmp0(name, "abs") == 0)
+				v = fabs(arg);
+			else if (g_strcmp0(name, "floor") == 0)
+				v = floor(arg);
+			else if (g_strcmp0(name, "ceil") == 0)
+				v = ceil(arg);
+			else if (g_strcmp0(name, "round") == 0)
+				v = round(arg);
+			else
+				st->ok = FALSE;
+		} else {
+			st->ok = FALSE;
+		}
+	} else {
+		st->ok = FALSE;
+	}
+
+	/* Postfix power binds tightest and to the right: 2^3^2 is 2^9. */
+	calc_skip(st);
+	if (st->ok && (*st->p == '^' || (st->p[0] == '*' && st->p[1] == '*'))) {
+		gdouble ex;
+
+		st->p += (*st->p == '^') ? 1 : 2;
+		ex = calc_atom(st);
+		v = pow(v, ex);
+	}
+	st->depth--;
+	return v;
+}
+
+static gdouble
+calc_term(CalcState *st)
+{
+	gdouble v = calc_atom(st);
+
+	for (;;) {
+		gchar op;
+		gdouble rhs;
+
+		calc_skip(st);
+		op = *st->p;
+		if (op != '*' && op != '/' && op != '%' && op != 'x')
+			return v;
+		if (op == 'x' && !g_ascii_isdigit(st->p[1]) && st->p[1] != ' '
+		    && st->p[1] != '(')
+			return v;
+		if (op == '*' && st->p[1] == '*')
+			return v;       /* power, handled in the atom */
+		st->p++;
+		rhs = calc_atom(st);
+		if (op == '*' || op == 'x') {
+			v *= rhs;
+		} else if (op == '/') {
+			if (rhs == 0.0)
+				st->ok = FALSE;
+			else
+				v /= rhs;
+		} else {
+			if (rhs == 0.0)
+				st->ok = FALSE;
+			else
+				v = fmod(v, rhs);
+		}
+	}
+}
+
+static gdouble
+calc_expr(CalcState *st)
+{
+	gdouble v = calc_term(st);
+
+	for (;;) {
+		gchar op;
+
+		calc_skip(st);
+		op = *st->p;
+		if (op != '+' && op != '-')
+			return v;
+		st->p++;
+		if (op == '+')
+			v += calc_term(st);
+		else
+			v -= calc_term(st);
+	}
+}
+
+gboolean
+gowl_menu_calc(const gchar *expression, gdouble *out)
+{
+	CalcState st;
+	gdouble v;
+
+	if (expression == NULL || out == NULL)
+		return FALSE;
+	st.p = expression;
+	st.ok = TRUE;
+	st.depth = 0;
+	calc_skip(&st);
+	if (*st.p == '\0')
+		return FALSE;
+	v = calc_expr(&st);
+	calc_skip(&st);
+	if (!st.ok || *st.p != '\0' || isnan(v) || isinf(v))
+		return FALSE;
+	*out = v;
+	return TRUE;
+}
+
+gchar *
+gowl_menu_format_number(gdouble value)
+{
+	gchar buf[G_ASCII_DTOSTR_BUF_SIZE];
+	gchar *dot;
+
+	if (value == floor(value) && fabs(value) < 1e15)
+		return g_strdup_printf("%" G_GINT64_FORMAT, (gint64)value);
+
+	g_ascii_formatd(buf, sizeof buf, "%.10g", value);
+	/* %g already drops trailing zeros unless it chose exponent form;
+	 * a stray `1.5000' cannot occur, but a `2.' can be tidied. */
+	dot = strrchr(buf, '.');
+	if (dot != NULL && strchr(buf, 'e') == NULL) {
+		gchar *end = buf + strlen(buf) - 1;
+
+		while (end > dot && *end == '0')
+			*end-- = '\0';
+		if (end == dot)
+			*end = '\0';
+	}
+	return g_strdup(buf);
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ * History: what was chosen, how often, and when
+ * ──────────────────────────────────────────────────────────────────── */
+
+typedef struct {
+	guint  count;
+	gint64 last;      /* seconds since the epoch */
+} UseRecord;
+
+#define GOWL_MENU_HISTORY_MAX (200)
+
+static gchar *
+history_path(void)
+{
+	const gchar *env = g_getenv("GOWL_MENU_HISTORY");
+
+	if (g_getenv("GOWL_MENU_NO_HISTORY") != NULL)
+		return NULL;
+	if (env != NULL && *env != '\0')
+		return g_strdup(env);
+	return g_build_filename(g_get_user_state_dir(), "gowl",
+	                        "menu-recent.tsv", NULL);
+}
+
+static void
+history_ensure(GowlMenu *self)
+{
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *body = NULL;
+	g_auto(GStrv) lines = NULL;
+	gint i;
+
+	if (self->history != NULL)
+		return;
+	self->history = g_hash_table_new_full(g_str_hash, g_str_equal,
+	                                      g_free, g_free);
+	path = history_path();
+	if (path == NULL || !g_file_get_contents(path, &body, NULL, NULL))
+		return;
+
+	lines = g_strsplit(body, "\n", -1);
+	for (i = 0; lines[i] != NULL; i++) {
+		g_auto(GStrv) f = g_strsplit(lines[i], "\t", 3);
+		UseRecord *rec;
+
+		if (g_strv_length(f) < 3 || f[0][0] == '\0')
+			continue;
+		rec = g_new0(UseRecord, 1);
+		rec->count = (guint)g_ascii_strtoull(f[1], NULL, 10);
+		rec->last  = g_ascii_strtoll(f[2], NULL, 10);
+		g_hash_table_replace(self->history, g_strdup(f[0]), rec);
+	}
+}
+
+static gint
+history_by_recency(gconstpointer a, gconstpointer b, gpointer user_data)
+{
+	GHashTable *history = user_data;
+	const UseRecord *ra = g_hash_table_lookup(history, *(const gchar **)a);
+	const UseRecord *rb = g_hash_table_lookup(history, *(const gchar **)b);
+
+	if (ra->last != rb->last)
+		return (rb->last > ra->last) ? 1 : -1;
+	return (gint)rb->count - (gint)ra->count;
+}
+
+/* The routes, most recent first. */
+static GPtrArray *
+history_routes(GowlMenu *self)
+{
+	GPtrArray *routes = g_ptr_array_new();
+	GHashTableIter iter;
+	gpointer k;
+
+	history_ensure(self);
+	g_hash_table_iter_init(&iter, self->history);
+	while (g_hash_table_iter_next(&iter, &k, NULL))
+		g_ptr_array_add(routes, k);
+	g_ptr_array_sort_with_data(routes, history_by_recency, self->history);
+	return routes;
+}
+
+static void
+history_save(GowlMenu *self)
+{
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *dir = NULL;
+	g_autoptr(GPtrArray) routes = NULL;
+	g_autoptr(GString) out = NULL;
+	guint i;
+
+	path = history_path();
+	if (path == NULL)
+		return;
+	dir = g_path_get_dirname(path);
+	if (g_mkdir_with_parents(dir, 0700) != 0)
+		return;
+
+	/* Bounded: the two hundred most recent.  A menu remembers what
+	 * you use, not everything you have ever pressed. */
+	routes = history_routes(self);
+	out = g_string_new(NULL);
+	for (i = 0; i < routes->len && i < GOWL_MENU_HISTORY_MAX; i++) {
+		const gchar *route = g_ptr_array_index(routes, i);
+		const UseRecord *rec = g_hash_table_lookup(self->history, route);
+
+		g_string_append_printf(out, "%s\t%u\t%" G_GINT64_FORMAT "\n",
+		                       route, rec->count, rec->last);
+	}
+	g_file_set_contents(path, out->str, -1, NULL);
+}
+
+void
+gowl_menu_note_used(GowlMenu *self, const gchar *route)
+{
+	UseRecord *rec;
+
+	g_return_if_fail(GOWL_IS_MENU(self));
+	if (route == NULL || *route == '\0'
+	    || g_str_has_prefix(route, "calc:")
+	    || g_str_has_prefix(route, "run:")
+	    || g_str_has_prefix(route, "open:"))
+		return;
+
+	/* "Keeps nothing" means nothing in memory either: one process
+	 * running many menus (the tests) must not see one's choices in
+	 * another's Recent rows. */
+	{
+		g_autofree gchar *path = history_path();
+
+		if (path == NULL)
+			return;
+	}
+
+	history_ensure(self);
+	rec = g_hash_table_lookup(self->history, route);
+	if (rec == NULL) {
+		rec = g_new0(UseRecord, 1);
+		g_hash_table_replace(self->history, g_strdup(route), rec);
+	}
+	rec->count++;
+	rec->last = g_get_real_time() / G_USEC_PER_SEC;
+	history_save(self);
+}
+
+guint
+gowl_menu_get_uses(GowlMenu *self, const gchar *route)
+{
+	const UseRecord *rec;
+
+	g_return_val_if_fail(GOWL_IS_MENU(self), 0);
+	if (route == NULL)
+		return 0;
+	history_ensure(self);
+	rec = g_hash_table_lookup(self->history, route);
+	return rec != NULL ? rec->count : 0;
+}
+
+void
+gowl_menu_forget_history(GowlMenu *self)
+{
+	g_autofree gchar *path = NULL;
+
+	g_return_if_fail(GOWL_IS_MENU(self));
+	history_ensure(self);
+	g_hash_table_remove_all(self->history);
+	path = history_path();
+	if (path != NULL)
+		g_unlink(path);
+}
+
+static GowlMenuRow *row_from_entry(GowlMenuEntry *e, GowlCompositor *comp,
+                                   const gchar *detail);
+static GowlMenuRow *row_from_provider(GowlMenuEntry *parent,
+                                      GowlMenuProviderRow *p);
+static GPtrArray *provider_run(GowlMenu *self, const gchar *name,
+                               GowlCompositor *comp);
+static gboolean entry_visible(GowlMenuEntry *e, GowlCompositor *comp);
+static gchar *path_text(GowlMenu *self, GowlMenuEntry *e);
+
+/* The row @route stands for today, or NULL when it no longer exists:
+ * a declared entry that is still visible, or a provider row whose
+ * provider still makes it. */
+static GowlMenuRow *
+row_for_route(GowlMenu *self, GowlCompositor *comp, const gchar *route)
+{
+	GowlMenuEntry *e = lookup(self, route);
+
+	if (e != NULL && e != self->root) {
+		GowlMenuRow *row;
+		g_autofree gchar *path = NULL;
+
+		if (!entry_visible(e, comp))
+			return NULL;
+		path = path_text(self, e);
+		row = row_from_entry(e, comp, path);
+		return row;
+	}
+
+	{
+		g_autofree gchar *parent_route = gowl_menu_get_parent(self, route);
+		GowlMenuEntry *parent = parent_route != NULL
+			? lookup(self, parent_route) : NULL;
+		const gchar *leaf = strrchr(route, '.');
+		g_autoptr(GPtrArray) rows = NULL;
+		guint i;
+
+		if (parent == NULL || parent->provider == NULL || leaf == NULL)
+			return NULL;
+		rows = provider_run(self, parent->provider, comp);
+		for (i = 0; rows != NULL && i < rows->len; i++) {
+			GowlMenuProviderRow *pr = g_ptr_array_index(rows, i);
+
+			if (g_strcmp0(pr->id, leaf + 1) == 0) {
+				GowlMenuRow *row = row_from_provider(parent, pr);
+				g_autofree gchar *above = path_text(self, parent);
+
+				g_free(row->detail);
+				row->detail = (above != NULL && *above != '\0')
+					? g_strdup_printf("%s / %s", above,
+					                  parent->label != NULL
+					                  ? parent->label : parent->id)
+					: g_strdup(parent->label != NULL
+					           ? parent->label : parent->id);
+				return row;
+			}
+		}
+	}
+	return NULL;
+}
+
+GPtrArray *
+gowl_menu_recent(GowlMenu *self, GowlCompositor *comp, guint max)
+{
+	GPtrArray *out;
+	g_autoptr(GPtrArray) routes = NULL;
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MENU(self), NULL);
+
+	out = g_ptr_array_new_with_free_func((GDestroyNotify)gowl_menu_row_free);
+	routes = history_routes(self);
+	for (i = 0; i < routes->len && out->len < max; i++) {
+		GowlMenuRow *row = row_for_route(self, comp,
+		                                 g_ptr_array_index(routes, i));
+
+		if (row != NULL)
+			g_ptr_array_add(out, row);
+	}
+	return out;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ * Rows made from what was typed
+ *
+ * `=2*21' is a sum, `!make' is a command, and `example.org' or
+ * `~/notes' is somewhere to open.  Each becomes one row at the top of
+ * the results with a route of its own kind, so choosing it needs no
+ * entry in the tree.
+ * ──────────────────────────────────────────────────────────────────── */
+
+static gboolean
+looks_like_url(const gchar *text)
+{
+	const gchar *dot;
+
+	if (g_str_has_prefix(text, "http://") || g_str_has_prefix(text, "https://"))
+		return strlen(text) > 8;
+	if (g_str_has_prefix(text, "www."))
+		return strlen(text) > 5;
+	/* host.tld with a plausible tld and no spaces */
+	if (strchr(text, ' ') != NULL || strchr(text, '/') != NULL)
+		return FALSE;
+	dot = strrchr(text, '.');
+	if (dot == NULL || dot == text || strlen(dot) < 3 || strlen(dot) > 7)
+		return FALSE;
+	for (dot++; *dot != '\0'; dot++)
+		if (!g_ascii_isalpha(*dot))
+			return FALSE;
+	return TRUE;
+}
+
+static gboolean
+looks_like_path(const gchar *text, gchar **expanded)
+{
+	g_autofree gchar *path = NULL;
+
+	if (g_str_has_prefix(text, "~/"))
+		path = g_build_filename(g_get_home_dir(), text + 2, NULL);
+	else if (g_strcmp0(text, "~") == 0)
+		path = g_strdup(g_get_home_dir());
+	else if (text[0] == '/')
+		path = g_strdup(text);
+	else
+		return FALSE;
+	if (!g_file_test(path, G_FILE_TEST_EXISTS))
+		return FALSE;
+	if (expanded != NULL)
+		*expanded = g_steal_pointer(&path);
+	return TRUE;
+}
+
+/* Whether @text is arithmetic without the `=' -- digits and operators
+ * only, with at least one operator, so `2+2' answers and `1password'
+ * does not. */
+static gboolean
+looks_like_sum(const gchar *text)
+{
+	const gchar *p;
+	gboolean op = FALSE, digit = FALSE;
+
+	for (p = text; *p != '\0'; p++) {
+		if (g_ascii_isdigit(*p) || *p == '.')
+			digit = TRUE;
+		else if (strchr("+-*/%^() ", *p) != NULL)
+			op = op || (*p != ' ' && *p != '(' && *p != ')');
+		else
+			return FALSE;
+	}
+	return digit && op;
+}
+
+static GowlMenuRow *
+special_row(const gchar *route, const gchar *icon, const gchar *label,
+            const gchar *detail)
+{
+	GowlMenuRow *row = g_new0(GowlMenuRow, 1);
+
+	row->route    = g_strdup(route);
+	row->icon     = g_strdup(icon);
+	row->label    = g_strdup(label);
+	row->detail   = g_strdup(detail);
+	row->runnable = TRUE;
+	return row;
+}
+
+static void
+special_rows(GPtrArray *out, const gchar *text)
+{
+	g_autofree gchar *trimmed = g_strdup(text);
+
+	g_strstrip(trimmed);
+	if (*trimmed == '\0')
+		return;
+
+	/* A sum, explicit with `=' or implied by its shape. */
+	if (trimmed[0] == '=' || looks_like_sum(trimmed)) {
+		const gchar *expr = trimmed[0] == '=' ? trimmed + 1 : trimmed;
+		gdouble v;
+
+		if (gowl_menu_calc(expr, &v)) {
+			g_autofree gchar *num = gowl_menu_format_number(v);
+			g_autofree gchar *route = g_strdup_printf("calc:%s", num);
+			g_autofree gchar *detail = NULL;
+			g_autofree gchar *shown = g_strdup(expr);
+
+			g_strstrip(shown);
+			detail = g_strdup_printf("%s  =  %s  \xc2\xb7  Return copies it",
+			                         shown, num);
+			g_ptr_array_add(out, special_row(route, "\xf3\xb0\x83\xac",
+			                                 num, detail));
+		} else if (trimmed[0] == '=') {
+			GowlMenuRow *row = special_row("calc:", "\xf3\xb0\x83\xac",
+				"Calculator", "+ - * / % ^  ( )  sqrt abs pi e");
+
+			row->disabled = TRUE;
+			g_ptr_array_add(out, row);
+		}
+		if (trimmed[0] == '=')
+			return;
+	}
+
+	/* A command to run. */
+	if (trimmed[0] == '!' || trimmed[0] == '>') {
+		const gchar *cmd = trimmed + 1;
+
+		while (*cmd == ' ')
+			cmd++;
+		if (*cmd != '\0') {
+			g_autofree gchar *route = g_strdup_printf("run:%s", cmd);
+			g_autofree gchar *label = g_strdup_printf("Run  %s", cmd);
+
+			g_ptr_array_add(out, special_row(route, "\xef\x84\xa0",
+				label, "in a shell, detached"));
+		} else {
+			GowlMenuRow *row = special_row("run:", "\xef\x84\xa0",
+				"Run a command", "type it after the !");
+
+			row->disabled = TRUE;
+			g_ptr_array_add(out, row);
+		}
+		return;
+	}
+
+	/* Somewhere to open. */
+	{
+		g_autofree gchar *path = NULL;
+
+		if (looks_like_url(trimmed)) {
+			g_autofree gchar *url = g_str_has_prefix(trimmed, "http")
+				? g_strdup(trimmed)
+				: g_strdup_printf("https://%s", trimmed);
+			g_autofree gchar *route = g_strdup_printf("open:%s", url);
+
+			g_ptr_array_add(out, special_row(route, "\xf3\xb0\x96\x9f",
+				"Open in the browser", url));
+		} else if (looks_like_path(trimmed, &path)) {
+			g_autofree gchar *route = g_strdup_printf("open:%s", path);
+
+			g_ptr_array_add(out, special_row(route, "\xef\x81\xbb",
+				g_file_test(path, G_FILE_TEST_IS_DIR)
+					? "Open the folder" : "Open the file",
+				path));
+		}
+	}
+}
+
+/* Act on one of the rows above.  Returns FALSE when @route is not one. */
+static gboolean
+activate_special(GowlCompositor *comp, const gchar *route,
+                 GowlMenuResult *result)
+{
+	if (route == NULL)
+		return FALSE;
+
+	if (g_str_has_prefix(route, "calc:")) {
+		const gchar *num = route + 5;
+		GowlSeat *seat = comp != NULL ? gowl_compositor_get_seat(comp) : NULL;
+
+		*result = GOWL_MENU_RESULT_NONE;
+		if (*num == '\0')
+			return TRUE;
+		/* Onto the clipboard, and the card stays: the number is
+		 * still wanted on screen while it is being pasted. */
+		if (seat != NULL)
+			gowl_seat_set_clipboard(seat, num);
+		*result = GOWL_MENU_RESULT_RAN_OPEN;
+		return TRUE;
+	}
+	if (g_str_has_prefix(route, "run:")) {
+		const gchar *cmd = route + 4;
+		g_autofree gchar *line = NULL;
+		g_autofree gchar *quoted = NULL;
+
+		*result = GOWL_MENU_RESULT_NONE;
+		if (*cmd == '\0')
+			return TRUE;
+		/* Through a shell, so pipes and $HOME mean what they do at a
+		 * prompt; the spawn action is the same one a keybind uses. */
+		quoted = g_shell_quote(cmd);
+		line = g_strdup_printf("sh -c %s", quoted);
+		if (run_entry_action(comp, GOWL_ACTION_SPAWN, line))
+			*result = GOWL_MENU_RESULT_RAN;
+		return TRUE;
+	}
+	if (g_str_has_prefix(route, "open:")) {
+		const gchar *target = route + 5;
+		g_autofree gchar *quoted = NULL;
+		g_autofree gchar *line = NULL;
+
+		*result = GOWL_MENU_RESULT_NONE;
+		if (*target == '\0')
+			return TRUE;
+		quoted = g_shell_quote(target);
+		line = g_strdup_printf("xdg-open %s", quoted);
+		if (run_entry_action(comp, GOWL_ACTION_SPAWN, line))
+			*result = GOWL_MENU_RESULT_RAN;
+		return TRUE;
+	}
+	return FALSE;
+}
+
 /* ────────────────────────────────────────────────────────────────────
  * Search
  * ──────────────────────────────────────────────────────────────────── */
@@ -1637,21 +2542,30 @@ static gint
 search_score(const gchar *label, const gchar *detail, const gchar *path,
              const gchar *needle)
 {
-	g_autofree gchar *l = g_utf8_casefold(label != NULL ? label : "", -1);
 	g_autofree gchar *d = g_utf8_casefold(detail != NULL ? detail : "", -1);
 	g_autofree gchar *p = g_utf8_casefold(path != NULL ? path : "", -1);
+	gint tier;
 
-	if (g_strcmp0(l, needle) == 0)
-		return 0;
-	if (g_str_has_prefix(l, needle))
-		return 10;
-	if (strstr(l, needle) != NULL)
-		return 30;
+	/* The label, through the matcher the rows are highlighted by, so
+	 * what ranks and what lights up are the same thing. */
+	tier = gowl_menu_match(label, needle, NULL);
+	if (tier >= 0)
+		return tier;
 	if (*d != '\0' && strstr(d, needle) != NULL)
 		return 50;
 	if (strstr(p, needle) != NULL)
 		return 70;
 	return -1;
+}
+
+/* A rank bonus for what has been chosen before.  Within a tier only:
+ * frecency reorders equals, it never promotes a worse match. */
+static gint
+search_use_bonus(GowlMenu *self, const gchar *route)
+{
+	guint uses = gowl_menu_get_uses(self, route);
+
+	return (gint)MIN(uses, 20u) * 10;
 }
 
 static gint
@@ -1720,7 +2634,8 @@ search_walk(GowlMenu *self, GowlMenuEntry *e, GowlCompositor *comp,
 			hit.row   = row_from_entry(c, comp, path);
 			hit.score = score * 1000
 			            + (hit.row->submenu ? 2 : 0)
-			            + (gint)(*order % 1000);
+			            + 250 - search_use_bonus(self, c->route)
+			            + (gint)(*order % 200);
 			hit.order = *order;
 			g_array_append_val(hits, hit);
 		}
@@ -1773,8 +2688,9 @@ search_walk(GowlMenu *self, GowlMenuEntry *e, GowlCompositor *comp,
 				 * by, which is the mistake omarchy documents
 				 * having made.
 				 */
-				hit.score = s2 * 1000 + 500
-				            + (gint)(*order % 500);
+				hit.score = s2 * 1000 + 700
+				            - search_use_bonus(self, hit.row->route)
+				            + (gint)(*order % 200);
 				hit.order = *order;
 				g_array_append_val(hits, hit);
 				(*order)++;
@@ -1803,6 +2719,13 @@ gowl_menu_search(GowlMenu *self, GowlCompositor *comp, const gchar *text)
 	needle = g_utf8_casefold(text, -1);
 	g_strstrip(needle);
 	if (*needle == '\0')
+		return out;
+
+	/* What the text itself means comes first: a sum, a command or a
+	 * place to open answers before anything that merely contains the
+	 * letters. */
+	special_rows(out, text);
+	if (text[0] == '=' || text[0] == '!' || text[0] == '>')
 		return out;
 
 	hits = g_array_new(FALSE, FALSE, sizeof(SearchHit));
@@ -1876,6 +2799,13 @@ gowl_menu_activate(GowlMenu *self, GowlCompositor *comp, const gchar *route,
 	if (out_route != NULL)
 		*out_route = NULL;
 
+	{
+		GowlMenuResult special = GOWL_MENU_RESULT_NONE;
+
+		if (activate_special(comp, route, &special))
+			return special;
+	}
+
 	e = lookup(self, route);
 	if (e == NULL) {
 		/* Not in the tree: it may be a row a provider made up, whose
@@ -1885,8 +2815,14 @@ gowl_menu_activate(GowlMenu *self, GowlCompositor *comp, const gchar *route,
 			? lookup(self, parent_route) : NULL;
 		const gchar *leaf = strrchr(route != NULL ? route : "", '.');
 
-		if (parent != NULL && parent->provider != NULL && leaf != NULL)
-			return activate_provider_row(self, comp, parent, leaf + 1);
+		if (parent != NULL && parent->provider != NULL && leaf != NULL) {
+			GowlMenuResult r = activate_provider_row(self, comp,
+			                                         parent, leaf + 1);
+
+			if (r != GOWL_MENU_RESULT_NONE)
+				gowl_menu_note_used(self, route);
+			return r;
+		}
 		return GOWL_MENU_RESULT_NONE;
 	}
 
@@ -1925,9 +2861,15 @@ gowl_menu_activate(GowlMenu *self, GowlCompositor *comp, const gchar *route,
 		GowlAction action = e->action;
 		gboolean keep_open = e->keep_open;
 		g_autofree gchar *arg = g_strdup(e->arg);
+		g_autofree gchar *used = g_strdup(e->route);
 
 		if (!run_entry_action(comp, action, arg))
 			return GOWL_MENU_RESULT_NONE;
+		/* After the run, from a copy: the run may have reloaded the
+		 * tree and `e' with it.  A keep-open row (volume up) is not
+		 * recorded -- pressing it nine times is one choice. */
+		if (!keep_open)
+			gowl_menu_note_used(self, used);
 		return keep_open ? GOWL_MENU_RESULT_RAN_OPEN
 		                 : GOWL_MENU_RESULT_RAN;
 	}

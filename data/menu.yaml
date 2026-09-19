@@ -427,6 +427,11 @@ menu:
         icon: ""
         label: Reload this menu
         command: "menu-refresh"
+      - id: forget
+        icon: "󰃢"
+        label: Forget recent choices
+        desc: clears the Recent rows at the top of the menu
+        command: "menu-forget"
 
   # ── Ending the session ──────────────────────────────────────────
   - id: system

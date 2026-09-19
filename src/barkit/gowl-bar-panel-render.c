@@ -149,6 +149,90 @@ pass_draw_text(PanelPass *p, const gchar *text, gint x, gint center_y,
 	return logical.width;
 }
 
+/*
+ * The characters a search matched, as Pango attributes.
+ *
+ * A row carries them in its "match" prop: byte offsets into the title,
+ * comma separated, as the menu's matcher reports them.  Each becomes
+ * one bold accent-coloured character, which is how a fuzzy hit shows
+ * WHY it is a hit -- "frx" landing on Firefox reads as f-i-R-efo-X
+ * rather than as a row that appeared for no visible reason.
+ */
+static PangoAttrList *
+pass_match_attrs(PanelPass *p, const gchar *spec, const gchar *text)
+{
+	PangoAttrList *attrs;
+	const gdouble *c;
+	g_auto(GStrv) parts = NULL;
+	gsize len;
+	gint i;
+
+	if (spec == NULL || spec[0] == '\0' || text == NULL)
+		return NULL;
+
+	c = gowl_bar_theme_color(p->theme, GOWL_BAR_COLOR_ACCENT);
+	len = strlen(text);
+	attrs = pango_attr_list_new();
+	parts = g_strsplit(spec, ",", -1);
+	for (i = 0; parts[i] != NULL; i++) {
+		PangoAttribute *attr;
+		gint64 start = g_ascii_strtoll(parts[i], NULL, 10);
+		const gchar *next;
+
+		if (start < 0 || (gsize)start >= len)
+			continue;
+		next = g_utf8_next_char(text + start);
+
+		attr = pango_attr_foreground_new((guint16)(c[0] * 65535.0),
+		                                 (guint16)(c[1] * 65535.0),
+		                                 (guint16)(c[2] * 65535.0));
+		attr->start_index = (guint)start;
+		attr->end_index   = (guint)(next - text);
+		pango_attr_list_insert(attrs, attr);
+
+		attr = pango_attr_weight_new(PANGO_WEIGHT_BOLD);
+		attr->start_index = (guint)start;
+		attr->end_index   = (guint)(next - text);
+		pango_attr_list_insert(attrs, attr);
+	}
+	return attrs;
+}
+
+/* pass_draw_text() with an attribute list over the text. */
+static gint
+pass_draw_text_attrs(PanelPass *p, const gchar *text, gint x, gint center_y,
+                     GowlBarColor role, gdouble alpha, gint max_w,
+                     PangoAttrList *attrs)
+{
+	PangoRectangle logical;
+	gint y;
+
+	if (attrs == NULL)
+		return pass_draw_text(p, text, x, center_y, role, alpha, max_w,
+		                      PANGO_ALIGN_LEFT);
+	if (p->cr == NULL || text == NULL || text[0] == '\0')
+		return 0;
+
+	pango_layout_set_attributes(p->layout, attrs);
+	pango_layout_set_text(p->layout, text, -1);
+	if (max_w > 0) {
+		pango_layout_set_width(p->layout, max_w * PANGO_SCALE);
+		pango_layout_set_ellipsize(p->layout, PANGO_ELLIPSIZE_END);
+	} else {
+		pango_layout_set_width(p->layout, -1);
+		pango_layout_set_ellipsize(p->layout, PANGO_ELLIPSIZE_NONE);
+	}
+	pango_layout_set_alignment(p->layout, PANGO_ALIGN_LEFT);
+	pango_layout_get_pixel_extents(p->layout, NULL, &logical);
+	y = center_y - logical.height / 2;
+
+	gowl_bar_theme_cairo_set_alpha(p->theme, p->cr, role, alpha);
+	cairo_move_to(p->cr, x, y);
+	pango_cairo_show_layout(p->cr, p->layout);
+	pango_layout_set_attributes(p->layout, NULL);
+	return logical.width;
+}
+
 /* Draw @text with letter spacing --- the wide dim caps the panel
    headers and hero subtitles use. */
 static void
@@ -752,18 +836,31 @@ pass_draw_row(PanelPass *p, GowlBarPanelItem *item, gint index,
 		top = center - (title_h + sub_h) / 2;
 
 		pass_set_font(p, 1.0, FALSE, FALSE);
-		pass_draw_text(p, gowl_bar_panel_item_get_title(item), x,
-		               top + title_h / 2, GOWL_BAR_COLOR_TEXT, alpha,
-		               right - x, PANGO_ALIGN_LEFT);
+		{
+			PangoAttrList *attrs = pass_match_attrs(p,
+				gowl_bar_panel_item_get_prop(item, "match"),
+				gowl_bar_panel_item_get_title(item));
+
+			pass_draw_text_attrs(p, gowl_bar_panel_item_get_title(item),
+			                     x, top + title_h / 2,
+			                     GOWL_BAR_COLOR_TEXT, alpha,
+			                     right - x, attrs);
+			g_clear_pointer(&attrs, pango_attr_list_unref);
+		}
 		pass_set_font(p, SMALL_SCALE, FALSE, FALSE);
 		pass_draw_text(p, subtitle, x, top + title_h + sub_h / 2,
 		               GOWL_BAR_COLOR_MUTED, alpha, right - x,
 		               PANGO_ALIGN_LEFT);
 	} else {
+		PangoAttrList *attrs = pass_match_attrs(p,
+			gowl_bar_panel_item_get_prop(item, "match"),
+			gowl_bar_panel_item_get_title(item));
+
 		pass_set_font(p, 1.0, FALSE, FALSE);
-		pass_draw_text(p, gowl_bar_panel_item_get_title(item), x,
-		               center, GOWL_BAR_COLOR_TEXT, alpha,
-		               right - x, PANGO_ALIGN_LEFT);
+		pass_draw_text_attrs(p, gowl_bar_panel_item_get_title(item), x,
+		                     center, GOWL_BAR_COLOR_TEXT, alpha,
+		                     right - x, attrs);
+		g_clear_pointer(&attrs, pango_attr_list_unref);
 	}
 
 	if (!gowl_bar_panel_item_get_disabled(item)) {

@@ -129,6 +129,15 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   networks dropped, and the ACTIVE flag survives a stronger sighting of
   the same SSID (on a mesh you are rarely on the nearest node). Runs
   against real `nmcli` output via `GOWL_TEST_NMCLI_WIFI`
+- `test-menu` / `test-menu-module` / `test-menu-render` -- the Super+space
+  menu: the model (tree, guards, providers, the fuzzy matcher and its
+  reported positions, the calculator, rows made from typed text --
+  `=sum`, `!cmd`, a URL or a path -- and the recent-choices history,
+  isolated through `GOWL_MENU_HISTORY`/`GOWL_MENU_NO_HISTORY`), the
+  module's keys (Backspace at the root STAYS OPEN, Alt+N picks a row,
+  Ctrl+u/g), and the drawn card (sits above centre, never off the
+  output, click mapping, no frames while still). Every test sets
+  `GOWL_MENU_NO_HISTORY` so nothing lands in the developer's state dir
 - `test-bar-util` -- the pure helpers behind the shipped bar plugins,
   `modules/bar/bar-util.c`: which command lines need a shell (an argv
   parser hands `$(slurp)` and `&&` to the program as arguments); ANSI

@@ -203,16 +203,20 @@ test_opening_draws_a_card(void)
 	g_assert_cmpint(card->dst_width, >, 0);
 	g_assert_cmpint(card->dst_height, >, 0);
 
-	/* Centred on the focused output, give or take the drop shadow's
-	 * share of the surface. */
+	/* Centred across the focused output, give or take the drop
+	 * shadow's share of the surface, and a little ABOVE the middle
+	 * -- where launchers sit, so a list that grows grows downward --
+	 * but never off the top. */
 	wlr_scene_node_coords(&card->node, &x, &y);
 	{
 		GowlMonitor *m = r.compositor->selmon;
 		gint want_x = m->w.x + (m->w.width - card->dst_width) / 2;
-		gint want_y = m->w.y + (m->w.height - card->dst_height) / 2;
+		gint centre_y = m->w.y + (m->w.height - card->dst_height) / 2;
 
 		g_assert_cmpint(ABS(x - want_x), <=, 2);
-		g_assert_cmpint(ABS(y - want_y), <=, 2);
+		g_assert_cmpint(y, <=, centre_y + 2);
+		g_assert_cmpint(y, >=, m->w.y);
+		g_assert_cmpint(y + card->dst_height, <=, m->w.y + m->w.height);
 	}
 
 	rig_down(&r);
@@ -544,6 +548,7 @@ int
 main(int argc, char *argv[])
 {
 	g_test_init(&argc, &argv, NULL);
+	g_setenv("GOWL_MENU_NO_HISTORY", "1", TRUE);
 
 	g_test_add_func("/menu-render/opening-draws-a-card",
 	                test_opening_draws_a_card);

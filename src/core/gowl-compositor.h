@@ -939,7 +939,7 @@ void gowl_compositor_pretag_pid (GowlCompositor *self,
  * @x: layout x, in pixels
  * @y: layout y, in pixels
  *
- * Places the injected pointer at a point in OUTPUT-LAYOUT coordinates --
+ * Moves the injected pointer to a point in OUTPUT-LAYOUT coordinates --
  * the same space the input-capture zones and barriers use.
  *
  * The normalized variant that came first cannot do this job: a
@@ -947,6 +947,14 @@ void gowl_compositor_pretag_pid (GowlCompositor *self,
  * 3840-pixel layout its smallest step is fifteen pixels.  In layout
  * coordinates the same representation resolves to 1/256th of a pixel.
  * A point outside the layout is clamped to the nearest one on it.
+ *
+ * This is motion, not a warp, and it is the request a software KVM
+ * sends for every pointer move: it obeys the active pointer constraint
+ * exactly as a physical device does.  A locked pointer stays where it
+ * is and the client is told how far the sender's position moved on the
+ * relative-pointer stream, measured from the sender's previous position
+ * rather than from the held cursor; a confined pointer slides along its
+ * region's edge.
  */
 void gowl_compositor_inject_pointer_warp (GowlCompositor *self,
                                           gdouble         x,

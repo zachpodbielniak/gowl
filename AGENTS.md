@@ -227,6 +227,13 @@ tests. These assert invariants no unit test can reach:
 > recorder tap (never record our own injections), the InputCapture
 > diversion (would echo input back to its sender) and key repeat (the
 > sender repeats already). `tests/test-inject-routing.sh` enforces it.
+> Motion included, on **every** route: relative, normalised absolute and
+> `pointer_motion_absolute_layout` (the one a KVM actually sends) all
+> honour the pointer constraint and feed relative-pointer, and absolute
+> deltas are measured from the sender's previous position, never from a
+> cursor a lock is holding still (that reports cumulative distance and a
+> mouselook accelerates). The lock fix once landed on two of the three
+> routes and a test drove only the relative one; the guard now names each.
 
 > **A captured image that outlives the frame needs a buffer you own.**
 > `gowl_fx_capture_to_buffer()` returns a slot of the *output's* swapchain

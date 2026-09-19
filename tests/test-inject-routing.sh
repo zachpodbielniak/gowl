@@ -98,6 +98,48 @@ if require_fn gowl_compositor_inject_pointer_motion; then
 	fi
 fi
 
+# 2b. Every injector that moves the pointer honours the pointer
+#     constraint and feeds the relative stream -- INCLUDING the
+#     layout-absolute one.
+#
+#     The lock fix landed in the relative injector and the deprecated
+#     normalised one and missed pointer_motion_absolute_layout, which is
+#     the request a software KVM sends for every pointer move once it
+#     knows the compositor speaks version 2.  So a game's mouselook
+#     driven from a deskflow client kept having the cursor dragged out
+#     of the window with nothing on the relative stream, from the
+#     networked mouse only, after the bug was "fixed" and tested.  Each
+#     route is checked by name so a fourth one cannot repeat it quietly.
+for fn in gowl_compositor_inject_pointer_motion \
+          gowl_compositor_inject_pointer_motion_absolute \
+          gowl_compositor_inject_pointer_warp; do
+	require_fn "$fn" || continue
+	if ! body "$fn" | grep -qE 'constraint_resolve_target|compositor_handle_motion_absolute'; then
+		echo "FAIL: $fn moves the cursor without consulting the pointer"
+		echo "      constraint.  A locked pointer will walk out of its window"
+		echo "      when the motion arrives over the KVM."
+		fail=1
+	fi
+	if ! body "$fn" | grep -qE 'relative_pointer_send|compositor_handle_motion_absolute'; then
+		echo "FAIL: $fn never feeds the relative-pointer stream, which is"
+		echo "      the only input a locked client gets."
+		fail=1
+	fi
+done
+
+# And the shared absolute handler must measure its delta from the
+# device's previous position, not from the cursor: against a cursor a
+# lock is holding still, successive positions report the accumulated
+# distance from the lock point and a mouselook accelerates.
+if require_fn compositor_handle_motion_absolute; then
+	if ! body compositor_handle_motion_absolute | grep -q 'absolute_motion_delta'; then
+		echo "FAIL: compositor_handle_motion_absolute does not take its delta"
+		echo "      from absolute_motion_delta(); a locked client will be fed"
+		echo "      cumulative deltas."
+		fail=1
+	fi
+fi
+
 # 3. The shared decisions must still forward what nothing claimed, or
 #    injection would type into a void.
 if require_fn compositor_handle_key; then

@@ -30,6 +30,7 @@
 #include <wayland-client-protocol.h>
 #include <wayland-server-core.h>
 #include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_pointer_constraints_v1.h>
 
 #include "xdg-shell-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
@@ -44,6 +45,10 @@
 /* Where the client says its own cursor is, surface-local. */
 #define HINT_X (120)
 #define HINT_Y (90)
+
+/* The region a confining client keeps the pointer in, surface-local. */
+#define CONFINE_W (100)
+#define CONFINE_H (100)
 
 typedef struct {
 	const gchar *socket;
@@ -61,12 +66,15 @@ typedef struct {
 
 	struct zwp_pointer_constraints_v1      *constraints;
 	struct zwp_locked_pointer_v1           *lock;
+	struct zwp_confined_pointer_v1         *confine;
+	gboolean                                use_confine;
 	struct zwp_relative_pointer_manager_v1 *relative_mgr;
 	struct zwp_relative_pointer_v1         *relative;
 
 	/* Read by the test thread. */
 	gint entered;
 	gint locked;
+	gint confined;
 	gint rel_events;
 	gint rel_dx;
 	gint unlock_now;   /* the test asks the client to drop the lock */
@@ -133,6 +141,23 @@ static const struct zwp_locked_pointer_v1_listener lock_listener = {
 	.unlocked = lock_unlocked,
 };
 
+static void
+confine_confined(void *data, struct zwp_confined_pointer_v1 *confine)
+{
+	g_atomic_int_set(&((Client *)data)->confined, 1);
+}
+
+static void
+confine_unconfined(void *data, struct zwp_confined_pointer_v1 *confine)
+{
+	g_atomic_int_set(&((Client *)data)->confined, 0);
+}
+
+static const struct zwp_confined_pointer_v1_listener confine_listener = {
+	.confined   = confine_confined,
+	.unconfined = confine_unconfined,
+};
+
 /* Take the lock the moment the pointer is over us, as a game does on
  * the click that starts a mouselook. */
 static void
@@ -141,8 +166,26 @@ pointer_enter(void *data, struct wl_pointer *p, uint32_t serial,
 {
 	Client *c = data;
 
-	if (c->lock != NULL || c->constraints == NULL)
+	if (c->lock != NULL || c->confine != NULL || c->constraints == NULL)
 		return;
+	if (c->use_confine) {
+		/* Confine to the top-left CONFINE_W x CONFINE_H of the
+		 * surface, as a windowed game clipping the cursor does. */
+		struct wl_region *region;
+
+		region = wl_compositor_create_region(c->compositor);
+		wl_region_add(region, 0, 0, CONFINE_W, CONFINE_H);
+		c->confine = zwp_pointer_constraints_v1_confine_pointer(
+			c->constraints, c->surface, c->pointer, region,
+			ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+		wl_region_destroy(region);
+		zwp_confined_pointer_v1_add_listener(c->confine,
+		                                     &confine_listener, c);
+		wl_surface_commit(c->surface);
+		wl_display_flush(c->display);
+		g_atomic_int_set(&c->entered, 1);
+		return;
+	}
 	c->lock = zwp_pointer_constraints_v1_lock_pointer(
 		c->constraints, c->surface, c->pointer, NULL,
 		ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
@@ -521,6 +564,160 @@ unlocking_puts_the_cursor_where_the_client_says(void)
 	rig_down(&r);
 }
 
+/*
+ * The layout-absolute injector is the request a software KVM sends for
+ * EVERY pointer move once it knows the compositor speaks version 2 of
+ * the inject protocol, and it is the one the lock fix missed: it kept
+ * warping the cursor unconditionally and never fed the relative stream.
+ *
+ * Two things are asserted, and the second is the subtle one.  The
+ * cursor holds still.  And three positions five pixels apart arrive as
+ * three deltas of five -- fifteen in all -- not five, ten and fifteen.
+ * A delta measured against a cursor the lock is holding still is the
+ * accumulated distance from the lock point, and a mouselook fed that
+ * accelerates: the "hyper speed" seen from a deskflow client and never
+ * from a mouse, because a mouse arrives as deltas.
+ */
+static void
+layout_absolute_holds_still_and_reports_increments(void)
+{
+	Rig      r;
+	Client   c;
+	GThread *thread;
+	gdouble  x, y;
+	gint     rel_before, dx_before;
+
+	if (!rig_up(&r))
+		return;
+
+	memset(&c, 0, sizeof c);
+	c.socket = r.compositor->socket_name;
+	thread = g_thread_new("pointer-lock-abs-client", client_thread, &c);
+	pump(&r, 400);
+
+	gowl_compositor_inject_pointer_motion(r.compositor, 5, 5);
+	pump(&r, 200);
+
+	if (!await(&r, &c.entered) || !await(&r, &c.locked)) {
+		g_atomic_int_set(&c.stop, 1);
+		pump(&r, 200);
+		g_thread_join(thread);
+		g_test_skip("the client never took the lock here");
+		rig_down(&r);
+		return;
+	}
+	g_assert_true(gowl_compositor_pointer_is_locked(r.compositor));
+
+	x = r.compositor->wlr_cursor->x;
+	y = r.compositor->wlr_cursor->y;
+	rel_before = g_atomic_int_get(&c.rel_events);
+	dx_before  = g_atomic_int_get(&c.rel_dx);
+
+	/* A sender walking its own position right in five-pixel steps. */
+	gowl_compositor_inject_pointer_warp(r.compositor, x + 5, y);
+	pump(&r, 100);
+	gowl_compositor_inject_pointer_warp(r.compositor, x + 10, y);
+	pump(&r, 100);
+	gowl_compositor_inject_pointer_warp(r.compositor, x + 15, y);
+	pump(&r, 300);
+
+	g_assert_cmpfloat(r.compositor->wlr_cursor->x, ==, x);
+	g_assert_cmpfloat(r.compositor->wlr_cursor->y, ==, y);
+	g_assert_cmpint(g_atomic_int_get(&c.rel_events) - rel_before, ==, 3);
+	g_assert_cmpint(g_atomic_int_get(&c.rel_dx) - dx_before, ==, 15);
+
+	g_atomic_int_set(&c.stop, 1);
+	pump(&r, 200);
+	g_thread_join(thread);
+	rig_down(&r);
+}
+
+/*
+ * A confined pointer slides along the edge of its region.
+ *
+ * Motion that would leave the region used to be dropped whole, so a
+ * pointer pushed diagonally into a corner stuck there -- the part of
+ * the motion that WAS allowed went with the part that was not.  X11 and
+ * every other compositor clamp instead, which is what a windowed game
+ * clipping its cursor expects.
+ */
+static void
+confined_pointer_slides_along_the_edge(void)
+{
+	Rig      r;
+	Client   c;
+	GThread *thread;
+	struct wlr_pointer_constraint_v1 *active;
+	GowlClient *client;
+	gint     sx, sy;
+	gdouble  x, y;
+
+	if (!rig_up(&r))
+		return;
+
+	memset(&c, 0, sizeof c);
+	c.socket = r.compositor->socket_name;
+	c.use_confine = TRUE;
+	thread = g_thread_new("pointer-confine-client", client_thread, &c);
+	pump(&r, 400);
+
+	gowl_compositor_inject_pointer_motion(r.compositor, 5, 5);
+	pump(&r, 200);
+
+	if (!await(&r, &c.entered) || !await(&r, &c.confined)) {
+		g_atomic_int_set(&c.stop, 1);
+		pump(&r, 200);
+		g_thread_join(thread);
+		g_test_skip("the client never got confined here");
+		rig_down(&r);
+		return;
+	}
+	active = gowl_compositor_get_active_pointer_constraint(r.compositor);
+	g_assert_nonnull(active);
+	g_assert_cmpint(active->type, ==, WLR_POINTER_CONSTRAINT_V1_CONFINED);
+	g_assert_false(gowl_compositor_pointer_is_locked(r.compositor));
+
+	client = r.compositor->clients != NULL
+		? (GowlClient *)r.compositor->clients->data : NULL;
+	if (client == NULL || client->scene_surface == NULL
+	    || !wlr_scene_node_coords(&client->scene_surface->node, &sx, &sy)) {
+		g_atomic_int_set(&c.stop, 1);
+		pump(&r, 200);
+		g_thread_join(thread);
+		g_test_skip("no placed surface to measure the region against");
+		rig_down(&r);
+		return;
+	}
+
+	/* Start from the middle of the region.  Where a headless compositor
+	 * puts its cursor to begin with is not this test's business, and a
+	 * cursor that happens to start in a corner has nowhere to slide. */
+	gowl_compositor_inject_pointer_motion(r.compositor,
+		(gdouble)(sx + CONFINE_W / 2) - r.compositor->wlr_cursor->x,
+		(gdouble)(sy + CONFINE_H / 2) - r.compositor->wlr_cursor->y);
+	pump(&r, 200);
+	x = r.compositor->wlr_cursor->x;
+	y = r.compositor->wlr_cursor->y;
+	g_assert_cmpfloat(x, ==, (gdouble)(sx + CONFINE_W / 2));
+	g_assert_cmpfloat(y, ==, (gdouble)(sy + CONFINE_H / 2));
+
+	/* Far past the right edge, a little down.  The x is clamped to the
+	 * last pixel of the region; the y, which was allowed all along, is
+	 * taken in full. */
+	gowl_compositor_inject_pointer_motion(r.compositor, 500, 10);
+	pump(&r, 300);
+
+	g_assert_cmpfloat(r.compositor->wlr_cursor->x, ==,
+	                  (gdouble)(sx + CONFINE_W - 1));
+	g_assert_cmpfloat(r.compositor->wlr_cursor->y, ==, y + 10);
+	g_assert_cmpfloat(r.compositor->wlr_cursor->x, >, x);
+
+	g_atomic_int_set(&c.stop, 1);
+	pump(&r, 200);
+	g_thread_join(thread);
+	rig_down(&r);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -529,5 +726,9 @@ main(int argc, char **argv)
 	                locked_pointer_holds_still_and_still_reports);
 	g_test_add_func("/pointer-lock/unlocking-honours-the-cursor-hint",
 	                unlocking_puts_the_cursor_where_the_client_says);
+	g_test_add_func("/pointer-lock/layout-absolute-holds-still-and-reports-increments",
+	                layout_absolute_holds_still_and_reports_increments);
+	g_test_add_func("/pointer-lock/confined-pointer-slides-along-the-edge",
+	                confined_pointer_slides_along_the_edge);
 	return g_test_run();
 }

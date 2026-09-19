@@ -1396,6 +1396,37 @@ cursor still the reported delta was exactly zero. The delta now comes
 from where the event asked the cursor to go, which is the number that
 differs from zero precisely when it matters.
 
+*And that fix missed the route the KVM actually uses.* The inject
+protocol has three ways to move the pointer: relative motion, the
+deprecated normalised absolute request, and
+=pointer_motion_absolute_layout=, which the portal sends for *every*
+pointer move once it knows the compositor speaks version 2. The lock
+fix went into the first two. The third was
+=gowl_compositor_inject_pointer_warp()=, named and written as a warp,
+and it kept calling =wlr_cursor_warp_closest()= unconditionally with
+nothing on the relative stream --- so a deskflow client's mouselook
+stayed broken, from the networked mouse only, after the bug had been
+fixed and a test written for it. The test drove the relative injector.
+
+All three routes now end in =compositor_handle_motion_absolute()= or
+=constraint_resolve_target()=, and =tests/test-inject-routing.sh=
+checks each by name so a fourth cannot repeat it quietly.
+
+*Absolute deltas are measured from the device, not the cursor.* An
+absolute source --- a tablet, a VM's mouse, a KVM sender --- says
+where the pointer should be, and when a lock holds the cursor still
+the delta the locked client needs is the change in *that* position.
+Measured against the cursor, three positions five pixels apart report
+five, ten and fifteen: the accumulated distance from the lock point,
+and a mouselook fed that accelerates until the sender's own position
+hits its screen edge. =absolute_motion_delta()= keeps the last
+position asked for and the cursor position after it was dealt with;
+the baseline is the former while the cursor has not moved since, and
+resets to the cursor when anything else --- a relative motion, a
+warp, a lock ending on its hint --- moved it. The note is taken after
+=motionnotify=, so the capture freeze and the cursor hint are included
+in "where the cursor ended up".
+
 =tests/test-pointer-lock.c= is a real Wayland client --- it maps a
 toplevel, takes the lock on pointer enter and counts what arrives ---
 because the note in =tests/test-pointer-constraints.c= was right that a
@@ -2391,7 +2422,24 @@ In the motion handlers:
   absolute handler as well as the relative one --- a tablet or a VM's
   absolute mouse must not teleport the cursor out from under a client
   holding the lock.
-- a =CONFINED= constraint drops motion that would leave the region.
+- a =CONFINED= constraint *clamps* motion to the region:
+  =constraint_resolve_target()= clamps the target into the region's
+  bounding box and, for a region that is not a rectangle, tries each
+  axis on its own before giving up.  Motion that would leave the
+  region used to be dropped whole, so a pointer pushed diagonally into
+  a corner stuck there instead of sliding along the edge the way X11
+  and every other compositor let it --- and a windowed game clipping
+  its cursor is a confinement, via Xwayland.
+- absolute motion --- the tablet path and both absolute inject
+  requests --- goes through =compositor_handle_motion_absolute()=,
+  which measures the relative delta from the device's *previous
+  position* rather than from the cursor (see [[#injected-input-path]]
+  for why that matters under a lock).
+
+=tests/test-pointer-lock.c= exercises all of it with a real client:
+the lock from the relative and the layout-absolute injectors, the
+increments a locked client is fed, the cursor hint at unlock, and a
+confined pointer sliding along its edge.
 
 Deactivation has one trap worth naming:
 =wlr_pointer_constraint_v1_send_deactivated()= may *destroy* the

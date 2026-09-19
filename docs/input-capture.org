@@ -212,6 +212,25 @@ portal passes them through unchanged rather than normalising and
 un-normalising them. A version 1 compositor still works; the portal falls
 back to the normalised request and the coarseness with it.
 
+The layout request is *motion*, not a warp, whatever its first
+implementation was called. It obeys the active pointer constraint exactly
+as a physical device does: while a client holds the pointer locked --- a
+game's mouselook --- the cursor stays put and the client is told the
+change in the sender's position on the relative-pointer stream, measured
+from the sender's previous position rather than from the held cursor; a
+confined pointer slides along its region's edge. The first version warped
+unconditionally and said nothing on the relative stream, which is why a
+deskflow client's mouselook stayed broken after the same fault had been
+fixed in the relative injector --- see the architecture notes on
+[[file:architecture.org::#injected-input-path][injected input]].
+
+A deskflow *server* sends absolute positions unless its "use relative
+mouse moves" option is on and a button is held. With that option a
+mouselook arrives as relative motion and the server's own idea of the
+cursor position never reaches a screen edge; without it, the server clamps
+its virtual position at the client screen's edge and turning stops there.
+That limit is deskflow's and applies under every compositor.
+
 *** Injected modifiers
 
 A key sent to the seat reaches the focused surface, but a client's idea of

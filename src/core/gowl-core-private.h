@@ -578,6 +578,23 @@ struct _GowlCompositor {
 	gdouble           cap_motion_dx;
 	gdouble           cap_motion_dy;
 
+	/* Absolute motion, tracked as the DEVICE's own position.  A tablet,
+	 * a VM's mouse or a software-KVM sender says where the pointer
+	 * should be, and the delta a locked client reads is the change in
+	 * that, not the distance from a cursor the lock is holding still:
+	 * measured against a cursor that is not moving, positions five
+	 * pixels apart report five, ten, fifteen -- the accumulated distance
+	 * from the lock point -- and a mouselook accelerates.  abs_track_x/y
+	 * is the last position asked for; abs_track_cursor_x/y is where the
+	 * cursor stood once that position had been dealt with, so a cursor
+	 * moved by anything else since resets the baseline to wherever it
+	 * now is.  See absolute_motion_delta(). */
+	gboolean          abs_track_valid;
+	gdouble           abs_track_x;
+	gdouble           abs_track_y;
+	gdouble           abs_track_cursor_x;
+	gdouble           abs_track_cursor_y;
+
 	/* Graphics tablets (tablet-v2).  Kept as lists rather than a single
 	 * device because a tablet, its pad, and each tool the user picks up
 	 * are separate libinput devices with separate lifetimes. */

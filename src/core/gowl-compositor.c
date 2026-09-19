@@ -330,6 +330,19 @@ static void     relative_pointer_send      (GowlCompositor *self,
                                             gdouble dx, gdouble dy,
                                             gdouble dx_unaccel,
                                             gdouble dy_unaccel);
+static gboolean constraint_resolve_target  (GowlCompositor *self,
+                                            gdouble        *x,
+                                            gdouble        *y);
+static void     absolute_motion_note       (GowlCompositor *self,
+                                            gdouble         tx,
+                                            gdouble         ty);
+static void     compositor_handle_motion_absolute (GowlCompositor *self,
+                                                   struct wlr_input_device *device,
+                                                   gdouble         tx,
+                                                   gdouble         ty,
+                                                   guint32         time_msec,
+                                                   gdouble        *dx_out,
+                                                   gdouble        *dy_out);
 
 
 /* layout helpers */
@@ -1817,14 +1830,19 @@ gowl_compositor_inject_pointer_motion(
 	 */
 	relative_pointer_send(self, inject_now_msec(), dx, dy, dx, dy);
 
-	/* And the cursor only if it is allowed to move.  Injected motion is
+	/* And the cursor only where it is allowed to go.  Injected motion is
 	 * motion: a lock that the device path honours and this one does not
 	 * is a cursor that walks out of a window whenever the input happens
 	 * to arrive over a protocol instead of from a mouse. */
-	if (!constraint_locks_cursor(self)
-	    && constraint_allows_position(self, self->wlr_cursor->x + dx,
-	                                  self->wlr_cursor->y + dy))
-		wlr_cursor_move(self->wlr_cursor, NULL, dx, dy);
+	{
+		gdouble tx = self->wlr_cursor->x + dx;
+		gdouble ty = self->wlr_cursor->y + dy;
+
+		if (constraint_resolve_target(self, &tx, &ty))
+			wlr_cursor_move(self->wlr_cursor, NULL,
+			                tx - self->wlr_cursor->x,
+			                ty - self->wlr_cursor->y);
+	}
 
 	gowl_compositor_motionnotify(self, inject_now_msec());
 	gowl_compositor_inject_frame(self);
@@ -1852,21 +1870,11 @@ gowl_compositor_inject_pointer_motion_absolute(
 		gdouble tx = extents.x + nx * extents.width;
 		gdouble ty = extents.y + ny * extents.height;
 
-		/* The delta this warp WOULD produce, computed before
-		 * deciding whether to take it: a locked client still has to
-		 * be told how far the device moved, and reading it back off
-		 * a cursor that correctly did not move reports zero. */
-		relative_pointer_send(self, inject_now_msec(),
-		                      tx - self->wlr_cursor->x,
-		                      ty - self->wlr_cursor->y,
-		                      tx - self->wlr_cursor->x,
-		                      ty - self->wlr_cursor->y);
-
-		if (!constraint_locks_cursor(self)
-		    && constraint_allows_position(self, tx, ty))
-			wlr_cursor_warp_closest(self->wlr_cursor, NULL, tx, ty);
+		compositor_handle_motion_absolute(self, NULL, tx, ty,
+		                                  inject_now_msec(), NULL, NULL);
+		gowl_compositor_motionnotify(self, inject_now_msec());
+		absolute_motion_note(self, tx, ty);
 	}
-	gowl_compositor_motionnotify(self, inject_now_msec());
 	gowl_compositor_inject_frame(self);
 }
 
@@ -1924,14 +1932,29 @@ gowl_compositor_inject_pointer_warp(
 		return;
 
 	/*
-	 * warp_closest, not warp: a KVM client derives the screen edge from
-	 * zone geometry it was told about earlier, and a point a fraction
-	 * outside the layout should put the cursor at the edge rather than
-	 * be dropped.  Losing a pointer to a rounding disagreement is a much
-	 * worse failure than a pixel of clamping.
+	 * This is the request a software KVM actually sends for every
+	 * pointer move once it knows the compositor speaks version 2, and
+	 * it is MOTION, not a warp: it has to honour a pointer lock and
+	 * feed the relative stream exactly as the relative request does.
+	 *
+	 * It did neither.  The lock fix landed in the relative injector and
+	 * in the deprecated normalised one, and this route -- the one the
+	 * portal prefers -- kept warping the cursor unconditionally and
+	 * saying nothing on the relative stream.  So a game's mouselook
+	 * driven from a deskflow client had the cursor dragged out of the
+	 * window and received no motion at all, and the result read as a
+	 * pointer that "spazzes out", from the networked mouse only.
+	 *
+	 * warp_closest inside the handler, not warp: a KVM client derives
+	 * the screen edge from zone geometry it was told about earlier, and
+	 * a point a fraction outside the layout should put the cursor at
+	 * the edge rather than be dropped.  Losing a pointer to a rounding
+	 * disagreement is a much worse failure than a pixel of clamping.
 	 */
-	wlr_cursor_warp_closest(self->wlr_cursor, NULL, x, y);
+	compositor_handle_motion_absolute(self, NULL, x, y, inject_now_msec(),
+	                                  NULL, NULL);
 	gowl_compositor_motionnotify(self, inject_now_msec());
+	absolute_motion_note(self, x, y);
 	gowl_compositor_inject_frame(self);
 }
 
@@ -11663,6 +11686,161 @@ constraint_allows_position(GowlCompositor *self, gdouble x, gdouble y)
 	                                      NULL);
 }
 
+/*
+ * Where a motion may actually put the cursor, given the active
+ * constraint.  @x/@y come in as the position the event asked for and
+ * go out as the position to take; FALSE means the cursor stays put.
+ *
+ * A LOCKED pointer never moves.  A CONFINED one is clamped to its
+ * region rather than stopped by it: the request used to be dropped
+ * whole whenever any part of it left the region, so a pointer pushed
+ * diagonally into a corner stuck there instead of sliding along the
+ * edge the way X11 and every other compositor let it.  The target is
+ * first clamped into the region's bounding box; for a region that is
+ * not a rectangle, each axis is then tried on its own.
+ */
+static gboolean
+constraint_resolve_target(GowlCompositor *self, gdouble *x, gdouble *y)
+{
+	struct wlr_pointer_constraint_v1 *c = self->active_constraint;
+	struct wlr_surface *surface = NULL;
+	GowlClient *client = NULL;
+	gdouble cx, cy, sx = 0, sy = 0;
+	gdouble tx = *x, ty = *y;
+
+	if (c == NULL)
+		return TRUE;
+	if (c->type == WLR_POINTER_CONSTRAINT_V1_LOCKED)
+		return FALSE;
+	if (constraint_allows_position(self, tx, ty))
+		return TRUE;
+
+	cx = self->wlr_cursor->x;
+	cy = self->wlr_cursor->y;
+
+	/* The region is surface-local.  The cursor is inside the confined
+	 * surface for as long as the constraint is active, so its own
+	 * surface coordinates locate the region in the layout. */
+	xytonode(self, cx, cy, &surface, &client, &sx, &sy);
+	if (surface == c->surface) {
+		const pixman_box32_t *ext = pixman_region32_extents(&c->region);
+		gdouble ox = cx - sx;
+		gdouble oy = cy - sy;
+
+		tx = CLAMP(tx, ox + ext->x1, ox + ext->x2 - 1);
+		ty = CLAMP(ty, oy + ext->y1, oy + ext->y2 - 1);
+		if (constraint_allows_position(self, tx, ty)) {
+			*x = tx;
+			*y = ty;
+			return TRUE;
+		}
+	}
+	if (constraint_allows_position(self, tx, cy)) {
+		*x = tx;
+		*y = cy;
+		return TRUE;
+	}
+	if (constraint_allows_position(self, cx, ty)) {
+		*x = cx;
+		*y = ty;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+/*
+ * The delta an absolute event is asking for.
+ *
+ * Measured from the LAST POSITION ASKED FOR, not from the cursor.  The
+ * two are the same while the cursor follows the device, and they part
+ * company exactly when a lock holds the cursor still: measured against
+ * a cursor that is not moving, three positions five pixels apart report
+ * five, ten and fifteen -- the accumulated distance from the lock point
+ * -- and a mouselook driven from a tablet, a VM or a software KVM
+ * accelerates until the device's own position reaches its screen edge.
+ * A physical mouse arrives as deltas and never takes this path, which
+ * is why that fault showed from the networked pointer only.
+ *
+ * The baseline resets to the cursor whenever anything else has moved
+ * it since the last absolute position -- a relative motion, a warp, a
+ * lock ending on its cursor hint -- because the device's last position
+ * then says nothing about where the pointer is now.
+ */
+static void
+absolute_motion_delta(GowlCompositor *self,
+                      gdouble         tx,
+                      gdouble         ty,
+                      gdouble        *dx,
+                      gdouble        *dy)
+{
+	gdouble from_x = self->wlr_cursor->x;
+	gdouble from_y = self->wlr_cursor->y;
+
+	if (self->abs_track_valid
+	    && self->abs_track_cursor_x == self->wlr_cursor->x
+	    && self->abs_track_cursor_y == self->wlr_cursor->y) {
+		from_x = self->abs_track_x;
+		from_y = self->abs_track_y;
+	}
+	*dx = tx - from_x;
+	*dy = ty - from_y;
+}
+
+/* Record an absolute position once it has been acted on, so the next
+ * one is measured from it.  Called AFTER motionnotify, so a cursor that
+ * the capture freeze or a constraint's cursor hint moved is recorded
+ * where it ended up rather than where the warp left it. */
+static void
+absolute_motion_note(GowlCompositor *self, gdouble tx, gdouble ty)
+{
+	self->abs_track_valid = TRUE;
+	self->abs_track_x = tx;
+	self->abs_track_y = ty;
+	self->abs_track_cursor_x = self->wlr_cursor->x;
+	self->abs_track_cursor_y = self->wlr_cursor->y;
+}
+
+/*
+ * One absolute pointer position, from any source.  The normalised and
+ * the layout inject requests and the absolute device handler all end
+ * here, so a lock, a confinement and the relative stream are honoured
+ * the same way whichever protocol carried the position -- the layout
+ * request had its own copy of this logic with both halves missing.
+ *
+ * @device is the physical absolute pointer, so the warp respects its
+ * output mapping, or %NULL for injected input.  @dx_out/@dy_out receive
+ * the delta the position asked for.  The caller runs motionnotify and
+ * then absolute_motion_note().
+ */
+static void
+compositor_handle_motion_absolute(GowlCompositor          *self,
+                                  struct wlr_input_device *device,
+                                  gdouble                  tx,
+                                  gdouble                  ty,
+                                  guint32                  time_msec,
+                                  gdouble                 *dx_out,
+                                  gdouble                 *dy_out)
+{
+	gdouble dx, dy;
+	gdouble wx = tx;
+	gdouble wy = ty;
+
+	absolute_motion_delta(self, tx, ty, &dx, &dy);
+
+	/* The relative stream first and unconditionally: a locked client
+	 * reads this and nothing else.  There is no unaccelerated variant
+	 * to report, so the same values go in both slots. */
+	relative_pointer_send(self, time_msec, dx, dy, dx, dy);
+
+	if (constraint_resolve_target(self, &wx, &wy))
+		wlr_cursor_warp_closest(self->wlr_cursor, device, wx, wy);
+
+	if (dx_out != NULL)
+		*dx_out = dx;
+	if (dy_out != NULL)
+		*dy_out = dy;
+}
+
 /**
  * gowl_compositor_client_at:
  * @self: a #GowlCompositor
@@ -11796,14 +11974,17 @@ on_cursor_motion(struct wl_listener *listener, void *data)
 	                      event->delta_x, event->delta_y,
 	                      event->unaccel_dx, event->unaccel_dy);
 
-	/* A locked pointer does not move.  A confined one moves only where
-	 * the region allows.  Everything else moves normally. */
-	if (!constraint_locks_cursor(self)) {
-		if (constraint_allows_position(self,
-		                               self->wlr_cursor->x + event->delta_x,
-		                               self->wlr_cursor->y + event->delta_y))
+	/* A locked pointer does not move.  A confined one moves as far as
+	 * the region allows, sliding along its edge.  Everything else moves
+	 * normally. */
+	{
+		gdouble tx = self->wlr_cursor->x + event->delta_x;
+		gdouble ty = self->wlr_cursor->y + event->delta_y;
+
+		if (constraint_resolve_target(self, &tx, &ty))
 			wlr_cursor_move(self->wlr_cursor, &event->pointer->base,
-			                event->delta_x, event->delta_y);
+			                tx - self->wlr_cursor->x,
+			                ty - self->wlr_cursor->y);
 	}
 	gowl_compositor_motionnotify(self, event->time_msec);
 	recording_note_motion(self, event->delta_x, event->delta_y);
@@ -11829,7 +12010,7 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 {
 	GowlCompositor *self;
 	struct wlr_pointer_motion_absolute_event *event;
-	gdouble before_x, before_y, rel_dx, rel_dy;
+	gdouble lx, ly, rel_dx, rel_dy;
 	gboolean was_active;
 
 	self = wl_container_of(listener, self, cursor_motion_absolute);
@@ -11840,50 +12021,31 @@ on_cursor_motion_abs(struct wl_listener *listener, void *data)
 	was_active = (self->input_capture != NULL
 	              && gowl_input_capture_is_active(self->input_capture));
 
-	before_x = self->wlr_cursor->x;
-	before_y = self->wlr_cursor->y;
-
 	/*
-	 * Where this event WANTS the cursor, worked out before deciding
-	 * whether to take it.  A locked pointer does not move, and reading
-	 * the delta back off a cursor that correctly did not move reports
-	 * zero -- which left a locked client on a tablet, a VM's absolute
-	 * mouse or a KVM with no motion at all.  The device moved; the
-	 * client has to be told how far.
+	 * Where this event WANTS the cursor, in layout coordinates.  The
+	 * shared handler sends the relative delta first, measured from the
+	 * device's previous position rather than from a cursor a lock may
+	 * be holding still, and then moves the cursor only where the
+	 * active constraint allows -- a tablet or a VM's absolute mouse must
+	 * not teleport the cursor out from under a client holding a lock.
 	 */
-	{
-		gdouble lx = before_x, ly = before_y;
+	wlr_cursor_absolute_to_layout_coords(self->wlr_cursor,
+		&event->pointer->base, event->x, event->y, &lx, &ly);
+	compositor_handle_motion_absolute(self, &event->pointer->base, lx, ly,
+	                                  event->time_msec, &rel_dx, &rel_dy);
 
-		wlr_cursor_absolute_to_layout_coords(self->wlr_cursor,
-			&event->pointer->base, event->x, event->y, &lx, &ly);
-		rel_dx = lx - before_x;
-		rel_dy = ly - before_y;
-	}
-
-	/* A locked pointer does not move, even for an absolute device --
-	 * a tablet or a VM's absolute mouse must not teleport the cursor
-	 * out from under a client that has asked for the lock. */
-	if (!constraint_locks_cursor(self))
-		wlr_cursor_warp_absolute(self->wlr_cursor, &event->pointer->base,
-		                         event->x, event->y);
-	/* The relative delta the absolute warp produced (post-clamp); used
-	 * both for capture egress and barrier-crossing.  Absolute devices
-	 * rarely drive deskflow's egress, but keep it consistent. */
-	self->cap_motion_dx = self->wlr_cursor->x - before_x;
-	self->cap_motion_dy = self->wlr_cursor->y - before_y;
-	/* Relative motion from an absolute device is the delta the event
-	 * asked for, not the one the cursor took: they differ exactly when
-	 * the cursor was held, which is when the client needs it most.
-	 * There is no unaccelerated variant to report, so the same values
-	 * go in both slots. */
-	relative_pointer_send(self, event->time_msec,
-	                      rel_dx, rel_dy, rel_dx, rel_dy);
+	/* The raw delta for the barrier test, as on_cursor_motion records
+	 * it: the motion the device asked for, which straddles an edge
+	 * barrier where the clamped cursor cannot.  It is also what the
+	 * capture egress and the recorder want -- how far the device moved,
+	 * not how far a held cursor was let go. */
+	self->cap_motion_dx = rel_dx;
+	self->cap_motion_dy = rel_dy;
 	if (was_active)
-		input_capture_emit_motion(self, event->time_msec,
-		                          self->cap_motion_dx,
-		                          self->cap_motion_dy);
+		input_capture_emit_motion(self, event->time_msec, rel_dx, rel_dy);
 	gowl_compositor_motionnotify(self, event->time_msec);
-	recording_note_motion(self, self->cap_motion_dx, self->cap_motion_dy);
+	absolute_motion_note(self, lx, ly);
+	recording_note_motion(self, rel_dx, rel_dy);
 }
 
 /*

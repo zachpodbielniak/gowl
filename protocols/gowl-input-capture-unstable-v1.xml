@@ -367,6 +367,13 @@
         on it rather than rejected: a KVM client's idea of the screen
         edge is derived from zone geometry it was told about earlier,
         and it should not lose a pointer to a rounding disagreement.
+
+        This is motion, subject to the same pointer constraints as a
+        physical device.  While a client holds the pointer locked the
+        cursor does not move; the client receives the change in the
+        sender's position on the relative-pointer stream instead, which
+        is what a game's mouselook reads.  A confined pointer slides
+        along its region's edge.
       </description>
       <arg name="x" type="fixed"/>
       <arg name="y" type="fixed"/>

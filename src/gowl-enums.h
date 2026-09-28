@@ -619,6 +619,9 @@ GType gowl_input_remap_device_type_get_type(void) G_GNUC_CONST;
  * @GOWL_INPUT_REMAP_TARGET_CALLBACK: Call a C function on press and on
  *   release.  Arbitrary code; the one-to-one guarantee does not cover
  *   what it does.
+ * @GOWL_INPUT_REMAP_TARGET_MACRO: Run a macro (the opt-in macro module)
+ *   on press.  A macro may do many things, so this is outside the
+ *   one-to-one guarantee, like a callback.
  *
  * What a remapped input turns into.  Every kind produces at most one
  * output per physical press, and the release mirrors the press.  There
@@ -631,7 +634,8 @@ typedef enum {
 	GOWL_INPUT_REMAP_TARGET_BUTTON,
 	GOWL_INPUT_REMAP_TARGET_ACTION,
 	GOWL_INPUT_REMAP_TARGET_COMMAND,
-	GOWL_INPUT_REMAP_TARGET_CALLBACK
+	GOWL_INPUT_REMAP_TARGET_CALLBACK,
+	GOWL_INPUT_REMAP_TARGET_MACRO
 } GowlInputRemapTargetKind;
 
 #define GOWL_TYPE_INPUT_REMAP_TARGET_KIND (gowl_input_remap_target_kind_get_type())

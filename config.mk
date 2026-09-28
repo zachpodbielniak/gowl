@@ -35,7 +35,7 @@ INCLUDEDIR ?= $(PREFIX)/include
 # today, so adding a subsystem means adding one word here -- and
 # forgetting to is what left src/fx and src/barkit uninstalled.
 HEADER_SUBDIRS := core boxed config menu module interfaces ipc tray util \
-                  barkit fx protocols
+                  barkit fx protocols macro
 DATADIR ?= $(PREFIX)/share
 PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig
 GIRDIR ?= $(DATADIR)/gir-1.0

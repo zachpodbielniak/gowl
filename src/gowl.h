@@ -75,6 +75,9 @@
 #include "interfaces/gowl-capture-provider.h"
 #include "interfaces/gowl-input-remapper.h"
 
+/* Macros (the API a macro script calls) */
+#include "macro/gowl-macro.h"
+
 /* Boxed types */
 #include "boxed/gowl-capture-result.h"
 #include "boxed/gowl-focus-token.h"

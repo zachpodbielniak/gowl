@@ -242,6 +242,11 @@ void                gowl_input_remap_rule_map_callback (GowlInputRemapRule     *
                                                         GowlInputRemapCallback  callback,
                                                         gpointer                user_data,
                                                         GDestroyNotify          destroy);
+gboolean            gowl_input_remap_rule_map_macro    (GowlInputRemapRule     *self,
+                                                        guint32                 input,
+                                                        const gchar            *name,
+                                                        const gchar            *args,
+                                                        GError                **error);
 void                gowl_input_remap_rule_map_drop     (GowlInputRemapRule     *self,
                                                         guint32                 input);
 void                gowl_input_remap_rule_map_pass     (GowlInputRemapRule     *self,
@@ -261,6 +266,7 @@ guint32                  gowl_input_remap_target_get_keysym    (const GowlInputR
 guint32                  gowl_input_remap_target_get_modifiers (const GowlInputRemapTarget *self);
 GowlAction               gowl_input_remap_target_get_action    (const GowlInputRemapTarget *self);
 const gchar             *gowl_input_remap_target_get_arg       (const GowlInputRemapTarget *self);
+const gchar             *gowl_input_remap_target_get_macro_args(const GowlInputRemapTarget *self);
 void                     gowl_input_remap_target_invoke        (const GowlInputRemapTarget *self,
                                                                 GowlInputRemapRule         *rule,
                                                                 const GowlInputRemapEvent  *event,

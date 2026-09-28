@@ -100,6 +100,7 @@ LIB_SRCS := \
 	src/util/gowl-easing.c \
 	src/util/gowl-backdrop-plan.c \
 	src/util/gowl-fx-optout.c \
+	src/util/gowl-fault-guard.c \
 	src/tray/gowl-tray.c \
 	src/menu/gowl-menu.c \
 	src/fx/gowl-fx-gl.c \
@@ -152,6 +153,8 @@ LIB_SRCS := \
 	src/core/gowl-text-input.c \
 	src/core/gowl-input-config.c \
 	src/core/gowl-input-remap-core.c \
+	src/core/gowl-client-input.c \
+	src/macro/gowl-macro.c \
 	src/core/gowl-decor.c \
 	src/core/gowl-static-prefix-key-policy.c \
 	src/core/gowl-session-default.c \
@@ -226,12 +229,14 @@ LIB_HDRS := \
 	src/interfaces/gowl-embed-renderer.h \
 	src/interfaces/gowl-workspace-provider.h \
 	src/interfaces/gowl-input-remapper.h \
+	src/macro/gowl-macro.h \
 	src/config/gowl-config.h \
 	src/config/gowl-config-compiler.h \
 	src/config/gowl-keybind.h \
 	src/ipc/gowl-ipc.h \
 	src/util/gowl-log.h \
 	src/util/gowl-easing.h \
+	src/util/gowl-fault-guard.h \
 	src/fx/gowl-fx.h \
 	src/tray/gowl-tray.h \
 	src/menu/gowl-menu.h \
@@ -525,6 +530,13 @@ $(OBJDIR)/tests/test-pointer-lock.o: pointer-constraints-unstable-v1-client-prot
                                      xdg-shell-client-protocol.h
 $(OUTDIR)/test-pointer-lock: TEST_LDFLAGS += $(POINTER_LOCK_PROTO) $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-pointer-lock.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
+# test-macro-targeted-key is a real client too: two toplevels and a
+# keyboard, to see which window a targeted key actually reaches.
+# test-macro-examples runs the shipped macros against the same client.
+$(OUTDIR)/test-macro-targeted-key $(OUTDIR)/test-macro-examples: $(OBJDIR)/tests/xdg-shell-protocol.o
+$(OBJDIR)/tests/test-macro-targeted-key.o $(OBJDIR)/tests/test-macro-examples.o: xdg-shell-client-protocol.h tests/macro-test-client.h
+$(OUTDIR)/test-macro-targeted-key $(OUTDIR)/test-macro-examples: TEST_LDFLAGS += $(OBJDIR)/tests/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
+$(OBJDIR)/tests/test-macro-targeted-key.o $(OBJDIR)/tests/test-macro-examples.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 $(OUTDIR)/test-protocols: TEST_LDFLAGS += $(OBJDIR)/bar/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 
@@ -722,6 +734,17 @@ $(OBJDIR)/tests/test-input-remap-claim.o: TEST_CFLAGS += -DGOWL_TEST_INPUTREMAP_
 # The engine test includes the module's pure rule engine directly.
 $(OBJDIR)/tests/test-input-remap-engine.o: modules/inputremap/gowl-inputremap-engine.c modules/inputremap/gowl-inputremap-engine.h
 
+# Macros.  The loader test includes the loader directly and compiles
+# real macro files with crispy against this build's headers, so it
+# needs the same dev include dir the module is given.  The runner and
+# example tests load the real macro.so in a headless compositor.
+$(OBJDIR)/tests/test-macro-loader.o: modules/macro/gowl-macro-loader.c modules/macro/gowl-macro-loader.h
+$(OBJDIR)/tests/test-macro-loader.o: TEST_CFLAGS += -DGOWL_MACRO_DEV_INCLUDE='"$(abspath $(BUILDDIR)/include)"'
+$(OUTDIR)/test-macro-runner $(OUTDIR)/test-macro-examples: $(OUTDIR)/modules/macro.so $(OUTDIR)/modules/inputremap.so
+$(OUTDIR)/test-macro-examples: $(OUTDIR)/modules/tile.so $(OUTDIR)/modules/monocle.so
+$(OBJDIR)/tests/test-macro-runner.o $(OBJDIR)/tests/test-macro-examples.o: TEST_CFLAGS += -DGOWL_TEST_MACRO_MODULE='"$(abspath $(OUTDIR)/modules/macro.so)"' -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"' -DGOWL_TEST_MACRO_EXAMPLES='"$(abspath data/macros)"' -DGOWL_MACRO_DEV_INCLUDE='"$(abspath $(BUILDDIR)/include)"' $(shell $(PKG_CONFIG) --cflags gio-unix-2.0)
+$(OUTDIR)/modules/macro.so: $(wildcard modules/macro/*.c modules/macro/*.h)
+
 # A GPU reset in a headless compositor, then again with the real modules
 # that draw scene buffers of their own loaded, to see each one redraw.
 # Each is built by its own Makefile, as `modules' builds it: the generic
@@ -752,7 +775,7 @@ $(OUTDIR)/modules/menu.so: $(wildcard modules/menu/*.c modules/menu/*.h)
 # The input remapper: its engine is a second file, and it links
 # json-glib and wayland-server, neither of which the generic rule does.
 $(OUTDIR)/modules/inputremap.so: $(wildcard modules/inputremap/*.c modules/inputremap/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so $(OUTDIR)/modules/inputremap.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modules/macro.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

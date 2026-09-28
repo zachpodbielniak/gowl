@@ -70,6 +70,10 @@ $(OBJDIR)/ipc/%.o: src/ipc/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(OBJDIR)/macro/%.o: src/macro/%.c | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(OBJDIR)/util/%.o: src/util/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -583,6 +587,12 @@ install-bar-configs:
 	$(INSTALL_DATA) data/example-bar.c $(DESTDIR)$(DATADIR)/gowl/example-bar.c
 	$(INSTALL_DATA) data/example-input-remap.yaml $(DESTDIR)$(DATADIR)/gowl/example-input-remap.yaml
 	$(INSTALL_DATA) data/example-input-remap.c $(DESTDIR)$(DATADIR)/gowl/example-input-remap.c
+	@# The example macros go where a bare `macro-run NAME' finds them:
+	@# $(DATADIR)/gowl/macros is on the macro module's search path.
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/gowl/macros
+	for f in data/macros/*.c; do \
+		$(INSTALL_DATA) "$$f" $(DESTDIR)$(DATADIR)/gowl/macros/ || exit 1; \
+	done
 
 # Uninstall
 .PHONY: uninstall
@@ -611,6 +621,10 @@ uninstall:
 	rm -f $(DESTDIR)$(DATADIR)/gowl/example-bar.c
 	rm -f $(DESTDIR)$(DATADIR)/gowl/example-input-remap.yaml
 	rm -f $(DESTDIR)$(DATADIR)/gowl/example-input-remap.c
+	for f in data/macros/*.c; do \
+		rm -f $(DESTDIR)$(DATADIR)/gowl/macros/$$(basename "$$f"); \
+	done
+	-rmdir $(DESTDIR)$(DATADIR)/gowl/macros 2>/dev/null
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl.desktop
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gowl.png

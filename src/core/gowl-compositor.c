@@ -5810,6 +5810,43 @@ setmon(
 }
 
 /**
+ * gowl_compositor_move_client:
+ * @self: a #GowlCompositor
+ * @client: the window
+ * @monitor: (nullable): the output to move it to, %NULL to stay
+ * @tags: the tags to put it on, 0 for the destination's current view
+ *   (or, staying put, to keep its tags)
+ *
+ * Moves a window to another output and/or other tags, the way the
+ * move-to-monitor and tag-set actions do, and re-tiles.  For macros and
+ * embedders; the raw gowl_client_set_tags()/set_monitor() setters do
+ * not re-arrange anything.
+ */
+void
+gowl_compositor_move_client(
+	GowlCompositor *self,
+	GowlClient     *client,
+	GowlMonitor    *monitor,
+	guint32         tags
+){
+	GowlMonitor *target;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(client));
+
+	target = monitor != NULL ? monitor : client->mon;
+	if (target != client->mon) {
+		setmon(self, client, target, tags);
+		return;
+	}
+	if (tags == 0 || tags == client->tags || target == NULL)
+		return;
+	gowl_client_set_tags(client, tags);
+	gowl_compositor_focus_client(self, focustop(self, self->selmon), TRUE);
+	gowl_compositor_arrange(self, target);
+}
+
+/**
  * xytonode:
  *
  * Finds the client and wlr_surface under the given coordinates

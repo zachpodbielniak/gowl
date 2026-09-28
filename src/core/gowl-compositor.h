@@ -1290,6 +1290,73 @@ void gowl_compositor_set_key_intercept (GowlCompositor      *self,
                                         gpointer              user_data);
 
 /**
+ * gowl_compositor_keysym_to_keycode:
+ * @self: a #GowlCompositor
+ * @keysym: an XKB keysym
+ * @out_shift: (out) (optional): whether Shift is needed for it
+ *
+ * Returns: the evdev keycode producing @keysym in the current keymap,
+ *   or 0 when none does
+ */
+guint32    gowl_compositor_keysym_to_keycode  (GowlCompositor *self,
+                                               guint32         keysym,
+                                               gboolean       *out_shift);
+
+/**
+ * gowl_compositor_send_key_to_client:
+ * @self: a #GowlCompositor
+ * @client: the window to type into, focused or not
+ * @keycode: an evdev keycode
+ * @modifiers: #GowlKeyMod bits held for the key
+ *
+ * Taps one key into @client and gives keyboard focus back.  Refused
+ * while locked or while a launcher or popup holds the keyboard.
+ *
+ * Returns: %TRUE when delivered
+ */
+gboolean   gowl_compositor_send_key_to_client (GowlCompositor *self,
+                                               GowlClient     *client,
+                                               guint32         keycode,
+                                               guint32         modifiers);
+
+/**
+ * gowl_compositor_send_text_to_client:
+ * @self: a #GowlCompositor
+ * @client: the window to type into
+ * @text: UTF-8 text
+ *
+ * Returns: characters typed, -1 when refused
+ */
+gint       gowl_compositor_send_text_to_client (GowlCompositor *self,
+                                                GowlClient     *client,
+                                                const gchar    *text);
+
+/**
+ * gowl_compositor_move_client:
+ * @self: a #GowlCompositor
+ * @client: the window
+ * @monitor: (nullable): destination output, %NULL to stay
+ * @tags: destination tags, 0 for the destination's view (or to keep)
+ *
+ * Moves a window between outputs and tags and re-tiles.
+ */
+void       gowl_compositor_move_client        (GowlCompositor *self,
+                                               GowlClient     *client,
+                                               GowlMonitor    *monitor,
+                                               guint32         tags);
+
+/**
+ * gowl_compositor_reorder_clients:
+ * @self: a #GowlCompositor
+ * @order: (element-type GowlClient): clients in the wanted order
+ *
+ * Reorders those clients within the slots they occupy in the tiling
+ * order, and re-arranges the monitors that changed.
+ */
+void       gowl_compositor_reorder_clients    (GowlCompositor *self,
+                                               GList          *order);
+
+/**
  * GowlInputRemapIdentifyFunc:
  * @compositor: the compositor
  * @info: the device the input came from

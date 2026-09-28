@@ -120,7 +120,8 @@ struct _GowlInputRemapTarget {
 	guint32                  keysym;
 	guint32                  modifiers;
 	GowlAction               action;
-	gchar                   *arg;
+	gchar                   *arg;        /* action arg, command, macro name */
+	gchar                   *macro_args; /* macro target's arguments */
 	GowlInputRemapCallback   callback;
 	gpointer                 user_data;
 	GDestroyNotify           destroy;
@@ -151,6 +152,7 @@ target_free(gpointer data)
 	if (t->destroy != NULL && t->user_data != NULL)
 		t->destroy(t->user_data);
 	g_free(t->arg);
+	g_free(t->macro_args);
 	g_free(t);
 }
 
@@ -890,6 +892,51 @@ gowl_input_remap_rule_map_callback(
 }
 
 /**
+ * gowl_input_remap_rule_map_macro:
+ * @self: a #GowlInputRemapRule
+ * @input: the physical input
+ * @name: the macro to run on press (a name on the macro path, or a path)
+ * @args: (nullable): its arguments, shell-style (`"a b" c')
+ * @error: return location for a #GError
+ *
+ * Maps @input to a macro, run through the opt-in macro module on press.
+ * A macro can do many things -- this is OUTSIDE the one-to-one
+ * guarantee, like a callback; do not use it where the rules of a game
+ * forbid automation.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_input_remap_rule_map_macro(
+	GowlInputRemapRule  *self,
+	guint32              input,
+	const gchar         *name,
+	const gchar         *args,
+	GError             **error
+){
+	GowlInputRemapTarget *t;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+
+	if (!check_input(input, error))
+		return FALSE;
+	if (name == NULL || *name == '\0' || strpbrk(name, "\n\r") != NULL
+	    || (args != NULL && strpbrk(args, "\n\r") != NULL)) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "a macro target needs a name, on one line");
+		return FALSE;
+	}
+
+	t = g_new0(GowlInputRemapTarget, 1);
+	t->kind = GOWL_INPUT_REMAP_TARGET_MACRO;
+	t->arg = g_strdup(name);
+	t->macro_args = (args != NULL && *args != '\0') ? g_strdup(args) : NULL;
+	store_target(self, input, t);
+	return TRUE;
+}
+
+/**
  * gowl_input_remap_rule_map_drop:
  * @self: a #GowlInputRemapRule
  * @input: the physical input to swallow
@@ -1104,6 +1151,19 @@ gowl_input_remap_target_get_arg(const GowlInputRemapTarget *self)
 }
 
 /**
+ * gowl_input_remap_target_get_macro_args:
+ * @self: a #GowlInputRemapTarget
+ *
+ * Returns: (transfer none) (nullable): a macro target's arguments
+ */
+const gchar *
+gowl_input_remap_target_get_macro_args(const GowlInputRemapTarget *self)
+{
+	g_return_val_if_fail(self != NULL, NULL);
+	return self->macro_args;
+}
+
+/**
  * gowl_input_remap_target_invoke:
  * @self: a callback target
  * @rule: the rule it belongs to
@@ -1224,6 +1284,15 @@ append_target_yaml(
 	case GOWL_INPUT_REMAP_TARGET_COMMAND:
 		g_string_append(out, "{command: ");
 		append_quoted(out, t->arg);
+		g_string_append_c(out, '}');
+		return;
+	case GOWL_INPUT_REMAP_TARGET_MACRO:
+		g_string_append(out, "{macro: ");
+		append_quoted(out, t->arg);
+		if (t->macro_args != NULL) {
+			g_string_append(out, ", args: ");
+			append_quoted(out, t->macro_args);
+		}
 		g_string_append_c(out, '}');
 		return;
 	case GOWL_INPUT_REMAP_TARGET_CALLBACK:
@@ -1707,7 +1776,10 @@ parse_map_entry(
 		const gchar *k;
 
 		k = yaml_mapping_get_key(m, i);
-		if (key_is_forbidden(k)) {
+		/* `macro' names a macro TARGET here (outside the one-to-one
+		   guarantee, by explicit request); it stays refused as a key of
+		   the rule itself, where it would mean a sequence. */
+		if (key_is_forbidden(k) && g_strcmp0(k, "macro") != 0) {
 			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
 			            GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE,
 			            "`%s' in the mapping for %s: remaps are one "
@@ -1717,7 +1789,8 @@ parse_map_entry(
 		}
 		if (g_strcmp0(k, "key") == 0 || g_strcmp0(k, "button") == 0
 		    || g_strcmp0(k, "action") == 0
-		    || g_strcmp0(k, "command") == 0)
+		    || g_strcmp0(k, "command") == 0
+		    || g_strcmp0(k, "macro") == 0)
 			kinds++;
 		else if (g_strcmp0(k, "callback") == 0) {
 			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
@@ -1726,7 +1799,7 @@ parse_map_entry(
 			            "from C (gowl_input_remap_rule_map_callback) "
 			            "or, in cmacs, from Elisp", input_name);
 			return FALSE;
-		} else if (g_strcmp0(k, "arg") != 0) {
+		} else if (g_strcmp0(k, "arg") != 0 && g_strcmp0(k, "args") != 0) {
 			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
 			            GOWL_INPUT_REMAP_ERROR_INVALID,
 			            "unknown key `%s' in the mapping for %s",
@@ -1738,7 +1811,7 @@ parse_map_entry(
 		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
 		            GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE,
 		            "the mapping for %s names %u outputs; exactly one "
-		            "of key, button, action or command", input_name,
+		            "of key, button, action, command or macro", input_name,
 		            kinds);
 		return FALSE;
 	}
@@ -1754,6 +1827,13 @@ parse_map_entry(
 		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
 		            GOWL_INPUT_REMAP_ERROR_INVALID,
 		            "`arg' for %s only goes with `action'", input_name);
+		return FALSE;
+	}
+	if (yaml_mapping_has_member(m, "args")
+	    && !yaml_mapping_has_member(m, "macro")) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "`args' for %s only goes with `macro'", input_name);
 		return FALSE;
 	}
 
@@ -1802,6 +1882,21 @@ parse_map_entry(
 			return FALSE;
 		return gowl_input_remap_rule_map_action(rule, input, action, arg,
 		                                        error);
+	}
+	if (yaml_mapping_has_member(m, "macro")) {
+		const gchar *margs;
+		YamlNode *args_node;
+
+		if (!require_scalar(yaml_mapping_get_member(m, "macro"), "macro",
+		                    &text, error))
+			return FALSE;
+		margs = NULL;
+		args_node = yaml_mapping_get_member(m, "args");
+		if (args_node != NULL
+		    && !require_scalar(args_node, "args", &margs, error))
+			return FALSE;
+		return gowl_input_remap_rule_map_macro(rule, input, text, margs,
+		                                       error);
 	}
 	if (!require_scalar(yaml_mapping_get_member(m, "command"), "command",
 	                    &text, error))

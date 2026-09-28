@@ -596,6 +596,8 @@ gowl_input_remap_target_kind_get_type(void)
 			  "GOWL_INPUT_REMAP_TARGET_COMMAND", "command" },
 			{ GOWL_INPUT_REMAP_TARGET_CALLBACK,
 			  "GOWL_INPUT_REMAP_TARGET_CALLBACK", "callback" },
+			{ GOWL_INPUT_REMAP_TARGET_MACRO,
+			  "GOWL_INPUT_REMAP_TARGET_MACRO", "macro" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static(

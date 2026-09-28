@@ -527,6 +527,37 @@ apply_press(
 			return;
 		gowl_input_remap_target_invoke(h->target, h->rule, ev, self);
 		return;
+	case GOWL_INPUT_REMAP_TARGET_MACRO: {
+		/* Through the macro module's own entry point, marked as a remap
+		   trigger with the rule and input as its detail.  Press only. */
+		g_autofree gchar *qname = NULL;
+		g_autofree gchar *detail = NULL;
+		g_autofree gchar *qdetail = NULL;
+		g_autofree gchar *input = NULL;
+		g_autofree gchar *line = NULL;
+		g_autofree gchar *reply = NULL;
+		const gchar *margs;
+
+		if (locked)
+			return;
+		input = gowl_input_remap_code_to_name(ev->code);
+		detail = g_strdup_printf("%s %s",
+		                         gowl_input_remap_rule_get_name(h->rule), input);
+		qdetail = g_shell_quote(detail);
+		qname = g_shell_quote(gowl_input_remap_target_get_arg(h->target));
+		margs = gowl_input_remap_target_get_macro_args(h->target);
+		line = g_strdup_printf("macro-run --trigger=remap --detail=%s %s %s",
+		                       qdetail, qname, margs != NULL ? margs : "");
+		reply = gowl_compositor_run_command(self, line);
+		if (reply == NULL)
+			g_message("input-remap: macro target '%s' but the macro module "
+			          "is not loaded",
+			          gowl_input_remap_target_get_arg(h->target));
+		else if (g_str_has_prefix(reply, "ERROR"))
+			g_message("input-remap: macro '%s': %s",
+			          gowl_input_remap_target_get_arg(h->target), reply);
+		return;
+	}
 	default:
 		return;
 	}
@@ -562,8 +593,9 @@ apply_release(
 	case GOWL_INPUT_REMAP_TARGET_DROP:
 	case GOWL_INPUT_REMAP_TARGET_ACTION:
 	case GOWL_INPUT_REMAP_TARGET_COMMAND:
+	case GOWL_INPUT_REMAP_TARGET_MACRO:
 	default:
-		/* An action or command ran on the press; the release is
+		/* An action, command or macro ran on the press; the release is
 		 * swallowed so it cannot leak through to anything. */
 		return;
 	}

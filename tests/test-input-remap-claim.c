@@ -200,12 +200,20 @@ rig_setup(
 	gowl_config_set_lock_command(r->config, "");
 	r->modules = gowl_module_manager_new();
 
-	/* The real module, and the probe beside it */
+	/* The real module, and the probe beside it.  The clipboard module
+	 * is loaded FIRST, as cmacs --gowl loads it: it answers IPC too, and
+	 * once claimed every `WORD ARGS' command it saw, so `inputremap-add'
+	 * never reached the remapper in a real session. */
 	if (with_module) {
-		if (!gowl_module_manager_load_module(r->modules,
-		                                     GOWL_TEST_INPUTREMAP_MODULE,
-		                                     &error)) {
-			g_test_skip("inputremap.so did not load");
+		g_autofree gchar *clip = NULL;
+
+		clip = g_build_filename(GOWL_TEST_MODULE_DIR, "clipboard.so", NULL);
+		g_setenv("XDG_STATE_HOME", r->runtime, TRUE);
+		if (!gowl_module_manager_load_module(r->modules, clip, &error)
+		    || !gowl_module_manager_load_module(r->modules,
+		                                        GOWL_TEST_INPUTREMAP_MODULE,
+		                                        &error)) {
+			g_test_skip("a module did not load");
 			g_clear_error(&error);
 			return;
 		}

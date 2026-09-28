@@ -402,6 +402,13 @@ clip_handle_command(GowlIpcHandler *handler, const gchar *command,
 
 	if (command == NULL || self->compositor == NULL)
 		return NULL;
+	/* Only our own words.  The id check below used to run for ANY
+	 * command with arguments, so every other module's `WORD ARGS'
+	 * command reaching this handler first -- `inputremap-add {...}',
+	 * say -- was answered "a numeric id is required" and never got
+	 * to the module it was for. */
+	if (!g_str_has_prefix(command, "clipboard-"))
+		return NULL;
 
 	if (g_strcmp0(command, "clipboard-list") == 0) {
 		g_autoptr(GString) out = g_string_new(NULL);

@@ -717,8 +717,8 @@ $(OBJDIR)/tests/test-scratchpad-module.o: TEST_CFLAGS += -DGOWL_TEST_SCRATCHPAD_
 # compositor: software keyboards and pointers plugged into the backend,
 # keys pressed on the device itself, outputs watched where the pipeline
 # ends.  Its own Makefile builds it (json-glib, wayland-server).
-$(OUTDIR)/test-input-remap-claim: $(OUTDIR)/modules/inputremap.so
-$(OBJDIR)/tests/test-input-remap-claim.o: TEST_CFLAGS += -DGOWL_TEST_INPUTREMAP_MODULE='"$(abspath $(OUTDIR)/modules/inputremap.so)"'
+$(OUTDIR)/test-input-remap-claim: $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modules/clipboard.so
+$(OBJDIR)/tests/test-input-remap-claim.o: TEST_CFLAGS += -DGOWL_TEST_INPUTREMAP_MODULE='"$(abspath $(OUTDIR)/modules/inputremap.so)"' -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 # The engine test includes the module's pure rule engine directly.
 $(OBJDIR)/tests/test-input-remap-engine.o: modules/inputremap/gowl-inputremap-engine.c modules/inputremap/gowl-inputremap-engine.h
 

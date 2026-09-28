@@ -348,3 +348,31 @@ gowl_input_config_foreach_keyboard(
 			func(wlr_keyboard_from_input_device(t->device), user_data);
 	}
 }
+
+/**
+ * gowl_input_config_foreach_device:
+ * @self: the compositor
+ * @func: called with each device
+ * @user_data: passed through
+ *
+ * Every input device the compositor has been handed and that is still
+ * plugged in.  Per-device input remapping walks it to re-decide which
+ * devices are claimed when a rule is added or removed at runtime.
+ * @func must not destroy devices.
+ */
+void
+gowl_input_config_foreach_device(
+	GowlCompositor *self,
+	void          (*func)(struct wlr_input_device *dev, gpointer user_data),
+	gpointer        user_data
+){
+	GList *l;
+	GList *next;
+
+	for (l = self->input_devices; l != NULL; l = next) {
+		GowlTrackedDevice *t = (GowlTrackedDevice *)l->data;
+
+		next = l->next;
+		func(t->device, user_data);
+	}
+}

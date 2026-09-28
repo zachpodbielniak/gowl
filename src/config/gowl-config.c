@@ -21,6 +21,8 @@
 #include "gowl-keybind.h"
 #include "gowl-enums.h"
 #include "gowl-types.h"
+#include "boxed/gowl-input-remap-rule.h"
+#include "boxed/gowl-input-remap-rule-private.h"
 
 #include <glib.h>
 #include <glib-object.h>
@@ -1073,6 +1075,11 @@ struct _GowlConfig {
 	/* input: blocks - array of GowlInputConfigEntry* (heap) */
 	GPtrArray *input_configs;
 
+	/* input-remap: rules - array of GowlInputRemapRule* (a ref each),
+	 * in file order.  Applied by the opt-in inputremap module; with it
+	 * not loaded these are inert. */
+	GPtrArray *input_remap_rules;
+
 	/* Rules - array of GowlRuleEntry* (heap-allocated) */
 	GPtrArray *rules;
 
@@ -1671,6 +1678,7 @@ gowl_config_finalize(GObject *object)
 	if (self->gestures != NULL)
 		g_array_unref(self->gestures);
 	g_clear_pointer(&self->input_configs, g_ptr_array_unref);
+	g_clear_pointer(&self->input_remap_rules, g_ptr_array_unref);
 	g_free(self->xkb_layout);
 	g_free(self->xkb_variant);
 	g_free(self->xkb_model);
@@ -2487,6 +2495,8 @@ gowl_config_init(GowlConfig *self)
 	g_array_set_clear_func(self->gestures, gowl_gesture_entry_clear);
 	self->input_configs = g_ptr_array_new_with_free_func(
 		gowl_input_config_entry_free);
+	self->input_remap_rules = g_ptr_array_new_with_free_func(
+		(GDestroyNotify)gowl_input_remap_rule_unref);
 	gowl_config_add_default_mousebinds(self);
 
 	self->rules = g_ptr_array_new_with_free_func(gowl_rule_entry_free);
@@ -2891,7 +2901,7 @@ static const gchar *const top_level_keys[] = {
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
 	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
 	"lock-command", "lock-on-suspend", "keybinds", "modes",
-	"mousebinds", "gestures", "input", "rules", "dropdowns", "autostart",
+	"mousebinds", "gestures", "input", "input-remap", "rules", "dropdowns", "autostart",
 	"monitors", "modules", "profiles",
 	NULL
 };
@@ -5405,6 +5415,47 @@ gowl_config_apply_mapping(
 		}
 	}
 
+	/* input-remap: a list of per-device remap rules, applied by the
+	 * opt-in inputremap module (docs/input-remap.org):
+	 *
+	 *   input-remap:
+	 *     - name: pedals
+	 *       match: { id: "1a86:e026" }
+	 *       map:
+	 *         KEY_A: { button: middle }
+	 *         KEY_B: { action: focus-client, arg: "app-id:*wow*" }
+	 *
+	 * Rule by rule: a bad one is reported and skipped and the rest
+	 * still load, as a bad keybind is.  A rule shaped like a macro is
+	 * refused here, not merely documented against. */
+	if (yaml_mapping_has_member(mapping, "input-remap")) {
+		YamlSequence *seq;
+		guint n, ri;
+
+		seq = yaml_mapping_get_sequence_member(mapping, "input-remap");
+		if (seq == NULL) {
+			g_warning("gowl_config: `input-remap:' is a list of rules, "
+			          "ignoring it");
+			self->problems++;
+		}
+		n = seq != NULL ? yaml_sequence_get_length(seq) : 0;
+		for (ri = 0; ri < n; ri++) {
+			g_autoptr(GError) rerr = NULL;
+			GowlInputRemapRule *rule;
+
+			rule = gowl_input_remap_rule_new_from_node(
+				yaml_sequence_get_element(seq, ri), &rerr);
+			if (rule == NULL) {
+				g_warning("gowl_config: input-remap rule %u: %s",
+				          ri + 1, rerr->message);
+				self->problems++;
+				continue;
+			}
+			gowl_config_add_input_remap_rule(self, rule);
+			gowl_input_remap_rule_unref(rule);
+		}
+	}
+
 	/* Keybinds: mapping of
 	 *   "Mod+Key": { action: <name>, arg: "<value>", desc: "<text>" }
 	 *
@@ -6327,6 +6378,19 @@ gowl_config_generate_yaml(GowlConfig *self)
 		}
 	}
 
+	/* input-remap: rules, one flow mapping each (callbacks, which have
+	 * no text form, come out as `{callback: native}' and are refused on
+	 * the way back in) */
+	if (self->input_remap_rules->len > 0) {
+		g_string_append(yaml, "\ninput-remap:\n");
+		for (i = 0; i < self->input_remap_rules->len; i++) {
+			g_autofree gchar *line = gowl_input_remap_rule_to_yaml(
+				g_ptr_array_index(self->input_remap_rules, i));
+
+			g_string_append_printf(yaml, "  - %s\n", line);
+		}
+	}
+
 	/* Rules */
 	if (self->rules->len > 0) {
 		g_string_append(yaml, "\nrules:\n");
@@ -6722,6 +6786,8 @@ gowl_config_reset_values_to_defaults(GowlConfig *self)
 		g_array_set_size(self->gestures, 0);
 	if (self->input_configs != NULL)
 		g_ptr_array_set_size(self->input_configs, 0);
+	if (self->input_remap_rules != NULL)
+		g_ptr_array_set_size(self->input_remap_rules, 0);
 	if (self->rules != NULL)
 		g_ptr_array_set_size(self->rules, 0);
 	if (self->dropdowns != NULL)
@@ -7014,6 +7080,98 @@ gowl_config_lookup_input_setting(
 			found = v;
 	}
 	return found;
+}
+
+/* --- input-remap: rules --- */
+
+/**
+ * gowl_config_add_input_remap_rule:
+ * @self: a #GowlConfig
+ * @rule: a remap rule; the config takes its own reference
+ *
+ * Adds @rule to the `input-remap:' list, replacing any rule with the
+ * same name in place (so a C config and a YAML one cannot silently
+ * stack two rules for one pedal).  The inputremap module applies the
+ * list; without it loaded the rules are inert.
+ */
+void
+gowl_config_add_input_remap_rule(
+	GowlConfig         *self,
+	GowlInputRemapRule *rule
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_return_if_fail(rule != NULL);
+
+	for (i = 0; i < self->input_remap_rules->len; i++) {
+		GowlInputRemapRule *old;
+
+		old = g_ptr_array_index(self->input_remap_rules, i);
+		if (g_strcmp0(gowl_input_remap_rule_get_name(old),
+		              gowl_input_remap_rule_get_name(rule)) == 0) {
+			gowl_input_remap_rule_ref(rule);
+			self->input_remap_rules->pdata[i] = rule;
+			gowl_input_remap_rule_unref(old);
+			return;
+		}
+	}
+	g_ptr_array_add(self->input_remap_rules,
+	                gowl_input_remap_rule_ref(rule));
+}
+
+/**
+ * gowl_config_remove_input_remap_rule:
+ * @self: a #GowlConfig
+ * @name: the rule's name
+ *
+ * Returns: %TRUE when a rule by that name was removed
+ */
+gboolean
+gowl_config_remove_input_remap_rule(
+	GowlConfig  *self,
+	const gchar *name
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	g_return_val_if_fail(name != NULL, FALSE);
+
+	for (i = 0; i < self->input_remap_rules->len; i++) {
+		GowlInputRemapRule *r;
+
+		r = g_ptr_array_index(self->input_remap_rules, i);
+		if (g_strcmp0(gowl_input_remap_rule_get_name(r), name) == 0) {
+			g_ptr_array_remove_index(self->input_remap_rules, i);
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/**
+ * gowl_config_clear_input_remap_rules:
+ * @self: a #GowlConfig
+ */
+void
+gowl_config_clear_input_remap_rules(GowlConfig *self)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_ptr_array_set_size(self->input_remap_rules, 0);
+}
+
+/**
+ * gowl_config_get_input_remap_rules:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlInputRemapRule): the
+ *   `input-remap:' rules, in file order
+ */
+GPtrArray *
+gowl_config_get_input_remap_rules(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->input_remap_rules;
 }
 
 /* --- XKB --- */

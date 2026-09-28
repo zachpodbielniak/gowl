@@ -397,6 +397,17 @@ struct _GowlCompositor {
 	 * plugged in. */
 	GList                        *input_devices;
 
+	/* Per-device input remapping (gowl-input-remap-core.c).  Records
+	 * exist only once a GowlInputRemapper module is active; with none
+	 * the table stays NULL and every hook returns at once.
+	 * remap_feeding is TRUE while a remapped key is inside
+	 * compositor_handle_key(), which only stops key repeat being armed
+	 * for it: a remap is one press, one output. */
+	GHashTable                   *remap_devices;
+	guint                         remap_next_id;
+	gboolean                      remap_feeding;
+	gpointer                      remap_identify;
+
 	/* A configured gesture in progress.  A finger count with any
 	 * gesture bound is claimed for the whole gesture, like a module
 	 * claimant; the travel is summed and read at the end. */
@@ -1210,6 +1221,26 @@ void     gowl_input_config_finish          (GowlCompositor *self);
 void     gowl_input_config_foreach_keyboard(GowlCompositor *self,
                                             void (*func)(struct wlr_keyboard *kb, gpointer user_data),
                                             gpointer user_data);
+void     gowl_input_config_foreach_device  (GowlCompositor *self,
+                                            void (*func)(struct wlr_input_device *dev, gpointer user_data),
+                                            gpointer user_data);
+
+/* per-device input remapping: gowl-input-remap-core.c.  Every hook
+ * returns at once when no GowlInputRemapper module is active, which is
+ * what keeps the input path unchanged without one. */
+gboolean gowl_input_remap_core_try_claim   (GowlCompositor *self, struct wlr_input_device *dev);
+gboolean gowl_input_remap_core_button      (GowlCompositor *self, struct wlr_input_device *dev,
+                                            guint32 button, guint32 state, guint32 time_msec);
+gboolean gowl_input_remap_core_axis        (GowlCompositor *self, struct wlr_pointer_axis_event *event);
+gboolean gowl_input_remap_core_has_claimed_keyboard(GowlCompositor *self);
+void     gowl_input_remap_core_finish      (GowlCompositor *self);
+
+/* The two compositor decisions the remap core feeds, exported from
+ * gowl-compositor.c (where they are static) for it alone. */
+void     gowl_compositor_remap_handle_key   (GowlCompositor *self, guint32 keycode,
+                                             guint32 state, guint32 time_msec);
+void     gowl_compositor_remap_handle_button(GowlCompositor *self, guint32 button,
+                                             guint32 state, guint32 time_msec);
 
 /* wlr-foreign-toplevel-management: gowl-foreign-toplevel.c */
 void     gowl_foreign_toplevel_init        (GowlCompositor *self);

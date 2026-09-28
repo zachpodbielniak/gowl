@@ -26,6 +26,7 @@
  */
 
 #include "gowl-config-compiler.h"
+#include "boxed/gowl-input-remap-rule-private.h"
 
 #define CRISPY_COMPILATION
 #include <crispy.h>
@@ -561,6 +562,7 @@ gowl_config_compiler_load_and_apply(
 	gpointer symbol;
 	gboolean (*config_init_fn)(void);
 	gboolean result;
+	guint callback_mark;
 
 	g_return_val_if_fail(GOWL_IS_CONFIG_COMPILER(self), FALSE);
 	g_return_val_if_fail(so_path != NULL, FALSE);
@@ -588,7 +590,22 @@ gowl_config_compiler_load_and_apply(
 	}
 
 	config_init_fn = (gboolean (*)(void))symbol;
+	callback_mark = gowl_input_remap_callback_generation();
 	result = config_init_fn();
+
+	/*
+	 * A config that mapped an input-remap CALLBACK has handed the
+	 * compositor a pointer into this very .so.  Closing it on the next
+	 * reload would leave that pointer aimed at unmapped memory -- a
+	 * pedal press after `reload' would jump into nothing.  Such a
+	 * config stays loaded for the life of the process: one small .so
+	 * per reload, against a crash.
+	 */
+	if (result && gowl_input_remap_callback_generation() != callback_mark) {
+		g_module_make_resident(module);
+		g_debug("gowl_config: '%s' maps input-remap callbacks; kept "
+		        "resident", so_path);
+	}
 
 	if (!result) {
 		g_set_error(error,

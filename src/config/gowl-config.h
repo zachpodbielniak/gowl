@@ -24,6 +24,7 @@
 #include "boxed/gowl-palette.h"
 /* For GowlBackdropStyle, which `window-backdrop' resolves to. */
 #include "gowl-enums.h"
+#include "boxed/gowl-input-remap-rule.h"
 
 G_BEGIN_DECLS
 
@@ -1049,6 +1050,42 @@ const gchar *gowl_config_lookup_input_setting (GowlConfig  *self,
                                                const gchar *device_name,
                                                const gchar *device_class,
                                                const gchar *key);
+
+/**
+ * gowl_config_add_input_remap_rule:
+ * @self: a #GowlConfig
+ * @rule: a per-device remap rule
+ *
+ * Adds @rule to the `input-remap:' list, replacing a rule of the same
+ * name.  The C-config equivalent of an `input-remap:' entry; see
+ * docs/input-remap.org.  Inert unless the inputremap module is loaded.
+ */
+void       gowl_config_add_input_remap_rule    (GowlConfig         *self,
+                                                GowlInputRemapRule *rule);
+
+/**
+ * gowl_config_remove_input_remap_rule:
+ * @self: a #GowlConfig
+ * @name: a rule name
+ *
+ * Returns: %TRUE when a rule was removed
+ */
+gboolean   gowl_config_remove_input_remap_rule (GowlConfig         *self,
+                                                const gchar        *name);
+
+/**
+ * gowl_config_clear_input_remap_rules:
+ * @self: a #GowlConfig
+ */
+void       gowl_config_clear_input_remap_rules (GowlConfig         *self);
+
+/**
+ * gowl_config_get_input_remap_rules:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlInputRemapRule): the rules
+ */
+GPtrArray *gowl_config_get_input_remap_rules   (GowlConfig         *self);
 
 /**
  * gowl_config_get_keybinds:

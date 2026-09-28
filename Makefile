@@ -45,6 +45,7 @@ LIB_SRCS := \
 	src/boxed/gowl-capture-source.c \
 	src/boxed/gowl-input-zone.c \
 	src/boxed/gowl-input-barrier.c \
+	src/boxed/gowl-input-remap-rule.c \
 	src/module/gowl-module.c \
 	src/module/gowl-module-manager.c \
 	src/module/gowl-module-info.c \
@@ -77,6 +78,7 @@ LIB_SRCS := \
 	src/interfaces/gowl-embed-renderer.c \
 	src/interfaces/gowl-workspace-provider.c \
 	src/interfaces/gowl-capture-provider.c \
+	src/interfaces/gowl-input-remapper.c \
 	src/barkit/gowl-bar-theme.c \
 	src/barkit/gowl-bar-icon.c \
 	src/barkit/gowl-bar-json.c \
@@ -149,6 +151,7 @@ LIB_SRCS := \
 	src/core/gowl-foreign-toplevel.c \
 	src/core/gowl-text-input.c \
 	src/core/gowl-input-config.c \
+	src/core/gowl-input-remap-core.c \
 	src/core/gowl-decor.c \
 	src/core/gowl-static-prefix-key-policy.c \
 	src/core/gowl-session-default.c \
@@ -178,6 +181,7 @@ LIB_HDRS := \
 	src/boxed/gowl-process-info.h \
 	src/boxed/gowl-focus-token.h \
 	src/boxed/gowl-workspace-id.h \
+	src/boxed/gowl-input-remap-rule.h \
 	src/barkit/gowl-barkit-types.h \
 	src/barkit/gowl-bar-theme.h \
 	src/barkit/gowl-bar-icon.h \
@@ -221,6 +225,7 @@ LIB_HDRS := \
 	src/interfaces/gowl-session-provider.h \
 	src/interfaces/gowl-embed-renderer.h \
 	src/interfaces/gowl-workspace-provider.h \
+	src/interfaces/gowl-input-remapper.h \
 	src/config/gowl-config.h \
 	src/config/gowl-config-compiler.h \
 	src/config/gowl-keybind.h \
@@ -708,6 +713,15 @@ $(OBJDIR)/tests/test-tray-menu-panel.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"
 $(OUTDIR)/test-scratchpad-module: $(OUTDIR)/modules/scratchpad.so
 $(OBJDIR)/tests/test-scratchpad-module.o: TEST_CFLAGS += -DGOWL_TEST_SCRATCHPAD_MODULE='"$(abspath $(OUTDIR)/modules/scratchpad.so)"'
 
+# Per-device input remapping against the real module in a headless
+# compositor: software keyboards and pointers plugged into the backend,
+# keys pressed on the device itself, outputs watched where the pipeline
+# ends.  Its own Makefile builds it (json-glib, wayland-server).
+$(OUTDIR)/test-input-remap-claim: $(OUTDIR)/modules/inputremap.so
+$(OBJDIR)/tests/test-input-remap-claim.o: TEST_CFLAGS += -DGOWL_TEST_INPUTREMAP_MODULE='"$(abspath $(OUTDIR)/modules/inputremap.so)"'
+# The engine test includes the module's pure rule engine directly.
+$(OBJDIR)/tests/test-input-remap-engine.o: modules/inputremap/gowl-inputremap-engine.c modules/inputremap/gowl-inputremap-engine.h
+
 # A GPU reset in a headless compositor, then again with the real modules
 # that draw scene buffers of their own loaded, to see each one redraw.
 # Each is built by its own Makefile, as `modules' builds it: the generic
@@ -735,7 +749,10 @@ $(OUTDIR)/modules/bar.so: $(wildcard modules/bar/*.c modules/bar/*.h)
 # And the menu, for pangocairo: it draws through barkit, which is
 # Pango, and the generic rule links neither.
 $(OUTDIR)/modules/menu.so: $(wildcard modules/menu/*.c modules/menu/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+# The input remapper: its engine is a second file, and it links
+# json-glib and wayland-server, neither of which the generic rule does.
+$(OUTDIR)/modules/inputremap.so: $(wildcard modules/inputremap/*.c modules/inputremap/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so $(OUTDIR)/modules/inputremap.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

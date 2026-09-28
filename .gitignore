@@ -24,3 +24,5 @@ src/protocols/*-protocol.h
 .mcp.json
 .cache/
 compile_commands.json
+# input-remap evdev name table, generated from <linux/input-event-codes.h>
+/gowl-evdev-names.inc

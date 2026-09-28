@@ -456,6 +456,7 @@ remove_compositor_listeners(GowlCompositor *self)
 	gowl_shortcuts_inhibit_finish(self);
 	gowl_text_input_finish(self);
 	gowl_input_config_finish(self);
+	gowl_input_remap_core_finish(self);
 
 	/* The cursor. */
 	listener_remove(&self->cursor_motion);
@@ -9112,9 +9113,12 @@ on_new_input(struct wl_listener *listener, void *data)
 		break;
 	}
 
-	/* Update seat capabilities */
+	/* Update seat capabilities.  A claimed keyboard is outside the
+	 * group but still a keyboard: with only a pedal plugged in, its
+	 * remapped keys still need a wl_keyboard to arrive on. */
 	caps = WL_SEAT_CAPABILITY_POINTER;
-	if (!wl_list_empty(&self->wlr_kb_group->devices))
+	if (!wl_list_empty(&self->wlr_kb_group->devices)
+	    || gowl_input_remap_core_has_claimed_keyboard(self))
 		caps |= WL_SEAT_CAPABILITY_KEYBOARD;
 	wlr_seat_set_capabilities(self->wlr_seat, caps);
 }
@@ -9138,8 +9142,12 @@ create_keyboard(
 		xkb_keymap_unref(keymap);
 	}
 
-	/* Add to the keyboard group (shared XKB state) */
-	wlr_keyboard_group_add_keyboard(self->wlr_kb_group, keyboard);
+	/* Add to the keyboard group (shared XKB state) -- unless an input
+	 * remapper claims this device, which then keeps it apart so its
+	 * keys reach nothing before the remapper decides what they are
+	 * (gowl-input-remap-core.c; FALSE at once with no remapper). */
+	if (!gowl_input_remap_core_try_claim(self, &keyboard->base))
+		wlr_keyboard_group_add_keyboard(self->wlr_kb_group, keyboard);
 	gowl_input_config_track_device(self, &keyboard->base);
 }
 
@@ -9426,6 +9434,9 @@ create_pointer(
 	/* The `input:' section, on top of the defaults above; and the
 	 * device is remembered for a reload. */
 	gowl_input_config_track_device(self, &pointer->base);
+	/* A claimed pointer stays attached: only its buttons and wheel are
+	 * offered to the remapper (on_cursor_button, on_cursor_axis). */
+	gowl_input_remap_core_try_claim(self, &pointer->base);
 }
 
 /* -----------------------------------------------------------
@@ -10559,6 +10570,10 @@ run_keybind_entry(
 		}
 		gowl_compositor_apply_keymap(self);
 		gowl_input_config_apply_all(self);
+		/* The new config's `input-remap:' rules: the remapper reads
+		 * them off the config it is handed, so re-decide the claims
+		 * (returns at once with no remapper loaded). */
+		gowl_compositor_input_remap_reevaluate(self);
 
 		/* Re-apply per-output YAML overrides first, then
 		 * re-arrange so any transform/scale/position
@@ -10765,6 +10780,31 @@ run_keybind_entry(
 		else
 			on = gowl_compositor_any_output_powered_off(self);
 		gowl_compositor_set_outputs_powered(self, on);
+		return TRUE;
+	}
+	case GOWL_ACTION_FOCUS_CLIENT: {
+		/* "app-id:GLOB", "title:GLOB" or a bare app-id GLOB: jump to
+		 * the first matching window wherever it lives -- its tags
+		 * viewed, its monitor selected, focus given.  Built for a
+		 * foot pedal that says "take me to the game" without the
+		 * bind having to know which tag the game is on. */
+		const gchar *pattern;
+		GowlClient  *target;
+
+		if (kb->arg == NULL || *kb->arg == '\0')
+			return TRUE;
+		if (g_str_has_prefix(kb->arg, "title:")) {
+			pattern = kb->arg + strlen("title:");
+			target = gowl_compositor_find_client_by_title(self, pattern);
+		} else {
+			pattern = g_str_has_prefix(kb->arg, "app-id:")
+			          ? kb->arg + strlen("app-id:") : kb->arg;
+			target = gowl_compositor_find_client_by_app_id(self, pattern);
+		}
+		if (target != NULL)
+			gowl_compositor_show_client(self, target);
+		else
+			g_debug("focus-client: nothing matches '%s'", kb->arg);
 		return TRUE;
 	}
 	case GOWL_ACTION_CUSTOM:
@@ -11262,7 +11302,8 @@ compositor_handle_key(
 	/* Set up key repeat state.  Not for injected keys: the sender is
 	 * already repeating, and adding ours on top double-fires the
 	 * keybind for as long as the remote holds the key down. */
-	if (!synthetic && state == WL_KEYBOARD_KEY_STATE_PRESSED && handled
+	if (!synthetic && !self->remap_feeding
+	    && state == WL_KEYBOARD_KEY_STATE_PRESSED && handled
 	    && self->kb_repeat_ok) {
 		self->kb_nsyms   = nsyms;
 		self->kb_keysyms = syms;
@@ -11295,6 +11336,38 @@ on_kb_key(struct wl_listener *listener, void *data)
 
 	compositor_handle_key(self, event->keycode, event->state,
 	                      event->time_msec, FALSE);
+}
+
+/*
+ * The key decision for a per-device remap (gowl-input-remap-core.c):
+ * real input -- recorded, capturable -- that never arms key repeat, so
+ * one press of a remapped key is one press and nothing more.
+ */
+void
+gowl_compositor_remap_handle_key(
+	GowlCompositor *self,
+	guint32         keycode,
+	guint32         state,
+	guint32         time_msec
+){
+	self->remap_feeding = TRUE;
+	compositor_handle_key(self, keycode, state, time_msec, FALSE);
+	self->remap_feeding = FALSE;
+}
+
+/*
+ * The button decision for a per-device remap, framed as a real click is
+ * (a remapped button has no wlr_cursor frame of its own to close it).
+ */
+void
+gowl_compositor_remap_handle_button(
+	GowlCompositor *self,
+	guint32         button,
+	guint32         state,
+	guint32         time_msec
+){
+	compositor_handle_button(self, button, state, time_msec, FALSE);
+	gowl_compositor_inject_frame(self);
 }
 
 /**
@@ -12475,6 +12548,13 @@ on_cursor_button(struct wl_listener *listener, void *data)
 	self = wl_container_of(listener, self, cursor_button);
 	event = (struct wlr_pointer_button_event *)data;
 
+	/* A button on a pointer an input remapper claimed is the
+	 * remapper's to decide (FALSE at once when nothing is claimed). */
+	if (gowl_input_remap_core_button(self, &event->pointer->base,
+	                                 event->button, event->state,
+	                                 event->time_msec))
+		return;
+
 	compositor_handle_button(self, event->button, event->state,
 	                         event->time_msec, FALSE);
 }
@@ -12487,6 +12567,11 @@ on_cursor_axis(struct wl_listener *listener, void *data)
 
 	self = wl_container_of(listener, self, cursor_axis);
 	event = (struct wlr_pointer_axis_event *)data;
+
+	/* A wheel notch on a claimed pointer, remapped (FALSE at once when
+	 * nothing is claimed). */
+	if (gowl_input_remap_core_axis(self, event))
+		return;
 
 	if (self->idle_mgr != NULL)
 		gowl_idle_manager_note_activity(self->idle_mgr);

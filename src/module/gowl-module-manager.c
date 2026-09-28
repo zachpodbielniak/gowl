@@ -33,6 +33,7 @@
 #include "interfaces/gowl-client-decorator.h"
 #include "interfaces/gowl-screenshot-provider.h"
 #include "interfaces/gowl-recording-provider.h"
+#include "interfaces/gowl-input-remapper.h"
 #include "interfaces/gowl-scene-effect.h"
 
 /**
@@ -65,6 +66,7 @@ struct _GowlModuleManager {
 	GPtrArray *screenshot_providers; /* element-type GowlScreenshotProvider* */
 	GPtrArray *scene_effects;
 	GPtrArray *recording_providers;  /* element-type GowlRecordingProvider*  */
+	GPtrArray *input_remappers;      /* element-type GowlInputRemapper*      */
 };
 
 G_DEFINE_FINAL_TYPE(GowlModuleManager, gowl_module_manager, G_TYPE_OBJECT)
@@ -197,6 +199,7 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->decorator_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->screenshot_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->recording_providers, g_ptr_array_unref);
+	g_clear_pointer(&self->input_remappers, g_ptr_array_unref);
 	g_clear_pointer(&self->scene_effects, g_ptr_array_unref);
 
 	/* Unref all module instances */
@@ -304,6 +307,7 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->decorator_providers   = g_ptr_array_new();
 	self->screenshot_providers  = g_ptr_array_new();
 	self->recording_providers   = g_ptr_array_new();
+	self->input_remappers       = g_ptr_array_new();
 	self->scene_effects = g_ptr_array_new();
 }
 
@@ -405,6 +409,11 @@ classify_module(
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_RECORDING_PROVIDER)) {
 		g_ptr_array_add(self->recording_providers, (gpointer)mod);
 		sort_dispatch_array(self->recording_providers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_INPUT_REMAPPER)) {
+		g_ptr_array_add(self->input_remappers, (gpointer)mod);
+		sort_dispatch_array(self->input_remappers);
 	}
 }
 
@@ -1674,6 +1683,26 @@ gowl_module_manager_get_recording_provider(GowlModuleManager *self)
 	    || self->recording_providers->len == 0)
 		return NULL;
 	return g_ptr_array_index(self->recording_providers, 0);
+}
+
+gpointer
+gowl_module_manager_get_input_remapper(GowlModuleManager *self)
+{
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), NULL);
+
+	/* Active only: a disabled remap module must release every device,
+	 * and the core asks this to find out whether anything still
+	 * claims them. */
+	for (i = 0; i < self->input_remappers->len; i++) {
+		GowlModule *mod;
+
+		mod = (GowlModule *)g_ptr_array_index(self->input_remappers, i);
+		if (gowl_module_get_is_active(mod))
+			return mod;
+	}
+	return NULL;
 }
 
 gpointer

@@ -291,6 +291,10 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  * @GOWL_ACTION_TOGGLE_CRT: Put the whole output through a cathode ray
  *   tube, or take it back off.  The argument may be "on", "off" or
  *   nothing, which toggles.
+ * @GOWL_ACTION_FOCUS_CLIENT: Find a window and jump to it: view its
+ *   tags on its monitor, select that monitor and give it focus.  The
+ *   argument is "app-id:GLOB" or "title:GLOB"; a bare GLOB is an
+ *   app-id.  The first match in the client list wins.
  *
  * Compositor actions that can be bound to keys or IPC commands.
  */
@@ -332,7 +336,8 @@ typedef enum {
 	GOWL_ACTION_CYCLE_BACKDROP,
 	GOWL_ACTION_TOGGLE_BELOW,
 	GOWL_ACTION_TOGGLE_BELOW_ALL,
-	GOWL_ACTION_TOGGLE_CRT
+	GOWL_ACTION_TOGGLE_CRT,
+	GOWL_ACTION_FOCUS_CLIENT
 } GowlAction;
 
 #define GOWL_TYPE_ACTION (gowl_action_get_type())
@@ -573,6 +578,84 @@ typedef enum {
 
 #define GOWL_TYPE_FOCUS_REASON (gowl_focus_reason_get_type())
 GType gowl_focus_reason_get_type(void) G_GNUC_CONST;
+
+/* --- GowlInputRemapDeviceType --- */
+
+/**
+ * GowlInputRemapDeviceType:
+ * @GOWL_INPUT_REMAP_DEVICE_ANY: Match any kind of device.
+ * @GOWL_INPUT_REMAP_DEVICE_KEYBOARD: A keyboard (anything that emits
+ *   key events; a HID foot pedal is usually one).
+ * @GOWL_INPUT_REMAP_DEVICE_POINTER: A pointer (mouse, trackball,
+ *   touchpad, or a pedal that reports mouse buttons).
+ *
+ * The kind of physical device an input-remap rule matches, and the
+ * kind reported for a connected device by #GowlInputDeviceInfo.
+ */
+typedef enum {
+	GOWL_INPUT_REMAP_DEVICE_ANY,
+	GOWL_INPUT_REMAP_DEVICE_KEYBOARD,
+	GOWL_INPUT_REMAP_DEVICE_POINTER
+} GowlInputRemapDeviceType;
+
+#define GOWL_TYPE_INPUT_REMAP_DEVICE_TYPE (gowl_input_remap_device_type_get_type())
+GType gowl_input_remap_device_type_get_type(void) G_GNUC_CONST;
+
+/* --- GowlInputRemapTargetKind --- */
+
+/**
+ * GowlInputRemapTargetKind:
+ * @GOWL_INPUT_REMAP_TARGET_PASS: Deliver the input unchanged.
+ * @GOWL_INPUT_REMAP_TARGET_DROP: Swallow the input.
+ * @GOWL_INPUT_REMAP_TARGET_KEY: Deliver one different key (with
+ *   optional modifiers) to the focused client, through the normal key
+ *   pipeline.
+ * @GOWL_INPUT_REMAP_TARGET_BUTTON: Press/release one pointer button at
+ *   the current cursor position, through the normal button pipeline.
+ * @GOWL_INPUT_REMAP_TARGET_ACTION: Run one compositor #GowlAction on
+ *   press.
+ * @GOWL_INPUT_REMAP_TARGET_COMMAND: Run one command line through
+ *   gowl_compositor_run_command() on press (module IPC words).
+ * @GOWL_INPUT_REMAP_TARGET_CALLBACK: Call a C function on press and on
+ *   release.  Arbitrary code; the one-to-one guarantee does not cover
+ *   what it does.
+ *
+ * What a remapped input turns into.  Every kind produces at most one
+ * output per physical press, and the release mirrors the press.  There
+ * is deliberately no sequence, macro, delay or repeat kind.
+ */
+typedef enum {
+	GOWL_INPUT_REMAP_TARGET_PASS,
+	GOWL_INPUT_REMAP_TARGET_DROP,
+	GOWL_INPUT_REMAP_TARGET_KEY,
+	GOWL_INPUT_REMAP_TARGET_BUTTON,
+	GOWL_INPUT_REMAP_TARGET_ACTION,
+	GOWL_INPUT_REMAP_TARGET_COMMAND,
+	GOWL_INPUT_REMAP_TARGET_CALLBACK
+} GowlInputRemapTargetKind;
+
+#define GOWL_TYPE_INPUT_REMAP_TARGET_KIND (gowl_input_remap_target_kind_get_type())
+GType gowl_input_remap_target_kind_get_type(void) G_GNUC_CONST;
+
+/* --- GowlInputRemapEventKind --- */
+
+/**
+ * GowlInputRemapEventKind:
+ * @GOWL_INPUT_REMAP_EVENT_KEY: A key on a keyboard device.
+ * @GOWL_INPUT_REMAP_EVENT_BUTTON: A button on a pointer device.
+ * @GOWL_INPUT_REMAP_EVENT_AXIS: One wheel notch on a pointer device;
+ *   delivered as a press immediately followed by its release.
+ *
+ * The kind of physical input a #GowlInputRemapEvent describes.
+ */
+typedef enum {
+	GOWL_INPUT_REMAP_EVENT_KEY,
+	GOWL_INPUT_REMAP_EVENT_BUTTON,
+	GOWL_INPUT_REMAP_EVENT_AXIS
+} GowlInputRemapEventKind;
+
+#define GOWL_TYPE_INPUT_REMAP_EVENT_KIND (gowl_input_remap_event_kind_get_type())
+GType gowl_input_remap_event_kind_get_type(void) G_GNUC_CONST;
 
 G_END_DECLS
 

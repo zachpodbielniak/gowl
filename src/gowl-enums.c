@@ -295,6 +295,7 @@ gowl_action_get_type(void)
 			{ GOWL_ACTION_TOGGLE_BELOW,      "GOWL_ACTION_TOGGLE_BELOW",      "toggle-below" },
 			{ GOWL_ACTION_TOGGLE_BELOW_ALL,  "GOWL_ACTION_TOGGLE_BELOW_ALL",  "toggle-below-all" },
 			{ GOWL_ACTION_TOGGLE_CRT,        "GOWL_ACTION_TOGGLE_CRT",        "toggle-crt" },
+			{ GOWL_ACTION_FOCUS_CLIENT,      "GOWL_ACTION_FOCUS_CLIENT",      "focus-client" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlAction", values);
@@ -531,6 +532,104 @@ gowl_focus_reason_get_type(void)
 		};
 		GType type_id = g_enum_register_static("GowlFocusReason",
 		                                        values);
+		g_once_init_leave(&g_type_id, type_id);
+	}
+
+	return (GType)g_type_id;
+}
+
+/**
+ * gowl_input_remap_device_type_get_type:
+ *
+ * Retrieves the #GType for #GowlInputRemapDeviceType.
+ *
+ * Returns: the #GType for #GowlInputRemapDeviceType
+ */
+GType
+gowl_input_remap_device_type_get_type(void)
+{
+	static volatile gsize g_type_id = 0;
+
+	if (g_once_init_enter(&g_type_id)) {
+		static const GEnumValue values[] = {
+			{ GOWL_INPUT_REMAP_DEVICE_ANY,
+			  "GOWL_INPUT_REMAP_DEVICE_ANY", "any" },
+			{ GOWL_INPUT_REMAP_DEVICE_KEYBOARD,
+			  "GOWL_INPUT_REMAP_DEVICE_KEYBOARD", "keyboard" },
+			{ GOWL_INPUT_REMAP_DEVICE_POINTER,
+			  "GOWL_INPUT_REMAP_DEVICE_POINTER", "pointer" },
+			{ 0, NULL, NULL }
+		};
+		GType type_id = g_enum_register_static(
+			"GowlInputRemapDeviceType", values);
+		g_once_init_leave(&g_type_id, type_id);
+	}
+
+	return (GType)g_type_id;
+}
+
+/**
+ * gowl_input_remap_target_kind_get_type:
+ *
+ * Retrieves the #GType for #GowlInputRemapTargetKind.
+ *
+ * Returns: the #GType for #GowlInputRemapTargetKind
+ */
+GType
+gowl_input_remap_target_kind_get_type(void)
+{
+	static volatile gsize g_type_id = 0;
+
+	if (g_once_init_enter(&g_type_id)) {
+		static const GEnumValue values[] = {
+			{ GOWL_INPUT_REMAP_TARGET_PASS,
+			  "GOWL_INPUT_REMAP_TARGET_PASS", "pass" },
+			{ GOWL_INPUT_REMAP_TARGET_DROP,
+			  "GOWL_INPUT_REMAP_TARGET_DROP", "drop" },
+			{ GOWL_INPUT_REMAP_TARGET_KEY,
+			  "GOWL_INPUT_REMAP_TARGET_KEY", "key" },
+			{ GOWL_INPUT_REMAP_TARGET_BUTTON,
+			  "GOWL_INPUT_REMAP_TARGET_BUTTON", "button" },
+			{ GOWL_INPUT_REMAP_TARGET_ACTION,
+			  "GOWL_INPUT_REMAP_TARGET_ACTION", "action" },
+			{ GOWL_INPUT_REMAP_TARGET_COMMAND,
+			  "GOWL_INPUT_REMAP_TARGET_COMMAND", "command" },
+			{ GOWL_INPUT_REMAP_TARGET_CALLBACK,
+			  "GOWL_INPUT_REMAP_TARGET_CALLBACK", "callback" },
+			{ 0, NULL, NULL }
+		};
+		GType type_id = g_enum_register_static(
+			"GowlInputRemapTargetKind", values);
+		g_once_init_leave(&g_type_id, type_id);
+	}
+
+	return (GType)g_type_id;
+}
+
+/**
+ * gowl_input_remap_event_kind_get_type:
+ *
+ * Retrieves the #GType for #GowlInputRemapEventKind.
+ *
+ * Returns: the #GType for #GowlInputRemapEventKind
+ */
+GType
+gowl_input_remap_event_kind_get_type(void)
+{
+	static volatile gsize g_type_id = 0;
+
+	if (g_once_init_enter(&g_type_id)) {
+		static const GEnumValue values[] = {
+			{ GOWL_INPUT_REMAP_EVENT_KEY,
+			  "GOWL_INPUT_REMAP_EVENT_KEY", "key" },
+			{ GOWL_INPUT_REMAP_EVENT_BUTTON,
+			  "GOWL_INPUT_REMAP_EVENT_BUTTON", "button" },
+			{ GOWL_INPUT_REMAP_EVENT_AXIS,
+			  "GOWL_INPUT_REMAP_EVENT_AXIS", "axis" },
+			{ 0, NULL, NULL }
+		};
+		GType type_id = g_enum_register_static(
+			"GowlInputRemapEventKind", values);
 		g_once_init_leave(&g_type_id, type_id);
 	}
 

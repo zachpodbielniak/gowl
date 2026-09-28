@@ -205,6 +205,30 @@ tests. These assert invariants no unit test can reach:
   carries the Super+Shift+Escape force-stop, and the on-screen indicator
   is still raised from the recorder's own state change
 
+- `test-input-remap-fastpath.sh` -- per-device input remapping stays
+  invisible without a remapper (`create_keyboard` joins the group unless
+  `gowl_input_remap_core_try_claim()` says otherwise, the pointer hooks
+  run before the old handlers and fall through, each core hook bails
+  before touching state), remapped output goes through
+  `compositor_handle_key()` / `compositor_handle_button()` as real input
+  and never straight to the seat, key repeat is never armed for it, and
+  a claimed keyboard still recognises Super+Escape
+
+> **Per-device remapping is one press, one output, and its hooks are
+> inert without the module.** A keyboard a `GowlInputRemapper` claims is
+> kept OUT of the keyboard group (`src/core/gowl-input-remap-core.c`);
+> everything it produces re-enters the normal key/button decisions as
+> real (non-synthetic) input, so the recorder records it and a capture
+> carries it -- only key repeat is skipped. Never add a target kind that
+> holds a list, a delay or a repeat, and never let the core call
+> `wlr_seat_*_notify_*` itself: the rule model (`src/boxed/
+> gowl-input-remap-rule.c`) refuses macros with
+> `GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE`, and the release of every input
+> replays what its press produced (the `held` table) so a rule change
+> mid-press cannot strand a key. A new hook in `gowl-compositor.c` must
+> return at once when `gowl_module_manager_get_input_remapper()` is
+> `NULL`. See `docs/input-remap.org`.
+
 > **Both directions of libei are load-bearing, and they are asymmetric.**
 > `tools/xdg-desktop-portal-gowl` is one libeis context serving two
 > opposite roles: a *receiver* client is a software KVM sharing this

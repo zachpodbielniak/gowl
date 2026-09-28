@@ -16,6 +16,27 @@ PROTO_HDRS := \
 # All source objects depend on generated version header and protocol headers
 $(LIB_OBJS) $(MAIN_OBJ): src/gowl-version.h $(PROTO_HDRS)
 
+# evdev key/button names for input-remap rules, generated from the
+# kernel headers the compiler actually sees, so a key code added to the
+# kernel is nameable the day it lands.  `#define KEY_X <number>' only:
+# aliases (`#define KEY_MIN_INTERESTING KEY_MUTE') and the range and
+# class markers are skipped.  Each entry names its macro rather than a
+# number, so the preprocessor supplies the value and awk never has to
+# read hex (strtonum is gawk-only; mawk is Ubuntu's awk).  Sorted by
+# name so the table, and the reverse lookup, are stable.
+EVDEV_NAMES_INC := gowl-evdev-names.inc
+EVDEV_SKIP := KEY_MAX|KEY_CNT|BTN_MISC|BTN_MOUSE|BTN_JOYSTICK|BTN_GAMEPAD|BTN_DIGI|BTN_WHEEL|BTN_TRIGGER_HAPPY
+$(EVDEV_NAMES_INC):
+	echo '#include <linux/input-event-codes.h>' | $(CC) -dM -E - \
+		| awk '$$1 == "#define" && $$2 ~ /^(KEY|BTN)_[A-Z0-9_]+$$/ \
+		       && $$3 ~ /^(0x[0-9a-fA-F]+|[0-9]+)$$/ \
+		       && $$2 !~ /^($(EVDEV_SKIP))$$/ { print $$2 }' \
+		| LC_ALL=C sort -u \
+		| awk '{ printf "\t{ \"%s\", %s },\n", $$1, $$1 }' > $@.tmp
+	mv $@.tmp $@
+
+$(OBJDIR)/boxed/gowl-input-remap-rule.o: $(EVDEV_NAMES_INC)
+
 # Object file compilation
 $(OBJDIR)/%.o: src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
@@ -379,6 +400,7 @@ src/gowl-version.h: src/gowl-version.h.in
 .PHONY: clean clean-all
 clean:
 	rm -rf $(BUILDDIR)/$(BUILD_TYPE)
+	rm -f $(EVDEV_NAMES_INC)
 	rm -f src/gowl-version.h
 	rm -f $(CRISPY_DIR)/src/crispy-version.h
 	rm -f $(PROTO_HDRS)
@@ -389,6 +411,7 @@ clean:
 
 clean-all:
 	rm -rf $(BUILDDIR)
+	rm -f $(EVDEV_NAMES_INC)
 	rm -f src/gowl-version.h
 	rm -f $(CRISPY_DIR)/src/crispy-version.h
 	rm -f $(PROTO_HDRS)
@@ -558,6 +581,8 @@ install-bar-configs:
 	$(MKDIR_P) $(DESTDIR)$(DATADIR)/gowl
 	$(INSTALL_DATA) data/default-bar.yaml $(DESTDIR)$(DATADIR)/gowl/default-bar.yaml
 	$(INSTALL_DATA) data/example-bar.c $(DESTDIR)$(DATADIR)/gowl/example-bar.c
+	$(INSTALL_DATA) data/example-input-remap.yaml $(DESTDIR)$(DATADIR)/gowl/example-input-remap.yaml
+	$(INSTALL_DATA) data/example-input-remap.c $(DESTDIR)$(DATADIR)/gowl/example-input-remap.c
 
 # Uninstall
 .PHONY: uninstall
@@ -584,6 +609,8 @@ uninstall:
 	rm -f $(DESTDIR)$(DATADIR)/gowl/default-bar.yaml
 	rm -f $(DESTDIR)$(DATADIR)/gowl/menu.yaml
 	rm -f $(DESTDIR)$(DATADIR)/gowl/example-bar.c
+	rm -f $(DESTDIR)$(DATADIR)/gowl/example-input-remap.yaml
+	rm -f $(DESTDIR)$(DATADIR)/gowl/example-input-remap.c
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl.desktop
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/gowl-debug.desktop
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gowl.png

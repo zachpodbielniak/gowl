@@ -23,6 +23,7 @@
 #include "../gowl-enums.h"
 #include "../interfaces/gowl-prefix-key-policy.h"
 #include "../interfaces/gowl-workspace-provider.h"
+#include "../boxed/gowl-input-remap-rule.h"
 #include <wayland-server-core.h>
 #include <sys/types.h>
 
@@ -1287,6 +1288,60 @@ typedef gboolean (*GowlKeyInterceptFunc)(GowlCompositor *compositor,
 void gowl_compositor_set_key_intercept (GowlCompositor      *self,
                                         GowlKeyInterceptFunc  func,
                                         gpointer              user_data);
+
+/**
+ * GowlInputRemapIdentifyFunc:
+ * @compositor: the compositor
+ * @info: the device the input came from
+ * @event: the press
+ * @user_data: caller-supplied data
+ *
+ * Told about every key or button press on any keyboard or pointer while
+ * gowl_compositor_input_remap_identify_start() is in force.
+ */
+typedef void (*GowlInputRemapIdentifyFunc)(GowlCompositor            *compositor,
+                                           const GowlInputDeviceInfo *info,
+                                           const GowlInputRemapEvent *event,
+                                           gpointer                   user_data);
+
+/**
+ * gowl_compositor_input_remap_reevaluate:
+ * @self: a #GowlCompositor
+ *
+ * Re-decides which connected devices the active #GowlInputRemapper
+ * claims, moving keyboards out of and back into the shared keyboard
+ * group.  Call after changing remap rules at runtime.
+ */
+void       gowl_compositor_input_remap_reevaluate     (GowlCompositor *self);
+
+/**
+ * gowl_compositor_list_input_devices:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer full) (element-type GowlInputDeviceInfo): every
+ *   connected keyboard and pointer, with its remap identity
+ */
+GPtrArray *gowl_compositor_list_input_devices         (GowlCompositor *self);
+
+/**
+ * gowl_compositor_input_remap_identify_start:
+ * @self: a #GowlCompositor
+ * @func: (scope forever): called for each press on any device
+ * @user_data: (closure): passed to @func
+ *
+ * Observes every keyboard and pointer without consuming anything.
+ *
+ * Returns: %TRUE when observation started
+ */
+gboolean   gowl_compositor_input_remap_identify_start (GowlCompositor             *self,
+                                                       GowlInputRemapIdentifyFunc  func,
+                                                       gpointer                    user_data);
+
+/**
+ * gowl_compositor_input_remap_identify_stop:
+ * @self: a #GowlCompositor
+ */
+void       gowl_compositor_input_remap_identify_stop  (GowlCompositor *self);
 
 /**
  * GowlCustomActionFunc:

@@ -219,6 +219,19 @@ gpointer            gowl_module_manager_get_decorator (GowlModuleManager *self);
 gpointer            gowl_module_manager_get_recording_provider (GowlModuleManager *self);
 
 /**
+ * gowl_module_manager_get_input_remapper:
+ * @self: a #GowlModuleManager
+ *
+ * Returns the first ACTIVE #GowlInputRemapper module, or %NULL when
+ * none is loaded or enabled.  %NULL is the common case and the core's
+ * fast path: every per-device remap hook returns at once on it, which
+ * is what keeps a session without the module byte-for-byte unchanged.
+ *
+ * Returns: (transfer none) (nullable): the active input remapper
+ */
+gpointer            gowl_module_manager_get_input_remapper (GowlModuleManager *self);
+
+/**
  * gowl_module_manager_get_screenshot_provider:
  * @self: a #GowlModuleManager
  *

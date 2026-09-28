@@ -233,7 +233,7 @@ Thin wrappers over the opt-in =inputremap= module's IPC words ([[file:input-rema
 | =input_remap_list_devices=    | --                             | Every keyboard and pointer: id, type, name, vendor-product, sysname, claimed |
 | =input_remap_list=            | --                             | The rules in force, their source, YAML and matched devices |
 | =input_remap_status=          | --                             | Enabled, rule and claim counts, log level, identify state |
-| =input_remap_add=             | =rule= (object) or =yaml= (one line) | Add or replace a rule; macros and sequences are refused |
+| =input_remap_add=             | =rule= (object) or =yaml= (one line) | Add or replace a rule; sequences are refused (a ={macro:}= target is allowed) |
 | =input_remap_remove=          | =name=                         | Remove a rule; released devices rejoin the keyboard       |
 | =input_remap_identify=        | =seconds= (optional)           | Listen for the next press on any device, consuming nothing |
 | =input_remap_identify_result= | --                             | The device and input caught, =pending= or =none=          |
@@ -246,6 +246,21 @@ A =rule= object is the same schema as a YAML rule --- JSON is YAML flow syntax, 
           "map": {"KEY_A": {"button": "middle"},
                   "KEY_B": {"action": "focus-client", "arg": "title:World of Warcraft*"}}}}
 #+end_src
+
+*** Macros
+:PROPERTIES:
+:CUSTOM_ID: macro-tools-mcp
+:END:
+Thin wrappers over the opt-in =macro= module's IPC words ([[file:macros.org][macros.org]]).  Each reports plainly when the module is not loaded.
+
+| Tool           | Parameters                        | Description                                              |
+|----------------+-----------------------------------+----------------------------------------------------------|
+| =macro_run=    | =name=, =args= (array, optional)  | Run a macro by name or path (trigger =api=)              |
+| =macro_stop=   | =which= (name, id or =all=)       | Stop running macros                                      |
+| =macro_list=   | --                                | Every macro runnable by name, with held-back state       |
+| =macro_status= | --                                | Running runs, held-back macros and why, fault count     |
+| =macro_info=   | =name=                            | Path, description, mode, time budget                     |
+| =macro_clear=  | =name= (optional)                 | Let a held-back macro run again                          |
 
 *** Input Recording
 :PROPERTIES:

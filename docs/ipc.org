@@ -100,6 +100,14 @@ With the opt-in =inputremap= module loaded, the =inputremap-= words manage per-d
 gowl-msg inputremap-devices
 #+end_src
 
+* Macros
+
+With the opt-in =macro= module loaded, the =macro-= words run and manage macros: =macro-run [--trigger=K] [--detail=D] NAME ARGS=, =-stop [NAME|ID|all]=, =-list=, =-status=, =-info NAME=, =-compile NAME=, =-dirs=, =-reload=, =-clear [NAME]=, =-define NAME command|custom|action ...=, =-undefine NAME=, =-log [LEVEL]=.  Events: =EVENT macro started|finished|stopped NAME ID= and =EVENT macro fault NAME SIGNAL=.  See [[file:macros.org::#macros-ipc][macros.org]].
+
+#+begin_src bash
+gowl-msg macro-run sort-windows reverse
+#+end_src
+
 * From a module
 
 A module implementing =GowlIpcHandler= answers its own command names; =gowl_compositor_run_command()= is the shared entry point for the =ipc-command= keybind action, cmacs's =gowl-run-command=, MCP and this socket, so a command means the same thing from each.  Core commands are answered first (=src/ipc/gowl-ipc-core.c=), then the modules.  =gowl_ipc_push_event()= adds an event.

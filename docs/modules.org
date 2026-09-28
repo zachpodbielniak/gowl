@@ -703,6 +703,7 @@ another.
 | =screenlock=     | In-process lock screen with PAM (see also =gowl-lock=) |
 | =mcp=            | MCP server for AI control (needs an MCP=1 build)      |
 | =inputremap=     | Per-device key/button/wheel remapping (opt-in)        |
+| =macro=          | Crispy C macros run on demand, guarded (opt-in)       |
 
 *** The inputremap module
 :PROPERTIES:
@@ -712,13 +713,29 @@ Remaps keys, buttons and wheel notches on one physical device --- a foot pedal, 
 
 *Interfaces:* =GowlInputRemapper=, =GowlIpcHandler=, =GowlStartupHandler=
 
-*Rules* come from the top-level =input-remap:= section (and =gowl_config_add_input_remap_rule()= in C) plus runtime rules added over IPC (=inputremap-add=), MCP (=input_remap_add=) or, under cmacs, Elisp.  Each input maps to exactly one target and the release mirrors the press; the loader refuses sequences, macros, delays and repeats.
+*Rules* come from the top-level =input-remap:= section (and =gowl_config_add_input_remap_rule()= in C) plus runtime rules added over IPC (=inputremap-add=), MCP (=input_remap_add=) or, under cmacs, Elisp.  Each input maps to exactly one target and the release mirrors the press; the loader refuses sequences, delays and repeats.  A ={macro: NAME}= target hands the press to the macro module, outside that guarantee.
 
 *Settings:* =log= (=none=, =claim=, =match=, =all=), =log-file=, =identify-timeout=.
 
 *Finding a device:* =gowl-msg inputremap-devices= lists every keyboard and pointer with its vendor:product; =gowl-msg inputremap-identify= reports the next device pressed.
 
 *Files:* =gowl-module-inputremap.c= (the GObject half: IPC, logging, identify mode, config sync) and =gowl-inputremap-engine.c= (the pure rule set, tested directly).  The core half is =src/core/gowl-input-remap-core.c=.  Full reference: [[file:input-remap.org][input-remap.org]].
+
+*** The macro module
+:PROPERTIES:
+:CUSTOM_ID: macro-module
+:END:
+Runs *macros*: small C files, compiled at runtime with crispy and loaded into the compositor, that sort windows, type into a named window, move windows between tags, or anything else the gowl API can do.  Opt-in: it loads only with =modules: macro: {enabled: true}=, and cmacs loads it on first use.
+
+*Interfaces:* =GowlIpcHandler=, =GowlKeybindHandler= (Super+Escape stops every running macro), =GowlStartupHandler=
+
+*Lookup:* =macro-run NAME= finds =NAME.c= or =NAME.so= in =macro-dir=, =$GOWL_MACRO_DIR=, =~/.config/gowl/macros=, =$XDG_DATA_HOME/gowl/macros=, =/etc/gowl/macros=, =/usr/local/share/gowl/macros=, =/usr/share/gowl/macros= --- first hit wins; a name with a =/= is a path.
+
+*Containment:* every call into macro code runs under the fault guard (=src/util/gowl-fault-guard.c=) with a watchdog; a crash or a runaway loop is unwound, logged, notified and held back until =macro-clear=, and the journal holds back a macro that was running when a session died.
+
+*Settings:* =macro-dir=, =timeout-ms= (2000), =max-running= (4), =reentrant=, =stop-key= (=Super+Escape=), =max-steps=, =log= (=none=/=fault=/=run=/=all=), =log-file=, =journal=, =triggers= (=EVENT: MACRO= and =every MS: MACRO= lines), =dbus= (=org.gowl.Macro1=), =on-fault=, =on-fault-custom=.
+
+*Files:* =gowl-module-macro.c= (settings, IPC, triggers, journal), =gowl-macro-loader.c= (lookup, compile, open), =gowl-macro-runner.c= (guarded runs, timeline, workers), =gowl-macro-dbus.c=.  The API scripts call is =src/macro/gowl-macro.h=.  Full reference, with 24 shipped examples and use cases: [[file:macros.org][macros.org]].
 
 *** The clipboard module
 

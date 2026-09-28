@@ -222,12 +222,30 @@ tests. These assert invariants no unit test can reach:
 > carries it -- only key repeat is skipped. Never add a target kind that
 > holds a list, a delay or a repeat, and never let the core call
 > `wlr_seat_*_notify_*` itself: the rule model (`src/boxed/
-> gowl-input-remap-rule.c`) refuses macros with
-> `GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE`, and the release of every input
+> gowl-input-remap-rule.c`) refuses sequences with
+> `GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE` -- the `{macro: NAME}` target is
+> the one declarative exception, and it only hands the press to the macro
+> module (never while locked) -- and the release of every input
 > replays what its press produced (the `held` table) so a rule change
 > mid-press cannot strand a key. A new hook in `gowl-compositor.c` must
 > return at once when `gowl_module_manager_get_input_remapper()` is
 > `NULL`. See `docs/input-remap.org`.
+
+> **Macro code only ever runs under the fault guard, and never makes the
+> compositor wait.** Every call into a macro (the body, its constructors,
+> its `gowl_macro_info()`) goes through `gowl_fault_guard_call()`
+> (`src/util/gowl-fault-guard.c`, which the bar guard now wraps); add a
+> call into macro code anywhere else and one NULL dereference is a
+> logout. A threaded macro's steps and helpers are posted to the
+> compositor thread; the compositor never blocks on a worker (under cmacs
+> that deadlocks against the gowl lock). A lock that both a worker and
+> the compositor take is held inside `gowl_fault_guard_hold()` /
+> `_release()`, or a watchdog unwind leaves it taken for good -- a frozen
+> desktop. The loader never unmaps macro code (`g_module_make_resident`)
+> and never frees a `GowlMacroScript` before the loader itself (a worker
+> may still be about to read it). The watchdog is `SIGRTMIN+9`: never 40,
+> which cmacs gives to JSC. `tests/test-macro-guard.sh` pins all of it.
+> See `docs/macros.org`.
 
 > **Both directions of libei are load-bearing, and they are asymmetric.**
 > `tools/xdg-desktop-portal-gowl` is one libeis context serving two

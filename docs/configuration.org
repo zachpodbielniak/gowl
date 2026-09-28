@@ -3265,7 +3265,7 @@ input-remap:
       KEY_B: { action: focus-client, arg: "title:World of Warcraft*" }
 #+end_src
 
-Each input maps to exactly ONE target (=pass=, =drop=, =key=, =button=, =action= or =command=), and the release mirrors the press. A list, two targets for one input, or a =sequence=, =macro=, =delay= or =repeat= key is refused and counted as a config problem; the other rules still load. The full schema, the device-identification workflow and the IPC commands are in [[file:input-remap.org][Per-Device Input Remapping]]; =data/example-input-remap.yaml= is a complete example.
+Each input maps to exactly ONE target (=pass=, =drop=, =key=, =button=, =action=, =command= or =macro=), and the release mirrors the press. A list, two targets for one input, or a =sequence=, =delay= or =repeat= key is refused and counted as a config problem; the other rules still load. A ={macro: NAME}= target runs a [[file:macros.org][macro]] and is outside the one-to-one guarantee. The full schema, the device-identification workflow and the IPC commands are in [[file:input-remap.org][Per-Device Input Remapping]]; =data/example-input-remap.yaml= is a complete example.
 
 In a C config, the same rule is =gowl_input_remap_rule_new()= plus =gowl_config_add_input_remap_rule()= (see [[file:input-remap.org::#input-remap-c-config][C config]]), and =gowl_input_remap_rule_map_callback()= maps an input to a C function.
 
@@ -3693,6 +3693,25 @@ The scratchpad takes the dropdown's size settings --- =width-pct= and
 between the columns its windows are tiled in. A bad value is refused
 with a warning and the old one kept. See /Scratchpad/ in =modules.org=.
 
+The =macro= module (opt-in) runs crispy C macros on demand:
+
+#+begin_src yaml
+modules:
+  macro:
+    enabled: true
+    macro-dir: "~/macros"        # searched before the standard dirs
+    timeout-ms: 2000             # each run's budget; a macro may raise its own
+    triggers:
+      - "client-added: layout-for-count"
+      - "every 600000: night"
+    on-fault: "bar-notify Macro failed|%n: %s"
+
+keybinds:
+  "Super+s": { action: ipc-command, arg: "macro-run sort-windows" }
+#+end_src
+
+A list setting such as =triggers= reaches the module as one line per element.  Every setting, the lookup order, the macro API and the shipped examples are in [[file:macros.org][Macros]].
+
 *** Checking a config
 :PROPERTIES:
 :CUSTOM_ID: checking-a-config
@@ -3847,6 +3866,23 @@ gowl_input_remap_rule_unref(pedal);
 #+end_src
 
 A rule with the same name replaces the earlier one.  See [[file:input-remap.org::#input-remap-c-config][input-remap.org]] for callbacks.
+
+**** Running and registering macros
+
+With the =macro= module enabled, C config can run a macro by name, or register a C function as one that keybinds, IPC, D-Bus and the remapper can name:
+
+#+begin_src C
+static gboolean
+tidy(GowlMacroContext *ctx, gpointer data)
+{
+    gowl_macro_action(ctx, GOWL_ACTION_SET_LAYOUT, "tile");
+    return TRUE;
+}
+
+gowl_macro_register_func("tidy", tidy, NULL, NULL);
+#+end_src
+
+A registered macro runs under the same fault guard and quarantine as a macro file.  See [[file:macros.org::#macros-c-api][Macros]].
 
 **** Adding Rules
 :PROPERTIES:

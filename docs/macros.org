@@ -1,0 +1,528 @@
+* Macros
+:PROPERTIES:
+:CUSTOM_ID: macros
+:END:
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: macros-overview
+:END:
+A *macro* is a small C file that drives the compositor: sort the windows on a tag, type a command into the terminal while you keep working in the browser, move every window of one app to the current tag, put the desktop back the way it was this morning. Macros are compiled at runtime with crispy, loaded into the compositor, and run on demand --- from a keybind, =gowl-msg=, D-Bus, MCP, a compositor event, a timer, a foot pedal through the input remapper, or any C code. Edit the file, run it again, and the new code runs; there is no rebuild and no restart.
+
+Macros run *in-process*, so they have the whole compositor API and cost nothing to start. That is also why the system is built around containment: a macro that dereferences NULL, calls =abort()=, or loops forever is stopped, unwound, logged, reported in a notification, and held back until you clear it. The desktop carries on.
+
+The feature has two parts:
+
+- *libgowl* --- the macro API scripts call (=<gowl/gowl.h>= includes =macro/gowl-macro.h=), the shared fault guard (=src/util/gowl-fault-guard.c=), and targeted key delivery (=gowl_compositor_send_key_to_client()=).
+- *The =macro= module* --- opt-in, in no default list. Lookup, compiling and caching, guarded runs, the timeline player, worker threads, triggers, the journal, IPC, and the optional =org.gowl.Macro1= D-Bus service.
+
+With the module not loaded nothing runs, nothing is compiled, and no signal handler is installed beyond the ones the bar already uses.
+
+** Quick start
+:PROPERTIES:
+:CUSTOM_ID: macros-quick-start
+:END:
+*1. Enable the module* in =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  macro:
+    enabled: true
+#+end_src
+
+*2. Run a shipped example.* The examples are installed to =$(DATADIR)/gowl/macros=, which is on the search path, so a bare name finds them:
+
+#+begin_src sh
+gowl-msg macro-run hello world
+gowl-msg macro-run sort-windows
+gowl-msg macro-list          # everything runnable by name
+#+end_src
+
+*3. Write your own.* =~/.config/gowl/macros/tile-two.c=:
+
+#+begin_src c
+#include <gowl/gowl.h>
+
+G_MODULE_EXPORT const gchar *
+gowl_macro_info(void)
+{
+	return "Tile layout, and focus the terminal";
+}
+
+G_MODULE_EXPORT gboolean
+gowl_macro_run(GowlMacroContext *ctx)
+{
+	GowlClient *term;
+
+	gowl_macro_action(ctx, GOWL_ACTION_SET_LAYOUT, "tile");
+	term = gowl_macro_find_client(ctx, "app-id:foot");
+	if (term != NULL)
+		gowl_macro_focus(ctx, term);
+	return TRUE;
+}
+#+end_src
+
+*4. Bind it:*
+
+#+begin_src yaml
+keybinds:
+  "Super+t": { action: ipc-command, arg: "macro-run tile-two", desc: "Tile + terminal" }
+#+end_src
+
+** Finding a macro
+:PROPERTIES:
+:CUSTOM_ID: macros-lookup
+:END:
+=macro-run NAME= resolves =NAME= in this order, and the *first hit wins*:
+
+1. A name *defined* at runtime with =macro-define= (see [[#macros-defined][Defined macros]]).
+2. A name *registered from C* with =gowl_macro_register_func()=.
+3. A *file* on the search path. =sort-windows=, =sort-windows.c= and =sort-windows.so= all name the same macro; each directory is tried for =NAME.c=, then =NAME.so=.
+
+The search path, first to last:
+
+| Directory                                  | Meant for                                          |
+|--------------------------------------------+----------------------------------------------------|
+| the =macro-dir= setting (=:=-separated)    | your own list, =~/= expanded                       |
+| =$GOWL_MACRO_DIR= (=:=-separated)          | per-session or per-test overrides                  |
+| =$XDG_CONFIG_HOME/gowl/macros=             | your macros (=~/.config/gowl/macros=)              |
+| =$XDG_DATA_HOME/gowl/macros=               | macros installed per-user                          |
+| =/etc/gowl/macros=                         | site-wide macros                                   |
+| =/usr/local/share/gowl/macros=             | locally installed                                  |
+| =/usr/share/gowl/macros=                   | the distribution's, including the shipped examples |
+| =data/macros= of the source tree           | a development build, last                          |
+
+*A name containing =/= is a path*, used as-is with no lookup: =gowl-msg macro-run ~/scratch/try.c=. =macro-dirs= prints the path in force, and a directory that does not exist is skipped silently.
+
+** Writing a macro
+:PROPERTIES:
+:CUSTOM_ID: macros-writing
+:END:
+*** The ABI
+:PROPERTIES:
+:CUSTOM_ID: macros-abi
+:END:
+A macro file is one C translation unit that includes =<gowl/gowl.h>= and exports:
+
+| Symbol                                          | Required | Meaning                                                   |
+|-------------------------------------------------+----------+-----------------------------------------------------------|
+| =gboolean gowl_macro_run(GowlMacroContext *)=   | yes      | The macro. =FALSE= means it failed (not a fault).          |
+| =const gchar *gowl_macro_info(void)=            | no       | One line for =macro-list= and =macro-info=                |
+| =const guint gowl_macro_abi=                    | no       | Set to =GOWL_MACRO_ABI=; a mismatch is refused, not run   |
+| =#define GOWL_MACRO_THREADED 1=                  | no       | Run on a worker thread (see [[#macros-modes][Two modes]])                    |
+| =#define GOWL_MACRO_TIMEOUT_MS N=                | no       | This macro's time budget; =0= switches the watchdog off   |
+| =#define CRISPY_PARAMS "..."=                    | no       | Extra compiler flags, shell-expanded (=$(pkg-config ...)=) |
+
+The two =#define= lines are read from the source text, like =CRISPY_PARAMS= is for the config compiler, so they must be written literally. A prebuilt =.so= exports =gowl_macro_threaded= and =gowl_macro_timeout_ms= (=const gint=/=const guint=) instead.
+
+Files are compiled with the gowl headers, cairo, pangocairo, wayland-server, json-glib and =-DWLR_USE_UNSTABLE=; the result is cached in =$XDG_CACHE_HOME/gowl/macros=, keyed by a hash of the source. An unchanged file is not recompiled; a changed one is recompiled on its next run and the new code runs. A compile error is reported on one line --- over IPC, in the log, in =macro-compile NAME= --- and is not a fault: nothing is held back.
+
+*** The context
+:PROPERTIES:
+:CUSTOM_ID: macros-context
+:END:
+Everything a macro knows arrives in its =GowlMacroContext=:
+
+| Call                                  | Returns                                                       |
+|---------------------------------------+---------------------------------------------------------------|
+| =gowl_macro_get_compositor(ctx)=       | the compositor (threaded: only inside =call_on_compositor=)   |
+| =gowl_macro_get_name(ctx)=             | the name it was run by                                        |
+| =gowl_macro_get_path(ctx)=             | its source file, or =NULL= (registered, defined)              |
+| =gowl_macro_get_argc/arg/argv(ctx)=    | its arguments, shell-parsed from the command line            |
+| =gowl_macro_get_trigger(ctx)=          | =API=, =IPC=, =DBUS=, =EVENT=, =TIMER= or =REMAP=             |
+| =gowl_macro_get_trigger_detail(ctx)=   | who started it: the IPC line, the event and its window, the remap rule and input, the interval |
+| =gowl_macro_is_threaded(ctx)=          | which mode it is in                                           |
+
+And a macro reports through it:
+
+| Call                                        | Effect                                                     |
+|---------------------------------------------+------------------------------------------------------------|
+| =gowl_macro_set_result(ctx, text)=           | the reply to =macro-run= (=OK NAME: text=), the Finished event |
+| =gowl_macro_log(ctx, fmt, ...)=              | a line in the module's log, prefixed with the macro's name |
+| =gowl_macro_notify(ctx, summary, body)=      | a toast: the bar's (when loaded) and =toast-requested=     |
+| =gowl_macro_set_timeout(ctx, ms)=            | a new time budget from now; see [[#macros-watchdog][The watchdog]]                  |
+| =gowl_macro_is_cancelled(ctx)=               | whether it has been told to stop                           |
+
+*** Steps
+:PROPERTIES:
+:CUSTOM_ID: macros-steps
+:END:
+Anything that is /input/, or that should happen /in order over time/, is a step:
+
+| Step                                              | Does                                                           |
+|---------------------------------------------------+----------------------------------------------------------------|
+| =gowl_macro_key(ctx, target, "Super+9")=           | one key press and release; modifiers plus ONE key, or =KEY_F13= |
+| =gowl_macro_key_code(ctx, target, KEY_A, mods)=    | the same by evdev keycode                                      |
+| =gowl_macro_text(ctx, target, "make\n")=           | type a string; =\n= is Return, =\t= is Tab                     |
+| =gowl_macro_button(ctx, BTN_MIDDLE)=               | one click at the cursor                                        |
+| =gowl_macro_wait(ctx, 150)=                        | a pause in the sequence                                        |
+| =gowl_macro_command(ctx, "scratchpad-toggle")=     | one module IPC command line                                    |
+| =gowl_macro_action(ctx, GOWL_ACTION_..., arg)=     | one compositor action, as a keybind would run it               |
+| =gowl_macro_focus(ctx, client)=                    | focus a window (viewing its tags)                              |
+
+*The =target= of a key or text step* decides where it goes:
+
+- =NULL= --- the focused window, *through the compositor's keybinds*: a macro's =Super+9= views tag 9 exactly as pressing it would.
+- a =GowlClient= --- *that window only*, while the focused window keeps focus. The keyboard is lent to the target for the key and given back with the real keyboard's held keys and modifiers. This is what automating one app while you work in another needs. It is refused while the session is locked and while a launcher or an X11 popup holds the keyboard.
+
+A step whose target window has closed by the time it plays is skipped. While the session is locked only waits play; every other step is dropped.
+
+*** Helpers
+:PROPERTIES:
+:CUSTOM_ID: macros-helpers
+:END:
+Helpers read or change compositor state /now/ and return a value:
+
+| Helper                                                 | Does                                                    |
+|--------------------------------------------------------+---------------------------------------------------------|
+| =gowl_macro_find_client(ctx, "app-id:foot")=            | first window matching =app-id:GLOB=, =title:GLOB=, or a bare app-id glob |
+| =gowl_macro_list_clients(ctx, visible_only)=            | the windows, in tiling order (free the list, not the windows) |
+| =gowl_macro_sort_clients(ctx, clients, compare)=        | put those windows in =compare='s order, in the slots they occupy |
+| =gowl_macro_move_client(ctx, client, monitor, tags)=    | move a window to an output and/or tags                  |
+| =gowl_macro_run_command(ctx, line)=                     | run an IPC line now and get its reply                   |
+| =gowl_macro_call_on_compositor(ctx, func, data)=        | run any code on the compositor thread (threaded macros) |
+
+Anything else in the gowl API is callable directly from a macro in the default mode, since it is already on the compositor thread.
+
+** Two modes
+:PROPERTIES:
+:CUSTOM_ID: macros-modes
+:END:
+*** The timeline (default)
+:PROPERTIES:
+:CUSTOM_ID: macros-timeline
+:END:
+=gowl_macro_run= runs on the compositor thread, *under the fault guard*, and should return quickly. Steps it asks for are not performed during the call: they are queued, and after it returns the module plays them on event-loop timers --- a =wait= re-arms the timer, so a sequence with pauses never blocks the desktop. The reply says so: =OK started keypress-sequence id=7 steps=5=. A macro that queued no steps replies =OK ran NAME= or =OK NAME: RESULT=.
+
+=gowl_macro_sleep()= is refused in this mode (it returns =FALSE= and logs why), because sleeping here would stop the desktop.
+
+*** Threaded
+:PROPERTIES:
+:CUSTOM_ID: macros-threaded
+:END:
+With =#define GOWL_MACRO_THREADED 1= the macro runs on a worker thread of its own, with its own alternate signal stack and its own watchdog. It may sleep (=gowl_macro_sleep(ctx, ms)= returns =FALSE= once the run is cancelled) and it may take as long as it likes. Every step and helper it calls is carried to the compositor thread and performed there, synchronously; anything else that touches compositor state must go through =gowl_macro_call_on_compositor()=.
+
+The compositor never waits for a worker. A call from a worker that has not started yet is abandoned when the run is cancelled or the module goes away, and a worker still running at shutdown is left to notice and exit on its own. This matters most under cmacs, where the compositor thread holds a lock that a waiting worker would deadlock against.
+
+** Containment
+:PROPERTIES:
+:CUSTOM_ID: macros-containment
+:END:
+*** The fault guard
+:PROPERTIES:
+:CUSTOM_ID: macros-fault-guard
+:END:
+Every call into macro code --- the body, and opening the file (its constructors run then) --- goes through =gowl_fault_guard_call()=. The guard catches SIGSEGV, SIGBUS, SIGFPE, SIGILL and SIGABRT (and the watchdog) on the thread that raised them and unwinds to the call site with =siglongjmp=. Each thread gets an alternate signal stack, so a runaway recursion is caught too. Outside a guarded call the handlers step aside: the previous handler runs (Emacs's, under cmacs) or the default disposition is restored and the signal re-raised, so a real crash still dumps core where it happened.
+
+An unwound macro did not clean up after itself: memory it allocated is leaked, a lock it held stays held. That is the price of not losing the session, and the reason a faulted macro is held back rather than retried.
+
+*** The watchdog
+:PROPERTIES:
+:CUSTOM_ID: macros-watchdog
+:END:
+Every run has a time budget: the =timeout-ms= setting (2000 ms), or the macro's own =GOWL_MACRO_TIMEOUT_MS=. A per-thread POSIX timer fires when it runs out and the macro is unwound exactly like a crash, reported as "ran past its time budget". For a timeline macro the budget covers the body only; the steps it queued are not timed.
+
+*A macro that knows it is long says so*, first thing:
+
+#+begin_src c
+gowl_macro_set_timeout(ctx, 10000);   /* ten seconds from now */
+gowl_macro_set_timeout(ctx, 0);       /* no watchdog at all */
+#+end_src
+
+There is no ceiling (the =timeout-ms= setting stops at an hour; a macro's own request does not): it is your desktop and your macro. A threaded macro that polls forever sets =0=; a timeline macro that asks for ten seconds stalls the desktop for ten seconds, and should be threaded instead.
+
+The watchdog signal is =SIGRTMIN+9= --- clear of =SIGRTMIN+6= (40 on glibc), where cmacs puts WebKit's GC signal. Library code that takes a lock another thread also takes wraps it in =gowl_fault_guard_hold()= / =gowl_fault_guard_release()=: a watchdog that fires inside is delivered at the release, once the lock is let go, instead of leaving it held for good (the compositor thread is always on the other side of those locks, so that would be a frozen desktop). Crashes are not deferred.
+
+*** Held back: quarantine and the journal
+:PROPERTIES:
+:CUSTOM_ID: macros-quarantine
+:END:
+A macro that faults is *held back*: =macro-run= refuses it with =ERROR NAME is held back (crashed (SIGSEGV)); clear it with macro-clear NAME= until you run =macro-clear NAME= (or =macro-clear= for all). Edit, fix, clear, run.
+
+The hold survives a restart. =$XDG_STATE_HOME/gowl/macros.journal= keeps a =[quarantine]= group, and a =[running]= group marking every macro while its body runs. A macro still marked running when the module starts was running when the last session ended --- the one crash the in-process guard cannot report --- and is held back with "the last session ended while it was running". The =journal= setting moves the file, or =none= turns it off.
+
+*** Being told
+:PROPERTIES:
+:CUSTOM_ID: macros-notifications
+:END:
+A fault is reported everywhere at once:
+
+- the reply to whoever ran it: =ERROR crash-demo SIGSEGV and was stopped=;
+- the log (stderr, or =log-file=), with the lift command;
+- the IPC event stream: =EVENT macro fault NAME SIGNAL=;
+- a notification: a bar toast when the bar is loaded, and the compositor's =toast-requested= signal;
+- D-Bus =Faulted(name, signal)= when the service is on;
+- your own hooks: =on-fault= (a command line) and =on-fault-custom= (a =custom= action --- Elisp under cmacs). Both expand =%n= (name), =%s= (signal, or =timeout=) and =%t= (=fault=); in =on-fault-custom= each becomes a quoted Lisp string.
+
+#+begin_src yaml
+modules:
+  macro:
+    enabled: true
+    on-fault: "bar-notify Macro failed|%n: %s"
+    on-fault-custom: "(message \"macro %s died: %s\" %n %s)"
+#+end_src
+
+*** Stopping macros
+:PROPERTIES:
+:CUSTOM_ID: macros-stopping
+:END:
+- =gowl-msg macro-stop NAME=, =macro-stop ID=, =macro-stop= (all).
+- *Super+Escape* stops every running macro. It is only consumed while something is running, so it still reaches everything else the rest of the time. Module key handlers run /after/ the configured keybinds, so a config that binds the same combo wins; the =stop-key= setting moves it (=stop-key: "Super+Alt+Escape"=, or =none=). cmacs binds Super+Escape to its menu and moves the stop key to Super+Alt+Escape.
+
+A timeline run stops at once: its queued steps are dropped. A threaded run is told, and ends at its next step, sleep or =gowl_macro_is_cancelled()= check.
+
+** Triggers
+:PROPERTIES:
+:CUSTOM_ID: macros-triggers
+:END:
+*** Keybinds
+:PROPERTIES:
+:CUSTOM_ID: macros-keybinds
+:END:
+The existing =ipc-command= action runs a macro, with arguments:
+
+#+begin_src yaml
+keybinds:
+  "Super+s":       { action: ipc-command, arg: "macro-run sort-windows" }
+  "Super+Shift+s": { action: ipc-command, arg: "macro-run sort-windows reverse" }
+  "Super+F1":      { action: ipc-command, arg: "macro-run type-into app-id:foot 'make -j8\\n'" }
+#+end_src
+
+*** IPC
+:PROPERTIES:
+:CUSTOM_ID: macros-ipc
+:END:
+| Command                                          | Reply                                                     |
+|--------------------------------------------------+-----------------------------------------------------------|
+| =macro-run [--trigger=K] [--detail=D] NAME ARGS= | =OK ...= / =ERROR ...= (arguments are shell-parsed)       |
+| =macro-stop [NAME\vert{}ID\vert{}all]=           | =OK stopped N=                                            |
+| =macro-list=                                     | JSON: name, kind (file/registered/command/custom/action), path, held-back |
+| =macro-status=                                   | JSON: running runs, held-back macros and why, fault count, budget, D-Bus |
+| =macro-info NAME=                                | JSON: path, compiled path, description, threaded, budget  |
+| =macro-compile NAME=                             | compile without running; the error on one line            |
+| =macro-dirs=                                     | JSON: the search path                                     |
+| =macro-reload=                                   | forget compiled macros; re-read the triggers              |
+| =macro-clear [NAME]=                             | lift a hold (all when no name)                            |
+| =macro-define NAME command\vert{}custom\vert{}action ...= | define a macro without a file                    |
+| =macro-undefine NAME=                            | remove one                                                |
+| =macro-log [none\vert{}fault\vert{}run\vert{}all]= | show or set the log level                                |
+
+Events on the IPC stream: =EVENT macro started NAME ID=, =finished NAME ID=, =stopped NAME ID=, =fault NAME SIGNAL=.
+
+*** Events and timers
+:PROPERTIES:
+:CUSTOM_ID: macros-events
+:END:
+The =triggers= setting is a list of =EVENT: MACRO [ARGS]= and =every MS: MACRO [ARGS]= lines:
+
+#+begin_src yaml
+modules:
+  macro:
+    enabled: true
+    triggers:
+      - "client-added: tidy-on-map"
+      - "client-added: layout-for-count"
+      - "client-removed: layout-for-count"
+      - "every 600000: night"
+#+end_src
+
+=EVENT= is any compositor signal (=client-added=, =client-removed=, =focus-changed=, =workspace-switched=, =layout-changed=, =monitor-added=, =lock-changed=, ...); a name the compositor does not have is reported and skipped. An event macro runs from an idle callback *after* the emission, never inside it, so a macro that moves windows during =client-added= is not rearranging a list the compositor is in the middle of changing. When the signal's first argument is a window, the detail says which: =client-added app-id=foot title=~=. Intervals are at least 100 ms.
+
+*** D-Bus
+:PROPERTIES:
+:CUSTOM_ID: macros-dbus
+:END:
+With =dbus: true= the module owns =org.gowl.Macro1= on the session bus, object =/org/gowl/Macro1=:
+
+| Member                          | Kind   | Meaning                          |
+|---------------------------------+--------+----------------------------------|
+| =Run(s name, as args) → s=      | method | =macro-run=, trigger =dbus=      |
+| =Stop(s which) → s=             | method | =macro-stop=                     |
+| =List() → s=, =Status() → s=    | method | the JSON of =macro-list=/=-status= |
+| =Started(s name, s detail)=     | signal |                                  |
+| =Finished(s name, s result)=    | signal |                                  |
+| =Faulted(s name, s signal)=     | signal |                                  |
+
+#+begin_src sh
+gdbus call --session --dest org.gowl.Macro1 --object-path /org/gowl/Macro1 \
+  --method org.gowl.Macro1.Run sort-windows '["reverse"]'
+#+end_src
+
+The bus lives on a thread of its own with a private main context; calls are carried to the compositor thread and answered from there.
+
+*** MCP
+:PROPERTIES:
+:CUSTOM_ID: macros-mcp
+:END:
+=macro_run= (=name=, =args=), =macro_stop=, =macro_list=, =macro_status=, =macro_info= and =macro_clear=, thin wrappers over the IPC words. See [[file:mcp.org][mcp.org]].
+
+*** The input remapper
+:PROPERTIES:
+:CUSTOM_ID: macros-remap
+:END:
+A per-device remap rule can run a macro on a press:
+
+#+begin_src yaml
+input-remap:
+  - name: pedals
+    match: { id: "1a86:e026" }
+    map:
+      KEY_A: { button: middle }
+      KEY_B: { macro: focus-or-launch, args: "'title:World of Warcraft*' lutris" }
+#+end_src
+
+The macro sees trigger =REMAP= and detail =RULE INPUT= (=pedals KEY_B=). =args= is one command line, shell-parsed. The release is swallowed. Not while the session is locked.
+
+*This is outside the remapper's one-press-one-output guarantee*, deliberately and visibly: a macro is code and can do anything. Games with "one keypress, one action" rules (World of Warcraft among them) treat a pedal that plays a sequence as automation; keep macro targets for things that are not the game --- focusing it, arranging windows around it, a push-to-talk command.
+
+*** From C
+:PROPERTIES:
+:CUSTOM_ID: macros-c-api
+:END:
+Any C code --- the C config, a module, an embedder --- can run a macro by name, or provide one:
+
+#+begin_src c
+/* run one: the same path as macro-run, guard and all */
+g_free(gowl_macro_run_by_name(compositor, "sort-windows", NULL));
+
+/* provide one: callable by name from keybinds, IPC, D-Bus, the remapper */
+static gboolean
+tidy(GowlMacroContext *ctx, gpointer data)
+{
+	gowl_macro_action(ctx, GOWL_ACTION_SET_LAYOUT, "tile");
+	return TRUE;
+}
+
+gowl_macro_register_func("tidy", tidy, NULL, NULL);
+#+end_src
+
+A registered macro runs under the same guard and the same quarantine as a file, in the default (timeline) mode.
+
+*** Defined macros
+:PROPERTIES:
+:CUSTOM_ID: macros-defined
+:END:
+=macro-define= gives a name to a command line, an action, or a =custom= action, with no file:
+
+#+begin_src sh
+gowl-msg macro-define web  action focus-client app-id:librewolf
+gowl-msg macro-define scratch command scratchpad-toggle
+gowl-msg macro-define note custom '(org-capture nil "n")'
+#+end_src
+
+=command= and =custom= templates expand =%n= (name), =%t= (trigger) and =%a= (the arguments: shell-quoted words in a command, a parenthesised list of Lisp strings in a custom form --- quote it, ='%a=, where it is data and not a call). This is how cmacs turns an Elisp function into a macro every trigger can name.
+
+** Settings
+:PROPERTIES:
+:CUSTOM_ID: macros-settings
+:END:
+| Setting           | Default                           | Meaning                                                  |
+|-------------------+-----------------------------------+----------------------------------------------------------|
+| =enabled=         | =false=                           | the module is opt-in                                     |
+| =macro-dir=       | --                                | directories searched first, =:=-separated                |
+| =timeout-ms=      | =2000=                            | the default time budget; =0= for none                    |
+| =max-running=     | =4=                               | runs at once (timeline + threaded)                       |
+| =reentrant=       | =false=                           | may a macro run while it is already running?             |
+| =stop-key=        | =Super+Escape=                    | stops every running macro; =none= for no key             |
+| =max-steps=       | =100000=                          | steps one timeline run may queue; the rest are dropped   |
+| =log=             | =fault=                           | =none=, =fault=, =run= or =all=                           |
+| =log-file=        | stderr                            | where the log goes                                       |
+| =journal=         | =$XDG_STATE_HOME/gowl/macros.journal= | the quarantine journal, or =none=                    |
+| =triggers=        | --                                | event and interval triggers (a list)                     |
+| =dbus=            | =false=                           | own =org.gowl.Macro1=                                    |
+| =on-fault=        | --                                | a command line run on every fault                        |
+| =on-fault-custom= | --                                | a =custom= action run on every fault                     |
+
+** The examples
+:PROPERTIES:
+:CUSTOM_ID: macros-examples
+:END:
+=data/macros/= ships these, installed on the search path. Each file's header says how to run it; =make test= compiles every one strictly and runs every one in a headless session.
+
+| Macro                  | Mode     | What it shows                                                    |
+|------------------------+----------+------------------------------------------------------------------|
+| =hello=                | timeline | the context: arguments, trigger, detail, a toast                 |
+| =sort-windows=         | timeline | sort the visible tiles by title (=reverse= for Z..A)             |
+| =sort-by-app=          | timeline | group the tiles by app-id, then title                            |
+| =gather-app=           | timeline | bring every window of an app-id glob to the current tags        |
+| =scatter=              | timeline | one visible window per tag                                       |
+| =swap-monitors=        | timeline | swap the windows of the first two outputs                        |
+| =type-into=            | timeline | type text into a window by pattern, keeping focus where it is    |
+| =paste-template=       | timeline | type a named snippet into the focused window                     |
+| =keypress-sequence=    | timeline | key, wait, text, wait, key --- into one named window             |
+| =focus-or-launch=      | timeline | focus a window, or spawn its program                             |
+| =layout-for-count=     | timeline | monocle / tile / grid by window count (an event trigger)         |
+| =cycle-layouts=        | timeline | step through /your/ list of layouts                              |
+| =float-center=         | timeline | float the focused window, centred at a percentage                |
+| =tidy-on-map=          | timeline | on =client-added=, send known apps to their tags                 |
+| =presentation=         | timeline | effects off, toasts dismissed, fullscreen --- and back           |
+| =night=                | timeline | an interval trigger that acts once after 22:00                   |
+| =screenshot-annotated= | timeline | ask the screenshot module, notify with the window's title        |
+| =kill-by-title=        | timeline | close every window whose title matches                           |
+| =workspace-snapshot=   | timeline | save app-id → tags to a file; restore it later                   |
+| =pedal-demo=           | timeline | what a remapper ={macro:}= target receives                       |
+| =threaded-poll=        | threaded | poll a file, notify on change, until stopped; budget off         |
+| =long-demo=            | timeline | raise its own budget, then work past the default                 |
+| =crash-demo=           | timeline | segfault, abort or SIGFPE on purpose --- and survive it          |
+| =loop-demo=            | timeline | loop forever on purpose --- and be stopped                       |
+
+** Use cases
+:PROPERTIES:
+:CUSTOM_ID: macros-use-cases
+:END:
+Ideas, by kind; most are twenty lines.
+
+*Window management.* Sort, group, gather and scatter (above). "Stack the two newest windows side by side." "Move every video player to the second output." "Toggle between the two layouts I actually use." "When a fourth window opens, switch to grid; when it drops to one, monocle" --- =layout-for-count= on =client-added= and =client-removed=.
+
+*Getting somewhere.* Focus-or-launch for each app you live in, one key each. "Take me to the game" from a foot pedal. "Jump to the window that last asked for attention." "Cycle only through terminals."
+
+*Driving an app that is not focused.* Type a build command into the terminal while you read in the browser (=type-into=). Send =q= to a pager, =Ctrl+R= to a browser tab, =space= to a media player --- without touching focus. Log in to a VPN client window with a keypress sequence (never your password: see below).
+
+*Sessions.* Save where everything lives at the end of the day and restore it in the morning (=workspace-snapshot=). A "meeting" macro that moves chat to one output, mutes effects and turns DND on; its opposite.
+
+*Housekeeping on a timer.* Close dialogs matching a title after they have been open ten minutes. Turn effects down at night. Re-apply a layout that an app keeps breaking.
+
+*Event rules beyond window rules.* A window rule matches when a window appears; a macro on =client-added= can look at everything else first --- how many windows the tag already has, which output is free, what time it is.
+
+*Pedals and macro pads.* A macro pad's keys each name a macro through the remapper. Keep game keys declarative (=button=, =key=) and give the macro targets to everything around the game.
+
+*Bridging to scripts.* =gowl_macro_command()= and =gowl_macro_run_command()= reach every module's IPC; a =spawn= action runs anything else. A macro is the place to put the logic, and a shell script is fine for the part that is really a shell script.
+
+** What not to do
+:PROPERTIES:
+:CUSTOM_ID: macros-dont
+:END:
+- *Do not automate a game.* Anything that plays a sequence or reacts to the game for you breaks the rules of most online games, and a macro target on a pedal does not change that.
+- *Do not type secrets.* A macro file is plain text in your home directory, and keys typed into the wrong window are keys typed into the wrong window. Use a password manager.
+- *Do not do slow work on the compositor thread.* Network, disk, subprocesses you wait for: make the macro threaded. A timeline macro that takes a second freezes the desktop for a second, watchdog or not.
+- *Do not rely on the guard to clean up.* An unwound macro leaks what it allocated and keeps any lock it held; the guard saves the session, not the macro's state.
+- *Do not call Lisp from a macro under cmacs.* Crispy macros run in the compositor; Elisp runs on Emacs's main thread. Define the Elisp side as a cmacs macro (=cmacs-gowl-macro-define=) and name it instead.
+
+** Files
+:PROPERTIES:
+:CUSTOM_ID: macros-files
+:END:
+| File                                        | What                                                         |
+|---------------------------------------------+--------------------------------------------------------------|
+| =src/macro/gowl-macro.{h,c}=                 | the API: context, steps, helpers, the C registry             |
+| =src/macro/gowl-macro-private.h=             | steps and the host vtable the module implements              |
+| =src/util/gowl-fault-guard.{h,c}=            | the fault guard and watchdog (the bar's guard wraps it)      |
+| =src/core/gowl-client-input.c=               | targeted keys and text, keysym lookup, tiling reorder        |
+| =modules/macro/gowl-module-macro.c=          | the module: settings, IPC, triggers, journal, notifications  |
+| =modules/macro/gowl-macro-loader.c=          | lookup, compiling, caching, opening                          |
+| =modules/macro/gowl-macro-runner.c=          | guarded runs, the timeline player, workers                   |
+| =modules/macro/gowl-macro-dbus.c=            | =org.gowl.Macro1=                                            |
+| =modules/mcp/gowl-mcp-tools-macro.c=         | the MCP tools                                                |
+| =data/macros/*.c=                            | the examples                                                 |
+
+** Tests
+:PROPERTIES:
+:CUSTOM_ID: macros-tests
+:END:
+| Test                           | Covers                                                                  |
+|--------------------------------+-------------------------------------------------------------------------|
+| =test-fault-guard=             | each signal on the main thread and on workers, stack overflow, the watchdog and =extend=, holds deferring the watchdog, nesting, the bar wrapper, unarmed faults still reaching the previous handler |
+| =test-macro-loader=            | search order, name resolution, a path skipping lookup, recompiling on edit, the =#define=s, compile errors, a missing run function, the wrong ABI, a crashing constructor, the registry |
+| =test-macro-runner=            | results and failures, timeline order and timing, stop and Super+Escape, crash/abort/loop held back and cleared, a self-raised budget, threaded runs (steps, crash, cancel, a watchdog mid-sleep), limits, journal recovery, toasts and fault hooks, the log file, triggers, registered and defined macros, the remapper target, D-Bus |
+| =test-macro-targeted-key=      | a real Wayland client: a targeted key reaches only its window and focus comes back; text with shifted and unmappable characters; refused while locked; the step API; reordering |
+| =test-macro-examples=          | every example compiled with =-std=gnu89 -Wall -Wextra -Werror=, opened, and run against three real windows |
+| =test-macro-guard.sh=          | source invariants: every body guarded, nothing sleeps on the compositor thread, cross-thread locks held with the watchdog deferred, targeted keys refuse when locked, code stays mapped |

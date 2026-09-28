@@ -161,6 +161,12 @@ Plugins load from `~/.config/gowl/bar-plugins/` as a compiled `.so` **or as a pl
 
 Plugins run inside the compositor, so a fault in one is caught by a signal guard, quarantined and reported rather than taking the session down; a load that kills the session anyway is journalled and held back on the next start. See [docs/bar.org](docs/bar.org), and `data/example-bar-plugin.c` for a complete worked plugin.
 
+## Macros
+
+A **macro** is a small C file that drives the compositor -- sort a tag's windows alphabetically, type a command into the terminal while you keep working in the browser, send every window of one app to the current tag, put the desktop back the way it was this morning. Macros compile on demand through crispy and run in-process, from a keybind, `gowl-msg macro-run NAME`, D-Bus, MCP, a compositor event, a timer, or a foot pedal through the input remapper. Edit the file and run it again: the new code runs.
+
+Every macro runs under the same kind of signal guard as bar plugins, plus a watchdog: a crash or a runaway loop is unwound, logged, notified and held back until you clear it, and the session carries on. A macro that knows it is long raises its own time budget, or runs on a worker thread where it may sleep. Opt in with `modules.macro.enabled: true`; 24 commented examples ship in `data/macros/` and are installed on the search path. See [docs/macros.org](docs/macros.org).
+
 ## Documentation
 
 - [docs/architecture.org](docs/architecture.org) -- Type hierarchy, module system, interface dispatch, config system.
@@ -168,6 +174,8 @@ Plugins run inside the compositor, so a fault in one is caught by a signal guard
 - [docs/configuration.org](docs/configuration.org) -- YAML and C configuration reference.
 - [docs/modules.org](docs/modules.org) -- Module development guide with examples.
 - [docs/bar.org](docs/bar.org) -- The status bar: widgets, dropdown panels, toasts, and writing a bar plugin.
+- [docs/macros.org](docs/macros.org) -- Macros: writing them, running them, containment, triggers, examples and use cases.
+- [docs/input-remap.org](docs/input-remap.org) -- Per-device key, button and wheel remapping.
 
 ## License
 

@@ -682,6 +682,14 @@ All keyboards normally join one =wlr_keyboard_group=, so no key knows which phys
 
 The hooks in =gowl-compositor.c= are four one-line calls (=create_keyboard=, =create_pointer=, =on_cursor_button=, =on_cursor_axis=) plus the seat-capability check; each returns at once when no remapper is active, so a session without the opt-in =inputremap= module is unchanged.  Claims are re-decided by =gowl_compositor_input_remap_reevaluate()= when rules change, and the release of every input replays what its press produced.  Full reference: [[file:input-remap.org][Per-Device Input Remapping]].
 
+** Macros and the fault guard
+:PROPERTIES:
+:CUSTOM_ID: macros-arch
+:END:
+Macros are crispy C loaded into the compositor, so containment is part of the design rather than a feature of it.  =src/util/gowl-fault-guard.c= is the one guard every in-process plugin call goes through --- bar plugins (=gowl_bar_guard_call()= is now a wrapper) and macros alike: a thread-local =sigsetjmp= landing point, handlers for SIGSEGV/BUS/FPE/ILL/ABRT that chain to the previous handler when no call is armed (Emacs's, under cmacs), an alternate signal stack *per thread* so a stack overflow on a worker is catchable, and a per-thread POSIX watchdog timer on =SIGRTMIN+9= that unwinds a call that outlives its budget.  =gowl_fault_guard_extend()= lets the running call re-arm its own budget; =gowl_fault_guard_hold()= / =_release()= defer the watchdog across a region that holds a lock another thread takes.
+
+The macro API (=src/macro/=) never touches compositor state from a worker: a threaded macro's steps and helpers are posted to the compositor thread over an eventfd and run there, and the compositor never waits for a worker.  Targeted keys (=src/core/gowl-client-input.c=) lend the seat's keyboard focus to one surface for one key and give it back, refusing while locked or while anything holds the keyboard.  Full reference: [[file:macros.org][Macros]].
+
 ** Input Recording (teach-a-task)
 :PROPERTIES:
 :CUSTOM_ID: input-recording-arch

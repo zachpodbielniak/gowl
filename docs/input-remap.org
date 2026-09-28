@@ -20,18 +20,18 @@ With the module not loaded, the compositor's input path is exactly what it was b
 :PROPERTIES:
 :CUSTOM_ID: input-remap-one-to-one
 :END:
-Every remap is *one physical press to at most one output*, and the release mirrors the press. There are no macros, sequences, delays, timers, generated repeats, or input sent to an unfocused window. This is enforced by the API, not merely documented:
+Every remap is *one physical press to at most one output*, and the release mirrors the press. There are no sequences, delays, timers, generated repeats, or input sent to an unfocused window. This is enforced by the API, not merely documented:
 
 - A rule maps each input to exactly *one* target. The mapping functions /replace/; there is no append.
 - No target kind can hold a list, a delay or a repeat.
-- The YAML loader refuses a list as a target, two target kinds in one entry, and any =sequence=, =macro=, =delay=, =repeat=, =keys=, =then=, =chain=, =times=, =tap=, =hold=, =timeout=, =interval= or =script= key, with =GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE=.
+- The YAML loader refuses a list as a target, two target kinds in one entry, and any =sequence=, =delay=, =repeat=, =keys=, =then=, =chain=, =times=, =tap=, =hold=, =timeout=, =interval= or =script= key, with =GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE=. (=macro= is refused as a /rule/ key; inside a map entry it names the macro target below.)
 - A key target is modifiers plus *one* key (=Super+9=); =a+b= is refused.
 - A command target is *one* line; a newline is refused.
 - Remapped keys never arm the compositor's key repeat.
 
 The motivation is game input rules such as World of Warcraft's "one keypress, one action": a foot pedal that clicks once per press is a hardware remap, while a pedal that plays a sequence is automation.
 
-*The one exception is the callback target* (C config, and Elisp in cmacs). It runs arbitrary code by design; the guarantee covers the declarative targets and the code is trusted to keep to it itself.
+*Two targets are outside the guarantee, on purpose and visibly*: the callback target (C config, and Elisp in cmacs) and the macro target (={macro: NAME}=, which runs a [[file:macros.org][gowl macro]] on the press). Both run arbitrary code by design; the guarantee covers every other target, and the code is trusted to keep to it itself. A pedal that plays a sequence through a macro is automation as far as a game is concerned --- keep macro targets for things around the game, not in it.
 
 ** Quick start: the WoW foot pedal
 :PROPERTIES:
@@ -147,12 +147,14 @@ A wheel notch counts in whole notches (120 value120 units), so a high-resolution
 | ={button: middle}=                      | One pointer button at the current cursor position        |
 | ={action: tag-view, arg: "256"}=        | One compositor action, on press                          |
 | ={command: "scratchpad-toggle"}=        | One command line through module IPC, on press            |
+| ={macro: sort-windows, args: "x"}=      | Run a gowl macro, on press (outside one-to-one)          |
 | /callback/ (C, and Elisp in cmacs)      | Arbitrary code, on press and on release                  |
 
 - *Keys.* A keysym (=Page_Up=, =9=) is resolved against the live keymap at the moment of the press; if the symbol sits on a shifted level, Shift is added. A =KEY_*= name is the keycode itself. Modifiers are held in the shared xkb state for the key and released with it, and a modifier that is already physically held is not pressed twice.
 - *Buttons.* A press and release at wherever the cursor is, through the same decision a real click takes: click-to-focus, the bar, mousebinds and module mouse handlers all see it.
 - *Actions.* Any =GOWL_ACTION_*= by its nick (the same names as keybinds, =_= or =-=), through the normal keybind dispatch. The release does nothing.
 - *Commands.* One line for =gowl_compositor_run_command()= --- a module IPC word such as =scratchpad-toggle=. In cmacs, =custom= actions are how Elisp is reached (see the cmacs manual).
+- *Macros.* =macro-run --trigger=remap --detail='RULE INPUT' NAME ARGS= through the macro module, on the press; the release is swallowed, and nothing runs while the session is locked. =args= is one shell-parsed command line. The macro module must be loaded; without it the press is logged and dropped. In C: =gowl_input_remap_rule_map_macro(rule, input, name, args, &error)=. See [[file:macros.org::#macros-remap][macros.org]].
 
 =focus-client= is an action added alongside this feature, and useful on its own: =focus-client app-id:GLOB= or =focus-client title:GLOB= (a bare glob is an app-id) views the first matching window's tags, selects its monitor and focuses it. It is what lets pedal B say "take me to the game" without knowing which tag the game is on.
 

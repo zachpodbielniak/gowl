@@ -305,12 +305,21 @@ Sharing one state with the physical keyboard is deliberate: a modifier
 held on the local keyboard applies to a click arriving from the remote
 one, and the reverse.
 
-*Injected keys do not run compositor keybinds.* They go to the focused
-surface, not through the keybind table, so =Super+1= from the remote
-machine reaches the application rather than switching tags. That is the
-conservative default -- a remote machine driving the local window manager
-is a bigger step than driving the local applications -- and it is a
-deliberate choice rather than an oversight.
+*Injected keys run compositor keybinds.* They go through the same
+=compositor_handle_key()= decision a physical key does -- configured
+binds, module binds, the embedder intercept, then the focused client --
+so =Super+1= from the remote machine switches tags here, as it would on a
+keyboard plugged into this machine.  (Earlier versions sent injected keys
+straight to the focused surface, which left a software KVM able to type
+but unable to use a single compositor binding;
+=tests/test-inject-routing.sh= keeps them on the shared path.)  The only
+differences for injected input are that it is never recorded, never
+diverted back out by an active capture, and never repeated by gowl.
+
+The same decision also serves per-device remapping
+([[file:input-remap.org][input-remap.org]]), with one difference: a
+remapped key comes from hardware, so it IS recorded and IS carried by an
+active capture.
 
 ** Zones and barriers
 :PROPERTIES:

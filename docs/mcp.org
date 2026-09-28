@@ -222,6 +222,31 @@ Tags use bitmasks: tag 1 = =1=, tag 2 = =2=, tag 3 = =4=, tags 1+2 = =3=, etc.
 Key names use XKB names: =Return=, =space=, =a=, =Escape=, =Tab=, =BackSpace=, =F1=, etc.
 Button names: =left=, =right=, =middle=, or numeric codes.
 
+*** Per-Device Input Remapping
+:PROPERTIES:
+:CUSTOM_ID: input-remap-tools-mcp
+:END:
+Thin wrappers over the opt-in =inputremap= module's IPC words ([[file:input-remap.org][input-remap.org]]).  Each reports plainly when the module is not loaded.
+
+| Tool                          | Parameters                     | Description                                              |
+|-------------------------------+--------------------------------+----------------------------------------------------------|
+| =input_remap_list_devices=    | --                             | Every keyboard and pointer: id, type, name, vendor-product, sysname, claimed |
+| =input_remap_list=            | --                             | The rules in force, their source, YAML and matched devices |
+| =input_remap_status=          | --                             | Enabled, rule and claim counts, log level, identify state |
+| =input_remap_add=             | =rule= (object) or =yaml= (one line) | Add or replace a rule; macros and sequences are refused |
+| =input_remap_remove=          | =name=                         | Remove a rule; released devices rejoin the keyboard       |
+| =input_remap_identify=        | =seconds= (optional)           | Listen for the next press on any device, consuming nothing |
+| =input_remap_identify_result= | --                             | The device and input caught, =pending= or =none=          |
+
+A =rule= object is the same schema as a YAML rule --- JSON is YAML flow syntax, so it goes to the same parser:
+
+#+begin_src json
+{"rule": {"name": "wow-pedals",
+          "match": {"id": "1a86:e026", "type": "keyboard"},
+          "map": {"KEY_A": {"button": "middle"},
+                  "KEY_B": {"action": "focus-client", "arg": "title:World of Warcraft*"}}}}
+#+end_src
+
 *** Input Recording
 :PROPERTIES:
 :CUSTOM_ID: input-recording-tools-mcp

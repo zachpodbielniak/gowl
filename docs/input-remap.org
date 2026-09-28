@@ -1,0 +1,361 @@
+* Per-Device Input Remapping
+:PROPERTIES:
+:CUSTOM_ID: input-remap
+:END:
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: input-remap-overview
+:END:
+Some input devices should have their keys or buttons mean something else --- /on that device only/. A USB foot pedal that presents itself as a HID keyboard sends =KEY_A= and =KEY_B=; remapping those globally would break the real keyboard. gowl remaps per *physical device*: a rule names the devices it applies to, and every other keyboard or mouse that sends the same codes is untouched.
+
+The feature has three parts:
+
+- *=GowlInputRemapper=* --- an interface the core asks two questions: /does this device need to be claimed?/ and /what does this input on a claimed device turn into?/
+- *The core* --- keeps claimed keyboards out of the shared keyboard group, hears them on their own listeners, and delivers what the remapper decides through the compositor's normal key and button decisions.
+- *The =inputremap= module* --- the opt-in implementation: rules from the YAML =input-remap:= section, the C config, and runtime rules over IPC, MCP, D-Bus and Elisp.
+
+With the module not loaded, the compositor's input path is exactly what it was before the feature existed. Every hook is a =NULL= check that returns before touching any state, and =tests/test-input-remap-fastpath.sh= holds that in place.
+
+*** The one-to-one rule
+:PROPERTIES:
+:CUSTOM_ID: input-remap-one-to-one
+:END:
+Every remap is *one physical press to at most one output*, and the release mirrors the press. There are no macros, sequences, delays, timers, generated repeats, or input sent to an unfocused window. This is enforced by the API, not merely documented:
+
+- A rule maps each input to exactly *one* target. The mapping functions /replace/; there is no append.
+- No target kind can hold a list, a delay or a repeat.
+- The YAML loader refuses a list as a target, two target kinds in one entry, and any =sequence=, =macro=, =delay=, =repeat=, =keys=, =then=, =chain=, =times=, =tap=, =hold=, =timeout=, =interval= or =script= key, with =GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE=.
+- A key target is modifiers plus *one* key (=Super+9=); =a+b= is refused.
+- A command target is *one* line; a newline is refused.
+- Remapped keys never arm the compositor's key repeat.
+
+The motivation is game input rules such as World of Warcraft's "one keypress, one action": a foot pedal that clicks once per press is a hardware remap, while a pedal that plays a sequence is automation.
+
+*The one exception is the callback target* (C config, and Elisp in cmacs). It runs arbitrary code by design; the guarantee covers the declarative targets and the code is trusted to keep to it itself.
+
+** Quick start: the WoW foot pedal
+:PROPERTIES:
+:CUSTOM_ID: input-remap-quick-start
+:END:
+The case this was built for: a 2-pedal USB switch.
+
+- *Pedal A* → a middle-mouse click at the cursor. A fishing addon binds middle click to "cast, or loot the bobber", so one press is one action.
+- *Pedal B* → jump to WoW: view the tag it lives on and focus it. This is a compositor action; nothing is sent to the game.
+
+*1. Enable the module* (it is opt-in) and add the rule, in =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  inputremap:
+    enabled: true
+    log: claim
+
+input-remap:
+  - name: wow-pedals
+    match:
+      id: "1a86:e026"      # from inputremap-devices; see step 2
+      type: keyboard
+    unmatched: drop
+    log: true
+    map:
+      KEY_A: { button: middle }
+      KEY_B: { action: focus-client, arg: "title:World of Warcraft*" }
+#+end_src
+
+*2. Find the pedal's identity.* Plug it in and ask:
+
+#+begin_src bash
+gowl-msg inputremap-devices
+#+end_src
+
+#+begin_src bash
+gowl-msg inputremap-identify 10
+#+end_src
+
+Press a pedal within ten seconds, then:
+
+#+begin_src bash
+gowl-msg inputremap-identify-result
+#+end_src
+
+The result names the device (with its =vendor-product=) and the input it sent (=KEY_A=), which is exactly what the rule's =match:= and =map:= need. Identify mode only observes: the press still goes wherever it was going.
+
+*3. Reload* (=Super+Shift+r=, or =gowl-msg reload=). The pedal is claimed at once; the log shows it:
+
+#+begin_example
+2026-09-28T12:00:00-04:00 inputremap: claimed device 12 keyboard 1a86:e026 event19 "PCsensor FootSwitch"
+#+end_example
+
+The same example ships as =data/example-input-remap.yaml=, and as C config in =data/example-input-remap.c=, where pedal B is a callback that launches WoW when it is not running. Both are installed to =$(DATADIR)/gowl/=.
+
+** Rules
+:PROPERTIES:
+:CUSTOM_ID: input-remap-rules
+:END:
+A rule has a name, a =match:= block saying which devices it applies to, and a =map:= of inputs to targets.
+
+#+begin_src yaml
+- name: NAME              # required; also the id used to remove it
+  match:                  # required; at least one of name/id/vendor/product/sysname
+    name: "GLOB"          # libinput device name, * and ? only
+    id: "VVVV:PPPP"       # vendor:product in hex, as lsusb prints it
+    vendor: 0x1a86        # or separately (always hex)
+    product: e026
+    sysname: "event*"     # kernel sysname
+    type: keyboard        # keyboard | pointer | any (default any)
+  unmatched: pass         # pass (default) | drop: inputs the map does not name
+  log: false              # log every remap this rule makes
+  map:
+    INPUT: TARGET
+#+end_src
+
+*** Matching
+:PROPERTIES:
+:CUSTOM_ID: input-remap-matching
+:END:
+Every criterion the rule sets must hold; unset criteria are ignored. A rule with /no/ criterion matches nothing --- a rule that matched everything would claim the keyboard being typed on --- and is refused by the loader. =type= narrows but is not a criterion on its own.
+
+Vendor and product come from libinput (=libinput_device_get_id_vendor/product=, through =wlr_libinput_get_device_handle()=). They are the most specific identity and the one to prefer. Many pedals are /composite/ devices that expose a keyboard and a pointer with the same ids; =type:= picks one.
+
+A rule may match several devices, and a device may be matched by several rules (see [[#input-remap-priority][Priority]]).
+
+*** Inputs
+:PROPERTIES:
+:CUSTOM_ID: input-remap-inputs
+:END:
+| Form                                        | Example                  |
+|---------------------------------------------+--------------------------|
+| Any evdev key or button name                | =KEY_A=, =KEY_F13=, =BTN_SIDE= |
+| Friendly button names                       | =left=, =middle=, =right=, =side=, =extra=, =forward=, =back=, =task= |
+| Wheel notches (pointers)                    | =WHEEL_UP=, =WHEEL_DOWN=, =WHEEL_LEFT=, =WHEEL_RIGHT= |
+| Raw evdev codes                             | =30=, =0x110=            |
+
+The evdev names come from the kernel headers at build time (=gowl-evdev-names.inc=, generated from =<linux/input-event-codes.h>=), so every =KEY_*= and =BTN_*= the kernel defines is accepted. Names are case-insensitive.
+
+A wheel notch counts in whole notches (120 value120 units), so a high-resolution wheel's quarter-notches add up to /one/ input, not four. Each notch is a press immediately followed by its release. Touchpad (continuous) scrolling is never remapped.
+
+*** Targets
+:PROPERTIES:
+:CUSTOM_ID: input-remap-targets
+:END:
+| Target                                  | What one press does                                      |
+|-----------------------------------------+----------------------------------------------------------|
+| =pass=                                  | Deliver the input unchanged                              |
+| =drop=                                  | Swallow it                                               |
+| ={key: "Super+9"}=                      | One key to the focused client, modifiers held for it     |
+| ={key: KEY_F13}=                        | One key by keycode (layout-independent)                  |
+| ={button: middle}=                      | One pointer button at the current cursor position        |
+| ={action: tag-view, arg: "256"}=        | One compositor action, on press                          |
+| ={command: "scratchpad-toggle"}=        | One command line through module IPC, on press            |
+| /callback/ (C, and Elisp in cmacs)      | Arbitrary code, on press and on release                  |
+
+- *Keys.* A keysym (=Page_Up=, =9=) is resolved against the live keymap at the moment of the press; if the symbol sits on a shifted level, Shift is added. A =KEY_*= name is the keycode itself. Modifiers are held in the shared xkb state for the key and released with it, and a modifier that is already physically held is not pressed twice.
+- *Buttons.* A press and release at wherever the cursor is, through the same decision a real click takes: click-to-focus, the bar, mousebinds and module mouse handlers all see it.
+- *Actions.* Any =GOWL_ACTION_*= by its nick (the same names as keybinds, =_= or =-=), through the normal keybind dispatch. The release does nothing.
+- *Commands.* One line for =gowl_compositor_run_command()= --- a module IPC word such as =scratchpad-toggle=. In cmacs, =custom= actions are how Elisp is reached (see the cmacs manual).
+
+=focus-client= is an action added alongside this feature, and useful on its own: =focus-client app-id:GLOB= or =focus-client title:GLOB= (a bare glob is an app-id) views the first matching window's tags, selects its monitor and focuses it. It is what lets pedal B say "take me to the game" without knowing which tag the game is on.
+
+*** Priority
+:PROPERTIES:
+:CUSTOM_ID: input-remap-priority
+:END:
+Rules come from two layers: the *config* layer (the =input-remap:= list, replaced wholesale on reload) and the *runtime* layer (=inputremap-add= and friends). A runtime rule shadows a config rule of the same name.
+
+For one input on one device, the rules are walked newest first --- runtime before config, later before earlier --- and the first rule that /matches the device and mentions the input/ decides it. When no matching rule mentions the input, the highest-priority rule that matches the device decides by its =unmatched:= setting. When no rule matches the device, it is not claimed at all.
+
+** How it works
+:PROPERTIES:
+:CUSTOM_ID: input-remap-internals
+:END:
+*** The interface
+:PROPERTIES:
+:CUSTOM_ID: input-remap-interface
+:END:
+#+begin_src C
+struct _GowlInputRemapperInterface {
+	GTypeInterface parent_iface;
+
+	gboolean             (*claims_device)  (GowlInputRemapper          *self,
+	                                        const GowlInputDeviceInfo  *info);
+	GowlInputRemapRule  *(*map_event)      (GowlInputRemapper          *self,
+	                                        const GowlInputDeviceInfo  *info,
+	                                        const GowlInputRemapEvent  *event,
+	                                        const GowlInputRemapTarget **out_target);
+	void                 (*device_changed) (GowlInputRemapper          *self,
+	                                        const GowlInputDeviceInfo  *info,
+	                                        gboolean                    claimed);
+};
+#+end_src
+
+=GowlInputDeviceInfo= is a plain value (id, type, name, sysname, vendor, product, claimed), so rules are matched and tested without wlroots. =map_event= returns the deciding rule (a reference) and its one target; =NULL= means pass. The module manager classifies implementations like every other interface; =gowl_module_manager_get_input_remapper()= returns the first *active* one.
+
+*** Claiming a keyboard
+:PROPERTIES:
+:CUSTOM_ID: input-remap-claim
+:END:
+Every keyboard normally joins one =wlr_keyboard_group=, which is what lets a modifier held on one keyboard apply to another --- and what makes it impossible to tell which device a key came from. So:
+
+1. On hotplug, =create_keyboard()= asks =gowl_input_remap_core_try_claim()= before adding the keyboard to the group. It returns =FALSE= at once when no remapper is active.
+2. A claimed keyboard keeps its own keymap and xkb state, stays *out* of the group, and is heard on its own =events.key= listener. Its keys never reach the shared state until the remapper has decided what they are.
+3. The decided output is fed into the group's xkb state and through =compositor_handle_key()= --- the same decision real keys take: configured keybinds, module keybinds, the embedder intercept, InputCapture, then the focused client.
+4. The seat keeps its keyboard capability when the only keyboard is a claimed pedal.
+
+A pointer is never detached: =wlr_cursor= already passes every button with its device, so a claimed pointer stays attached (motion is untouched) and only its buttons and wheel notches are offered to the remapper, from =on_cursor_button= and =on_cursor_axis=.
+
+*** Claim and release lifecycle
+:PROPERTIES:
+:CUSTOM_ID: input-remap-lifecycle
+:END:
+| Event                               | What happens                                                        |
+|-------------------------------------+---------------------------------------------------------------------|
+| Device plugged in                   | Asked once; claimed or joins the group                              |
+| Rule added / removed / replaced     | The module calls =gowl_compositor_input_remap_reevaluate()=         |
+| Module enabled / disabled           | Re-evaluated; disabling releases everything                         |
+| Config reloaded                     | Re-evaluated against the new config's rules                         |
+| Device unplugged                    | Anything it held is released; its record freed                      |
+| Compositor teardown                 | =gowl_input_remap_core_finish()= drops every record and listener    |
+
+Re-evaluation walks every connected device. A newly claimed keyboard leaves the group --- wlroots releases on the group any key it still held, so nothing is stuck --- and a released one rejoins.
+
+*The release mirrors the press.* What each press produced is recorded (with a reference to its rule, which keeps the target alive), and its release replays exactly that. A rule removed or replaced while a pedal is down cannot strand a key or a button: releasing a device flushes everything it holds.
+
+*** Ordering, recording and capture
+:PROPERTIES:
+:CUSTOM_ID: input-remap-ordering
+:END:
+Remapped output is *real* input, not synthetic: it came from hardware. So:
+
+- The input recorder records what the session received (the remapped key or click, not the pedal's raw code).
+- An active InputCapture (this machine as KVM server) carries remapped keys and buttons to the other machine, like any local input. Actions, commands and callbacks run locally.
+- Key repeat is the one difference: it is never armed for a remapped key (=remap_feeding= in =compositor_handle_key()=).
+
+*Super+Escape stays an escape hatch.* On a claimed keyboard, Escape pressed while that device holds Super bypasses every rule and is delivered as Super[+Shift]+Escape, so the InputCapture break and the recorder's Super+Shift+Escape force-stop always work.
+
+*While the session is locked*, actions, commands and callbacks do not run; keys and buttons go through the lock-aware pipelines, which only let lock-screen input through.
+
+** The inputremap module
+:PROPERTIES:
+:CUSTOM_ID: input-remap-module
+:END:
+*Interfaces:* =GowlInputRemapper=, =GowlIpcHandler=, =GowlStartupHandler=
+
+Opt-in: =modules: inputremap: {enabled: true}=. It is in no default list.
+
+*** Settings
+:PROPERTIES:
+:CUSTOM_ID: input-remap-settings
+:END:
+| Key                | Default  | Meaning                                                        |
+|--------------------+----------+----------------------------------------------------------------|
+| =log=              | =claim=  | =none=, =claim= (claim/release), =match= (+ every remap), =all= (+ pass-throughs) |
+| =log-file=         | stderr   | A path (=~/= allowed), or =stderr=; opened for appending       |
+| =identify-timeout= | =10=     | Seconds =inputremap-identify= listens, 1--300                  |
+
+A rule with =log: true= is logged at =match= whatever the level.
+
+*** IPC commands
+:PROPERTIES:
+:CUSTOM_ID: input-remap-ipc
+:END:
+Every surface --- the socket (=gowl-msg=), MCP, the cmacs D-Bus interface and Elisp --- reaches the module through these words. Replies are one line, =OK ...= or =ERROR ...=; structured replies are =OK= followed by JSON.
+
+| Command                          | Reply                                                          |
+|----------------------------------+----------------------------------------------------------------|
+| =inputremap-status=              | =OK enabled=1 rules=N claimed=M log=claim identifying=0=       |
+| =inputremap-devices=             | =OK [{id, type, name, vendor-product, sysname, claimed}, ...]= |
+| =inputremap-list=                | =OK [{name, source, mappings, yaml, devices: [ids]}, ...]=     |
+| =inputremap-add RULE=            | =OK added NAME= / =OK replaced NAME=; RULE is flow YAML or JSON |
+| =inputremap-remove NAME=         | =OK removed NAME=                                              |
+| =inputremap-clear=               | =OK cleared N= (runtime rules only)                            |
+| =inputremap-reload=              | =OK rules=N= (re-read the config's rules)                      |
+| =inputremap-enable= / =-disable= | Claim / release everything without unloading                   |
+| =inputremap-log [LEVEL]=         | Show or set the log level                                      |
+| =inputremap-identify [SECONDS]=  | =OK listening N=                                               |
+| =inputremap-identify-result=     | =OK {device, input, code}=, =OK pending= or =OK none=          |
+| =inputremap-identify-cancel=     | =OK cancelled=                                                 |
+
+#+begin_src bash
+gowl-msg 'inputremap-add {name: wow-pedals, match: {id: "1a86:e026", type: keyboard}, map: {KEY_A: {button: middle}, KEY_B: {action: focus-client, arg: "title:World of Warcraft*"}}}'
+#+end_src
+
+Removing a config rule at runtime lasts until the next reload.
+
+*** Events
+:PROPERTIES:
+:CUSTOM_ID: input-remap-events
+:END:
+Socket subscribers receive:
+
+#+begin_example
+EVENT inputremap claim 12 1a86:e026
+EVENT inputremap release 12 1a86:e026
+EVENT inputremap match wow-pedals 12 KEY_A
+EVENT inputremap identified {"device":{...},"input":"KEY_A","code":30}
+EVENT inputremap identify-timeout
+#+end_example
+
+** C config
+:PROPERTIES:
+:CUSTOM_ID: input-remap-c-config
+:END:
+The rule model is part of libgowl, so a C config (compiled at startup, before any module loads) builds rules directly:
+
+#+begin_src C
+GowlInputRemapRule *rule;
+GError             *error = NULL;
+
+rule = gowl_input_remap_rule_new("wow-pedals");
+gowl_input_remap_rule_set_match_ids(rule, 0x1a86, 0xe026);
+gowl_input_remap_rule_set_match_type(rule, GOWL_INPUT_REMAP_DEVICE_KEYBOARD);
+gowl_input_remap_rule_map_button(rule, KEY_A, BTN_MIDDLE, &error);
+gowl_input_remap_rule_map_action(rule, KEY_B, GOWL_ACTION_FOCUS_CLIENT,
+                                 "title:World of Warcraft*", &error);
+gowl_config_add_input_remap_rule(gowl_config, rule);
+gowl_input_remap_rule_unref(rule);
+#+end_src
+
+=gowl_input_remap_rule_map_callback()= maps an input to a C function, called on the compositor thread on press and on release:
+
+#+begin_src C
+static void
+on_pedal(
+	GowlInputRemapRule        *rule,
+	const GowlInputRemapEvent *event,
+	GowlCompositor            *compositor,
+	gpointer                   user_data
+){
+	if (event->pressed)
+		gowl_compositor_run_command(compositor, "scratchpad-toggle");
+}
+
+gowl_input_remap_rule_map_callback(rule, KEY_C, on_pedal, NULL, NULL);
+#+end_src
+
+A compiled config that maps a callback is kept loaded for the life of the session: the compositor holds a pointer into it, and closing it on reload would leave a pedal press jumping into unmapped memory. The config compiler notices (=gowl_input_remap_callback_generation()=) and makes that one config resident.
+
+** MCP
+:PROPERTIES:
+:CUSTOM_ID: input-remap-mcp
+:END:
+The MCP module exposes =input_remap_list_devices=, =input_remap_list=, =input_remap_status=, =input_remap_add= (a =rule= object or a =yaml= string), =input_remap_remove=, =input_remap_identify= and =input_remap_identify_result=. Each is a thin wrapper over the IPC words above, so the same validator refuses the same macros everywhere. See [[file:mcp.org][mcp.org]].
+
+** Tests
+:PROPERTIES:
+:CUSTOM_ID: input-remap-tests
+:END:
+| Test                                 | What it holds                                                  |
+|--------------------------------------+----------------------------------------------------------------|
+| =test-input-remap-rule=              | Names, parsing, NOT_ONE_TO_ONE refusals, matching, the mapping table, round trip, the config section, the shipped example |
+| =test-input-remap-engine=            | Claiming, priority, shadowing, unmatched, pass-through without rules |
+| =test-input-remap-claim=             | A headless compositor with the real module and software devices: unchanged without the module, claim/release on hotplug and on rule change, every output, release mirrors press, the escape hatch, unplug while held, pointer buttons and wheel notches |
+| =test-input-remap-fastpath.sh=       | The hooks stay inert without a remapper, and outputs never bypass the pipeline |
+
+** Limits
+:PROPERTIES:
+:CUSTOM_ID: input-remap-limits
+:END:
+- A remapped key's modifiers are pushed through the shared xkb state and =wl_keyboard.modifiers=, not a group =modifiers= signal; an input method grab sees the key but not a separate modifier event, as with injected keys.
+- Pointer motion is never remapped, and neither is touchpad scrolling.
+- A device that is not a libinput device (headless, virtual) has no vendor, product or sysname; match it by name.
+- Clients repeat a held key themselves (=wl_keyboard.repeat_info=); a remapped key held down repeats in the application exactly as the physical key would. gowl generates none.

@@ -1,0 +1,64 @@
+# gowl - per-device input remapping, example
+#
+# A 2-pedal USB foot switch that shows up as a HID keyboard, used with
+# World of Warcraft:
+#
+#   pedal A -> a middle-mouse click where the cursor is.  A fishing addon
+#              binds middle click to "cast, or loot the bobber", so one
+#              press is one action -- the 1:1 remap the game allows.
+#   pedal B -> jump to WoW: view the tag it lives on and focus it.  This
+#              is a compositor action; nothing at all is sent to the game.
+#
+# The inputremap module is OPT-IN: nothing here does anything until it is
+# enabled under `modules:'.  Merge these two sections into
+# ~/.config/gowl/config.yaml.
+#
+# Finding the pedal's identity:
+#   gowl-msg inputremap-devices          # every keyboard and pointer
+#   gowl-msg inputremap-identify 10      # then press a pedal...
+#   gowl-msg inputremap-identify-result  # ...device + the KEY_* it sent
+#
+# See docs/input-remap.org for the whole schema.
+
+modules:
+  inputremap:
+    enabled: true
+    # none | claim (the default: log claim/release) | match | all
+    log: claim
+    # a path (~/ allowed) or stderr
+    log-file: ~/.local/state/gowl/inputremap.log
+    identify-timeout: 10
+
+input-remap:
+  - name: wow-pedals
+    # vendor:product from `inputremap-devices' (hex, as lsusb prints
+    # it).  A composite pedal also exposes a pointer with the same ids;
+    # `type: keyboard' keeps this rule off it.
+    match:
+      id: "1a86:e026"
+      type: keyboard
+    # the switch sends nothing else, but be explicit: any other key it
+    # might send is swallowed rather than typed into the game
+    unmatched: drop
+    # log every remapped press, whatever the module's log level
+    log: true
+    map:
+      # pedal A: one middle click at the cursor
+      KEY_A: { button: middle }
+      # pedal B: view WoW's tag and focus it.  Matches the window title;
+      # `app-id:GLOB' works too (XWayland games report WM_CLASS there).
+      KEY_B: { action: focus-client, arg: "title:World of Warcraft*" }
+
+  # Other shapes a mapping can take, for reference (disabled: this rule
+  # matches a device name that does not exist):
+  - name: reference-shapes
+    match: { name: "No Such Device (example)" }
+    map:
+      KEY_C: { key: "Super+9" }              # one key, modifiers held for it
+      KEY_D: { key: KEY_F13 }                # layout-independent keycode
+      KEY_E: { action: tag-view, arg: "256" } # tag 9 (a bitmask)
+      KEY_F: { command: "scratchpad-toggle" } # one module IPC command line
+      KEY_G: drop                            # swallow
+      KEY_H: pass                            # deliver unchanged
+      BTN_SIDE: { button: middle }           # mouse buttons remap too
+      WHEEL_UP: { action: focus-stack, arg: "-1" } # per whole wheel notch

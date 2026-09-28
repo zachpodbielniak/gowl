@@ -349,6 +349,29 @@ struct _GowlCursorProviderInterface {
 };
 #+end_src
 
+*** GowlInputRemapper
+:PROPERTIES:
+:CUSTOM_ID: gowlinputremapper
+:END:
+Per-device input remapping.  The core asks whether a device should be claimed, and what an input on a claimed device turns into (one target, or pass).  Only the first *active* implementation is consulted.  Called on the compositor thread mid-input: answer from memory.  Implemented by the =inputremap= module; see [[file:input-remap.org][input-remap.org]].
+
+#+begin_src C
+struct _GowlInputRemapperInterface {
+    GTypeInterface parent_iface;
+    gboolean            (*claims_device)  (GowlInputRemapper *self,
+                                           const GowlInputDeviceInfo *info);
+    GowlInputRemapRule *(*map_event)      (GowlInputRemapper *self,
+                                           const GowlInputDeviceInfo *info,
+                                           const GowlInputRemapEvent *event,
+                                           const GowlInputRemapTarget **out_target);
+    void                (*device_changed) (GowlInputRemapper *self,
+                                           const GowlInputDeviceInfo *info,
+                                           gboolean claimed);
+};
+#+end_src
+
+After changing its rules at runtime, a remapper calls =gowl_compositor_input_remap_reevaluate()=, which moves keyboards out of and back into the keyboard group.
+
 ** Creating a Module: Step by Step
 :PROPERTIES:
 :CUSTOM_ID: creating-a-module-step-by-step
@@ -679,6 +702,23 @@ another.
 | =windowrules=    | Float/tag/monitor rules and the float-nudging actions |
 | =screenlock=     | In-process lock screen with PAM (see also =gowl-lock=) |
 | =mcp=            | MCP server for AI control (needs an MCP=1 build)      |
+| =inputremap=     | Per-device key/button/wheel remapping (opt-in)        |
+
+*** The inputremap module
+:PROPERTIES:
+:CUSTOM_ID: inputremap-module
+:END:
+Remaps keys, buttons and wheel notches on one physical device --- a foot pedal, a macro pad, one particular mouse --- without affecting any other device that sends the same codes.  Opt-in: it loads only with =modules: inputremap: {enabled: true}=, and with it absent the compositor's input path is unchanged.
+
+*Interfaces:* =GowlInputRemapper=, =GowlIpcHandler=, =GowlStartupHandler=
+
+*Rules* come from the top-level =input-remap:= section (and =gowl_config_add_input_remap_rule()= in C) plus runtime rules added over IPC (=inputremap-add=), MCP (=input_remap_add=) or, under cmacs, Elisp.  Each input maps to exactly one target and the release mirrors the press; the loader refuses sequences, macros, delays and repeats.
+
+*Settings:* =log= (=none=, =claim=, =match=, =all=), =log-file=, =identify-timeout=.
+
+*Finding a device:* =gowl-msg inputremap-devices= lists every keyboard and pointer with its vendor:product; =gowl-msg inputremap-identify= reports the next device pressed.
+
+*Files:* =gowl-module-inputremap.c= (the GObject half: IPC, logging, identify mode, config sync) and =gowl-inputremap-engine.c= (the pure rule set, tested directly).  The core half is =src/core/gowl-input-remap-core.c=.  Full reference: [[file:input-remap.org][input-remap.org]].
 
 *** The clipboard module
 

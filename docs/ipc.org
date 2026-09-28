@@ -92,6 +92,14 @@ A subscriber receives one line per event, =EVENT <name> <args>=:
 
 Events are pushed from the compositor's own code paths, so a change made from a keybind, from Elisp, from MCP or from this socket is announced the same way.
 
+* Per-device input remapping
+
+With the opt-in =inputremap= module loaded, the =inputremap-= words manage per-device remap rules: =inputremap-devices=, =-list=, =-add RULE=, =-remove NAME=, =-clear=, =-reload=, =-enable=, =-disable=, =-log=, =-identify [SECONDS]=, =-identify-result=, =-identify-cancel=, =-status=.  Events: =EVENT inputremap claim|release|match|identified ...=.  See [[file:input-remap.org::#input-remap-ipc][input-remap.org]].
+
+#+begin_src bash
+gowl-msg inputremap-devices
+#+end_src
+
 * From a module
 
 A module implementing =GowlIpcHandler= answers its own command names; =gowl_compositor_run_command()= is the shared entry point for the =ipc-command= keybind action, cmacs's =gowl-run-command=, MCP and this socket, so a command means the same thing from each.  Core commands are answered first (=src/ipc/gowl-ipc-core.c=), then the modules.  =gowl_ipc_push_event()= adds an event.

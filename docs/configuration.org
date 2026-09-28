@@ -2971,6 +2971,7 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =focus_dir=         | ="left"=, ="right"=, ="up"=, ="down"= | Focus the nearest window that way, crossing to the next monitor when there is none |
 | =focus_urgent=      | --                               | Focus the window marked urgent, viewing its tags if need be |
 | =focus_last=        | --                               | Focus the window that had focus before this one |
+| =focus_client=      | ="app-id:GLOB"=, ="title:GLOB"= or a bare app-id glob | Jump to the first matching window: view its tags, select its monitor, focus it |
 | =custom=            | passed to the embedder           | Embedder-defined action (see below)         |
 
 **** Key modes
@@ -3241,6 +3242,32 @@ input:
 | =rotation=         | degrees                                             |
 
 A setting a device cannot do is skipped quietly: a config shared between a laptop and a desktop names touchpad settings the desktop's mouse has no use for. Device names come from =libinput list-devices=.
+
+*** Per-device input remapping
+:PROPERTIES:
+:CUSTOM_ID: input-remap-config
+:END:
+The =input-remap= section remaps keys, buttons and wheel notches on *one physical device* --- a foot pedal, a macro pad, one mouse --- without touching any other device that sends the same codes. It takes effect only with the opt-in =inputremap= module enabled; without it the section is inert.
+
+#+begin_src yaml
+modules:
+  inputremap:
+    enabled: true
+    log: claim                  # none | claim | match | all
+    log-file: ~/.local/state/gowl/inputremap.log
+
+input-remap:
+  - name: wow-pedals
+    match: { id: "1a86:e026", type: keyboard }
+    unmatched: drop
+    map:
+      KEY_A: { button: middle }
+      KEY_B: { action: focus-client, arg: "title:World of Warcraft*" }
+#+end_src
+
+Each input maps to exactly ONE target (=pass=, =drop=, =key=, =button=, =action= or =command=), and the release mirrors the press. A list, two targets for one input, or a =sequence=, =macro=, =delay= or =repeat= key is refused and counted as a config problem; the other rules still load. The full schema, the device-identification workflow and the IPC commands are in [[file:input-remap.org][Per-Device Input Remapping]]; =data/example-input-remap.yaml= is a complete example.
+
+In a C config, the same rule is =gowl_input_remap_rule_new()= plus =gowl_config_add_input_remap_rule()= (see [[file:input-remap.org::#input-remap-c-config][C config]]), and =gowl_input_remap_rule_map_callback()= maps an input to a C function.
 
 *** Monitor Configuration
 :PROPERTIES:
@@ -3807,6 +3834,19 @@ gowl_config_add_keybind_full(gowl_config,
 #+end_src
 
 =gowl_config_add_keybind()= is a wrapper that passes a =NULL= description, so existing C configs need no change.
+
+**** Adding input-remap rules
+
+#+begin_src C
+GowlInputRemapRule *pedal = gowl_input_remap_rule_new("pedals");
+
+gowl_input_remap_rule_set_match_ids(pedal, 0x1a86, 0xe026);
+gowl_input_remap_rule_map_button(pedal, KEY_A, BTN_MIDDLE, NULL);
+gowl_config_add_input_remap_rule(gowl_config, pedal);
+gowl_input_remap_rule_unref(pedal);
+#+end_src
+
+A rule with the same name replaces the earlier one.  See [[file:input-remap.org::#input-remap-c-config][input-remap.org]] for callbacks.
 
 **** Adding Rules
 :PROPERTIES:

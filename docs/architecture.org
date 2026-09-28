@@ -73,6 +73,9 @@ Small value types registered with =g_boxed_type_register_static()=:
 | =GowlOutputMode= | Monitor mode: width, height, refresh rate.             |
 | =GowlInputZone=  | InputCapture zone: width, height, x, y, output name.   |
 | =GowlInputBarrier= | InputCapture pointer barrier: id + (x1,y1,x2,y2).    |
+| =GowlInputRemapRule= | Per-device remap rule: device match + one target per input (refcounted). |
+| =GowlInputDeviceInfo= | A connected device's remap identity: name, vendor, product, sysname. |
+| =GowlInputRemapEvent= | One physical input on a claimed device.              |
 
 *** Enumerations
 :PROPERTIES:
@@ -215,6 +218,7 @@ Gowl defines 18 GObject interfaces. A module implements one or more of these to 
 | =GowlSwallowHandler=      | =should_swallow(parent, child)=, =swallow(parent, child)=, =unswallow(parent)=                      | First handler returning TRUE claims the swallow.      |
 | =GowlStickyHandler=       | =is_sticky(client)=, =set_sticky(client, sticky)=                                                   | First handler returning TRUE claims the operation.    |
 | =GowlCursorProvider=      | =get_cursor_image(mode)=, =set_cursor(image)=                                                       | First provider returning non-NULL claims the cursor.  |
+| =GowlInputRemapper=       | =claims_device(info)=, =map_event(info, event)=, =device_changed(info, claimed)=                    | First ACTIVE remapper only; none active = input path unchanged. See [[#input-remap-arch][Per-device input remapping]]. |
 
 *** Dispatch Semantics
 :PROPERTIES:
@@ -669,6 +673,14 @@ The split keeps gowl core free of D-Bus and libeis:
   =org.freedesktop.impl.portal.desktop.gowl=. It is built only when
   =libeis-1.0= is present. Full reference: [[file:input-capture.org][Input
   Capture & Injection]].
+
+** Per-device input remapping
+:PROPERTIES:
+:CUSTOM_ID: input-remap-arch
+:END:
+All keyboards normally join one =wlr_keyboard_group=, so no key knows which physical device it came from.  A device a =GowlInputRemapper= claims is kept OUT of the group (=src/core/gowl-input-remap-core.c=) and heard on its own =events.key=; pointers stay on =wlr_cursor= and have only their buttons and wheel notches offered, since =wlr_cursor= already passes the device.  What the remapper decides re-enters =compositor_handle_key()= / =compositor_handle_button()= as real, non-synthetic input -- keybinds, module binds, the embedder intercept, InputCapture and the recorder all see it -- except that key repeat is never armed for it.
+
+The hooks in =gowl-compositor.c= are four one-line calls (=create_keyboard=, =create_pointer=, =on_cursor_button=, =on_cursor_axis=) plus the seat-capability check; each returns at once when no remapper is active, so a session without the opt-in =inputremap= module is unchanged.  Claims are re-decided by =gowl_compositor_input_remap_reevaluate()= when rules change, and the release of every input replays what its press produced.  Full reference: [[file:input-remap.org][Per-Device Input Remapping]].
 
 ** Input Recording (teach-a-task)
 :PROPERTIES:

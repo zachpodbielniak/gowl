@@ -51,6 +51,7 @@ gowl_mcp_register_all_tools(McpServer *server, GowlModuleMcp *module)
 	gowl_mcp_register_input_tools(server, module);
 	gowl_mcp_register_record_tools(server, module);
 	gowl_mcp_register_screenshot_tools(server, module);
+	gowl_mcp_register_inputremap_tools(server, module);
 
 	/* TODO: enable as tool files are implemented
 	gowl_mcp_register_clipboard_tools(server, module);

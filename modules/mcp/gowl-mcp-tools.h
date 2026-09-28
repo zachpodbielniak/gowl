@@ -58,6 +58,9 @@ void gowl_mcp_register_screenshot_tools(McpServer *server, GowlModuleMcp *module
 void gowl_mcp_register_clipboard_tools(McpServer *server, GowlModuleMcp *module);
 void gowl_mcp_register_process_tools (McpServer *server, GowlModuleMcp *module);
 void gowl_mcp_register_compound_tools(McpServer *server, GowlModuleMcp *module);
+/* Per-device input remapping: thin wrappers over the opt-in inputremap
+ * module's IPC words.  See modules/mcp/gowl-mcp-tools-inputremap.c. */
+void gowl_mcp_register_inputremap_tools(McpServer *server, GowlModuleMcp *module);
 
 /* Resource registration */
 void gowl_mcp_register_resources     (McpServer *server, GowlModuleMcp *module);

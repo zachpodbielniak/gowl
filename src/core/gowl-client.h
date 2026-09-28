@@ -119,10 +119,20 @@ gboolean       gowl_client_get_sticky         (GowlClient  *self);
  *
  * Emits #GowlClient::state-changed on a change.  The compositor
  * re-arranges its monitor; the `toggle-sticky' action and the `sticky'
- * rule property call this.
+ * rule property call this.  Only a floating window is pinned, so
+ * pinning a tiled one floats it in place; tiling it again unpins it.
  */
 void           gowl_client_set_sticky         (GowlClient  *self,
                                                gboolean     sticky);
+
+/**
+ * gowl_client_is_pinned:
+ * @self: a #GowlClient
+ *
+ * Returns: %TRUE if the window shows on every tag of its monitor:
+ *   sticky, floating, and not an overlay
+ */
+gboolean       gowl_client_is_pinned          (GowlClient  *self);
 
 /* String accessors */
 const gchar   *gowl_client_get_title          (GowlClient  *self);

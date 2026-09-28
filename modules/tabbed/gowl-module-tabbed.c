@@ -107,7 +107,8 @@ tiled_on(GowlClient *c, GowlMonitor *m)
 		return FALSE;
 	if (c->isoverlay)
 		return c->overlay_visible;
-	return c->issticky || (c->tags & m->tagset[m->seltags]) != 0;
+	return GOWL_CLIENT_PINNED(c)
+	    || (c->tags & m->tagset[m->seltags]) != 0;
 }
 
 static void

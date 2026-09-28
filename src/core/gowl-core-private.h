@@ -148,6 +148,20 @@
  * Convenience macro that sets the notify callback on @L and adds it
  * to the signal @E in a single expression.  Ported from dwl.
  */
+/*
+ * GOWL_CLIENT_PINNED:
+ * @C: a #GowlClient
+ *
+ * Whether @C shows on every tag of its monitor: sticky AND floating and
+ * not an overlay.  A sticky tile is on its own tags only -- otherwise it
+ * is a tile in every tag's layout (see gowl_client_set_sticky()).  Every
+ * visibility test uses this, not ->issticky.  A macro, not the public
+ * gowl_client_is_pinned(), because it runs on each client of each arrange
+ * and layout tests hand it plain structs that are not type-checkable.
+ */
+#define GOWL_CLIENT_PINNED(C) \
+	((C)->issticky && (C)->isfloating && !(C)->isoverlay)
+
 #define LISTEN(E, L, H)  wl_signal_add((E), ((L)->notify = (H), (L)))
 
 /**
@@ -842,7 +856,8 @@ struct _GowlClient {
 	gboolean isfloating;
 	gboolean isurgent;
 	gboolean isfullscreen;
-	/* Pinned: shown on every tag of its monitor, whatever is viewed.
+	/* Pinned: shown on every tag of its monitor, whatever is viewed --
+	 * but only while floating; test it with GOWL_CLIENT_PINNED().
 	 * Its own tags are kept, so unpinning puts it back where it was. */
 	gboolean issticky;
 

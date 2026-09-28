@@ -2962,7 +2962,7 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =switch_layout=     | ="next"=, ="prev"= or an index   | Switch the keyboard layout (see xkb-layout) |
 | =move_window=       | --                               | Drag the window under the pointer (a mouse bind) |
 | =resize_window=     | --                               | Resize the window under the pointer from its nearest corner |
-| =toggle_sticky=     | --                               | Pin the focused window to every tag of its monitor, or unpin it |
+| =toggle_sticky=     | --                               | Pin the focused window to every tag of its monitor, or unpin it. Only a floating window is pinned: pinning a tile floats it in place, and tiling it again unpins it |
 | =toggle_hdr=        | --, ="on"=, ="off"=, or an output name | Switch an output between HDR and SDR (the focused one by default) |
 | =cycle_backdrop=    | --, ="next"=, ="prev"=, or a style name | Cycle what shows through translucent windows: =glass=, =water=, =blur=, =none= |
 | =toggle_below=      | --, ="on"=, ="off"=              | Draw the focused FLOATING window behind the tiling instead of over it, or put it back |
@@ -3095,7 +3095,7 @@ Rules match clients by =app_id= and/or =title= and apply settings.
 | =height=   | int    | =0=     | Height in pixels for a floated match (0 = natural) |
 | =center=   | bool   | =true=  | Centre a floated match on its monitor       |
 | =regex=    | bool   | =false= | Match =app_id= and =title= as PCRE regexes rather than globs |
-| =sticky=   | bool   | =false= | Pin the match to every tag of its monitor   |
+| =sticky=   | bool   | =false= | Pin the match to every tag of its monitor; floats it, since only a floating window is pinned |
 | =initial-title= | string | =""= | Title pattern matched only when the window maps, never on a later rename (a browser's tab titles) |
 | =xwayland= | bool   | unset   | =true= matches only X11 clients, =false= only Wayland ones |
 | =pid=      | int    | =0=     | Match the client's process id               |

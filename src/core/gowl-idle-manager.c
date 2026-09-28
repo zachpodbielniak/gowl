@@ -378,7 +378,7 @@ gowl_idle_manager_check_inhibitors(GowlIdleManager *self)
 		    && c->mon != NULL && c->mon->wlr_output != NULL
 		    && c->mon->wlr_output->enabled
 		    && (c->isoverlay ? c->overlay_visible
-		        : (c->issticky
+		        : (GOWL_CLIENT_PINNED(c)
 		           || (c->tags & c->mon->tagset[c->mon->seltags]) != 0)))
 			inhibited = TRUE;
 	}

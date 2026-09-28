@@ -377,7 +377,8 @@ static GowlMonitor *xytomon       (GowlCompositor *self,
 
 #define VISIBLEON(C, M)  ((M) && (C)->mon == (M) && \
 	((C)->isoverlay ? (C)->overlay_visible : \
-	 ((C)->issticky || ((C)->tags & (M)->tagset[(M)->seltags]) != 0)))
+	 (GOWL_CLIENT_PINNED(C) \
+	  || ((C)->tags & (M)->tagset[(M)->seltags]) != 0)))
 #define TAGMASK          ((1u << 9) - 1)
 
 /* -----------------------------------------------------------
@@ -5644,9 +5645,13 @@ setfloating(
 	c->isfloating = floating;
 	/* "Behind the tiling" is a floating-window state.  A window
 	 * rejoining the layout is one of the tiles, so there is nothing
-	 * left for the flag to mean. */
-	if (!floating)
+	 * left for the flag to mean.  Pinned to every tag is one too (see
+	 * gowl_client_set_sticky): left set on a tile it would do nothing
+	 * until the window next floated, and then pin it out of nowhere. */
+	if (!floating) {
 		c->isbelow = FALSE;
+		c->issticky = FALSE;
+	}
 
 	if (c->mon == NULL)
 		return;

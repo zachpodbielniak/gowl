@@ -567,9 +567,50 @@ gowl_client_set_sticky(
 	if (self->issticky == sticky)
 		return;
 	self->issticky = sticky;
+
+	/*
+	 * Only a floating window is pinned.  A tiled one on every tag is a
+	 * tile in every tag's layout: pinning Element on tag 3 slotted it
+	 * into tag 4's scrolling strip beside Steam and left it drawn over
+	 * tag 2's terminal at whatever box the last layout gave it.  Sway
+	 * and Hyprland both refuse that, and so does this -- pinning a tile
+	 * floats it where it is, which is the one thing that makes "on
+	 * every tag" mean something.  A fullscreen window is left alone:
+	 * it is not floating and so is not pinned, until it leaves
+	 * fullscreen and is floated.
+	 */
+	if (sticky && !self->isfloating && !self->isfullscreen
+	    && !self->isoverlay) {
+		if (self->compositor != NULL && self->scene != NULL)
+			gowl_compositor_set_client_floating(self->compositor,
+			                                    self, TRUE);
+		else
+			self->isfloating = TRUE;
+	}
+
 	g_signal_emit(self, client_signals[SIGNAL_STATE_CHANGED], 0);
 	if (self->compositor != NULL && self->mon != NULL)
 		gowl_compositor_arrange(self->compositor, self->mon);
+}
+
+/**
+ * gowl_client_is_pinned:
+ * @self: a #GowlClient
+ *
+ * Whether @self shows on every tag of its monitor: sticky AND floating
+ * and not an overlay, whose owner decides where it shows.  This is the
+ * test every visibility check makes -- the compositor's VISIBLEON, the
+ * idle manager, and modules -- so that none of them tiles a sticky
+ * window into a tag it does not belong to.
+ *
+ * Returns: %TRUE if the window is on every tag
+ */
+gboolean
+gowl_client_is_pinned(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), FALSE);
+
+	return GOWL_CLIENT_PINNED(self);
 }
 
 /**

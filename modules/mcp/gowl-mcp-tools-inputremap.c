@@ -359,7 +359,9 @@ gowl_mcp_register_inputremap_tools(
 			"INPUT is KEY_*, BTN_*, left/middle/right/side/extra or "
 			"WHEEL_UP/DOWN/LEFT/RIGHT. TARGET is \"drop\", \"pass\" or "
 			"exactly one of {key: \"Super+9\"}, {button: middle}, "
-			"{action: tag-view, arg: \"256\"}, {command: \"...\"}.");
+			"{action: tag-view, arg: \"256\"}, {command: \"...\"}, "
+			"{macro: NAME, args: \"...\"} (a gowl macro, on press -- "
+			"the one declarative target outside one-to-one).");
 		json_builder_end_object(b);
 		add_string_property(b, "yaml",
 			"The same rule as one line of flow-style YAML, instead of "
@@ -370,8 +372,9 @@ gowl_mcp_register_inputremap_tools(
 		register_tool(server, module, "input_remap_add",
 			"Add, or replace by name, a per-device input remap rule. "
 			"Each input maps to exactly ONE output and the release "
-			"mirrors the press: sequences, macros, delays and repeats "
-			"are refused. Devices the rule matches are claimed at once.",
+			"mirrors the press: sequences, delays and repeats are "
+			"refused (a {macro:} target runs a gowl macro, whose code "
+			"may do more). Devices the rule matches are claimed at once.",
 			FALSE, json_builder_get_root(b), handle_add);
 	}
 

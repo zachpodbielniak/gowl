@@ -420,6 +420,19 @@ run_all(void)
 	g_assert_nonnull(strstr(reply, "pedals KEY_A"));
 	g_clear_pointer(&reply, g_free);
 
+	/* pip-corner: by hand on the focused window, then as a filtered
+	   trigger would run it, with the event's detail naming alpha */
+	run_ok(&s, "pip-corner 25");
+	g_assert_true(gowl_client_get_floating(s.rig.win[W_CHARLIE]));
+	reply = run(&s, "--trigger=event '--detail=client-added app-id=app.one "
+	            "title=alpha' pip-corner");
+	g_assert_cmpstr(reply, ==, "OK pip-corner: alpha");
+	g_clear_pointer(&reply, g_free);
+	g_assert_true(gowl_client_get_floating(s.rig.win[W_ALPHA]));
+	reply = run(&s, "pip-corner 99");
+	g_assert_true(g_str_has_prefix(reply, "ERROR"));   /* 10..90 */
+	g_clear_pointer(&reply, g_free);
+
 	/* placement: gather, snapshot, scatter, restore */
 	reply = run(&s, "gather-app 'app.two'");
 	g_assert_true(g_str_has_prefix(reply, "OK gather-app: gathered "));

@@ -165,7 +165,7 @@ Plugins run inside the compositor, so a fault in one is caught by a signal guard
 
 A **macro** is a small C file that drives the compositor -- sort a tag's windows alphabetically, type a command into the terminal while you keep working in the browser, send every window of one app to the current tag, put the desktop back the way it was this morning. Macros compile on demand through crispy and run in-process, from a keybind, `gowl-msg macro-run NAME`, D-Bus, MCP, a compositor event, a timer, or a foot pedal through the input remapper. Edit the file and run it again: the new code runs.
 
-Every macro runs under the same kind of signal guard as bar plugins, plus a watchdog: a crash or a runaway loop is unwound, logged, notified and held back until you clear it, and the session carries on. A macro that knows it is long raises its own time budget, or runs on a worker thread where it may sleep. Opt in with `modules.macro.enabled: true`; 24 commented examples ship in `data/macros/` and are installed on the search path. See [docs/macros.org](docs/macros.org).
+Every macro runs under the same kind of signal guard as bar plugins, plus a watchdog: a crash or a runaway loop is unwound, logged, notified and held back until you clear it, and the session carries on. A macro that knows it is long raises its own time budget, or runs on a worker thread where it may sleep. Opt in with `modules.macro.enabled: true`; 25 commented examples ship in `data/macros/` and are installed on the search path. See [docs/macros.org](docs/macros.org).
 
 ## Documentation
 

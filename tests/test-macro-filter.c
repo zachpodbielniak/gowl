@@ -252,6 +252,49 @@ test_to_string_round_trip(void)
 	}
 }
 
+/* The worked examples in docs/macros.org and the cmacs manual, as
+   written there: they parse, and pick the windows they say they do. */
+static void
+test_documented_examples(void)
+{
+	static const gchar *pip =
+		"(title='Picture-in-Picture' or app-id=mpv)"
+		" and clients>=2 and fullscreen=false";
+	static const gchar *late =
+		"app-id=mpv and floating=true and not (monitor=eDP-1 or hour<8)";
+	/* exactly what cmacs-gowl-macro-filter renders the cmacs manual's
+	   meeting-mode form to (cmacs-gowl-macro-tests.el checks that side) */
+	static const gchar *meeting =
+		"((app-id=\"zoom*\" or title~\"(?i)jitsi|meet\\\\.google\")"
+		" and not (title=\"*Settings*\"))";
+	g_autoptr(GHashTable) firefox_pip = fields_of(
+		"app-id=firefox", "title=Picture-in-Picture", "clients=3",
+		"fullscreen=false", NULL);
+	g_autoptr(GHashTable) lone_mpv = fields_of(
+		"app-id=mpv", "title=x.mkv", "clients=1", "fullscreen=false", NULL);
+	g_autoptr(GHashTable) busy_mpv = fields_of(
+		"app-id=mpv", "title=x.mkv", "clients=2", "fullscreen=false",
+		"floating=true", "monitor=DP-1", "hour=21", NULL);
+	g_autoptr(GHashTable) laptop_mpv = fields_of(
+		"app-id=mpv", "floating=true", "monitor=eDP-1", "hour=21", NULL);
+	g_autoptr(GHashTable) full_pip = fields_of(
+		"app-id=firefox", "title=Picture-in-Picture", "clients=3",
+		"fullscreen=true", NULL);
+	g_autoptr(GHashTable) meet = fields_of(
+		"app-id=chromium", "title=Meet - meet.google.com", NULL);
+	g_autoptr(GHashTable) zoom_settings = fields_of(
+		"app-id=zoom", "title=Zoom Settings", NULL);
+
+	g_assert_true(eval(pip, firefox_pip));
+	g_assert_false(eval(pip, lone_mpv));      /* empty tag: left alone */
+	g_assert_true(eval(pip, busy_mpv));
+	g_assert_false(eval(pip, full_pip));      /* fullscreen: left alone */
+	g_assert_true(eval(late, busy_mpv));
+	g_assert_false(eval(late, laptop_mpv));
+	g_assert_true(eval(meeting, meet));
+	g_assert_false(eval(meeting, zoom_settings));
+}
+
 static void
 split(
 	const gchar *line,
@@ -327,5 +370,7 @@ main(
 	g_test_add_func("/macro/filter/errors", test_errors);
 	g_test_add_func("/macro/filter/round-trip", test_to_string_round_trip);
 	g_test_add_func("/macro/filter/split-line", test_split_line);
+	g_test_add_func("/macro/filter/documented-examples",
+	                test_documented_examples);
 	return g_test_run();
 }

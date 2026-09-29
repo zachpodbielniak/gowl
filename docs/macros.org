@@ -394,6 +394,164 @@ gowl-msg macro-filter-test --event=focus-changed 'app-id=firefox* and clients>2'
     # value of every field
 #+end_src
 
+**** Worked example: picture-in-picture into the corner
+:PROPERTIES:
+:CUSTOM_ID: macros-filters-example
+:END:
+The goal: a browser's picture-in-picture window, or an mpv player, that opens on a tag already showing something should float at 30% of the screen in the bottom-right corner --- but one opened on an empty tag, or fullscreen, is left alone. The filter decides /which/ windows; the macro only moves them, so it stays four lines of real work and can be reused by hand.
+
+The macro is the shipped =data/macros/pip-corner.c= (abridged here; the file finds the event's window by the app-id and title in the trigger detail):
+
+#+begin_src c
+#include <gowl/gowl.h>
+
+G_MODULE_EXPORT gboolean
+gowl_macro_run(GowlMacroContext *ctx)
+{
+	GowlCompositor *comp;
+	GowlClient *c;
+	GowlMonitor *mon;
+	gint ax;
+	gint ay;
+	gint aw;
+	gint ah;
+	gint pct;
+
+	pct = gowl_macro_get_arg(ctx, 0) != NULL
+		? (gint)g_ascii_strtoll(gowl_macro_get_arg(ctx, 0), NULL, 10) : 30;
+	comp = gowl_macro_get_compositor(ctx);
+	c = event_window(ctx);                  /* from the trigger detail */
+	if (c == NULL)
+		c = gowl_compositor_get_focused_client(comp);  /* by hand */
+	if (c == NULL || (mon = gowl_client_get_monitor(c)) == NULL)
+		return FALSE;
+
+	/* PERCENT of the usable area, 16 px in from the bottom-right corner */
+	gowl_monitor_get_window_area(mon, &ax, &ay, &aw, &ah);
+	gowl_compositor_set_floating(comp, c, TRUE);
+	gowl_compositor_resize_client(comp, c,
+	                              ax + aw - aw * pct / 100 - 16,
+	                              ay + ah - ah * pct / 100 - 16,
+	                              aw * pct / 100, ah * pct / 100);
+	return TRUE;
+}
+#+end_src
+
+*In YAML* --- the filter uses parentheses to put the OR inside the ANDs, and a second trigger re-parks a floating mpv whenever it takes focus on an external screen after 08:00:
+
+#+begin_src yaml
+modules:
+  macro:
+    enabled: true
+    triggers:
+      - "client-added [(title='Picture-in-Picture' or app-id=mpv) and clients>=2 and fullscreen=false]: pip-corner 30"
+      - "focus-changed [app-id=mpv and floating=true and not (monitor=eDP-1 or hour<8)]: pip-corner 30"
+#+end_src
+
+How it reads (=gowl-msg macro-triggers= shows exactly this):
+
+#+begin_example
+(((title="Picture-in-Picture" or app-id="mpv") and clients>="2") and fullscreen="false")
+((app-id="mpv" and floating="true") and not (monitor="eDP-1" or hour<"8"))
+#+end_example
+
+| New window                                 | =clients= | Result                         |
+|--------------------------------------------+-----------+--------------------------------|
+| Firefox "Picture-in-Picture", busy tag     | 3         | floated into the corner        |
+| mpv on an empty tag                        | 1         | left tiled (=clients>=2= fails) |
+| Firefox "Picture-in-Picture", fullscreen   | 3         | left alone                     |
+| any other window                           | any       | trigger skipped, macro never runs |
+
+Check a filter against what is on screen before relying on it: focus the player and run =gowl-msg macro-filter-test --event=client-added "(title='Picture-in-Picture' or app-id=mpv) and clients>=2"=.
+
+*In C* --- the same, with the macro written in the C config instead of a file. =gowl_config_ready= runs once the modules are up, registers the function under a name, and hands the macro module its filtered triggers (the module still has to be enabled in YAML; this replaces any triggers from there):
+
+#+begin_src c
+#include <gowl/gowl.h>
+#include <string.h>
+
+extern GowlCompositor *gowl_compositor;
+extern GowlConfig     *gowl_config;
+
+/* Float the event's window (the focused one when run by hand) at
+   PERCENT (the data) in the bottom-right corner. */
+static gboolean
+pip_corner(
+	GowlMacroContext *ctx,
+	gpointer          data
+){
+	GowlCompositor *comp;
+	GowlClient *c = NULL;
+	GowlMonitor *mon;
+	const gchar *title;
+	g_autofree gchar *pattern = NULL;
+	gint pct;
+	gint ax;
+	gint ay;
+	gint aw;
+	gint ah;
+	gint w;
+	gint h;
+
+	comp = gowl_macro_get_compositor(ctx);
+	pct = GPOINTER_TO_INT(data);
+
+	/* The detail is "client-added app-id=APP title=TITLE" */
+	title = strstr(gowl_macro_get_trigger_detail(ctx), " title=");
+	if (title != NULL) {
+		pattern = g_strdup_printf("title:%s", title + 7);
+		c = gowl_macro_find_client(ctx, pattern);
+	}
+	if (c == NULL)
+		c = gowl_compositor_get_focused_client(comp);
+	if (c == NULL || (mon = gowl_client_get_monitor(c)) == NULL)
+		return FALSE;
+	gowl_monitor_get_window_area(mon, &ax, &ay, &aw, &ah);
+	w = aw * pct / 100;
+	h = ah * pct / 100;
+	gowl_compositor_set_floating(comp, c, TRUE);
+	gowl_compositor_resize_client(comp, c, ax + aw - w - 16,
+	                              ay + ah - h - 16, w, h);
+	return TRUE;
+}
+
+G_MODULE_EXPORT gboolean
+gowl_config_init(void)
+{
+	return TRUE;
+}
+
+G_MODULE_EXPORT void
+gowl_config_ready(void)
+{
+	GowlModuleManager *mgr;
+	GowlModule *macro;
+	g_autoptr(GHashTable) settings = NULL;
+
+	/* Callable by name from triggers, keybinds, IPC and D-Bus, and run
+	   under the same fault guard as a macro file */
+	gowl_macro_register_func("pip-corner-c", pip_corner,
+	                         GINT_TO_POINTER(30), NULL);
+
+	mgr = gowl_compositor_get_module_manager(gowl_compositor);
+	macro = mgr != NULL ? gowl_module_manager_find_module(mgr, "macro")
+	                    : NULL;
+	if (macro == NULL)
+		return;         /* enable it: modules: macro: {enabled: true} */
+
+	/* One string, one trigger per line, exactly as in YAML */
+	settings = g_hash_table_new(g_str_hash, g_str_equal);
+	g_hash_table_insert(settings, "triggers",
+		"client-added [(title='Picture-in-Picture' or app-id=mpv)"
+		" and clients>=2 and fullscreen=false]: pip-corner-c\n"
+		"focus-changed [app-id=mpv and floating=true"
+		" and not (monitor=eDP-1 or hour<8)]: pip-corner-c");
+	gowl_module_configure(macro, settings);
+}
+#+end_src
+
+The C function finds the window by the title in the trigger detail (a title pattern, so a title containing =*= or =?= would match loosely; the shipped file compares app-id and title exactly), and takes the focused window when run by hand. =tests/test-macro-filter.c= checks both filters against the cases in the table, and =test-macro-examples= runs =pip-corner= against real windows.
+
 *** D-Bus
 :PROPERTIES:
 :CUSTOM_ID: macros-dbus
@@ -527,6 +685,7 @@ gowl-msg macro-define note custom '(org-capture nil "n")'
 | =kill-by-title=        | timeline | close every window whose title matches                           |
 | =workspace-snapshot=   | timeline | save app-id → tags to a file; restore it later                   |
 | =pedal-demo=           | timeline | what a remapper ={macro:}= target receives                       |
+| =pip-corner=           | timeline | float a new PiP/player window into the corner --- for a filtered trigger |
 | =threaded-poll=        | threaded | poll a file, notify on change, until stopped; budget off         |
 | =long-demo=            | timeline | raise its own budget, then work past the default                 |
 | =crash-demo=           | timeline | segfault, abort or SIGFPE on purpose --- and survive it          |

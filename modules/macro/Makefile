@@ -8,7 +8,8 @@ LIBDIR ?= .
 
 # The loader and runner are files of their own so the tests can include
 # them without the module's GObject half.
-SRC = gowl-module-macro.c gowl-macro-loader.c gowl-macro-runner.c gowl-macro-dbus.c
+SRC = gowl-module-macro.c gowl-macro-loader.c gowl-macro-runner.c gowl-macro-dbus.c \
+      gowl-macro-filter.c
 OUT = $(OUTDIR)/$(MODULE_NAME).so
 
 # Paths the module needs as C strings.  Spelled here, single-quoted in

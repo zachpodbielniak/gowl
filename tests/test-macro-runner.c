@@ -926,6 +926,112 @@ test_triggers(
 	g_assert_cmpuint(n_actions_named("tick"), ==, 0);
 }
 
+/* ── Filtered triggers ──────────────────────────────────────────── */
+
+static void
+emit_layout(
+	Rig         *r,
+	const gchar *symbol
+){
+	g_signal_emit_by_name(r->compositor, "layout-changed",
+	                      gowl_compositor_get_selected_monitor(r->compositor),
+	                      symbol);
+}
+
+/* Several triggers on one event, each with its own filter: only the
+   ones whose filter passes run.  AND, OR, NOT, parentheses. */
+static void
+test_filtered_triggers(
+	Rig           *r,
+	gconstpointer  data
+){
+	g_autofree gchar *list = NULL;
+	g_autofree gchar *status = NULL;
+	g_autofree gchar *probe = NULL;
+	g_autofree gchar *bad = NULL;
+
+	(void)data;
+	RIG_UP(r);
+	write_macro(r, "mark", NULL,
+	            "\tgowl_macro_action(ctx, GOWL_ACTION_CUSTOM,\n"
+	            "\t\tgowl_macro_get_arg(ctx, 0));\n\treturn TRUE;");
+	/* Every trigger here runs the SAME macro; its queued step keeps a
+	   run alive until it plays, so without this the second trigger on
+	   one event finds `mark' already running and is refused. */
+	configure(r, "reentrant", "true", "max-running", "16", NULL);
+	allow_warnings();
+	configure(r, "triggers",
+	          /* no filter: every layout change */
+	          "layout-changed: mark all\n"
+	          /* one condition */
+	          "layout-changed [arg=\"[M]\"]: mark monocle\n"
+	          /* OR */
+	          "layout-changed [arg=\"[M]\" or arg=\"[]=\"]: mark m-or-t\n"
+	          /* AND with a field the monitor supplies */
+	          "layout-changed [arg=\"[]=\" and monitor=*? and tag=1]:"
+	          " mark tile-on-1\n"
+	          /* NOT, parentheses, regex */
+	          "layout-changed [not (arg~'^\\[M' or arg=\"[]=\")]: mark other\n"
+	          /* never: a monitor that is not there */
+	          "layout-changed [arg=* and monitor=NO-SUCH-OUTPUT]: mark never\n"
+	          /* refused: unknown field, and a broken expression */
+	          "layout-changed [colour=red]: mark bad\n"
+	          "layout-changed [arg=x and]: mark bad\n"
+	          /* a timer that is filtered away, and one that is not */
+	          "every 100 [hour>=0 and hour<=23]: mark tick\n"
+	          "every 100 [weekday=never]: mark no-tick", NULL);
+	restore_warnings();
+
+	/* compiled once up front, so the first event's runs are not
+	   waiting behind the compiler */
+	g_free(cmd(r, "macro-run mark warm-up"));
+	pump(r, 100);
+	emit_layout(r, "[M]");
+	pump(r, 400);
+	g_assert_cmpuint(n_actions_named("all"), ==, 1);
+	g_assert_cmpuint(n_actions_named("monocle"), ==, 1);
+	g_assert_cmpuint(n_actions_named("m-or-t"), ==, 1);
+	g_assert_cmpuint(n_actions_named("tile-on-1"), ==, 0);
+	g_assert_cmpuint(n_actions_named("other"), ==, 0);
+
+	emit_layout(r, "[]=");
+	pump(r, 400);
+	g_assert_cmpuint(n_actions_named("all"), ==, 2);
+	g_assert_cmpuint(n_actions_named("monocle"), ==, 1);
+	g_assert_cmpuint(n_actions_named("m-or-t"), ==, 2);
+	g_assert_cmpuint(n_actions_named("tile-on-1"), ==, 1);
+	g_assert_cmpuint(n_actions_named("other"), ==, 0);
+
+	emit_layout(r, "[G]");
+	pump(r, 400);
+	g_assert_cmpuint(n_actions_named("all"), ==, 3);
+	g_assert_cmpuint(n_actions_named("m-or-t"), ==, 2);
+	g_assert_cmpuint(n_actions_named("other"), ==, 1);
+	g_assert_cmpuint(n_actions_named("never"), ==, 0);
+	g_assert_cmpuint(n_actions_named("bad"), ==, 0);
+
+	pump(r, 300);
+	g_assert_cmpuint(n_actions_named("tick"), >=, 1);
+	g_assert_cmpuint(n_actions_named("no-tick"), ==, 0);
+
+	/* listed with the filter as understood, and counted */
+	list = cmd(r, "macro-triggers");
+	g_assert_nonnull(strstr(list, "\"errors\":2"));
+	g_assert_nonnull(strstr(list, "(arg=\\\"[M]\\\" or arg=\\\"[]=\\\")"));
+	g_assert_nonnull(strstr(list, "\"skipped\":"));
+	status = cmd(r, "macro-status");
+	g_assert_nonnull(strstr(status, "\"trigger-errors\":2"));
+
+	/* try a filter against the live state */
+	probe = cmd(r, "macro-filter-test --event=layout-changed "
+	            "monitor=* and clients<1");
+	g_assert_true(g_str_has_prefix(probe, "OK {\"match\":true"));
+	g_assert_nonnull(strstr(probe, "\"event\":\"layout-changed\""));
+	g_assert_nonnull(strstr(probe, "\"weekday\":"));
+	bad = cmd(r, "macro-filter-test title=x or");
+	g_assert_true(g_str_has_prefix(bad, "ERROR filter, at column"));
+}
+
 /* ── Registered from C, defined over IPC ────────────────────────── */
 
 static gboolean
@@ -1268,6 +1374,7 @@ main(
 	ADD("journal-recovery", RIG_PLAIN, test_journal_recovery);
 	ADD("notify-and-log-file", RIG_PLAIN, test_notify_and_log_file);
 	ADD("triggers", RIG_PLAIN, test_triggers);
+	ADD("filtered-triggers", RIG_PLAIN, test_filtered_triggers);
 	ADD("registered-and-defined", RIG_PLAIN, test_registered_and_defined);
 	ADD("info-dirs-compile", RIG_PLAIN, test_info_dirs_compile);
 	ADD("remap-target", RIG_REMAP, test_remap_target);

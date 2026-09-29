@@ -495,6 +495,85 @@ run_all(void)
 	session_down(&s);
 }
 
+/* ── Filters against real windows ───────────────────────────────── */
+
+static GPtrArray *recorded;   /* "tag:app-id:title" per run */
+
+static gboolean
+record_macro(
+	GowlMacroContext *ctx,
+	gpointer          data
+){
+	GowlClient *c;
+
+	c = gowl_compositor_get_focused_client(gowl_macro_get_compositor(ctx));
+	g_ptr_array_add(recorded,
+	                g_strdup_printf("%s:%s", (const gchar *)data,
+	                                c != NULL ? gowl_client_get_title(c) : ""));
+	return TRUE;
+}
+
+static gboolean
+recorded_has(const gchar *entry)
+{
+	guint i;
+
+	for (i = 0; i < recorded->len; i++)
+		if (g_strcmp0(g_ptr_array_index(recorded, i), entry) == 0)
+			return TRUE;
+	return FALSE;
+}
+
+/*
+ * focus-changed carries the window: app-id and title come from it.
+ * Three triggers on the one event, each keeping a different subset.
+ */
+static void
+filters_on_real_windows(void)
+{
+	Session s;
+
+	if (!session_up(&s)) {
+		session_down(&s);
+		return;
+	}
+	recorded = g_ptr_array_new_with_free_func(g_free);
+	gowl_macro_register_func("rec-one", record_macro, "one", NULL);
+	gowl_macro_register_func("rec-two", record_macro, "two", NULL);
+	gowl_macro_register_func("rec-any", record_macro, "any", NULL);
+	set(&s, "triggers",
+	    "focus-changed [app-id=app.one and not title=bravo]: rec-one\n"
+	    "focus-changed [app-id=app.two and (title=charlie or title=zulu)]:"
+	    " rec-two\n"
+	    "focus-changed [app-id=app.* and clients>=3 and floating=false]:"
+	    " rec-any");
+
+	gowl_compositor_focus_client(s.rig.compositor, s.rig.win[W_ALPHA], FALSE);
+	pump(&s.rig, 100);
+	gowl_compositor_focus_client(s.rig.compositor, s.rig.win[W_BRAVO], FALSE);
+	pump(&s.rig, 100);
+	gowl_compositor_focus_client(s.rig.compositor, s.rig.win[W_CHARLIE],
+	                             FALSE);
+	pump(&s.rig, 100);
+
+	g_assert_true(recorded_has("one:alpha"));
+	g_assert_false(recorded_has("one:bravo"));
+	g_assert_false(recorded_has("one:charlie"));
+	g_assert_true(recorded_has("two:charlie"));
+	g_assert_false(recorded_has("two:bravo"));
+	g_assert_false(recorded_has("two:alpha"));
+	g_assert_true(recorded_has("any:alpha"));
+	g_assert_true(recorded_has("any:bravo"));
+	g_assert_true(recorded_has("any:charlie"));
+
+	set(&s, "triggers", "");
+	gowl_macro_unregister_func("rec-one");
+	gowl_macro_unregister_func("rec-two");
+	gowl_macro_unregister_func("rec-any");
+	g_ptr_array_unref(recorded);
+	session_down(&s);
+}
+
 int
 main(
 	int    argc,
@@ -524,6 +603,8 @@ main(
 
 	g_test_add_func("/macro/examples/strict-compile", strict_compile);
 	g_test_add_func("/macro/examples/run", run_all);
+	g_test_add_func("/macro/examples/filters-on-real-windows",
+	                filters_on_real_windows);
 	rc = g_test_run();
 	rm_rf(home);
 	return rc;

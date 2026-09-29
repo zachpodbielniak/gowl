@@ -733,7 +733,7 @@ Runs *macros*: small C files, compiled at runtime with crispy and loaded into th
 
 *Containment:* every call into macro code runs under the fault guard (=src/util/gowl-fault-guard.c=) with a watchdog; a crash or a runaway loop is unwound, logged, notified and held back until =macro-clear=, and the journal holds back a macro that was running when a session died.
 
-*Settings:* =macro-dir=, =timeout-ms= (2000), =max-running= (4), =reentrant=, =stop-key= (=Super+Escape=), =max-steps=, =log= (=none=/=fault=/=run=/=all=), =log-file=, =journal=, =triggers= (=EVENT: MACRO= and =every MS: MACRO= lines), =dbus= (=org.gowl.Macro1=), =on-fault=, =on-fault-custom=.
+*Settings:* =macro-dir=, =timeout-ms= (2000), =max-running= (4), =reentrant=, =stop-key= (=Super+Escape=), =max-steps=, =log= (=none=/=fault=/=run=/=all=), =log-file=, =journal=, =triggers= (=EVENT [FILTER]: MACRO= and =every MS [FILTER]: MACRO= lines; the filter combines conditions on the event's window, monitor, arguments and the time with and/or/not), =dbus= (=org.gowl.Macro1=), =on-fault=, =on-fault-custom=.
 
 *Files:* =gowl-module-macro.c= (settings, IPC, triggers, journal), =gowl-macro-loader.c= (lookup, compile, open), =gowl-macro-runner.c= (guarded runs, timeline, workers), =gowl-macro-dbus.c=.  The API scripts call is =src/macro/gowl-macro.h=.  Full reference, with 24 shipped examples and use cases: [[file:macros.org][macros.org]].
 

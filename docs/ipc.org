@@ -102,7 +102,7 @@ gowl-msg inputremap-devices
 
 * Macros
 
-With the opt-in =macro= module loaded, the =macro-= words run and manage macros: =macro-run [--trigger=K] [--detail=D] NAME ARGS=, =-stop [NAME|ID|all]=, =-list=, =-status=, =-info NAME=, =-compile NAME=, =-dirs=, =-reload=, =-clear [NAME]=, =-define NAME command|custom|action ...=, =-undefine NAME=, =-log [LEVEL]=.  Events: =EVENT macro started|finished|stopped NAME ID= and =EVENT macro fault NAME SIGNAL=.  See [[file:macros.org::#macros-ipc][macros.org]].
+With the opt-in =macro= module loaded, the =macro-= words run and manage macros: =macro-run [--trigger=K] [--detail=D] NAME ARGS=, =-stop [NAME|ID|all]=, =-list=, =-status=, =-info NAME=, =-compile NAME=, =-dirs=, =-reload=, =-clear [NAME]=, =-define NAME command|custom|action ...=, =-undefine NAME=, =-log [LEVEL]=, =-triggers= (the triggers and their filters, as understood), =-filter-test [--event=E] FILTER= (judge a filter against the current state).  Events: =EVENT macro started|finished|stopped NAME ID= and =EVENT macro fault NAME SIGNAL=.  See [[file:macros.org::#macros-ipc][macros.org]].
 
 #+begin_src bash
 gowl-msg macro-run sort-windows reverse

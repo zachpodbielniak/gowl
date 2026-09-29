@@ -261,6 +261,8 @@ Thin wrappers over the opt-in =macro= module's IPC words ([[file:macros.org][mac
 | =macro_status= | --                                | Running runs, held-back macros and why, fault count     |
 | =macro_info=   | =name=                            | Path, description, mode, time budget                     |
 | =macro_clear=  | =name= (optional)                 | Let a held-back macro run again                          |
+| =macro_triggers= | --                              | Triggers, their filters as understood, fired/skipped     |
+| =macro_filter_test= | =filter=, =event= (optional) | Judge a filter now, with every field's value             |
 
 *** Input Recording
 :PROPERTIES:

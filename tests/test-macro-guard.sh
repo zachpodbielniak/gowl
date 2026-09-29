@@ -130,5 +130,18 @@ for f in data/macros/*.c; do
 	fi
 done
 
+# 9. A trigger's filter is judged in the emission, before anything is
+#    queued -- against the state the event saw -- and never runs macro
+#    code (the engine is pure GLib).
+sed -n '/^trigger_marshal(/,/^}/p' "$MODULE" \
+	| grep -q 'trigger_passes(self, t, t->event' ||
+	fail "event triggers no longer judge their filter before queueing"
+sed -n '/^on_trigger_timer(/,/^}/p' "$MODULE" | grep -q 'trigger_passes(' ||
+	fail "timer triggers no longer judge their filter"
+if grep -q '#include "gowl.h"\|lisp.h\|gowl-compositor.h' \
+	modules/macro/gowl-macro-filter.c; then
+	fail "the filter engine must stay pure GLib (tested without a compositor)"
+fi
+
 echo "macro guard: ok"
 exit 0

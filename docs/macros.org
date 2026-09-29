@@ -305,6 +305,8 @@ keybinds:
 | =macro-define NAME command\vert{}custom\vert{}action ...= | define a macro without a file                    |
 | =macro-undefine NAME=                            | remove one                                                |
 | =macro-log [none\vert{}fault\vert{}run\vert{}all]= | show or set the log level                                |
+| =macro-triggers=                                 | JSON: each trigger, its filter as understood, fired/skipped counts |
+| =macro-filter-test [--event=E] FILTER=           | judge a filter now; JSON with the verdict and every field |
 
 Events on the IPC stream: =EVENT macro started NAME ID=, =finished NAME ID=, =stopped NAME ID=, =fault NAME SIGNAL=.
 
@@ -326,6 +328,71 @@ modules:
 #+end_src
 
 =EVENT= is any compositor signal (=client-added=, =client-removed=, =focus-changed=, =workspace-switched=, =layout-changed=, =monitor-added=, =lock-changed=, ...); a name the compositor does not have is reported and skipped. An event macro runs from an idle callback *after* the emission, never inside it, so a macro that moves windows during =client-added= is not rearranging a list the compositor is in the middle of changing. When the signal's first argument is a window, the detail says which: =client-added app-id=foot title=~=. Intervals are at least 100 ms.
+
+*Several macros on one event* is several lines with the same =EVENT=: each is its own trigger, judged and queued on its own, in the order written. They share =max-running=, and one macro named by several triggers that fire together is refused while it is still running (a macro that queued steps is running until they have played) --- set =reentrant: true= if that is what you want.
+
+**** Filters
+:PROPERTIES:
+:CUSTOM_ID: macros-filters
+:END:
+A trigger can say /which/ events it wants, in brackets before the colon:
+
+#+begin_src yaml
+modules:
+  macro:
+    enabled: true
+    triggers:
+      # only browsers, only on the second output
+      - "client-added [app-id=firefox* and monitor=HDMI-A-1]: gather-app firefox*"
+      # video, by app or by title
+      - "focus-changed [app-id=mpv or title~'(?i)youtube|twitch']: presentation on"
+      # anything else, as long as it is not a floating dialog
+      - "focus-changed [not (app-id=mpv or floating=true)]: presentation off"
+      # the layout macro only when the count crosses a line
+      - "client-added [clients>=5 or clients<=1]: layout-for-count"
+      # evenings, on weekdays
+      - "every 600000 [time>=22:00 and not (weekday=sat or weekday=sun)]: night"
+#+end_src
+
+The filter is judged *during* the emission, against the state the event saw, and only a trigger that passes queues its run. Any number of conditions can be combined:
+
+| Syntax                            | Meaning                                                        |
+|-----------------------------------+----------------------------------------------------------------|
+| =A and B=, =A && B=               | both                                                           |
+| =A or B=, =A ertert B=        | either                                                         |
+| =not A=, =!A=                     | the opposite                                                   |
+| =( ... )=                         | grouping; =and= binds tighter than =or=, as in C              |
+| =field=glob=, =field!=glob=       | glob match (=*=, =?=), case-sensitive; ==== is the same as ===  |
+| =field~regex=, =field!~regex=     | GRegex match; =(?i)= for case-insensitive                      |
+| =field<v=, =<==, =>=, =>==        | numbers compare as numbers, anything else as text (=time>=22:00=) |
+
+Keywords are case-insensitive. A bare value runs to whitespace, =(= or =)=; quote anything else with ="..."= or ='...'= --- inside quotes a backslash only escapes the quote or itself, so a regex keeps its =\=. Balanced brackets are fine in a bare value (=layout=[]==).
+
+The fields:
+
+| Field                             | Value                                                                |
+|-----------------------------------+----------------------------------------------------------------------|
+| =event=                           | the signal's name (=timer= for an interval)                          |
+| =app-id=, =title=                 | the event's window (its first window argument), else the focused one |
+| =floating=, =fullscreen=, =urgent=, =xwayland= | =true= / =false=, for that window                        |
+| =focused-app-id=, =focused-title= | the focused window, whatever the event                               |
+| =monitor=, =layout=               | the event's monitor, else the window's, else the selected one        |
+| =tags=, =tag=                     | that monitor's selected tags (="1,3"=) and the lowest (=1=)          |
+| =clients=                         | windows showing on that monitor                                      |
+| =arg=                             | the signal's first string or number (=layout-changed=: the symbol)   |
+| =time=, =hour=, =weekday=         | ="22:15"=, =22=, =mon= ... =sun=                                     |
+
+A field the event does not have is the empty string (=app-id=""= is "no window"). An unknown field, a missing operator or a bad regex refuses that one trigger when it is installed --- with the column --- and the others still load; =macro-status= counts them as =trigger-errors=.
+
+Two IPC words help write filters:
+
+#+begin_src sh
+gowl-msg macro-triggers     # each trigger, its filter as understood (fully
+                            # parenthesised), how often it fired or was skipped
+gowl-msg macro-filter-test --event=focus-changed 'app-id=firefox* and clients>2'
+    # judged against the focused window and selected monitor now, with the
+    # value of every field
+#+end_src
 
 *** D-Bus
 :PROPERTIES:
@@ -353,7 +420,7 @@ The bus lives on a thread of its own with a private main context; calls are carr
 :PROPERTIES:
 :CUSTOM_ID: macros-mcp
 :END:
-=macro_run= (=name=, =args=), =macro_stop=, =macro_list=, =macro_status=, =macro_info= and =macro_clear=, thin wrappers over the IPC words. See [[file:mcp.org][mcp.org]].
+=macro_run= (=name=, =args=), =macro_stop=, =macro_list=, =macro_status=, =macro_info=, =macro_clear=, =macro_triggers= and =macro_filter_test= (=filter=, =event=), thin wrappers over the IPC words. See [[file:mcp.org][mcp.org]].
 
 *** The input remapper
 :PROPERTIES:
@@ -427,7 +494,7 @@ gowl-msg macro-define note custom '(org-capture nil "n")'
 | =log=             | =fault=                           | =none=, =fault=, =run= or =all=                           |
 | =log-file=        | stderr                            | where the log goes                                       |
 | =journal=         | =$XDG_STATE_HOME/gowl/macros.journal= | the quarantine journal, or =none=                    |
-| =triggers=        | --                                | event and interval triggers (a list)                     |
+| =triggers=        | --                                | event and interval triggers (a list), each with an optional =[filter]= |
 | =dbus=            | =false=                           | own =org.gowl.Macro1=                                    |
 | =on-fault=        | --                                | a command line run on every fault                        |
 | =on-fault-custom= | --                                | a =custom= action run on every fault                     |
@@ -481,7 +548,7 @@ Ideas, by kind; most are twenty lines.
 
 *Housekeeping on a timer.* Close dialogs matching a title after they have been open ten minutes. Turn effects down at night. Re-apply a layout that an app keeps breaking.
 
-*Event rules beyond window rules.* A window rule matches when a window appears; a macro on =client-added= can look at everything else first --- how many windows the tag already has, which output is free, what time it is.
+*Event rules beyond window rules.* A window rule matches when a window appears; a macro on =client-added= can look at everything else first --- how many windows the tag already has, which output is free, what time it is. Most of that fits in a trigger filter (=client-added [app-id=steam* and clients>=4]: scatter=), so each macro stays small and single-purpose and the routing lives in one list.
 
 *Pedals and macro pads.* A macro pad's keys each name a macro through the remapper. Keep game keys declarative (=button=, =key=) and give the macro targets to everything around the game.
 
@@ -511,6 +578,7 @@ Ideas, by kind; most are twenty lines.
 | =modules/macro/gowl-macro-loader.c=          | lookup, compiling, caching, opening                          |
 | =modules/macro/gowl-macro-runner.c=          | guarded runs, the timeline player, workers                   |
 | =modules/macro/gowl-macro-dbus.c=            | =org.gowl.Macro1=                                            |
+| =modules/macro/gowl-macro-filter.c=          | the trigger filter language (pure GLib)                      |
 | =modules/mcp/gowl-mcp-tools-macro.c=         | the MCP tools                                                |
 | =data/macros/*.c=                            | the examples                                                 |
 
@@ -522,7 +590,8 @@ Ideas, by kind; most are twenty lines.
 |--------------------------------+-------------------------------------------------------------------------|
 | =test-fault-guard=             | each signal on the main thread and on workers, stack overflow, the watchdog and =extend=, holds deferring the watchdog, nesting, the bar wrapper, unarmed faults still reaching the previous handler |
 | =test-macro-loader=            | search order, name resolution, a path skipping lookup, recompiling on edit, the =#define=s, compile errors, a missing run function, the wrong ABI, a crashing constructor, the registry |
-| =test-macro-runner=            | results and failures, timeline order and timing, stop and Super+Escape, crash/abort/loop held back and cleared, a self-raised budget, threaded runs (steps, crash, cancel, a watchdog mid-sleep), limits, journal recovery, toasts and fault hooks, the log file, triggers, registered and defined macros, the remapper target, D-Bus |
+| =test-macro-runner=            | results and failures, timeline order and timing, stop and Super+Escape, crash/abort/loop held back and cleared, a self-raised budget, threaded runs (steps, crash, cancel, a watchdog mid-sleep), limits, journal recovery, toasts and fault hooks, the log file, triggers, filtered triggers (several on one event, and/or/not, timers, refused lines, =macro-triggers=, =macro-filter-test=), registered and defined macros, the remapper target, D-Bus |
 | =test-macro-targeted-key=      | a real Wayland client: a targeted key reaches only its window and focus comes back; text with shifted and unmappable characters; refused while locked; the step API; reordering |
-| =test-macro-examples=          | every example compiled with =-std=gnu89 -Wall -Wextra -Werror=, opened, and run against three real windows |
+| =test-macro-examples=          | every example compiled with =-std=gnu89 -Wall -Wextra -Werror=, opened, and run against three real windows; filtered =focus-changed= triggers each keeping their own subset of real windows |
+| =test-macro-filter=            | the filter language alone: every operator, and/or/not and precedence, quoting, numeric vs text comparison, absent fields, errors with their column, splitting a trigger line around its filter |
 | =test-macro-guard.sh=          | source invariants: every body guarded, nothing sleeps on the compositor thread, cross-thread locks held with the watchdog deferred, targeted keys refuse when locked, code stays mapped |

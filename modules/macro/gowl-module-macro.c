@@ -64,6 +64,7 @@
 #include "macro/gowl-macro.h"
 #include "macro/gowl-macro-private.h"
 #include "util/gowl-fault-guard.h"
+#include "gowl-macro-filter.h"
 
 #include "gowl-macro-loader.h"
 #include "gowl-macro-runner.h"
@@ -100,6 +101,10 @@ typedef struct {
 	guint                   interval;  /* ms, timers */
 	gchar                  *macro;
 	gchar                  *args;      /* shell-style, may be empty */
+	gchar                  *line;      /* as configured, for listings */
+	GowlMacroFilter        *filter;    /* NULL: every event */
+	guint                   skipped;   /* events the filter turned away */
+	guint                   fired;
 	gulong                  handler;
 	struct wl_event_source *timer;
 	gpointer                module;
@@ -136,6 +141,7 @@ struct _GowlModuleMacro {
 	gchar            *on_fault;
 	gchar            *on_fault_custom;
 	gchar            *triggers_text;
+	guint             trigger_errors;  /* lines refused at the last install */
 	guint             stop_mods;       /* the stop key; keysym 0 = none */
 	guint             stop_keysym;
 
@@ -826,6 +832,179 @@ queue_trigger(
 	self->pending_idles = g_list_prepend(self->pending_idles, p);
 }
 
+static void
+set_bool_field(
+	GHashTable  *f,
+	const gchar *key,
+	gboolean     v
+){
+	g_hash_table_insert(f, g_strdup(key), g_strdup(v ? "true" : "false"));
+}
+
+/* Tag numbers (1-based) of a mask: "1,3" -- and the lowest, for `tag'. */
+static void
+set_tag_fields(
+	GHashTable *f,
+	guint32     mask
+){
+	GString *s = g_string_new(NULL);
+	guint i;
+	gint lowest = 0;
+
+	for (i = 0; i < 32; i++) {
+		if ((mask & (1u << i)) == 0)
+			continue;
+		if (lowest == 0)
+			lowest = (gint)i + 1;
+		g_string_append_printf(s, "%s%u", s->len ? "," : "", i + 1);
+	}
+	g_hash_table_insert(f, g_strdup("tags"), g_string_free(s, FALSE));
+	g_hash_table_insert(f, g_strdup("tag"), g_strdup_printf("%d", lowest));
+}
+
+/*
+ * The field table a filter is evaluated against, from what the event
+ * carried.  The window is the event's own (its first GowlClient
+ * argument) or else the focused one; the monitor is the event's, the
+ * window's, or else the selected one.  Read on the compositor thread,
+ * at emission time: the values are the ones the event saw.
+ */
+static GHashTable *
+collect_fields(
+	GowlModuleMacro *self,
+	const gchar     *event,
+	guint            n_params,
+	const GValue    *params
+){
+	GHashTable *f;
+	GowlClient *client = NULL;
+	GowlClient *focused;
+	GowlMonitor *mon = NULL;
+	g_autofree gchar *arg = NULL;
+	g_autoptr(GDateTime) now = NULL;
+	static const gchar * const days[] = {
+		"", "mon", "tue", "wed", "thu", "fri", "sat", "sun"
+	};
+	guint i;
+
+	f = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+	g_hash_table_insert(f, g_strdup("event"), g_strdup(event));
+
+	/* What the signal passed (params[0] is the compositor itself) */
+	for (i = 1; i < n_params; i++) {
+		const GValue *v = &params[i];
+
+		if (G_VALUE_HOLDS_OBJECT(v) && g_value_get_object(v) != NULL) {
+			GObject *o = g_value_get_object(v);
+
+			if (client == NULL && GOWL_IS_CLIENT(o))
+				client = GOWL_CLIENT(o);
+			else if (mon == NULL && GOWL_IS_MONITOR(o))
+				mon = GOWL_MONITOR(o);
+		} else if (arg == NULL && G_VALUE_HOLDS_STRING(v)
+		           && g_value_get_string(v) != NULL) {
+			arg = g_value_dup_string(v);
+		} else if (arg == NULL && G_VALUE_HOLDS_BOOLEAN(v)) {
+			arg = g_strdup(g_value_get_boolean(v) ? "true" : "false");
+		} else if (arg == NULL && G_VALUE_HOLDS_INT(v)) {
+			arg = g_strdup_printf("%d", g_value_get_int(v));
+		} else if (arg == NULL && G_VALUE_HOLDS_UINT(v)) {
+			arg = g_strdup_printf("%u", g_value_get_uint(v));
+		}
+	}
+	if (arg != NULL)
+		g_hash_table_insert(f, g_strdup("arg"), g_steal_pointer(&arg));
+
+	focused = self->compositor != NULL
+		? gowl_compositor_get_focused_client(self->compositor) : NULL;
+	if (focused != NULL) {
+		g_hash_table_insert(f, g_strdup("focused-app-id"),
+		                    g_strdup(gowl_client_get_app_id(focused)
+		                             ? gowl_client_get_app_id(focused) : ""));
+		g_hash_table_insert(f, g_strdup("focused-title"),
+		                    g_strdup(gowl_client_get_title(focused)
+		                             ? gowl_client_get_title(focused) : ""));
+	}
+	if (client == NULL)
+		client = focused;
+	if (client != NULL) {
+		const gchar *s;
+
+		s = gowl_client_get_app_id(client);
+		g_hash_table_insert(f, g_strdup("app-id"), g_strdup(s ? s : ""));
+		s = gowl_client_get_title(client);
+		g_hash_table_insert(f, g_strdup("title"), g_strdup(s ? s : ""));
+		set_bool_field(f, "floating", gowl_client_get_floating(client));
+		set_bool_field(f, "fullscreen", gowl_client_get_fullscreen(client));
+		set_bool_field(f, "urgent", gowl_client_get_urgent(client));
+		set_bool_field(f, "xwayland", gowl_client_get_xwayland(client));
+		if (mon == NULL)
+			mon = gowl_client_get_monitor(client);
+	}
+	if (mon == NULL && self->compositor != NULL)
+		mon = gowl_compositor_get_selected_monitor(self->compositor);
+	if (mon != NULL) {
+		const gchar *s;
+		guint32 mask;
+		guint count = 0;
+		GList *l;
+
+		s = gowl_monitor_get_name(mon);
+		g_hash_table_insert(f, g_strdup("monitor"), g_strdup(s ? s : ""));
+		s = gowl_monitor_get_layout_symbol(mon);
+		g_hash_table_insert(f, g_strdup("layout"), g_strdup(s ? s : ""));
+		mask = gowl_monitor_get_tags(mon);
+		set_tag_fields(f, mask);
+		/* Windows showing on that monitor now */
+		for (l = self->compositor != NULL
+		         ? gowl_compositor_get_clients(self->compositor) : NULL;
+		     l != NULL; l = l->next) {
+			GowlClient *c = l->data;
+
+			if (gowl_client_get_monitor(c) == (gpointer)mon
+			    && (gowl_client_get_tags(c) & mask) != 0)
+				count++;
+		}
+		g_hash_table_insert(f, g_strdup("clients"),
+		                    g_strdup_printf("%u", count));
+	}
+
+	now = g_date_time_new_now_local();
+	g_hash_table_insert(f, g_strdup("time"),
+	                    g_date_time_format(now, "%H:%M"));
+	g_hash_table_insert(f, g_strdup("hour"),
+	                    g_strdup_printf("%d", g_date_time_get_hour(now)));
+	g_hash_table_insert(f, g_strdup("weekday"),
+	                    g_strdup(days[g_date_time_get_day_of_week(now)]));
+	return f;
+}
+
+/* Does trigger @t take this event?  Counts either way. */
+static gboolean
+trigger_passes(
+	GowlModuleMacro *self,
+	Trigger         *t,
+	const gchar     *event,
+	guint            n_params,
+	const GValue    *params
+){
+	g_autoptr(GHashTable) fields = NULL;
+
+	if (t->filter == NULL) {
+		t->fired++;
+		return TRUE;
+	}
+	fields = collect_fields(self, event, n_params, params);
+	if (!gowl_macro_filter_eval(t->filter, fields)) {
+		t->skipped++;
+		macro_log(self, LOG_ALL, "trigger `%s' skipped: the filter did not "
+		          "match", t->line);
+		return FALSE;
+	}
+	t->fired++;
+	return TRUE;
+}
+
 /*
  * One marshaller for every compositor signal, whatever its parameters:
  * the trigger only needs to know it fired.  A GowlClient first
@@ -848,6 +1027,10 @@ trigger_marshal(
 	(void)return_value;
 	(void)hint;
 	(void)marshal_data;
+	/* The filter is judged now, against the state the event saw; the
+	   run itself still waits for an idle. */
+	if (!trigger_passes(self, t, t->event, n_params, params))
+		return;
 	if (n_params > 1 && G_VALUE_HOLDS_OBJECT(&params[1])
 	    && GOWL_IS_CLIENT(g_value_get_object(&params[1]))) {
 		GowlClient *c = g_value_get_object(&params[1]);
@@ -871,8 +1054,9 @@ on_trigger_timer(gpointer data)
 	g_autofree gchar *detail = NULL;
 
 	detail = g_strdup_printf("every %u", t->interval);
-	run_with_argstring(self, t->macro, t->args, GOWL_MACRO_TRIGGER_TIMER,
-	                   detail);
+	if (trigger_passes(self, t, "timer", 0, NULL))
+		run_with_argstring(self, t->macro, t->args,
+		                   GOWL_MACRO_TRIGGER_TIMER, detail);
 	if (t->timer != NULL)
 		wl_event_source_timer_update(t->timer, (gint)t->interval);
 	return 0;
@@ -891,6 +1075,8 @@ trigger_free(gpointer data)
 	g_free(t->event);
 	g_free(t->macro);
 	g_free(t->args);
+	g_free(t->line);
+	gowl_macro_filter_free(t->filter);
 	g_free(t);
 }
 
@@ -909,36 +1095,50 @@ install_triggers(GowlModuleMacro *self)
 	guint i;
 
 	g_ptr_array_set_size(self->triggers, 0);
+	self->trigger_errors = 0;
 	if (self->compositor == NULL || self->triggers_text == NULL)
 		return;
 	loop = gowl_compositor_get_event_loop(self->compositor);
 	lines = g_strsplit(self->triggers_text, "\n", -1);
 	for (i = 0; lines[i] != NULL; i++) {
-		g_auto(GStrv) halves = NULL;
 		g_auto(GStrv) words = NULL;
-		gchar *what;
-		gchar *rest;
+		g_autofree gchar *what = NULL;
+		g_autofree gchar *filter_text = NULL;
+		g_autofree gchar *rest = NULL;
+		g_autoptr(GError) ferr = NULL;
+		g_autoptr(GowlMacroFilter) filter = NULL;
 		Trigger *t;
 
 		g_strstrip(lines[i]);
 		if (*lines[i] == '\0' || *lines[i] == '#')
 			continue;
-		halves = g_strsplit(lines[i], ":", 2);
-		if (halves[1] == NULL) {
-			macro_log(self, LOG_FAULT, "trigger `%s': expected "
-			          "\"EVENT: MACRO\"", lines[i]);
+		if (!gowl_macro_filter_split_line(lines[i], &what, &filter_text,
+		                                  &rest, &ferr)) {
+			macro_log(self, LOG_FAULT, "trigger `%s': %s", lines[i],
+			          ferr->message);
+			self->trigger_errors++;
 			continue;
 		}
-		what = g_strstrip(halves[0]);
-		rest = g_strstrip(halves[1]);
+		if (filter_text != NULL) {
+			filter = gowl_macro_filter_parse(filter_text, &ferr);
+			if (filter == NULL) {
+				macro_log(self, LOG_FAULT, "trigger `%s': %s", lines[i],
+				          ferr->message);
+				self->trigger_errors++;
+				continue;
+			}
+		}
 		words = g_strsplit(rest, " ", 2);
 		if (words[0] == NULL || *words[0] == '\0') {
 			macro_log(self, LOG_FAULT, "trigger `%s': no macro", lines[i]);
+			self->trigger_errors++;
 			continue;
 		}
 
 		t = g_new0(Trigger, 1);
 		t->module = self;
+		t->line = g_strdup(lines[i]);
+		t->filter = g_steal_pointer(&filter);
 		t->macro = g_strdup(words[0]);
 		t->args = g_strdup(words[1] != NULL ? g_strstrip(words[1]) : "");
 
@@ -950,6 +1150,7 @@ install_triggers(GowlModuleMacro *self)
 			    || loop == NULL) {
 				macro_log(self, LOG_FAULT, "trigger `%s': the interval is "
 				          "milliseconds, at least 100", lines[i]);
+				self->trigger_errors++;
 				trigger_free(t);
 				continue;
 			}
@@ -962,6 +1163,7 @@ install_triggers(GowlModuleMacro *self)
 			if (g_signal_lookup(what, G_OBJECT_TYPE(self->compositor)) == 0) {
 				macro_log(self, LOG_FAULT, "trigger `%s': the compositor has "
 				          "no `%s' event", lines[i], what);
+				self->trigger_errors++;
 				trigger_free(t);
 				continue;
 			}
@@ -1152,9 +1354,103 @@ status_json(GowlModuleMacro *self)
 	json_builder_add_int_value(b, self->faults);
 	json_builder_set_member_name(b, "timeout-ms");
 	json_builder_add_int_value(b, self->timeout_ms);
+	json_builder_set_member_name(b, "triggers");
+	json_builder_add_int_value(b, self->triggers->len);
+	json_builder_set_member_name(b, "trigger-errors");
+	json_builder_add_int_value(b, self->trigger_errors);
 	json_builder_set_member_name(b, "dbus");
 	json_builder_add_boolean_value(b, self->dbus != NULL
 	                               && gowl_macro_dbus_is_owned(self->dbus));
+	json_builder_end_object(b);
+	return json_finish_ok(b);
+}
+
+/* The triggers in force: what each is, its filter as understood, and
+   how often it fired or was turned away. */
+static gchar *
+triggers_json(GowlModuleMacro *self)
+{
+	g_autoptr(JsonBuilder) b = json_builder_new();
+	guint i;
+
+	json_builder_begin_object(b);
+	json_builder_set_member_name(b, "errors");
+	json_builder_add_int_value(b, self->trigger_errors);
+	json_builder_set_member_name(b, "triggers");
+	json_builder_begin_array(b);
+	for (i = 0; i < self->triggers->len; i++) {
+		Trigger *t = g_ptr_array_index(self->triggers, i);
+		g_autofree gchar *filter = t->filter != NULL
+			? gowl_macro_filter_to_string(t->filter) : NULL;
+
+		json_builder_begin_object(b);
+		json_add_string(b, "line", t->line);
+		json_add_string(b, "event", t->event);
+		json_builder_set_member_name(b, "interval-ms");
+		json_builder_add_int_value(b, t->interval);
+		json_add_string(b, "filter", filter);
+		json_add_string(b, "macro", t->macro);
+		json_add_string(b, "args", t->args);
+		json_builder_set_member_name(b, "fired");
+		json_builder_add_int_value(b, t->fired);
+		json_builder_set_member_name(b, "skipped");
+		json_builder_add_int_value(b, t->skipped);
+		json_builder_end_object(b);
+	}
+	json_builder_end_array(b);
+	json_builder_end_object(b);
+	return json_finish_ok(b);
+}
+
+/*
+ * macro-filter-test [--event=NAME] EXPR: parse EXPR and judge it
+ * against the focused window and the selected monitor now.  The reply
+ * carries the verdict, the filter as understood and every field, so a
+ * filter can be written against real values.
+ */
+static gchar *
+cmd_filter_test(
+	GowlModuleMacro *self,
+	const gchar     *args
+){
+	g_autoptr(GowlMacroFilter) filter = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GHashTable) fields = NULL;
+	g_autoptr(JsonBuilder) b = NULL;
+	g_autofree gchar *event = g_strdup("test");
+	g_autofree gchar *understood = NULL;
+	g_autoptr(GList) keys = NULL;
+	const gchar *expr = args;
+	GList *l;
+
+	if (expr == NULL || *expr == '\0')
+		return g_strdup("ERROR macro-filter-test [--event=NAME] EXPR");
+	if (g_str_has_prefix(expr, "--event=")) {
+		const gchar *sp = strchr(expr, ' ');
+
+		g_free(event);
+		event = sp != NULL ? g_strndup(expr + 8, (gsize)(sp - expr - 8))
+		                   : g_strdup(expr + 8);
+		expr = sp != NULL ? sp + 1 : "";
+	}
+	filter = gowl_macro_filter_parse(expr, &error);
+	if (filter == NULL)
+		return g_strdup_printf("ERROR %s", error->message);
+	fields = collect_fields(self, event, 0, NULL);
+	understood = gowl_macro_filter_to_string(filter);
+
+	b = json_builder_new();
+	json_builder_begin_object(b);
+	json_builder_set_member_name(b, "match");
+	json_builder_add_boolean_value(b, gowl_macro_filter_eval(filter, fields));
+	json_add_string(b, "filter", understood);
+	json_builder_set_member_name(b, "fields");
+	json_builder_begin_object(b);
+	keys = g_hash_table_get_keys(fields);
+	keys = g_list_sort(keys, (GCompareFunc)g_strcmp0);
+	for (l = keys; l != NULL; l = l->next)
+		json_add_string(b, l->data, g_hash_table_lookup(fields, l->data));
+	json_builder_end_object(b);
 	json_builder_end_object(b);
 	return json_finish_ok(b);
 }
@@ -1415,10 +1711,15 @@ macro_handle_command(
 	}
 	if (g_strcmp0(verb, "log") == 0)
 		return cmd_log(self, arg);
+	if (g_strcmp0(verb, "triggers") == 0)
+		return triggers_json(self);
+	if (g_strcmp0(verb, "filter-test") == 0)
+		return cmd_filter_test(self, arg);
 	return g_strdup_printf("ERROR unknown command %s; the macro module "
 	                       "knows " MACRO_PREFIX "run, -stop, -list, -status, "
 	                       "-info, -compile, -dirs, -reload, -clear, "
-	                       "-define, -undefine and -log", command);
+	                       "-define, -undefine, -log, -triggers and "
+	                       "-filter-test", command);
 }
 
 static void

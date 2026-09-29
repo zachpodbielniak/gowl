@@ -3703,14 +3703,15 @@ modules:
     timeout-ms: 2000             # each run's budget; a macro may raise its own
     triggers:
       - "client-added: layout-for-count"
-      - "every 600000: night"
+      - "client-added [app-id=firefox* and not title=*Private*]: gather-app firefox*"
+      - "every 600000 [time>=22:00]: night"
     on-fault: "bar-notify Macro failed|%n: %s"
 
 keybinds:
   "Super+s": { action: ipc-command, arg: "macro-run sort-windows" }
 #+end_src
 
-A list setting such as =triggers= reaches the module as one line per element.  Every setting, the lookup order, the macro API and the shipped examples are in [[file:macros.org][Macros]].
+A list setting such as =triggers= reaches the module as one line per element.  The bracketed filter is optional; conditions combine with =and=, =or=, =not= and parentheses --- see [[file:macros.org::#macros-filters][Filters]].  Every setting, the lookup order, the macro API and the shipped examples are in [[file:macros.org][Macros]].
 
 *** Checking a config
 :PROPERTIES:

@@ -739,6 +739,8 @@ $(OBJDIR)/tests/test-input-remap-engine.o: modules/inputremap/gowl-inputremap-en
 # needs the same dev include dir the module is given.  The runner and
 # example tests load the real macro.so in a headless compositor.
 $(OBJDIR)/tests/test-macro-loader.o: modules/macro/gowl-macro-loader.c modules/macro/gowl-macro-loader.h
+# The filter language is pure GLib: its test includes the engine.
+$(OBJDIR)/tests/test-macro-filter.o: modules/macro/gowl-macro-filter.c modules/macro/gowl-macro-filter.h
 $(OBJDIR)/tests/test-macro-loader.o: TEST_CFLAGS += -DGOWL_MACRO_DEV_INCLUDE='"$(abspath $(BUILDDIR)/include)"'
 $(OUTDIR)/test-macro-runner $(OUTDIR)/test-macro-examples: $(OUTDIR)/modules/macro.so $(OUTDIR)/modules/inputremap.so
 $(OUTDIR)/test-macro-examples: $(OUTDIR)/modules/tile.so $(OUTDIR)/modules/monocle.so

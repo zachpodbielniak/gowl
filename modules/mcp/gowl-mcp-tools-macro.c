@@ -20,7 +20,7 @@
  * gowl-mcp-tools-macro.c - Macros over MCP.
  *
  * Tools: macro_run, macro_stop, macro_list, macro_status, macro_info,
- *        macro_clear
+ *        macro_clear, macro_triggers, macro_filter_test
  *
  * Thin wrappers over the macro module's IPC words (`macro-run',
  * `macro-stop', ...), run on the compositor thread through
@@ -214,6 +214,37 @@ tool_info(
 }
 
 static McpToolResult *
+tool_triggers(
+	GowlModuleMcp *module,
+	JsonObject    *arguments,
+	gpointer       user_data
+){
+	(void)arguments;
+	(void)user_data;
+	return run_ipc(module, "macro-triggers");
+}
+
+static McpToolResult *
+tool_filter_test(
+	GowlModuleMcp *module,
+	JsonObject    *arguments,
+	gpointer       user_data
+){
+	const gchar *filter = string_arg(arguments, "filter");
+	const gchar *event = string_arg(arguments, "event");
+	g_autofree gchar *line = NULL;
+
+	(void)user_data;
+	if (filter == NULL || *filter == '\0')
+		return error_result("Missing required argument: filter");
+	/* The filter is the rest of the line, as typed: not shell-quoted */
+	line = event != NULL && *event != '\0'
+		? g_strdup_printf("macro-filter-test --event=%s %s", event, filter)
+		: g_strdup_printf("macro-filter-test %s", filter);
+	return run_ipc(module, line);
+}
+
+static McpToolResult *
 tool_clear(
 	GowlModuleMcp *module,
 	JsonObject    *arguments,
@@ -241,6 +272,8 @@ GOWL_MCP_MACRO_HANDLER(handle_list, tool_list)
 GOWL_MCP_MACRO_HANDLER(handle_status, tool_status)
 GOWL_MCP_MACRO_HANDLER(handle_info, tool_info)
 GOWL_MCP_MACRO_HANDLER(handle_clear, tool_clear)
+GOWL_MCP_MACRO_HANDLER(handle_triggers, tool_triggers)
+GOWL_MCP_MACRO_HANDLER(handle_filter_test, tool_filter_test)
 
 /* ---- registration ---- */
 
@@ -362,6 +395,15 @@ gowl_mcp_register_macro_tools(
 	static const gchar * const name_props[] = {
 		"name", "The macro's name", NULL
 	};
+	static const gchar * const filter_props[] = {
+		"filter", "A trigger filter, e.g. app-id=firefox* and "
+		"(title=*YouTube* or title=*Twitch*); fields: event, app-id, "
+		"title, floating, fullscreen, urgent, xwayland, focused-app-id, "
+		"focused-title, monitor, layout, tag, tags, clients, arg, time, "
+		"hour, weekday",
+		"event", "The event name the fields are filled in for (optional)",
+		NULL
+	};
 	static const gchar * const clear_props[] = {
 		"name", "The macro to let run again; all of them when omitted",
 		NULL
@@ -398,6 +440,16 @@ gowl_mcp_register_macro_tools(
 		"threaded, its time budget, and whether it is held back. "
 		"Compiles it if it has changed.",
 		TRUE, string_schema(name_props, "name"), handle_info);
+	register_tool(server, module, "macro_triggers",
+		"The event and timer triggers in force: each line, its filter as "
+		"understood (fully parenthesised), the macro and arguments, and "
+		"how often it fired or its filter turned the event away.",
+		TRUE, string_schema(NULL, NULL), handle_triggers);
+	register_tool(server, module, "macro_filter_test",
+		"Judge a trigger filter against the focused window and selected "
+		"monitor now: the verdict, the filter as understood, and every "
+		"field's current value -- write a filter against real values.",
+		TRUE, string_schema(filter_props, "filter"), handle_filter_test);
 	register_tool(server, module, "macro_clear",
 		"Let a macro that was held back after a crash or a runaway loop "
 		"run again.",

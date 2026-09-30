@@ -744,6 +744,7 @@ $(OBJDIR)/tests/test-macro-filter.o: modules/macro/gowl-macro-filter.c modules/m
 $(OBJDIR)/tests/test-macro-loader.o: TEST_CFLAGS += -DGOWL_MACRO_DEV_INCLUDE='"$(abspath $(BUILDDIR)/include)"'
 $(OUTDIR)/test-macro-runner $(OUTDIR)/test-macro-examples: $(OUTDIR)/modules/macro.so $(OUTDIR)/modules/inputremap.so
 $(OUTDIR)/test-macro-examples: $(OUTDIR)/modules/tile.so $(OUTDIR)/modules/monocle.so
+$(OBJDIR)/tests/test-macro-runner.o: TEST_CFLAGS += -DGOWL_TEST_MENU_FILE='"$(abspath data/menu.yaml)"'
 $(OBJDIR)/tests/test-macro-runner.o $(OBJDIR)/tests/test-macro-examples.o: TEST_CFLAGS += -DGOWL_TEST_MACRO_MODULE='"$(abspath $(OUTDIR)/modules/macro.so)"' -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"' -DGOWL_TEST_MACRO_EXAMPLES='"$(abspath data/macros)"' -DGOWL_MACRO_DEV_INCLUDE='"$(abspath $(BUILDDIR)/include)"' $(shell $(PKG_CONFIG) --cflags gio-unix-2.0)
 $(OUTDIR)/modules/macro.so: $(wildcard modules/macro/*.c modules/macro/*.h)
 

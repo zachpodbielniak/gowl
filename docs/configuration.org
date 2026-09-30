@@ -878,6 +878,7 @@ A submenu with =provider: NAME= gets its rows when it opens:
 | =backdrops= | every backdrop style, the current one ticked |
 | =keybinds= | every bind and what it does; choosing one runs it |
 | =tray= | what is in the system tray; choosing one activates it |
+| =macros= | every macro the macro module can run by name, where it lives, and whether it is held back; choosing one runs it (nothing while the module is off) |
 
 The names come from the compositor, so a user file can point a submenu at
 one but cannot declare a new one.

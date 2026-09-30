@@ -274,6 +274,16 @@ A timeline run stops at once: its queued steps are dropped. A threaded run is to
 :PROPERTIES:
 :CUSTOM_ID: macros-triggers
 :END:
+*** The Super+space menu
+:PROPERTIES:
+:CUSTOM_ID: macros-menu
+:END:
+The shipped menu has a *Macros* submenu. Its rows are the macros themselves --- every file on the search path, every macro registered from C, and every defined one (under cmacs, the Elisp macros) --- made by the =macros= provider when the submenu opens, so a new file shows up the next time you open it. Each row says where the macro lives (=~/.config/gowl/macros/x.c=, =Elisp=, =C, registered=) and shows =held back= after a fault. Choosing one is =macro-run --detail=menu -- NAME=: the macro sees trigger =ipc= and detail =menu=, so it can tell it was picked by hand. Search covers the rows too, so typing a macro's name at the top of the menu finds it without opening the submenu.
+
+Above the macros, *Macro tools* stops running macros, lets held-back ones run again and reloads macros and triggers (under cmacs also: manage, write a new macro, show the triggers). While the module is off, the submenu holds only *Load macros*: under cmacs it loads the module and reopens the menu on this list; in standalone gowl it is dimmed and says to enable =modules: macro=.
+
+The menu asks the module over IPC (=macro-list=), like any other client, so it links nothing of it. A macro that needs arguments is run without any from here and reports its usage; bind those to a key or trigger instead.
+
 *** Keybinds
 :PROPERTIES:
 :CUSTOM_ID: macros-keybinds
@@ -305,6 +315,7 @@ keybinds:
 | =macro-define NAME command\vert{}custom\vert{}action ...= | define a macro without a file                    |
 | =macro-undefine NAME=                            | remove one                                                |
 | =macro-log [none\vert{}fault\vert{}run\vert{}all]= | show or set the log level                                |
+| =menu-open macros=                               | open the Super+space menu on the Macros submenu (the menu module) |
 | =macro-triggers=                                 | JSON: each trigger, its filter as understood, fired/skipped counts |
 | =macro-filter-test [--event=E] FILTER=           | judge a filter now; JSON with the verdict and every field |
 

@@ -1032,6 +1032,111 @@ test_filtered_triggers(
 	g_assert_true(g_str_has_prefix(bad, "ERROR filter, at column"));
 }
 
+/* ── The Super+space menu's Macros submenu ──────────────────────── */
+
+static const GowlMenuRow *
+menu_row(
+	GPtrArray   *rows,
+	const gchar *label
+){
+	guint i;
+
+	for (i = 0; i < rows->len; i++) {
+		const GowlMenuRow *r = g_ptr_array_index(rows, i);
+
+		if (g_strcmp0(r->label, label) == 0)
+			return r;
+	}
+	return NULL;
+}
+
+/*
+ * With the module loaded, the shipped Macros submenu lists every macro
+ * by name, after its tools and without `Load macros'; a held-back one
+ * says so; search at the top finds one; choosing a row runs the macro
+ * with the detail `menu'.
+ */
+static void
+test_menu_lists_and_runs_macros(
+	Rig           *r,
+	gconstpointer  data
+){
+	g_autoptr(GowlMenu) menu = gowl_menu_new();
+	g_autoptr(GPtrArray) rows = NULL;
+	g_autoptr(GPtrArray) again = NULL;
+	g_autoptr(GPtrArray) found = NULL;
+	g_autofree gchar *next = NULL;
+	g_autofree gchar *held = NULL;
+	const GowlMenuRow *row;
+	const GowlMenuRow *tools;
+	GowlMenuResult result;
+
+	(void)data;
+	RIG_UP(r);
+	write_macro(r, "from-menu", NULL,
+	            "\tgowl_macro_action(ctx, GOWL_ACTION_CUSTOM,\n"
+	            "\t\tgowl_macro_get_trigger_detail(ctx));\n"
+	            "\treturn TRUE;");
+	write_macro(r, "broken-one", NULL,
+	            "\t(void)ctx;\n\t{ volatile gint *p = NULL; *p = 1; }\n"
+	            "\treturn TRUE;");
+	allow_warnings();
+	held = cmd(r, "macro-run broken-one");
+	restore_warnings();
+	g_assert_true(g_str_has_prefix(held, "ERROR"));
+	assert_ok(r, "macro-define elisp-thing custom (ignore)");
+
+	g_assert_true(gowl_menu_load_file(menu, GOWL_TEST_MENU_FILE, FALSE,
+	                                  NULL));
+	rows = gowl_menu_list(menu, r->compositor, "macros");
+	g_assert_null(menu_row(rows, "Load macros"));
+	tools = menu_row(rows, "Macro tools");
+	g_assert_nonnull(tools);
+	g_assert_true(tools->submenu);
+
+	row = menu_row(rows, "from-menu");
+	g_assert_nonnull(row);
+	g_assert_true(row->runnable);
+	g_assert_nonnull(row->detail);
+	g_assert_true(g_str_has_suffix(row->detail, "/from-menu.c"));
+	g_assert_cmpstr(menu_row(rows, "broken-one")->value, ==, "held back");
+	g_assert_cmpstr(menu_row(rows, "elisp-thing")->detail, ==, "Elisp");
+	/* the shipped examples are on the search path too */
+	g_assert_nonnull(menu_row(rows, "sort-windows"));
+
+	/* choosing it runs it, marked as picked from the menu */
+	result = gowl_menu_activate(menu, r->compositor, row->route, &next);
+	g_assert_cmpint(result, !=, GOWL_MENU_RESULT_OPEN);
+	pump_until(r, 1000, action_seen, "menu");
+	g_assert_cmpuint(n_actions_named("menu"), ==, 1);
+
+	/* found from the top, by name.  On a menu of just this provider:
+	   a search of the whole shipped tree runs every provider, and the
+	   tray one opens a session-bus connection that lives as long as
+	   the process -- which the D-Bus test after this one would trip
+	   over when it takes its private bus down. */
+	{
+		g_autoptr(GowlMenu) small = gowl_menu_new();
+
+		g_assert_true(gowl_menu_load_data(small,
+			"menu:\n"
+			"  - {id: macros, label: Macros, provider: macros}\n",
+			FALSE, NULL));
+		found = gowl_menu_search(small, r->compositor, "from-menu");
+		g_assert_nonnull(menu_row(found, "from-menu"));
+	}
+
+	/* the tools act on the module */
+	again = gowl_menu_list(menu, r->compositor, "macros.tools");
+	g_assert_nonnull(menu_row(again, "Stop running macros"));
+	g_assert_nonnull(menu_row(again, "Let held-back macros run again"));
+	g_clear_pointer(&next, g_free);
+	gowl_menu_activate(menu, r->compositor,
+	                   menu_row(again, "Let held-back macros run again")->route,
+	                   &next);
+	g_assert_false(held_back(r, "broken-one"));
+}
+
 /* ── Registered from C, defined over IPC ────────────────────────── */
 
 static gboolean
@@ -1375,6 +1480,8 @@ main(
 	ADD("notify-and-log-file", RIG_PLAIN, test_notify_and_log_file);
 	ADD("triggers", RIG_PLAIN, test_triggers);
 	ADD("filtered-triggers", RIG_PLAIN, test_filtered_triggers);
+	ADD("menu-lists-and-runs-macros", RIG_PLAIN,
+	    test_menu_lists_and_runs_macros);
 	ADD("registered-and-defined", RIG_PLAIN, test_registered_and_defined);
 	ADD("info-dirs-compile", RIG_PLAIN, test_info_dirs_compile);
 	ADD("remap-target", RIG_REMAP, test_remap_target);

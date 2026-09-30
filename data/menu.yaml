@@ -49,7 +49,8 @@
 # own -- every command a module answers is already a guard.
 #
 # PROVIDERS make their rows at open time: apps (desktop entries),
-# windows, tags, layouts, backdrops, keybinds and tray.
+# windows, tags, layouts, backdrops, keybinds, tray and macros (what
+# the macro module can run by name, when it is loaded).
 #
 # YOUR OWN.  Drop a file at ~/.config/gowl/menu.yaml with the same
 # `menu:' shape.  It is an OVERLAY, matched by id: repeat an id to
@@ -236,6 +237,63 @@ menu:
         label: Record the screen
         elisp: "(call-interactively 'cmacs-gowl-record-toggle)"
         when: {embedder: true}
+
+  # ── Macros: compositor scripts, and cmacs's Elisp ones ──────────
+  # The rows are the macros themselves (the `macros' provider asks the
+  # macro module), so typing a macro's name at the top finds it.  The
+  # module is opt-in: while it is off, `Load macros' stands in -- cmacs
+  # loads it and reopens this list; standalone gowl shows it dimmed.
+  - id: macros
+    icon: "󰐊"
+    label: Macros
+    title: Macros
+    desc: run a macro -- sort, gather, type into a window, ...
+    aliases: [macro, scripts, automation, automate]
+    provider: macros
+    items:
+      - id: load
+        icon: "󰐊"
+        label: Load macros
+        desc: "the macro module is off; standalone: modules: macro: {enabled: true}"
+        elisp: "(cmacs-gowl-macro-menu-load)"
+        when: {ipc: "macro-status", not: true}
+        disabled: {embedder: false}
+      - id: tools
+        icon: "󰒓"
+        label: Macro tools
+        desc: stop, clear, write and inspect macros
+        when: {module: macro}
+        items:
+          - id: stop
+            icon: "󰓛"
+            label: Stop running macros
+            command: "macro-stop"
+          - id: clear
+            icon: "󰑐"
+            label: Let held-back macros run again
+            desc: after a crash or a runaway loop
+            command: "macro-clear"
+          - id: reload
+            icon: "󰑓"
+            label: Reload macros and triggers
+            command: "macro-reload"
+          - id: manage
+            icon: "󰕰"
+            label: Manage macros
+            desc: the list -- run, visit the source, clear
+            elisp: "(cmacs-gowl-macro-list-macros)"
+            when: {embedder: true}
+          - id: new
+            icon: "󰝒"
+            label: Write a new macro
+            elisp: "(call-interactively 'cmacs-gowl-macro-new)"
+            when: {embedder: true}
+          - id: triggers
+            icon: "󰔟"
+            label: Show the triggers
+            desc: each trigger's filter, and how often it fired
+            elisp: "(pp-display-expression (cmacs-gowl-macro-list-triggers) \"*gowl macro triggers*\")"
+            when: {embedder: true}
 
   # ── The machine around the compositor ───────────────────────────
   - id: display

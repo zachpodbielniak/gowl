@@ -1115,6 +1115,8 @@ test_the_shipped_tree_parses(void)
 	g_assert_true(gowl_menu_has_route(menu, "apps"));
 	g_assert_true(gowl_menu_has_route(menu, "style.backdrop"));
 	g_assert_true(gowl_menu_has_route(menu, "system.lock"));
+	g_assert_true(gowl_menu_has_route(menu, "macros"));
+	g_assert_true(gowl_menu_has_route(menu, "macros.tools.stop"));
 
 	{
 		g_autofree gchar *power = gowl_menu_resolve(menu, "power");
@@ -1124,6 +1126,46 @@ test_the_shipped_tree_parses(void)
 
 	rows = gowl_menu_list(menu, NULL, NULL);
 	g_assert_cmpuint(rows->len, >, 5);
+}
+
+/*
+ * The Macros submenu with the macro module OFF: the only row is `Load
+ * macros' -- live under cmacs (an embedder), dimmed in standalone gowl,
+ * where it cannot load anything -- and no tools, no provider rows.
+ * (With the module on, test-macro-runner lists and runs macros.)
+ */
+static void
+test_the_macros_submenu_without_the_module(void)
+{
+	g_autoptr(GowlMenu) menu = gowl_menu_new();
+	GowlCompositor *comp = bare_compositor();
+	g_autoptr(GPtrArray) root = NULL;
+	g_autoptr(GPtrArray) standalone = NULL;
+	g_autoptr(GPtrArray) embedded = NULL;
+	const GowlMenuRow *load;
+
+	g_assert_true(gowl_menu_load_file(menu, GOWL_TEST_MENU_FILE, FALSE,
+	                                  NULL));
+	root = gowl_menu_list(menu, comp, NULL);
+	g_assert_nonnull(row_named(root, "Macros"));
+	g_assert_true(row_named(root, "Macros")->submenu);
+
+	standalone = gowl_menu_list(menu, comp, "macros");
+	g_assert_cmpuint(standalone->len, ==, 1);
+	load = row_named(standalone, "Load macros");
+	g_assert_nonnull(load);
+	g_assert_true(load->disabled);
+	g_assert_null(row_named(standalone, "Macro tools"));
+
+	comp->custom_action_func = (GowlCustomActionFunc)0x1;
+	embedded = gowl_menu_list(menu, comp, "macros");
+	comp->custom_action_func = NULL;
+	load = row_named(embedded, "Load macros");
+	g_assert_nonnull(load);
+	g_assert_false(load->disabled);
+	g_assert_true(load->runnable);
+
+	g_object_unref(comp);
 }
 
 static void
@@ -1585,6 +1627,8 @@ main(int argc, char *argv[])
 	                test_an_empty_tree_still_opens);
 	g_test_add_func("/menu/the-shipped-tree-parses",
 	                test_the_shipped_tree_parses);
+	g_test_add_func("/menu/shipped/macros-without-the-module",
+	                test_the_macros_submenu_without_the_module);
 	g_test_add_func("/menu/every-shipped-row-does-something",
 	                test_every_shipped_row_does_something);
 	g_test_add_func("/menu/a-dead-end-row-says-so",

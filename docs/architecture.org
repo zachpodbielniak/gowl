@@ -1186,7 +1186,7 @@ whenever the menu is listed: =hdr= with no argument toggles, which is
 why the read-only =hdr-state= exists beside it.
 
 *Providers make rows at open time.* =apps= (desktop entries), =windows=,
-=tags=, =layouts=, =backdrops=, =keybinds= and =tray= come from the
+=tags=, =layouts=, =backdrops=, =keybinds=, =tray= and =macros= come from the
 session rather than from the file. Their rows are not stored, so
 activating one re-runs the provider and matches by route --- which is
 also the only correct way, since the list may have changed between being

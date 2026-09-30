@@ -60,6 +60,7 @@
 
 #include <gio/gio.h>
 #include <glib/gstdio.h>
+#include <json-glib/json-glib.h>
 #include <math.h>
 #include <string.h>
 
@@ -1384,6 +1385,87 @@ provider_backdrops(GPtrArray *out, GowlCompositor *comp)
 	g_type_class_unref(klass);
 }
 
+/*
+ * Macros: everything the macro module can run by name -- files on its
+ * search path, macros registered from C, and ones defined over IPC
+ * (which is what cmacs's Elisp macros are).  Asked of the module over
+ * IPC, like any other client would, so the menu links nothing of it and
+ * shows nothing when it is not loaded; menu.yaml has the row for that.
+ * Choosing a row is `macro-run NAME' with the detail `menu', which is
+ * how a macro can tell it was picked here.
+ */
+static void
+provider_macros(GPtrArray *out, GowlCompositor *comp)
+{
+	g_autofree gchar *reply = NULL;
+	g_autoptr(JsonParser) parser = NULL;
+	JsonNode *root;
+	JsonArray *list;
+	const gchar *home;
+	guint i;
+
+	if (comp == NULL)
+		return;
+	reply = gowl_compositor_ipc_command(comp, "macro-list");
+	if (reply == NULL || !g_str_has_prefix(reply, "OK "))
+		return;
+	parser = json_parser_new();
+	if (!json_parser_load_from_data(parser, reply + 3, -1, NULL))
+		return;
+	root = json_parser_get_root(parser);
+	if (root == NULL || !JSON_NODE_HOLDS_ARRAY(root))
+		return;
+
+	home = g_get_home_dir();
+	list = json_node_get_array(root);
+	for (i = 0; i < json_array_get_length(list); i++) {
+		JsonObject *m = json_array_get_object_element(list, i);
+		const gchar *name;
+		const gchar *kind;
+		const gchar *path;
+		const gchar *icon;
+		g_autofree gchar *detail = NULL;
+		g_autofree gchar *quoted = NULL;
+		gboolean held;
+
+		if (m == NULL)
+			continue;
+		name = json_object_get_string_member_with_default(m, "name", NULL);
+		if (name == NULL || *name == '\0')
+			continue;
+		kind = json_object_get_string_member_with_default(m, "kind", "");
+		path = json_object_get_string_member_with_default(m, "path", NULL);
+		held = json_object_get_boolean_member_with_default(m, "held-back",
+		                                                   FALSE);
+
+		/* What it is, on the second line: where a file lives (with ~),
+		   or what kind of name it is */
+		if (g_strcmp0(kind, "file") == 0 && path != NULL) {
+			gsize n = strlen(home);
+
+			detail = n > 1 && g_str_has_prefix(path, home)
+			         && path[n] == '/'
+				? g_strdup_printf("~%s", path + n) : g_strdup(path);
+			icon = "\xf3\xb0\x85\xa9";               /* code */
+		} else if (g_strcmp0(kind, "custom") == 0) {
+			detail = g_strdup("Elisp");
+			icon = "\xee\x98\xb2";                   /* emacs */
+		} else if (g_strcmp0(kind, "registered") == 0) {
+			detail = g_strdup("C, registered");
+			icon = "\xf3\xb0\x90\x8a";               /* play */
+		} else {
+			detail = g_strdup_printf("defined: %s", kind);
+			icon = "\xf3\xb0\x90\x8a";
+		}
+
+		quoted = g_shell_quote(name);
+		provider_add(out, name, icon, name, detail,
+		             held ? "held back" : NULL, FALSE,
+		             GOWL_ACTION_IPC_COMMAND,
+		             g_strdup_printf("macro-run --detail=menu -- %s", quoted));
+	}
+}
+
 static void
 provider_keybinds(GPtrArray *out, GowlCompositor *comp)
 {
@@ -1472,6 +1554,8 @@ provider_run(GowlMenu *self, const gchar *name, GowlCompositor *comp)
 		provider_keybinds(out, comp);
 	else if (g_strcmp0(name, "tray") == 0)
 		provider_tray(out);
+	else if (g_strcmp0(name, "macros") == 0)
+		provider_macros(out, comp);
 	else
 		g_warning("menu: unknown provider `%s'", name);
 

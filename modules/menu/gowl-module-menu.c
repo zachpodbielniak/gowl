@@ -115,6 +115,7 @@ struct _GowlModuleMenu {
 	GowlBarTheme    *theme;
 
 	gboolean         open;
+	gboolean         with_path;         /* opened by menu-path: $PATH too */
 	GowlMonitor     *monitor;           /* unowned; where it is drawn */
 	gchar           *route;             /* what is open */
 	GString         *filter;
@@ -489,6 +490,8 @@ menu_hide(GowlModuleMenu *self)
 		self->node = NULL;
 	}
 	self->open    = FALSE;
+	/* The $PATH listing belongs to the opening that asked for it */
+	self->with_path = FALSE;
 	if (self->monitor != NULL) {
 		g_object_remove_weak_pointer(G_OBJECT(self->monitor),
 		                             (gpointer *)&self->monitor);
@@ -964,9 +967,11 @@ menu_draw_header(GowlModuleMenu *self, cairo_t *cr, gint x, gint y,
 		pango_layout_set_text(layout, self->filter->str, -1);
 		gowl_bar_theme_cairo_set(self->theme, cr, GOWL_BAR_COLOR_TEXT);
 	} else {
-		pango_layout_set_text(layout,
-			"Type to search  \xc2\xb7  = sum  \xc2\xb7  ! run  "
-			"\xc2\xb7  a URL or a path", -1);
+		pango_layout_set_text(layout, self->with_path
+			? "Search apps and programs on $PATH  \xc2\xb7  = sum  "
+			  "\xc2\xb7  ! run"
+			: "Type to search  \xc2\xb7  = sum  \xc2\xb7  ! run  "
+			  "\xc2\xb7  a URL or a path", -1);
 		gowl_bar_theme_cairo_set(self->theme, cr, GOWL_BAR_COLOR_MUTED);
 	}
 	pango_layout_set_width(layout,
@@ -1817,6 +1822,42 @@ menu_handle_command(GowlIpcHandler *handler, const gchar *command,
 		menu_open_route(self, route);
 		return g_strdup(self->open ? "OK open" : "OK");
 	}
+	/*
+	 * menu-path [ROUTE]: the same menu, with every program on $PATH
+	 * listed and searched beside the applications (the `programs' row,
+	 * whose guard asks menu-with-path).  Pressed again while open in
+	 * that mode it closes, as `menu' does; pressed while the ordinary
+	 * menu is open it switches that menu to include $PATH.
+	 */
+	if (g_strcmp0(command, "menu-path") == 0) {
+		if (self->open && self->with_path) {
+			g_autofree gchar *want =
+				gowl_menu_resolve(self->menu, route);
+
+			if (route == NULL
+			    || g_strcmp0(want, self->route) == 0) {
+				menu_hide(self);
+				return g_strdup("OK closed");
+			}
+		}
+		if (self->open && route == NULL) {
+			self->with_path = TRUE;
+			menu_reload_rows(self);
+			self->cursor = menu_step(self, -1, 1);
+			menu_render(self);
+			return g_strdup("OK open");
+		}
+		menu_open_route(self, route);
+		self->with_path = self->open;
+		if (self->open) {
+			menu_reload_rows(self);
+			self->cursor = menu_step(self, -1, 1);
+			menu_render(self);
+		}
+		return g_strdup(self->open ? "OK open" : "OK");
+	}
+	if (g_strcmp0(command, "menu-with-path") == 0)
+		return g_strdup(self->open && self->with_path ? "OK yes" : "OK no");
 	if (g_strcmp0(command, "menu-open") == 0
 	    || g_strcmp0(command, "menu-summon") == 0) {
 		menu_open_route(self, route);

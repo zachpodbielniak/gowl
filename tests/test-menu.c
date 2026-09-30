@@ -1168,6 +1168,148 @@ test_the_macros_submenu_without_the_module(void)
 	g_object_unref(comp);
 }
 
+/*
+ * The path provider: every executable on $PATH once -- the first
+ * directory wins, as in a shell -- sorted, and on a route of its own
+ * even where slugify folds names together (g++ and g).  Choosing g++
+ * must run g++: a shared route would run whichever came first.
+ */
+static void
+test_the_path_provider(void)
+{
+	g_autofree gchar *a = g_dir_make_tmp("gowl-path-a-XXXXXX", NULL);
+	g_autofree gchar *b = g_dir_make_tmp("gowl-path-b-XXXXXX", NULL);
+	g_autofree gchar *marker = g_build_filename(a, "ran", NULL);
+	g_autofree gchar *old_path = g_strdup(g_getenv("PATH"));
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *next = NULL;
+	g_autoptr(GowlMenu) menu = gowl_menu_new();
+	g_autoptr(GPtrArray) rows = NULL;
+	GowlCompositor *comp = bare_compositor();
+	g_autoptr(GHashTable) routes = NULL;
+	static const gchar *const execs[] = { "alpha", "g", "g++", NULL };
+	const GowlMenuRow *gpp;
+	gint64 deadline;
+	guint i;
+
+	/* a: three tools that write their own name to `ran' */
+	for (i = 0; execs[i] != NULL; i++) {
+		g_autofree gchar *f = g_build_filename(a, execs[i], NULL);
+		g_autofree gchar *body = g_strdup_printf(
+			"#!/bin/sh\necho %s > '%s'\n", execs[i], marker);
+
+		g_assert_true(g_file_set_contents(f, body, -1, NULL));
+		g_chmod(f, 0755);
+	}
+	/* ... plus things that are not programs */
+	{
+		g_autofree gchar *txt = g_build_filename(a, "notes.txt", NULL);
+		g_autofree gchar *hid = g_build_filename(a, ".hidden", NULL);
+		g_autofree gchar *sub = g_build_filename(a, "subdir", NULL);
+
+		g_assert_true(g_file_set_contents(txt, "x", -1, NULL));
+		g_assert_true(g_file_set_contents(hid, "#!/bin/sh\n", -1, NULL));
+		g_chmod(hid, 0755);
+		g_mkdir(sub, 0755);
+	}
+	/* b: a second alpha (shadowed) and beta */
+	{
+		g_autofree gchar *f1 = g_build_filename(b, "alpha", NULL);
+		g_autofree gchar *f2 = g_build_filename(b, "beta", NULL);
+
+		g_assert_true(g_file_set_contents(f1, "#!/bin/sh\n", -1, NULL));
+		g_assert_true(g_file_set_contents(f2, "#!/bin/sh\n", -1, NULL));
+		g_chmod(f1, 0755);
+		g_chmod(f2, 0755);
+	}
+	path = g_strdup_printf("%s:%s:/nonexistent-dir", a, b);
+	g_setenv("PATH", path, TRUE);
+
+	g_assert_true(gowl_menu_load_data(menu,
+		"menu:\n"
+		"  - {id: programs, label: Programs, provider: path}\n",
+		FALSE, NULL));
+	rows = gowl_menu_list(menu, comp, "programs");
+	g_assert_cmpuint(rows->len, ==, 4);
+	g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(rows, 0))->label, ==,
+	                "alpha");
+	g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(rows, 1))->label, ==,
+	                "beta");
+	g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(rows, 2))->label, ==,
+	                "g");
+	g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(rows, 3))->label, ==,
+	                "g++");
+	g_assert_cmpstr(row_named(rows, "alpha")->detail, ==, a);   /* first */
+	g_assert_cmpstr(row_named(rows, "beta")->detail, ==, b);
+	g_assert_null(row_named(rows, "notes.txt"));
+	g_assert_null(row_named(rows, ".hidden"));
+	g_assert_null(row_named(rows, "subdir"));
+
+	routes = g_hash_table_new(g_str_hash, g_str_equal);
+	for (i = 0; i < rows->len; i++) {
+		const GowlMenuRow *r = g_ptr_array_index(rows, i);
+
+		g_assert_true(r->runnable);
+		g_assert_false(g_hash_table_contains(routes, r->route));
+		g_hash_table_add(routes, r->route);
+	}
+
+	gpp = row_named(rows, "g++");
+	g_assert_cmpint(gowl_menu_activate(menu, comp, gpp->route, &next), !=,
+	                GOWL_MENU_RESULT_OPEN);
+	deadline = g_get_monotonic_time() + 5 * G_USEC_PER_SEC;
+	while (!g_file_test(marker, G_FILE_TEST_EXISTS)
+	       && g_get_monotonic_time() < deadline)
+		g_usleep(20 * 1000);
+	{
+		g_autofree gchar *who = NULL;
+
+		g_assert_true(g_file_get_contents(marker, &who, NULL, NULL));
+		g_assert_cmpstr(g_strstrip(who), ==, "g++");
+	}
+
+	g_setenv("PATH", old_path, TRUE);
+	g_object_unref(comp);
+	for (i = 0; execs[i] != NULL; i++) {
+		g_autofree gchar *f = g_build_filename(a, execs[i], NULL);
+
+		g_unlink(f);
+	}
+	{
+		g_autofree gchar *p1 = g_build_filename(a, "notes.txt", NULL);
+		g_autofree gchar *p2 = g_build_filename(a, ".hidden", NULL);
+		g_autofree gchar *p3 = g_build_filename(a, "subdir", NULL);
+		g_autofree gchar *p4 = g_build_filename(b, "alpha", NULL);
+		g_autofree gchar *p5 = g_build_filename(b, "beta", NULL);
+
+		g_unlink(p1);
+		g_unlink(p2);
+		g_rmdir(p3);
+		g_unlink(p4);
+		g_unlink(p5);
+		g_unlink(marker);
+	}
+	g_rmdir(a);
+	g_rmdir(b);
+}
+
+/* The shipped Programs row only shows for a menu-path opening. */
+static void
+test_the_shipped_programs_row_needs_menu_path(void)
+{
+	g_autoptr(GowlMenu) menu = gowl_menu_new();
+	GowlCompositor *comp = bare_compositor();
+	g_autoptr(GPtrArray) root = NULL;
+
+	g_assert_true(gowl_menu_load_file(menu, GOWL_TEST_MENU_FILE, FALSE,
+	                                  NULL));
+	g_assert_true(gowl_menu_has_route(menu, "programs"));
+	root = gowl_menu_list(menu, comp, NULL);
+	g_assert_null(row_named(root, "Programs on $PATH"));
+	g_assert_nonnull(row_named(root, "Apps"));
+	g_object_unref(comp);
+}
+
 static void
 test_every_shipped_row_does_something(void)
 {
@@ -1627,6 +1769,9 @@ main(int argc, char *argv[])
 	                test_an_empty_tree_still_opens);
 	g_test_add_func("/menu/the-shipped-tree-parses",
 	                test_the_shipped_tree_parses);
+	g_test_add_func("/menu/provider/path", test_the_path_provider);
+	g_test_add_func("/menu/shipped/programs-needs-menu-path",
+	                test_the_shipped_programs_row_needs_menu_path);
 	g_test_add_func("/menu/shipped/macros-without-the-module",
 	                test_the_macros_submenu_without_the_module);
 	g_test_add_func("/menu/every-shipped-row-does-something",

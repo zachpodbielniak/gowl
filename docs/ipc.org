@@ -60,6 +60,8 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =ping=, =version=, =help=     |                                                    |
 | =subscribe=                   | =OK subscribed=; events follow on this connection  |
 | =menu [ROUTE]=                | Opens the menu card, or closes it when it is already at =ROUTE= (modules/menu) |
+| =menu-path [ROUTE]=           | Like =menu=, with every program on =$PATH= listed (the =programs= row) and searched; over an open plain menu it adds them |
+| =menu-with-path=              | =yes= while the card is open from =menu-path=, else =no= (what the =programs= row's guard asks) |
 | =menu-open ROUTE=             | Always opens, at a route.  A route that names an action runs it |
 | =menu-close=                  | Closes the card |
 | =menu-refresh=                | Re-reads =menu.yaml= and the user's overlay |

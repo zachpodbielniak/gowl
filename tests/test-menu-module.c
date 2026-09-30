@@ -34,6 +34,7 @@
  */
 
 #include <gmodule.h>
+#include <glib/gstdio.h>
 #include <string.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
@@ -42,6 +43,7 @@
 #include "core/gowl-monitor.h"
 #include "menu/gowl-menu.h"
 #include "module/gowl-module.h"
+#include "module/gowl-module-manager.h"
 #include "interfaces/gowl-ipc-handler.h"
 #include "interfaces/gowl-keybind-handler.h"
 #include "interfaces/gowl-startup-handler.h"
@@ -696,6 +698,123 @@ test_super_hjkl_is_not_ours(Fixture *f, gconstpointer data)
 	g_assert_false(is_open(f));
 }
 
+/* ── menu-path: the same menu, with every program on $PATH ─────── */
+
+/*
+ * The whole loop, through a real module manager so the tree's `ipc'
+ * guard can reach the module: the Programs row exists only while the
+ * card was opened by menu-path, lists what is on $PATH, and goes when
+ * the card closes.  The plain menu never shows it.
+ */
+static void
+test_menu_path_adds_programs(void)
+{
+	g_autofree gchar *bin = NULL;
+	g_autofree gchar *tool = NULL;
+	g_autofree gchar *old_path = g_strdup(g_getenv("PATH"));
+	g_autoptr(GError) error = NULL;
+	GowlCompositor *comp;
+	GowlMonitor *mon;
+	GowlModuleManager *mgr;
+	GowlModule *module;
+	GowlIpcHandler *ipc;
+	GType type;
+	gchar *r;
+
+	type = menu_type();
+	if (type == 0) {
+		g_test_skip("menu.so did not load");
+		return;
+	}
+	bin = g_dir_make_tmp("gowl-menu-path-XXXXXX", NULL);
+	tool = g_build_filename(bin, "zz-menu-path-tool", NULL);
+	g_assert_true(g_file_set_contents(tool, "#!/bin/sh\n", -1, NULL));
+	g_chmod(tool, 0755);
+	g_setenv("PATH", bin, TRUE);
+
+	g_assert_true(gowl_menu_load_data(gowl_menu_get_default(),
+		"menu:\n"
+		"  - {id: apps, label: Apps, spawn: \"/bin/true\"}\n"
+		"  - {id: programs, label: Programs on $PATH, provider: path,\n"
+		"     when: {ipc: \"menu-with-path\"}}\n",
+		FALSE, NULL));
+
+	comp = gowl_compositor_new();
+	mon = g_object_new(GOWL_TYPE_MONITOR, NULL);
+	mon->w.width = 1920;
+	mon->w.height = 1080;
+	comp->selmon = mon;
+	comp->monitors = g_list_append(NULL, mon);
+	mgr = gowl_module_manager_new();
+	comp->module_mgr = mgr;
+	g_assert_true(gowl_module_manager_register(mgr, type, &error));
+	g_assert_no_error(error);
+	gowl_module_manager_activate_all(mgr);
+	module = gowl_module_manager_find_module(mgr, "menu");
+	g_assert_nonnull(module);
+	gowl_startup_handler_on_startup(GOWL_STARTUP_HANDLER(module), comp);
+	ipc = GOWL_IPC_HANDLER(module);
+
+	/* closed, and the plain menu: no Programs */
+	r = gowl_ipc_handler_handle_command(ipc, "menu-with-path", NULL);
+	g_assert_cmpstr(r, ==, "OK no");
+	g_free(r);
+	r = gowl_ipc_handler_handle_command(ipc, "menu", NULL);
+	g_assert_cmpstr(r, ==, "OK open");
+	g_free(r);
+	r = gowl_ipc_handler_handle_command(ipc, "menu-list", NULL);
+	g_assert_null(strstr(r, "Programs on $PATH"));
+	g_free(r);
+
+	/* menu-path over the open plain menu switches it to include $PATH */
+	r = gowl_ipc_handler_handle_command(ipc, "menu-path", NULL);
+	g_assert_cmpstr(r, ==, "OK open");
+	g_free(r);
+	r = gowl_ipc_handler_handle_command(ipc, "menu-with-path", NULL);
+	g_assert_cmpstr(r, ==, "OK yes");
+	g_free(r);
+	r = gowl_ipc_handler_handle_command(ipc, "menu-list", NULL);
+	g_assert_nonnull(strstr(r, "programs\tPrograms on $PATH\tmenu"));
+	g_free(r);
+	r = gowl_ipc_handler_handle_command(ipc, "menu-list", "programs");
+	g_assert_nonnull(strstr(r, "zz-menu-path-tool"));
+	g_free(r);
+
+	/* pressed again it closes, and the mode goes with it */
+	r = gowl_ipc_handler_handle_command(ipc, "menu-path", NULL);
+	g_assert_cmpstr(r, ==, "OK closed");
+	g_free(r);
+	r = gowl_ipc_handler_handle_command(ipc, "menu-with-path", NULL);
+	g_assert_cmpstr(r, ==, "OK no");
+	g_free(r);
+
+	/* opened by menu-path from closed; the plain key then closes it,
+	   and the next plain opening has no $PATH */
+	r = gowl_ipc_handler_handle_command(ipc, "menu-path", NULL);
+	g_assert_cmpstr(r, ==, "OK open");
+	g_free(r);
+	r = gowl_ipc_handler_handle_command(ipc, "menu", NULL);
+	g_assert_cmpstr(r, ==, "OK closed");
+	g_free(r);
+	r = gowl_ipc_handler_handle_command(ipc, "menu", NULL);
+	g_assert_cmpstr(r, ==, "OK open");
+	g_free(r);
+	r = gowl_ipc_handler_handle_command(ipc, "menu-with-path", NULL);
+	g_assert_cmpstr(r, ==, "OK no");
+	g_free(r);
+	g_free(gowl_ipc_handler_handle_command(ipc, "menu-close", NULL));
+
+	g_setenv("PATH", old_path, TRUE);
+	comp->module_mgr = NULL;
+	g_object_unref(mgr);
+	g_clear_pointer(&comp->monitors, g_list_free);
+	comp->selmon = NULL;
+	g_object_unref(comp);
+	g_object_unref(mon);
+	g_unlink(tool);
+	g_rmdir(bin);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -706,6 +825,8 @@ main(int argc, char *argv[])
 	g_test_add(path, Fixture, NULL, fixture_setup, fn, fixture_teardown)
 
 	ADD("/menu-module/toggles", test_menu_toggles);
+	g_test_add_func("/menu-module/menu-path-adds-programs",
+	                test_menu_path_adds_programs);
 	ADD("/menu-module/toggling-to-another-route-moves",
 	    test_toggling_to_another_route_moves);
 	ADD("/menu-module/open-never-closes", test_open_never_closes);

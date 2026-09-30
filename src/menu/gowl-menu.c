@@ -302,7 +302,7 @@ cached_rows_free(gpointer data)
 static gint64
 provider_ttl(const gchar *name)
 {
-	if (g_strcmp0(name, "apps") == 0)
+	if (g_strcmp0(name, "apps") == 0 || g_strcmp0(name, "path") == 0)
 		return 5 * G_USEC_PER_SEC;
 	return 0;
 }
@@ -1386,6 +1386,85 @@ provider_backdrops(GPtrArray *out, GowlCompositor *comp)
 }
 
 /*
+ * Programs on $PATH: every executable, by the name a shell would run.
+ *
+ * The first directory that has a name wins, as it does in a shell, so
+ * the row runs what typing the name would.  Rows are sorted by name.
+ * Their ids are the name slugified -- and slugify folds `g++' and `g'
+ * alike, so a collision gets -2, -3 in sorted order: activation finds a
+ * provider row again by its route, and two rows on one route would run
+ * whichever came first.  Cached like the application list, since a
+ * $PATH scan is thousands of stats and search runs providers on every
+ * keystroke.
+ */
+static void
+provider_path(GPtrArray *out)
+{
+	g_autoptr(GHashTable) found = NULL;
+	g_autoptr(GHashTable) slugs = NULL;
+	g_autoptr(GList) names = NULL;
+	g_auto(GStrv) dirs = NULL;
+	const gchar *env;
+	const gchar *home;
+	GList *l;
+	guint i;
+
+	env = g_getenv("PATH");
+	if (env == NULL || *env == '\0')
+		return;
+	found = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+	dirs = g_strsplit(env, G_SEARCHPATH_SEPARATOR_S, -1);
+	for (i = 0; dirs[i] != NULL; i++) {
+		g_autoptr(GDir) dir = NULL;
+		const gchar *entry;
+
+		if (*dirs[i] == '\0')
+			continue;
+		dir = g_dir_open(dirs[i], 0, NULL);
+		if (dir == NULL)
+			continue;
+		while ((entry = g_dir_read_name(dir)) != NULL) {
+			g_autofree gchar *full = NULL;
+
+			if (entry[0] == '.' || g_hash_table_contains(found, entry))
+				continue;
+			full = g_build_filename(dirs[i], entry, NULL);
+			if (g_file_test(full, G_FILE_TEST_IS_DIR)
+			    || !g_file_test(full, G_FILE_TEST_IS_EXECUTABLE))
+				continue;
+			g_hash_table_insert(found, g_strdup(entry),
+			                    g_steal_pointer(&full));
+		}
+	}
+
+	home = g_get_home_dir();
+	slugs = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	names = g_hash_table_get_keys(found);
+	names = g_list_sort(names, (GCompareFunc)g_strcmp0);
+	for (l = names; l != NULL; l = l->next) {
+		const gchar *name = l->data;
+		const gchar *full = g_hash_table_lookup(found, name);
+		g_autofree gchar *base = slugify(name);
+		g_autofree gchar *id = g_strdup(base);
+		g_autofree gchar *where = g_path_get_dirname(full);
+		g_autofree gchar *shown = NULL;
+		gsize n = strlen(home);
+		guint k = 2;
+
+		while (g_hash_table_contains(slugs, id)) {
+			g_free(id);
+			id = g_strdup_printf("%s-%u", base, k++);
+		}
+		g_hash_table_add(slugs, g_strdup(id));
+		shown = n > 1 && g_str_has_prefix(where, home)
+		        && (where[n] == '/' || where[n] == '\0')
+			? g_strdup_printf("~%s", where + n) : g_strdup(where);
+		provider_add(out, id, "\xef\x84\xa0", name, shown, NULL, FALSE,
+		             GOWL_ACTION_SPAWN, g_shell_quote(full));
+	}
+}
+
+/*
  * Macros: everything the macro module can run by name -- files on its
  * search path, macros registered from C, and ones defined over IPC
  * (which is what cmacs's Elisp macros are).  Asked of the module over
@@ -1556,6 +1635,8 @@ provider_run(GowlMenu *self, const gchar *name, GowlCompositor *comp)
 		provider_tray(out);
 	else if (g_strcmp0(name, "macros") == 0)
 		provider_macros(out, comp);
+	else if (g_strcmp0(name, "path") == 0)
+		provider_path(out);
 	else
 		g_warning("menu: unknown provider `%s'", name);
 

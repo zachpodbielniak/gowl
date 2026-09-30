@@ -879,6 +879,9 @@ A submenu with =provider: NAME= gets its rows when it opens:
 | =keybinds= | every bind and what it does; choosing one runs it |
 | =tray= | what is in the system tray; choosing one activates it |
 | =macros= | every macro the macro module can run by name, where it lives, and whether it is held back; choosing one runs it (nothing while the module is off) |
+| =path= | every executable on =$PATH=, the first directory's copy of each name, sorted; choosing one runs it by full path |
+
+The shipped tree lists =path= under *Programs on $PATH* with =when: {ipc: "menu-with-path"}=, so it appears only when the card was opened with =menu-path= (cmacs binds that to =Super+Shift+space=): thousands of command-line tools in every ordinary search would bury the applications.  Like the application list, it is cached for five seconds.
 
 The names come from the compositor, so a user file can point a submenu at
 one but cannot declare a new one.
@@ -889,7 +892,7 @@ knowing it lives under Apps. A declared row always outranks an
 application that matched as well, so an application called =Settings=
 cannot capture the route =Setup= is reached by.
 
-The application list is *cached for five seconds*. Enumerating desktop
+The application and =$PATH= lists are *cached for five seconds*. Enumerating desktop
 entries costs about 18 ms and search runs providers on every keystroke,
 on the compositor thread --- uncached, typing six characters is a tenth
 of a second of stutter across the whole desktop. Nothing else is cached:
@@ -934,6 +937,7 @@ out about them.
 
 #+begin_src sh
 gowl menu                    # toggle at the root
+gowl menu-path               # the same, with programs on $PATH too
 gowl menu-open system        # always open, at a route
 gowl menu-close
 gowl menu-refresh            # re-read menu.yaml

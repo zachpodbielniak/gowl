@@ -49,8 +49,9 @@
 # own -- every command a module answers is already a guard.
 #
 # PROVIDERS make their rows at open time: apps (desktop entries),
-# windows, tags, layouts, backdrops, keybinds, tray and macros (what
-# the macro module can run by name, when it is loaded).
+# windows, tags, layouts, backdrops, keybinds, tray, macros (what the
+# macro module can run by name, when it is loaded) and path (every
+# executable on $PATH).
 #
 # YOUR OWN.  Drop a file at ~/.config/gowl/menu.yaml with the same
 # `menu:' shape.  It is an OVERLAY, matched by id: repeat an id to
@@ -66,6 +67,18 @@ menu:
     desc: launch an installed application
     aliases: [app, applications, launcher, run]
     provider: apps
+
+  # Every executable on $PATH.  Only when the menu was opened for it --
+  # `menu-path', Super+Shift+space under cmacs -- since thousands of
+  # command-line tools would bury the applications in every search.
+  - id: programs
+    icon: ""
+    label: Programs on $PATH
+    title: Programs
+    desc: every executable on $PATH
+    aliases: [path, bin, binaries, commands, command]
+    provider: path
+    when: {ipc: "menu-with-path"}
 
   - id: windows
     icon: "󰣆"

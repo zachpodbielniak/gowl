@@ -700,6 +700,7 @@ list is the interface you can use without having remembered anything.
 | Key | Does |
 |-----+------|
 | =Super+space= | Open it, or close it |
+| =Super+Shift+space= | Open it with every program on =$PATH= listed and searched too |
 | =Super+Alt+space= | Open it at Applications |
 | =Super+Ctrl+Escape= | Open it at System |
 
@@ -881,7 +882,7 @@ A submenu with =provider: NAME= gets its rows when it opens:
 | =macros= | every macro the macro module can run by name, where it lives, and whether it is held back; choosing one runs it (nothing while the module is off) |
 | =path= | every executable on =$PATH=, the first directory's copy of each name, sorted; choosing one runs it by full path |
 
-The shipped tree lists =path= under *Programs on $PATH* with =when: {ipc: "menu-with-path"}=, so it appears only when the card was opened with =menu-path= (cmacs binds that to =Super+Shift+space=): thousands of command-line tools in every ordinary search would bury the applications.  Like the application list, it is cached for five seconds.
+The shipped tree lists =path= under *Programs on $PATH* with =when: {ipc: "menu-with-path"}=, so it appears only when the card was opened with =menu-path= (bound to =Super+Shift+space= by default, in gowl and cmacs alike): thousands of command-line tools in every ordinary search would bury the applications.  Like the application list, it is cached for five seconds.
 
 The names come from the compositor, so a user file can point a submenu at
 one but cannot declare a new one.

@@ -28,7 +28,7 @@
 
 set -e
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 fail=0
 
 yaml="$root/data/default-config.yaml"
@@ -69,6 +69,25 @@ if [ -f "$main" ]; then
 		echo "      Super+Shift+f to toggle_float"
 		fail=1
 	fi
+fi
+
+# --- Super+Shift+space is the $PATH menu, not a second fullscreen ---
+#
+# It toggled fullscreen next to Super+f; it now opens the menu with every
+# program on $PATH (menu-path).  In both copies, for the same reason as
+# above.
+if ! grep -q '^[[:space:]]*"Super+Shift+space":[[:space:]]*{[[:space:]]*action:[[:space:]]*ipc_command,[[:space:]]*arg:[[:space:]]*"menu-path"' "$yaml"; then
+	echo "FAIL: default-config.yaml does not bind Super+Shift+space to menu-path"
+	fail=1
+fi
+if grep -q 'Super+Shift+space.*toggle_fullscreen' "$yaml" "$main"; then
+	echo "FAIL: Super+Shift+space is a second fullscreen toggle again"
+	fail=1
+fi
+if ! grep -q 'Super+Shift+space\\": { action: ipc_command, arg: \\"menu-path' "$main"; then
+	echo "FAIL: the config embedded in main.c does not bind Super+Shift+space"
+	echo "      to menu-path"
+	fail=1
 fi
 
 # --- and the float layout is still there to be cycled to ---

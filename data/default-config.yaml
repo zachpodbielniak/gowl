@@ -483,7 +483,6 @@ keybinds:
 
   # Client management
   "Super+Shift+c": { action: kill_client, desc: "Close window" }
-  "Super+Shift+space": { action: toggle_fullscreen, desc: "Toggle fullscreen" }
   "Super+Shift+Return": { action: zoom, desc: "Promote to master" }
 
   # Focus navigation
@@ -612,6 +611,10 @@ keybinds:
   # ipc_command, so this line needs to know nothing about it -- and does
   # nothing at all until `modules.menu.enabled' is true.
   "Super+space": { action: ipc_command, arg: "menu", desc: "Menu" }
+  # The same menu with every program on $PATH listed and searched beside
+  # the applications (menu-path); plain Super+space leaves them out.
+  # Fullscreen is Super+f.
+  "Super+Shift+space": { action: ipc_command, arg: "menu-path", desc: "Menu, with programs on $PATH" }
   "Super+Alt+space": { action: ipc_command, arg: "menu-open apps", desc: "Menu: applications" }
   "Super+Ctrl+Escape": { action: ipc_command, arg: "menu-open system", desc: "Menu: system" }
 

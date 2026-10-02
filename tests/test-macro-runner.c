@@ -1840,6 +1840,200 @@ test_clipboard_history_own_sets(
 	}
 }
 
+/* A provider row by its value (the key) -- labels may be descriptions. */
+static const GowlMenuRow *
+row_by_value(
+	GPtrArray   *rows,
+	const gchar *value
+){
+	guint i;
+
+	for (i = 0; rows != NULL && i < rows->len; i++) {
+		const GowlMenuRow *r = g_ptr_array_index(rows, i);
+
+		if (g_strcmp0(r->value, value) == 0)
+			return r;
+	}
+	return NULL;
+}
+
+/*
+ * Super+?: the Keybindings entry is the running config, read when it
+ * opens, every row saying what the key runs -- macros resolved through
+ * the macro module (file, C-registered, missing), custom code called
+ * out as Elisp under an embedder, programs, module commands, key
+ * modes, the locked flag -- plus the macro module's stop key, the mouse
+ * and gesture binds, and remap rules whose targets run something.
+ */
+static void
+test_menu_keybinds_introspect(
+	Rig           *r,
+	gconstpointer  data
+){
+	g_autoptr(GowlMenu) menu = gowl_menu_new();
+	g_autoptr(GPtrArray) rows = NULL;
+	g_autoptr(GPtrArray) again = NULL;
+	g_autoptr(GPtrArray) code = NULL;
+	g_autoptr(GPtrArray) mouse = NULL;
+	g_autoptr(GPtrArray) gest = NULL;
+	g_autoptr(GPtrArray) devs = NULL;
+	g_autoptr(GPtrArray) found = NULL;
+	g_autofree gchar *next = NULL;
+	const GowlMenuRow *row;
+	guint i;
+
+	(void)data;
+	RIG_UP(r);
+	write_macro(r, "tidy-up", NULL, "\t(void)ctx;\n\treturn TRUE;");
+	gowl_macro_register_func("c-made", c_macro, g_strdup("x"), g_free);
+
+	gowl_config_add_keybind_ex(r->config, GOWL_KEY_MOD_LOGO, XKB_KEY_F1,
+		GOWL_ACTION_IPC_COMMAND, "macro-run tidy-up", "Tidy the windows",
+		NULL, 0);
+	gowl_config_add_keybind_ex(r->config, GOWL_KEY_MOD_LOGO, XKB_KEY_F2,
+		GOWL_ACTION_IPC_COMMAND, "macro-run --trigger=api -- c-made 3",
+		NULL, NULL, 0);
+	gowl_config_add_keybind_ex(r->config, GOWL_KEY_MOD_LOGO, XKB_KEY_F3,
+		GOWL_ACTION_IPC_COMMAND, "macro-run nowhere-to-be-found", NULL,
+		NULL, 0);
+	gowl_config_add_keybind_ex(r->config, GOWL_KEY_MOD_LOGO, XKB_KEY_F4,
+		GOWL_ACTION_CUSTOM, "(menu-picked-me)", NULL, NULL, 0);
+	gowl_config_add_keybind_ex(r->config, GOWL_KEY_MOD_LOGO, XKB_KEY_F5,
+		GOWL_ACTION_SPAWN, "foot -e htop", NULL, NULL, 0);
+	gowl_config_add_keybind_ex(r->config, GOWL_KEY_MOD_LOGO, XKB_KEY_F6,
+		GOWL_ACTION_IPC_COMMAND, "screenshot-ocr", NULL, NULL, 0);
+	gowl_config_add_keybind_ex(r->config, 0, XKB_KEY_h,
+		GOWL_ACTION_SET_MFACT, "-0.05", NULL, "resize", 0);
+	gowl_config_add_keybind_ex(r->config, 0, XKB_KEY_XF86AudioMute,
+		GOWL_ACTION_SPAWN, "wpctl set-mute @DEFAULT_SINK@ toggle",
+		"Mute", NULL, GOWL_KEYBIND_FLAG_LOCKED);
+	gowl_config_add_mousebind(r->config, GOWL_KEY_MOD_LOGO, 0x110,
+		GOWL_ACTION_MOVE_WINDOW, NULL, NULL);
+	gowl_config_add_mousebind(r->config, GOWL_KEY_MOD_LOGO, 0x112,
+		GOWL_ACTION_IPC_COMMAND, "macro-run tidy-up", NULL);
+	gowl_config_add_gesture(r->config, GOWL_GESTURE_SWIPE,
+		GOWL_GESTURE_LEFT, 3, GOWL_ACTION_TAG_VIEW, "2", "Next tag");
+
+	g_assert_true(gowl_menu_load_file(menu, GOWL_TEST_MENU_FILE, FALSE,
+	                                  NULL));
+	g_assert_true(gowl_menu_is_submenu(menu, "keybinds"));
+	/* Learn's row is a link to it now */
+	{
+		g_autofree gchar *to = NULL;
+
+		g_assert_cmpint(gowl_menu_activate(menu, r->compositor,
+		                                   "learn.keybinds", &to),
+		                ==, GOWL_MENU_RESULT_OPEN);
+		g_assert_cmpstr(to, ==, "keybinds");
+	}
+	rows = gowl_menu_list(menu, r->compositor, "keybinds");
+	/* the filter views first */
+	g_assert_nonnull(menu_row(rows, "Keys that run macros or custom code"));
+	g_assert_nonnull(menu_row(rows, "Mouse buttons"));
+	g_assert_nonnull(menu_row(rows, "Touchpad gestures"));
+
+	/* a C file macro, with its description, and where it lives */
+	row = row_by_value(rows, "Super+F1");
+	g_assert_nonnull(row);
+	g_assert_cmpstr(row->label, ==, "Tidy the windows");
+	g_assert_nonnull(strstr(row->detail, "Macro tidy-up"));
+	g_assert_nonnull(strstr(row->detail, "C file"));
+	g_assert_nonnull(strstr(row->detail, "/tidy-up.c"));
+	/* no description: one made from the macro and its arguments */
+	row = row_by_value(rows, "Super+F2");
+	g_assert_cmpstr(row->label, ==, "Run macro c-made 3");
+	g_assert_nonnull(strstr(row->detail, "C, registered"));
+	row = row_by_value(rows, "Super+F3");
+	g_assert_nonnull(strstr(row->detail, "not found on the macro path"));
+	/* custom code: Elisp, because an embedder's handler is set */
+	row = row_by_value(rows, "Super+F4");
+	g_assert_cmpstr(row->label, ==, "Custom: (menu-picked-me)");
+	g_assert_nonnull(strstr(row->detail, "Custom code (Elisp)"));
+	row = row_by_value(rows, "Super+F5");
+	g_assert_cmpstr(row->label, ==, "Run foot -e htop");
+	g_assert_nonnull(strstr(row->detail, "Runs the program"));
+	row = row_by_value(rows, "Super+F6");
+	g_assert_nonnull(strstr(row->detail, "Module command: screenshot-ocr"));
+	/* a key mode's bind, after the default mode's */
+	row = row_by_value(rows, "h (resize)");
+	g_assert_nonnull(row);
+	g_assert_nonnull(strstr(row->detail, "in resize mode"));
+	g_assert_nonnull(strstr(row->detail, "set-mfact -0.05"));
+	row = row_by_value(rows, "XF86AudioMute");
+	g_assert_cmpstr(row->label, ==, "Mute");
+	g_assert_nonnull(strstr(row->detail, "works while locked"));
+	/* the macro module's own key */
+	row = menu_row(rows, "Stop every running macro");
+	g_assert_nonnull(row);
+	g_assert_cmpstr(row->value, ==, "Super+Escape");
+
+	/* only macros and custom code */
+	code = gowl_menu_list(menu, r->compositor, "keybinds.code");
+	g_assert_nonnull(row_by_value(code, "Super+F1"));
+	g_assert_nonnull(row_by_value(code, "Super+F4"));
+	g_assert_null(row_by_value(code, "Super+F5"));
+	g_assert_null(row_by_value(code, "h (resize)"));
+
+	mouse = gowl_menu_list(menu, r->compositor, "keybinds.mouse");
+	row = row_by_value(mouse, "Super+Left button");
+	g_assert_nonnull(row);
+	g_assert_nonnull(strstr(row->detail, "move-window"));
+	row = row_by_value(mouse, "Super+Middle button");
+	g_assert_nonnull(strstr(row->detail, "Macro tidy-up"));
+	gest = gowl_menu_list(menu, r->compositor, "keybinds.gestures");
+	row = row_by_value(gest, "3-finger swipe left");
+	g_assert_cmpstr(row->label, ==, "Next tag");
+
+	/* dynamic: a bind added now is in the next opening */
+	g_assert_null(row_by_value(rows, "Super+F7"));
+	gowl_config_add_keybind_ex(r->config, GOWL_KEY_MOD_LOGO, XKB_KEY_F7,
+		GOWL_ACTION_CUSTOM, "(added-later)", NULL, NULL, 0);
+	again = gowl_menu_list(menu, r->compositor, "keybinds");
+	g_assert_nonnull(row_by_value(again, "Super+F7"));
+
+	/* search finds the key once, not again through the code view */
+	{
+		g_autoptr(GowlMenu) small = gowl_menu_new();
+		guint hits = 0;
+
+		g_assert_true(gowl_menu_load_data(small,
+			"menu:\n"
+			"  - id: keybinds\n"
+			"    label: Keybindings\n"
+			"    provider: keybinds\n"
+			"    items:\n"
+			"      - {id: code, label: Code, provider: keybinds-code,"
+			" search: false}\n", FALSE, NULL));
+		found = gowl_menu_search(small, r->compositor, "Tidy the windows");
+		for (i = 0; i < found->len; i++)
+			if (g_strcmp0(((GowlMenuRow *)g_ptr_array_index(found, i))
+			              ->label, "Tidy the windows") == 0)
+				hits++;
+		g_assert_cmpuint(hits, ==, 1);
+	}
+
+	/* choosing a row runs what the key runs */
+	row = row_by_value(again, "Super+F4");
+	g_assert_cmpint(gowl_menu_activate(menu, r->compositor, row->route,
+	                                   &next), !=, GOWL_MENU_RESULT_NONE);
+	pump_until(r, 1000, action_seen, "(menu-picked-me)");
+	g_assert_cmpuint(n_actions_named("(menu-picked-me)"), ==, 1);
+
+	/* remapped device inputs that run something */
+	assert_ok(r, "inputremap-add {name: pedals, match: {name: \"Test "
+	          "Pedal\"}, map: {KEY_A: {macro: tidy-up, args: \"left\"}, "
+	          "KEY_B: {key: KEY_C}}}");
+	devs = gowl_menu_list(menu, r->compositor, "keybinds.devices");
+	row = row_by_value(devs, "pedals: KEY_A");
+	g_assert_nonnull(row);
+	g_assert_cmpstr(row->label, ==, "Run macro tidy-up left");
+	g_assert_nonnull(strstr(row->detail, "device input, rule pedals"));
+	/* a key-to-key remap is not a binding */
+	g_assert_null(row_by_value(devs, "pedals: KEY_B"));
+
+	gowl_macro_unregister_func("c-made");
+}
+
 /* ── D-Bus ──────────────────────────────────────────────────────── */
 
 static void
@@ -2006,6 +2200,8 @@ main(
 	ADD("record-escape-hatch", RIG_PLAIN, test_record_escape_hatch);
 	ADD("voice", RIG_PLAIN, test_voice);
 	ADD("menu-clipboard-private", RIG_CLIP, test_menu_clipboard_private);
+	ADD("menu-keybinds-introspect", RIG_REMAP,
+	    test_menu_keybinds_introspect);
 	ADD("clipboard-history-own-sets", RIG_CLIP,
 	    test_clipboard_history_own_sets);
 	ADD("dbus", RIG_DBUS, test_dbus);

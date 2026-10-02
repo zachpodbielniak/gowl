@@ -17,6 +17,8 @@
 #   target      a link: this row opens another route
 #   keep-open   leave the menu up after running, for a row pressed
 #               repeatedly such as volume
+#   search      false: a provider's rows are not search results -- for a
+#               view that filters rows another entry already offers
 #   private     a provider's rows are shown only to somebody who opens
 #               this entry: never in search results, never in "recent".
 #               Typing inside it filters it.  For the clipboard, which
@@ -55,8 +57,11 @@
 # PROVIDERS make their rows at open time: apps (desktop entries),
 # windows, tags, layouts, backdrops, keybinds, tray, macros (what the
 # macro module can run by name, when it is loaded), path (every
-# executable on $PATH) and clipboard (the clipboard module's history;
-# Return puts an entry back on the clipboard).
+# executable on $PATH), clipboard (the clipboard module's history;
+# Return puts an entry back on the clipboard), keybinds (every key in
+# the running config, saying what each runs), keybinds-code (only the
+# macros and custom code), mousebinds, gestures and input-remaps (the
+# per-device remap targets that run something).
 #
 # YOUR OWN.  Drop a file at ~/.config/gowl/menu.yaml with the same
 # `menu:' shape.  It is an OVERLAY, matched by id: repeat an id to
@@ -504,6 +509,44 @@ menu:
         label: Every floating window behind the tiling
         action: toggle-below-all
 
+  # ── Every key, read out of the running compositor ───────────────
+  # Super+? opens this.  The rows are the live config's binds at the
+  # moment it opens -- a bind added from Elisp a second ago is here --
+  # each saying what it really runs: a macro (and whether it is a C
+  # file, Elisp or registered from C), custom code, a program, a module
+  # command, a key mode; plus the macro module's stop key.  The views
+  # above the list are filters of it (search: false, so a search does
+  # not find every key twice), and the mouse, gestures and remapped
+  # device inputs that run something.  Choosing a row runs it.
+  - id: keybinds
+    icon: ""
+    label: Keybindings
+    title: Keybindings
+    desc: every key bound right now, and what it runs
+    aliases: [keys, cheatsheet, shortcuts, bindings, hotkeys]
+    provider: keybinds
+    items:
+      - id: code
+        icon: "󰐊"
+        label: Keys that run macros or custom code
+        title: Macros and custom code
+        provider: keybinds-code
+        search: false
+      - id: mouse
+        icon: "󰍽"
+        label: Mouse buttons
+        provider: mousebinds
+      - id: gestures
+        icon: "󰆽"
+        label: Touchpad gestures
+        provider: gestures
+      - id: devices
+        icon: "󰌌"
+        label: Remapped device inputs that run something
+        desc: pedals, macro pads -- input-remap targets that run a macro, a command or an action
+        provider: input-remaps
+        when: {module: inputremap}
+
   # ── Finding out how it works ────────────────────────────────────
   - id: learn
     icon: "󰧑"
@@ -513,10 +556,8 @@ menu:
       - id: keybinds
         icon: ""
         label: Keybindings
-        desc: every bind, and what it does
-        title: Keybindings
-        aliases: [keys, cheatsheet]
-        provider: keybinds
+        desc: every bind, and what it does (Super+?)
+        target: keybinds
       - id: manual
         icon: ""
         label: The gowl manual

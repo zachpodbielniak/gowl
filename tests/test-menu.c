@@ -1153,6 +1153,17 @@ test_the_shipped_tree_parses(void)
 	g_assert_true(gowl_menu_has_route(menu, "macros"));
 	g_assert_true(gowl_menu_has_route(menu, "macros.tools.stop"));
 	/* what the default keys open, and the rows beside them */
+	g_assert_true(gowl_menu_has_route(menu, "keybinds"));
+	g_assert_true(gowl_menu_has_route(menu, "keybinds.code"));
+	g_assert_true(gowl_menu_has_route(menu, "keybinds.mouse"));
+	g_assert_true(gowl_menu_has_route(menu, "keybinds.gestures"));
+	g_assert_true(gowl_menu_has_route(menu, "keybinds.devices"));
+	g_assert_true(gowl_menu_is_submenu(menu, "keybinds"));
+	{
+		g_autofree gchar *k = gowl_menu_resolve(menu, "shortcuts");
+
+		g_assert_cmpstr(k, ==, "keybinds");
+	}
 	g_assert_true(gowl_menu_has_route(menu, "clipboard"));
 	g_assert_true(gowl_menu_has_route(menu, "clipboard.clear"));
 	g_assert_true(gowl_menu_has_route(menu, "capture.text"));

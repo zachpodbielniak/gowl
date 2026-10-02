@@ -704,6 +704,7 @@ list is the interface you can use without having remembered anything.
 | =Super+Alt+space= | Open it at Applications |
 | =Super+Ctrl+Escape= | Open it at System |
 | =Super+Alt+v= | Open it at the clipboard history (private: see below) |
+| =Super+?= (=Super+Shift+slash=) | Open it at Keybindings: every key bound right now, and what it runs |
 
 The other keys the shipped config gives the new modules' commands, all
 inert until the module behind them is enabled:
@@ -834,7 +835,9 @@ of:
 | =elisp:= | evaluate Lisp; only does anything under =cmacs --gowl= |
 
 plus =keep-open: true= for a row meant to be pressed repeatedly, such as
-volume, and =private: true= for a provider whose rows nobody should see
+volume, =search: false= for a provider whose rows another entry already
+offers (a filtered view, which would otherwise find every row twice),
+and =private: true= for a provider whose rows nobody should see
 by accident: they are listed when the entry is opened and nowhere else ---
 never in a search, never in "recent" --- and typing inside it filters it.
 The shipped =Clipboard= entry is private, because a clipboard holds
@@ -902,6 +905,31 @@ A submenu with =provider: NAME= gets its rows when it opens:
 | =macros= | every macro the macro module can run by name, where it lives, and whether it is held back; choosing one runs it (nothing while the module is off) |
 | =path= | every executable on =$PATH=, the first directory's copy of each name, sorted; choosing one runs it by full path |
 | =clipboard= | the clipboard module's history, newest first: the preview, its type and size; choosing one puts it back on the clipboard. Use it under a =private: true= entry |
+| =keybinds= | every key in the running config (default mode, then each key mode) and the macro module's stop key: what it runs, called out --- see below |
+| =keybinds-code= | only the keys that run a macro or custom code |
+| =mousebinds= | the =mousebinds:= section |
+| =gestures= | the =gestures:= section |
+| =input-remaps= | per-device input-remap targets that run a macro, a command or an action (not key-to-key remaps) |
+
+*The Keybindings entry* (=Super+?=) is read out of the running
+compositor every time it opens, so a bind added a second ago from Elisp,
+MCP or a reload is there.  Each row's first line is the bind's
+description, or one made from what it runs ("Run macro tidy-up",
+"Run foot -e htop", "tag-view 4"); its value is the key; and its second
+line says what kind of thing runs, with the callouts that matter:
+
+- *a macro* --- =macro-run NAME= resolved through the macro module: a C
+  file and where it lives, an Elisp macro, one registered from C, not
+  found, or held back after a fault;
+- *custom code* --- a =custom= action, labelled Elisp under cmacs (where
+  that is what it is) and a custom action elsewhere;
+- a program, a module command, a key mode;
+- and whether it works while locked, fires on release, or belongs to a
+  key mode.
+
+Above the list are its views: only macros and custom code, the mouse
+buttons, the touchpad gestures, and remapped device inputs (a pedal
+whose =KEY_A= runs a macro).  Choosing a row runs what the key runs.
 
 The shipped tree lists =path= under *Programs on $PATH* with =when: {ipc: "menu-with-path"}=, so it appears only when the card was opened with =menu-path= (bound to =Super+Shift+space= by default, in gowl and cmacs alike): thousands of command-line tools in every ordinary search would bury the applications.  Like the application list, it is cached for five seconds.
 

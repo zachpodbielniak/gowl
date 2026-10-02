@@ -52,6 +52,7 @@
 #include "core/gowl-layout-registry.h"
 #include "config/gowl-config.h"
 #include "config/gowl-keybind.h"
+#include "boxed/gowl-input-remap-rule.h"
 #include "module/gowl-module-manager.h"
 #include "tray/gowl-tray.h"
 #include "gowl-enums.h"
@@ -124,6 +125,10 @@ struct _GowlMenuEntry {
 	/* Its provider's rows are shown only to somebody who opened it:
 	   never in search, never in "recent".  The clipboard. */
 	gboolean    is_private;
+	/* FALSE: its provider's rows are not search results (they are a
+	   filtered view of rows another entry already offers) -- unlike
+	   private, still remembered and unfiltered.  `search: false'. */
+	gboolean    search_rows;
 
 	GowlMenuGuard when;
 	GowlMenuGuard checked;
@@ -164,6 +169,7 @@ entry_new(const gchar *id, const gchar *route)
 	e->id       = g_strdup(id);
 	e->route    = g_strdup(route);
 	e->children = g_ptr_array_new_with_free_func(entry_free);
+	e->search_rows = TRUE;
 	return e;
 }
 
@@ -604,6 +610,8 @@ apply_entry(GowlMenu *self, YamlMapping *map, GowlMenuEntry *e, gint depth)
 		e->keep_open = yaml_mapping_get_boolean_member(map, "keep-open");
 	if (yaml_mapping_has_member(map, "private"))
 		e->is_private = yaml_mapping_get_boolean_member(map, "private");
+	if (yaml_mapping_has_member(map, "search"))
+		e->search_rows = yaml_mapping_get_boolean_member(map, "search");
 
 	if (yaml_mapping_has_member(map, "aliases")) {
 		YamlSequence *seq = yaml_mapping_get_sequence_member(map, "aliases");
@@ -1630,11 +1638,283 @@ provider_clipboard(GPtrArray *out, GowlCompositor *comp)
 	}
 }
 
+/*
+ * The keybindings, read out of the running compositor.
+ *
+ * Nothing here is a list somebody wrote: every row comes from the live
+ * config at the moment the submenu opens, so a bind added from Elisp a
+ * second ago, or a reload that changed one, is what you see.  Each row
+ * says what the key DOES, not only what it is called:
+ *
+ *   - its description when it has one, otherwise one made from the
+ *     action and its argument;
+ *   - on the second line, what kind of thing runs -- and the callouts
+ *     that matter: a MACRO (resolved through the macro module, so it
+ *     says whether it is a C file and where, an Elisp macro, or one
+ *     registered from C, and whether it is held back), CUSTOM CODE (an
+ *     Elisp form under cmacs), a program, a module command, a key mode;
+ *   - and whether it works while locked, fires on release, or belongs
+ *     to a key mode.
+ *
+ * Besides the config's keys: the macro module's own stop key, the
+ * mouse buttons and touchpad gestures, and per-device input-remap
+ * targets that run a macro, a command or an action.  Choosing a row
+ * runs what the key runs.
+ */
+
+#define KB_ICON_KEY    "\xef\x84\x9c"        /* keyboard */
+#define KB_ICON_MACRO  "\xf3\xb0\x90\x8a"    /* play */
+#define KB_ICON_CODE   "\xee\x98\xb2"        /* lambda-ish: code */
+#define KB_ICON_RUN    "\xef\x84\xa0"        /* terminal */
+#define KB_ICON_MOUSE  "\xf3\xb0\x8d\xbd"    /* mouse */
+#define KB_ICON_HAND   "\xf3\xb0\x86\xbd"    /* gesture */
+#define KB_ICON_REMAP  "\xf3\xb0\x8c\x8c"    /* device */
+
+/* What the macro module knows of each name: kind, path, held back. */
+typedef struct {
+	gchar    *kind;
+	gchar    *path;
+	gboolean  held;
+} KbMacro;
+
 static void
-provider_keybinds(GPtrArray *out, GowlCompositor *comp)
+kb_macro_free(gpointer data)
 {
+	KbMacro *m = data;
+
+	g_free(m->kind);
+	g_free(m->path);
+	g_free(m);
+}
+
+/* name -> KbMacro, from `macro-list'; empty when the module is off. */
+static GHashTable *
+kb_macros(GowlCompositor *comp)
+{
+	GHashTable *out;
+	g_autofree gchar *reply = NULL;
+	g_autoptr(JsonParser) parser = NULL;
+	JsonNode *root;
+	JsonArray *list;
+	guint i;
+
+	out = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+	                            kb_macro_free);
+	reply = gowl_compositor_ipc_command(comp, "macro-list");
+	if (reply == NULL || !g_str_has_prefix(reply, "OK "))
+		return out;
+	parser = json_parser_new();
+	if (!json_parser_load_from_data(parser, reply + 3, -1, NULL))
+		return out;
+	root = json_parser_get_root(parser);
+	if (root == NULL || !JSON_NODE_HOLDS_ARRAY(root))
+		return out;
+	list = json_node_get_array(root);
+	for (i = 0; i < json_array_get_length(list); i++) {
+		JsonObject *o = json_array_get_object_element(list, i);
+		const gchar *name;
+		KbMacro *m;
+
+		if (o == NULL)
+			continue;
+		name = json_object_get_string_member_with_default(o, "name", NULL);
+		if (name == NULL || g_hash_table_contains(out, name))
+			continue;
+		m = g_new0(KbMacro, 1);
+		m->kind = g_strdup(json_object_get_string_member_with_default(o,
+			"kind", ""));
+		m->path = g_strdup(json_object_get_string_member_with_default(o,
+			"path", NULL));
+		m->held = json_object_get_boolean_member_with_default(o,
+			"held-back", FALSE);
+		g_hash_table_insert(out, g_strdup(name), m);
+	}
+	return out;
+}
+
+/* @path with the home directory as ~. */
+static gchar *
+kb_tilde(const gchar *path)
+{
+	const gchar *home = g_get_home_dir();
+	gsize n = strlen(home);
+
+	if (path != NULL && n > 1 && g_str_has_prefix(path, home)
+	    && path[n] == '/')
+		return g_strdup_printf("~%s", path + n);
+	return g_strdup(path);
+}
+
+/* At most @max characters of @text, on one line, with an ellipsis. */
+static gchar *
+kb_short(const gchar *text, glong max)
+{
+	g_autofree gchar *flat = NULL;
+
+	if (text == NULL)
+		return g_strdup("");
+	flat = g_strdelimit(g_strdup(text), "\n\t\r", ' ');
+	if (g_utf8_strlen(flat, -1) <= max)
+		return g_steal_pointer(&flat);
+	{
+		gchar *end = g_utf8_offset_to_pointer(flat, max - 1);
+		g_autofree gchar *head = g_strndup(flat, (gsize)(end - flat));
+
+		return g_strdup_printf("%s\xe2\x80\xa6", head);
+	}
+}
+
+/* The action's nick: "tag-view", "spawn", ... */
+static const gchar *
+kb_action_nick(gint action)
+{
+	GEnumClass *klass;
+	GEnumValue *v;
+	const gchar *nick;
+
+	klass = (GEnumClass *)g_type_class_ref(GOWL_TYPE_ACTION);
+	v = g_enum_get_value(klass, action);
+	nick = v != NULL ? v->value_nick : "action";
+	g_type_class_unref(klass);
+	return nick;
+}
+
+/* The macro an argument runs (`macro-run [--opts] [--] NAME ...'), or
+   NULL; the rest of the line, if any, in @rest. */
+static gchar *
+kb_macro_of(const gchar *arg, gchar **rest)
+{
+	g_auto(GStrv) argv = NULL;
+	guint i;
+
+	*rest = NULL;
+	if (arg == NULL || !g_str_has_prefix(arg, "macro-run"))
+		return NULL;
+	if (!g_shell_parse_argv(arg, NULL, &argv, NULL))
+		return NULL;
+	for (i = 1; argv[i] != NULL && g_str_has_prefix(argv[i], "--"); i++)
+		if (g_strcmp0(argv[i], "--") == 0) {
+			i++;
+			break;
+		}
+	if (argv[i] == NULL)
+		return NULL;
+	if (argv[i + 1] != NULL)
+		*rest = g_strjoinv(" ", &argv[i + 1]);
+	return g_strdup(argv[i]);
+}
+
+/*
+ * What an action with @arg runs, for people: the generated label when
+ * there is no description, the second line always, and an icon.
+ * @is_code is set for a macro or custom code -- the `code' view.
+ */
+static void
+kb_describe(
+	GowlCompositor *comp,
+	GHashTable     *macros,
+	gint            action,
+	const gchar    *arg,
+	gchar         **out_label,
+	gchar         **out_detail,
+	const gchar   **out_icon,
+	gboolean       *is_code
+){
+	g_autofree gchar *rest = NULL;
+	g_autofree gchar *macro = NULL;
+	g_autofree gchar *shortarg = kb_short(arg, 60);
+
+	*is_code = FALSE;
+	*out_icon = KB_ICON_KEY;
+
+	macro = action == GOWL_ACTION_IPC_COMMAND ? kb_macro_of(arg, &rest)
+	                                          : NULL;
+	if (macro != NULL) {
+		KbMacro *m = g_hash_table_lookup(macros, macro);
+		g_autofree gchar *where = NULL;
+
+		*is_code = TRUE;
+		*out_icon = KB_ICON_MACRO;
+		if (m == NULL)
+			where = g_strdup(g_hash_table_size(macros) == 0
+			                 ? "the macro module is not loaded"
+			                 : "not found on the macro path");
+		else if (g_strcmp0(m->kind, "file") == 0 && m->path != NULL) {
+			g_autofree gchar *t = kb_tilde(m->path);
+
+			where = g_strdup_printf("C file %s", t);
+		} else if (g_strcmp0(m->kind, "custom") == 0)
+			where = g_strdup("Elisp");
+		else if (g_strcmp0(m->kind, "registered") == 0)
+			where = g_strdup("C, registered");
+		else
+			where = g_strdup_printf("defined: %s", m->kind);
+		*out_label = rest != NULL
+			? g_strdup_printf("Run macro %s %s", macro, rest)
+			: g_strdup_printf("Run macro %s", macro);
+		*out_detail = g_strdup_printf("Macro %s \xe2\x80\x94 %s%s", macro,
+		                              where, m != NULL && m->held
+		                              ? " \xc2\xb7 held back" : "");
+		return;
+	}
+
+	switch (action) {
+	case GOWL_ACTION_CUSTOM:
+		*is_code = TRUE;
+		*out_icon = KB_ICON_CODE;
+		*out_label = g_strdup_printf("Custom: %s", shortarg);
+		/* Under cmacs a custom action is an Elisp form; standalone it
+		   is whatever the embedder's handler makes of the string. */
+		*out_detail = comp != NULL && comp->custom_action_func != NULL
+			? g_strdup_printf("Custom code (Elisp): %s", shortarg)
+			: g_strdup_printf("Custom action: %s", shortarg);
+		return;
+	case GOWL_ACTION_SPAWN:
+		*out_icon = KB_ICON_RUN;
+		*out_label = g_strdup_printf("Run %s", shortarg);
+		*out_detail = g_strdup_printf("Runs the program: %s", shortarg);
+		return;
+	case GOWL_ACTION_IPC_COMMAND:
+		*out_label = g_strdup(shortarg);
+		*out_detail = g_strdup_printf("Module command: %s", shortarg);
+		return;
+	case GOWL_ACTION_MODE:
+		*out_label = g_strdup_printf("Key mode %s", shortarg);
+		*out_detail = g_strdup_printf("Enters key mode %s", shortarg);
+		return;
+	default:
+		*out_label = *shortarg != '\0'
+			? g_strdup_printf("%s %s", kb_action_nick(action), shortarg)
+			: g_strdup(kb_action_nick(action));
+		*out_detail = *shortarg != '\0'
+			? g_strdup_printf("gowl: %s %s", kb_action_nick(action),
+			                  shortarg)
+			: g_strdup_printf("gowl: %s", kb_action_nick(action));
+		return;
+	}
+}
+
+/* A description, unless it is empty. */
+static const gchar *
+kb_desc(const gchar *desc)
+{
+	return desc != NULL && *desc != '\0' ? desc : NULL;
+}
+
+/*
+ * provider_keybinds:
+ * @code_only: only keys that run a macro or custom code
+ *
+ * Every key the config binds, default mode first and then each key
+ * mode, then the macro module's own stop key.
+ */
+static void
+provider_keybinds(GPtrArray *out, GowlCompositor *comp, gboolean code_only)
+{
+	g_autoptr(GHashTable) macros = NULL;
 	GArray *kbs;
 	GowlConfig *config;
+	guint pass;
 	guint i;
 
 	if (comp == NULL)
@@ -1643,23 +1923,281 @@ provider_keybinds(GPtrArray *out, GowlCompositor *comp)
 	if (config == NULL)
 		return;
 	kbs = gowl_config_get_keybinds(config);
+	macros = kb_macros(comp);
 
-	for (i = 0; kbs != NULL && i < kbs->len; i++) {
-		GowlKeybindEntry *kb = &g_array_index(kbs, GowlKeybindEntry, i);
-		g_autofree gchar *key = gowl_keybind_to_string(kb->modifiers,
-		                                               kb->keysym);
-		const gchar *label = kb->desc != NULL && *kb->desc != '\0'
-			? kb->desc : (kb->arg != NULL ? kb->arg : "");
+	/* pass 0: the default mode; pass 1: binds that belong to a mode */
+	for (pass = 0; pass < 2; pass++) {
+		for (i = 0; kbs != NULL && i < kbs->len; i++) {
+			GowlKeybindEntry *kb = &g_array_index(kbs, GowlKeybindEntry, i);
+			g_autofree gchar *key = NULL;
+			g_autofree gchar *id = NULL;
+			g_autofree gchar *value = NULL;
+			g_autofree gchar *label = NULL;
+			g_autofree gchar *detail = NULL;
+			GString *full;
+			const gchar *icon;
+			gboolean code;
 
-		/*
-		 * The key is the VALUE rather than the label: this is a
-		 * cheatsheet you read down the left, and a list of key
-		 * combinations sorted by modifier is a list you cannot find
-		 * anything in.
-		 */
-		provider_add(out, key, "\xef\x84\x9c", label, NULL, key, FALSE,
-		             GOWL_ACTION_IPC_COMMAND,
-		             g_strdup_printf("dispatch %s", key));
+			if ((pass == 0) != (kb->mode == NULL))
+				continue;
+			kb_describe(comp, macros, kb->action, kb->arg, &label, &detail,
+			            &icon, &code);
+			if (code_only && !code)
+				continue;
+			key = gowl_keybind_to_string(kb->modifiers, kb->keysym);
+			value = kb->mode != NULL
+				? g_strdup_printf("%s (%s)", key, kb->mode)
+				: g_strdup(key);
+			id = kb->mode != NULL ? g_strdup_printf("%s-%s", kb->mode, key)
+			                      : g_strdup(key);
+			full = g_string_new(detail);
+			if (kb->mode != NULL)
+				g_string_append_printf(full, " \xc2\xb7 in %s mode",
+				                       kb->mode);
+			if (kb->flags & GOWL_KEYBIND_FLAG_LOCKED)
+				g_string_append(full, " \xc2\xb7 works while locked");
+			if (kb->flags & GOWL_KEYBIND_FLAG_RELEASE)
+				g_string_append(full, " \xc2\xb7 on release");
+			provider_add(out, id, icon,
+			             kb_desc(kb->desc) != NULL ? kb->desc : label,
+			             full->str, value, FALSE, (GowlAction)kb->action,
+			             g_strdup(kb->arg));
+			g_string_free(full, TRUE);
+		}
+	}
+
+	/* The macro module's own key: not in the config, but a key */
+	if (!code_only) {
+		g_autofree gchar *reply = gowl_compositor_ipc_command(comp,
+			"macro-status");
+
+		if (reply != NULL && g_str_has_prefix(reply, "OK ")) {
+			g_autoptr(JsonParser) p = json_parser_new();
+
+			if (json_parser_load_from_data(p, reply + 3, -1, NULL)
+			    && JSON_NODE_HOLDS_OBJECT(json_parser_get_root(p))) {
+				const gchar *stop =
+					json_object_get_string_member_with_default(
+						json_node_get_object(json_parser_get_root(p)),
+						"stop-key", NULL);
+
+				if (stop != NULL && *stop != '\0'
+				    && g_strcmp0(stop, "none") != 0)
+					provider_add(out, "macro-stop-key", KB_ICON_MACRO,
+					             "Stop every running macro",
+					             "The macro module's stop key "
+					             "(stop-key) \xc2\xb7 only while one "
+					             "runs", stop, FALSE,
+					             GOWL_ACTION_IPC_COMMAND,
+					             g_strdup("macro-stop"));
+			}
+		}
+	}
+}
+
+/* A pointer button's name: BTN_LEFT, wheel up, ... */
+static gchar *
+kb_button_name(guint button)
+{
+	switch (button) {
+	case GOWL_BUTTON_WHEEL_UP:    return g_strdup("Wheel up");
+	case GOWL_BUTTON_WHEEL_DOWN:  return g_strdup("Wheel down");
+	case GOWL_BUTTON_WHEEL_LEFT:  return g_strdup("Wheel left");
+	case GOWL_BUTTON_WHEEL_RIGHT: return g_strdup("Wheel right");
+	case 0x110:                   return g_strdup("Left button");
+	case 0x111:                   return g_strdup("Right button");
+	case 0x112:                   return g_strdup("Middle button");
+	case 0x113:                   return g_strdup("Side button");
+	case 0x114:                   return g_strdup("Extra button");
+	default:                      return g_strdup_printf("Button %u", button);
+	}
+}
+
+/* The `mousebinds:' section. */
+static void
+provider_mousebinds(GPtrArray *out, GowlCompositor *comp)
+{
+	g_autoptr(GHashTable) macros = NULL;
+	GowlConfig *config;
+	GArray *mbs;
+	guint i;
+
+	if (comp == NULL || (config = gowl_compositor_get_config(comp)) == NULL)
+		return;
+	mbs = gowl_config_get_mousebinds(config);
+	macros = kb_macros(comp);
+	for (i = 0; mbs != NULL && i < mbs->len; i++) {
+		GowlMousebindEntry *mb = &g_array_index(mbs, GowlMousebindEntry, i);
+		g_autofree gchar *mods = gowl_keybind_to_string(mb->modifiers, 0);
+		g_autofree gchar *btn = kb_button_name(mb->button);
+		g_autofree gchar *value = NULL;
+		g_autofree gchar *id = NULL;
+		g_autofree gchar *label = NULL;
+		g_autofree gchar *detail = NULL;
+		const gchar *icon;
+		gboolean code;
+		GowlAction run;
+
+		kb_describe(comp, macros, mb->action, mb->arg, &label, &detail,
+		            &icon, &code);
+		/* gowl_keybind_to_string() with no key names it NoSymbol: keep
+		   the modifiers ("Super+"), drop that */
+		if (g_str_has_suffix(mods, "NoSymbol"))
+			mods[strlen(mods) - strlen("NoSymbol")] = '\0';
+		value = mods != NULL && *mods != '\0'
+			? g_strdup_printf("%s%s%s", mods,
+			                  g_str_has_suffix(mods, "+") ? "" : "+", btn)
+			: g_strdup(btn);
+		id = g_strdup_printf("mouse-%u-%u", mb->modifiers, mb->button);
+		/* the window grabs need a pointer on a window: not from here */
+		run = mb->action == GOWL_ACTION_MOVE_WINDOW
+		      || mb->action == GOWL_ACTION_RESIZE_WINDOW
+			? GOWL_ACTION_NONE : (GowlAction)mb->action;
+		provider_add(out, id, code ? icon : KB_ICON_MOUSE,
+		             kb_desc(mb->desc) != NULL ? mb->desc : label, detail,
+		             value, FALSE, run, g_strdup(mb->arg));
+	}
+}
+
+/* The `gestures:' section. */
+static void
+provider_gestures(GPtrArray *out, GowlCompositor *comp)
+{
+	static const gchar *const dirs[] = {
+		"", "left", "right", "up", "down", "in", "out"
+	};
+	g_autoptr(GHashTable) macros = NULL;
+	GowlConfig *config;
+	GArray *gs;
+	guint i;
+
+	if (comp == NULL || (config = gowl_compositor_get_config(comp)) == NULL)
+		return;
+	gs = gowl_config_get_gestures(config);
+	macros = kb_macros(comp);
+	for (i = 0; gs != NULL && i < gs->len; i++) {
+		GowlGestureEntry *g = &g_array_index(gs, GowlGestureEntry, i);
+		g_autofree gchar *value = NULL;
+		g_autofree gchar *id = NULL;
+		g_autofree gchar *label = NULL;
+		g_autofree gchar *detail = NULL;
+		const gchar *icon;
+		const gchar *dir;
+		gboolean code;
+
+		dir = g->direction >= 0 && g->direction < (gint)G_N_ELEMENTS(dirs)
+			? dirs[g->direction] : "?";
+		kb_describe(comp, macros, g->action, g->arg, &label, &detail,
+		            &icon, &code);
+		value = g_strdup_printf("%u-finger %s %s", g->fingers,
+		                        g->kind == GOWL_GESTURE_PINCH ? "pinch"
+		                                                      : "swipe",
+		                        dir);
+		id = g_strdup_printf("gesture-%d-%d-%u", g->kind, g->direction,
+		                     g->fingers);
+		provider_add(out, id, code ? icon : KB_ICON_HAND,
+		             kb_desc(g->desc) != NULL ? g->desc : label, detail,
+		             value, FALSE, (GowlAction)g->action, g_strdup(g->arg));
+	}
+}
+
+/*
+ * Per-device input remapping: the targets that run something -- a
+ * macro, a module command, an action -- rather than turn one key into
+ * another.  Read back from each rule's YAML (`inputremap-list'), so it
+ * is the rules in force, config and runtime alike.
+ */
+static void
+provider_input_remaps(GPtrArray *out, GowlCompositor *comp)
+{
+	g_autoptr(GHashTable) macros = NULL;
+	g_autofree gchar *reply = NULL;
+	g_autoptr(JsonParser) parser = NULL;
+	JsonNode *root;
+	JsonArray *rules;
+	guint i;
+
+	if (comp == NULL)
+		return;
+	reply = gowl_compositor_ipc_command(comp, "inputremap-list");
+	if (reply == NULL || !g_str_has_prefix(reply, "OK "))
+		return;
+	parser = json_parser_new();
+	if (!json_parser_load_from_data(parser, reply + 3, -1, NULL))
+		return;
+	root = json_parser_get_root(parser);
+	if (root == NULL || !JSON_NODE_HOLDS_ARRAY(root))
+		return;
+	macros = kb_macros(comp);
+	rules = json_node_get_array(root);
+	for (i = 0; i < json_array_get_length(rules); i++) {
+		JsonObject *o = json_array_get_object_element(rules, i);
+		const gchar *yaml;
+		GowlInputRemapRule *rule;
+		GArray *inputs;
+		guint k;
+
+		yaml = o != NULL ? json_object_get_string_member_with_default(o,
+			"yaml", NULL) : NULL;
+		if (yaml == NULL)
+			continue;
+		rule = gowl_input_remap_rule_new_from_yaml(yaml, NULL);
+		if (rule == NULL)
+			continue;
+		inputs = gowl_input_remap_rule_get_inputs(rule);
+		for (k = 0; inputs != NULL && k < inputs->len; k++) {
+			guint32 in = g_array_index(inputs, guint32, k);
+			const GowlInputRemapTarget *t =
+				gowl_input_remap_rule_lookup(rule, in);
+			GowlInputRemapTargetKind kind;
+			g_autofree gchar *name = NULL;
+			g_autofree gchar *id = NULL;
+			g_autofree gchar *value = NULL;
+			g_autofree gchar *label = NULL;
+			g_autofree gchar *detail = NULL;
+			g_autofree gchar *full = NULL;
+			const gchar *icon;
+			gboolean code;
+			gint action;
+			g_autofree gchar *arg = NULL;
+
+			if (t == NULL)
+				continue;
+			kind = gowl_input_remap_target_get_kind(t);
+			if (kind == GOWL_INPUT_REMAP_TARGET_MACRO) {
+				const gchar *margs = gowl_input_remap_target_get_macro_args(t);
+				g_autofree gchar *q = g_shell_quote(
+					gowl_input_remap_target_get_arg(t));
+
+				action = GOWL_ACTION_IPC_COMMAND;
+				arg = margs != NULL && *margs != '\0'
+					? g_strdup_printf("macro-run -- %s %s", q, margs)
+					: g_strdup_printf("macro-run -- %s", q);
+			} else if (kind == GOWL_INPUT_REMAP_TARGET_COMMAND) {
+				action = GOWL_ACTION_IPC_COMMAND;
+				arg = g_strdup(gowl_input_remap_target_get_arg(t));
+			} else if (kind == GOWL_INPUT_REMAP_TARGET_ACTION) {
+				action = gowl_input_remap_target_get_action(t);
+				arg = g_strdup(gowl_input_remap_target_get_arg(t));
+			} else {
+				continue;    /* key to key: a remap, not a binding */
+			}
+			name = gowl_input_remap_code_to_name(in);
+			kb_describe(comp, macros, action, arg, &label, &detail, &icon,
+			            &code);
+			value = g_strdup_printf("%s: %s",
+			                        gowl_input_remap_rule_get_name(rule),
+			                        name != NULL ? name : "?");
+			id = g_strdup_printf("remap-%s-%u",
+			                     gowl_input_remap_rule_get_name(rule), in);
+			full = g_strdup_printf("%s \xc2\xb7 device input, rule %s",
+			                       detail,
+			                       gowl_input_remap_rule_get_name(rule));
+			provider_add(out, id, code ? icon : KB_ICON_REMAP, label, full,
+			             value, FALSE, (GowlAction)action,
+			             g_steal_pointer(&arg));
+		}
+		gowl_input_remap_rule_unref(rule);
 	}
 }
 
@@ -1715,7 +2253,15 @@ provider_run(GowlMenu *self, const gchar *name, GowlCompositor *comp)
 	else if (g_strcmp0(name, "backdrops") == 0)
 		provider_backdrops(out, comp);
 	else if (g_strcmp0(name, "keybinds") == 0)
-		provider_keybinds(out, comp);
+		provider_keybinds(out, comp, FALSE);
+	else if (g_strcmp0(name, "keybinds-code") == 0)
+		provider_keybinds(out, comp, TRUE);
+	else if (g_strcmp0(name, "mousebinds") == 0)
+		provider_mousebinds(out, comp);
+	else if (g_strcmp0(name, "gestures") == 0)
+		provider_gestures(out, comp);
+	else if (g_strcmp0(name, "input-remaps") == 0)
+		provider_input_remaps(out, comp);
 	else if (g_strcmp0(name, "tray") == 0)
 		provider_tray(out);
 	else if (g_strcmp0(name, "macros") == 0)
@@ -2906,7 +3452,7 @@ search_walk(GowlMenu *self, GowlMenuEntry *e, GowlCompositor *comp,
 		 */
 		/* A private submenu's rows are not searched: finding it by its
 		 * own name above, and opening it, is the way in. */
-		if (c->provider != NULL && !c->is_private) {
+		if (c->provider != NULL && !c->is_private && c->search_rows) {
 			g_autoptr(GPtrArray) made =
 				provider_run(self, c->provider, comp);
 			/* The path TO the provider's submenu, which is its

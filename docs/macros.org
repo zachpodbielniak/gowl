@@ -355,6 +355,8 @@ The shipped menu has a *Macros* submenu. Its rows are the macros themselves --- 
 
 Above the macros, *Macro tools* stops running macros, lets held-back ones run again and reloads macros and triggers (under cmacs also: manage, write a new macro, show the triggers). While the module is off, the submenu holds only *Load macros*: under cmacs it loads the module and reopens the menu on this list; in standalone gowl it is dimmed and says to enable =modules: macro=.
 
+Every key that runs a macro is in *Keybindings* (=Super+?=), saying which macro, where it lives and whether it is held back; its first view lists only the keys that run macros or custom code, and a remapped pedal that runs one is under its device view.
+
 The menu asks the module over IPC (=macro-list=), like any other client, so it links nothing of it. A macro that needs arguments is run without any from here and reports its usage; bind those to a key or trigger instead.
 
 *** Voice

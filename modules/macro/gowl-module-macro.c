@@ -2092,6 +2092,14 @@ status_json(GowlModuleMacro *self)
 	json_builder_add_int_value(b, self->triggers->len);
 	json_builder_set_member_name(b, "trigger-errors");
 	json_builder_add_int_value(b, self->trigger_errors);
+	/* the module's own key, for the keybindings list */
+	{
+		g_autofree gchar *key = self->stop_keysym != 0
+			? gowl_keybind_to_string(self->stop_mods, self->stop_keysym)
+			: g_strdup("none");
+
+		json_add_string(b, "stop-key", key);
+	}
 	json_builder_set_member_name(b, "dbus");
 	json_builder_add_boolean_value(b, self->dbus != NULL
 	                               && gowl_macro_dbus_is_owned(self->dbus));

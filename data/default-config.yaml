@@ -616,6 +616,10 @@ keybinds:
   # Fullscreen is Super+f.
   "Super+Shift+space": { action: ipc_command, arg: "menu-path", desc: "Menu, with programs on $PATH" }
   "Super+Alt+space": { action: ipc_command, arg: "menu-open apps", desc: "Menu: applications" }
+  # Super+? -- every key bound right now, read out of the running
+  # compositor, each saying what it runs (macros and custom code called
+  # out), with the mouse, gestures and remapped devices beside them.
+  "Super+Shift+slash": { action: ipc_command, arg: "menu-open keybinds", desc: "Menu: every keybinding" }
   "Super+Ctrl+Escape": { action: ipc_command, arg: "menu-open system", desc: "Menu: system" }
 
   # Screenshot.  Reaches the screenshot module by NAME through

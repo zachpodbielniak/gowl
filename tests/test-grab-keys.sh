@@ -7,7 +7,8 @@
 # menu -- their default keys, their opt-in, and the rules that keep them
 # from leaking or from blocking the desktop.
 #
-#   * The six keys in data/default-config.yaml, each bound once, to the
+#   * The six keys -- and Super+? (Super+Shift+slash), the menu's
+#     Keybindings -- in data/default-config.yaml, each bound once, to the
 #     command it is documented as.  cmacs --gowl carries its own copy in
 #     lisp/cmacs/cmacs-gowl.el, asserted by its ERT suite.
 #   * Opt-in standalone: the macro, screenshot and clipboard modules are
@@ -57,6 +58,7 @@ check_bind "Super+Alt+r" "macro-record"
 check_bind "Super+Alt+Shift+r" "macro-run last-recording"
 check_bind "Super+Alt+m" "macro-voice"
 check_bind "Super+Alt+v" "menu-open clipboard"
+check_bind "Super+Shift+slash" "menu-open keybinds"
 
 # --- opt-in: the modules behind them are off by default ---
 for m in macro screenshot clipboard; do

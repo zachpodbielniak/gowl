@@ -36,6 +36,11 @@
  *   events  `triggers:' -- "client-added: tidy", "every 60000: night"
  *   D-Bus   org.gowl.Macro1 on the session bus, when `dbus: true'
  *   remap   an input-remap {macro: NAME} target
+ *   record  macro-record [toggle|start [NAME]|stop|cancel|status]: what
+ *           you do next, written out as a macro (last-recording.c)
+ *   voice   macro-voice [toggle|...]: run `voice-command', match what
+ *           it heard to a macro; macro-voice-match TEXT does the second
+ *           half for a listener of its own (cmacs's whisper)
  */
 
 #undef G_LOG_DOMAIN
@@ -45,8 +50,10 @@
 #include <gmodule.h>
 #include <json-glib/json-glib.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <glib/gstdio.h>
 #include <wayland-server-core.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -65,6 +72,10 @@
 #include "macro/gowl-macro-private.h"
 #include "util/gowl-fault-guard.h"
 #include "gowl-macro-filter.h"
+#include "gowl-macro-record.h"
+#include "gowl-macro-voice.h"
+#include "core/gowl-input-recorder.h"
+#include "util/gowl-subprocess.h"
 
 #include "gowl-macro-loader.h"
 #include "gowl-macro-runner.h"
@@ -148,6 +159,24 @@ struct _GowlModuleMacro {
 	GPtrArray        *triggers;        /* Trigger* */
 	GList            *pending_idles;   /* wl_event_source* */
 	GowlMacroDbus    *dbus;
+
+	/* the recorder: a private input recording while rec_token is set */
+	gchar            *record_dir;      /* NULL: ~/.config/gowl/macros */
+	guint             record_max_seconds;
+	guint             record_max_gap_ms;
+	gchar            *rec_token;
+	gchar            *rec_name;        /* NULL: last-recording */
+	gulong            rec_changed_id;
+	struct wl_event_source *rec_idle;
+
+	/* voice: the listener while voice_proc is set */
+	gchar            *voice_command;   /* NULL: gowl-stt */
+	guint             voice_max_seconds;
+	GHashTable       *voice_phrases;   /* spoken phrase -> "macro args" */
+	gchar            *voice_last;
+	gchar            *voice_error;     /* why the last listen failed */
+	GowlSubprocess   *voice_proc;
+	struct wl_event_source *voice_timer;
 
 	struct wl_listener display_destroy;
 };
@@ -1268,6 +1297,684 @@ json_finish_ok(JsonBuilder *b)
 }
 
 /* Every macro that can be run by name: registered, defined, files. */
+/* ===================================================================
+ * The macro recorder
+ *
+ * `macro-record' turns what you do next into a macro.  It borrows the
+ * compositor's input recorder as a PRIVATE recording (see
+ * gowl_input_recorder_start_private()): the key you pressed is the
+ * consent, and the token never leaves this module, so nothing else can
+ * read what is being recorded.  The recorder paints its frame around
+ * the screen for as long as it runs, protects password prompts and the
+ * lock screen the same way it always does, and stops on
+ * Super+Shift+Escape or its deadline -- in which case the "changed"
+ * signal tells us, and what was recorded up to then is still saved.
+ * =================================================================== */
+
+#define RECORD_OWNER          "macro"
+#define RECORD_LAST           "last-recording"
+#define DEFAULT_RECORD_SECS   (300)
+#define DEFAULT_RECORD_GAP_MS (3000)
+#define RECORD_MAX_EVENTS     (20000)
+
+/* Whether @name can be a macro file name: letters, digits, - and _. */
+static gboolean
+record_name_ok(
+	const gchar *name
+){
+	const gchar *p;
+
+	if (name == NULL || *name == '\0' || *name == '-' || strlen(name) > 64)
+		return FALSE;
+	for (p = name; *p != '\0'; p++)
+		if (!g_ascii_isalnum(*p) && *p != '-' && *p != '_')
+			return FALSE;
+	return TRUE;
+}
+
+/* Where recordings are written: `record-dir', or the user's macros. */
+static gchar *
+record_dir(
+	GowlModuleMacro *self
+){
+	if (self->record_dir != NULL && *self->record_dir != '\0') {
+		if (g_str_has_prefix(self->record_dir, "~/"))
+			return g_build_filename(g_get_home_dir(),
+			                        self->record_dir + 2, NULL);
+		return g_strdup(self->record_dir);
+	}
+	return g_build_filename(g_get_user_config_dir(), "gowl", "macros", NULL);
+}
+
+static void
+record_forget(
+	GowlModuleMacro *self
+){
+	g_clear_pointer(&self->rec_token, g_free);
+	g_clear_pointer(&self->rec_name, g_free);
+	if (self->rec_idle != NULL) {
+		wl_event_source_remove(self->rec_idle);
+		self->rec_idle = NULL;
+	}
+}
+
+/*
+ * record_finish:
+ *
+ * Turns the recorder's payload into a macro file -- NAME.c when the
+ * recording was named, and always last-recording.c, which is what the
+ * replay key runs -- and says what happened.  Clears the recording.
+ *
+ * Returns: (transfer full): the reply line
+ */
+static gchar *
+record_finish(
+	GowlModuleMacro *self,
+	const gchar     *payload
+){
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *name = NULL;
+	g_autofree gchar *dir = NULL;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *last = NULL;
+	g_autofree gchar *source = NULL;
+	g_autofree gchar *body = NULL;
+	GowlMacroRecordStats st;
+
+	name = g_strdup(self->rec_name != NULL ? self->rec_name : RECORD_LAST);
+	record_forget(self);
+
+	source = gowl_macro_record_to_source(payload, name,
+	                                     self->record_max_gap_ms, &st,
+	                                     &error);
+	if (source == NULL) {
+		macro_notify(self, "Macro recorder", error->message);
+		macro_event(self, "recorded-nothing %s", name);
+		return g_strdup_printf("ERROR %s", error->message);
+	}
+
+	dir = record_dir(self);
+	if (g_mkdir_with_parents(dir, 0700) != 0) {
+		g_autofree gchar *why = g_strdup_printf("cannot create %s: %s",
+		                                        dir, g_strerror(errno));
+
+		macro_notify(self, "Macro recorder", why);
+		return g_strdup_printf("ERROR %s", why);
+	}
+	path = g_strdup_printf("%s/%s.c", dir, name);
+	if (!g_file_set_contents(path, source, -1, &error)) {
+		macro_notify(self, "Macro recorder", error->message);
+		return g_strdup_printf("ERROR %s", error->message);
+	}
+	/* The replay key always finds the newest recording, named or not.
+	   Its own source says its own name, so it is rewritten rather than
+	   copied. */
+	if (g_strcmp0(name, RECORD_LAST) != 0) {
+		g_autofree gchar *again = NULL;
+
+		again = gowl_macro_record_to_source(payload, RECORD_LAST,
+		                                    self->record_max_gap_ms, NULL,
+		                                    NULL);
+		last = g_strdup_printf("%s/%s.c", dir, RECORD_LAST);
+		if (again != NULL)
+			g_file_set_contents(last, again, -1, NULL);
+	}
+	gowl_macro_loader_forget(self->loader);
+
+	body = g_strdup_printf("%s: %u step(s), %u.%u s%s", name, st.steps,
+	                       st.duration_ms / 1000,
+	                       (st.duration_ms % 1000) / 100,
+	                       st.suppressed > 0
+	                       ? " -- some input was protected and left out"
+	                       : "");
+	macro_notify(self, "Macro recorded", body);
+	macro_event(self, "recorded %s %u %s", name, st.steps, path);
+	macro_log(self, LOG_RUN, "recorded %s (%u steps, %u dropped, %u "
+	          "protected) -> %s", name, st.steps, st.dropped, st.suppressed,
+	          path);
+	return g_strdup_printf("OK recorded %s %u %s", name, st.steps, path);
+}
+
+/* The recording stopped behind our back (Super+Shift+Escape, the
+   deadline): finish it from the event loop, outside the signal. */
+static void
+on_record_idle(
+	gpointer data
+){
+	GowlModuleMacro *self = data;
+	GowlInputRecorder *rec;
+	g_autofree gchar *payload = NULL;
+	g_autofree gchar *reply = NULL;
+
+	self->rec_idle = NULL;
+	if (self->rec_token == NULL || self->compositor == NULL)
+		return;
+	rec = gowl_compositor_get_input_recorder(self->compositor);
+	payload = gowl_input_recorder_drain(rec, self->rec_token, NULL);
+	if (payload == NULL) {
+		record_forget(self);
+		return;
+	}
+	reply = record_finish(self, payload);
+}
+
+static void
+on_recorder_changed(
+	GowlInputRecorder *rec,
+	gboolean           active,
+	const gchar       *token,
+	gpointer           data
+){
+	GowlModuleMacro *self = data;
+	struct wl_event_loop *loop;
+
+	(void)token;
+	if (active || self->rec_token == NULL || self->rec_idle != NULL
+	    || g_strcmp0(gowl_input_recorder_get_owner(rec), RECORD_OWNER) != 0
+	    || self->compositor == NULL)
+		return;
+	loop = gowl_compositor_get_event_loop(self->compositor);
+	if (loop != NULL)
+		self->rec_idle = wl_event_loop_add_idle(loop, on_record_idle, self);
+}
+
+static gchar *
+record_start(
+	GowlModuleMacro *self,
+	const gchar     *name
+){
+	GowlInputRecorder *rec;
+	g_autoptr(GError) error = NULL;
+	gchar *token;
+
+	if (self->rec_token != NULL)
+		return g_strdup("ERROR already recording; macro-record stop");
+	if (name != NULL && !record_name_ok(name))
+		return g_strdup_printf("ERROR %s is not a macro name: letters, "
+		                       "digits, - and _ only", name);
+	rec = gowl_compositor_get_input_recorder(self->compositor);
+	if (rec == NULL)
+		return g_strdup("ERROR this compositor has no input recorder");
+	if (self->rec_changed_id == 0)
+		self->rec_changed_id = g_signal_connect(rec, "changed",
+			G_CALLBACK(on_recorder_changed), self);
+
+	token = gowl_input_recorder_start_private(rec, RECORD_OWNER,
+	                                          self->record_max_seconds,
+	                                          RECORD_MAX_EVENTS, &error);
+	if (token == NULL) {
+		macro_notify(self, "Macro recorder", error->message);
+		return g_strdup_printf("ERROR %s", error->message);
+	}
+	self->rec_token = token;
+	self->rec_name = g_strdup(name);
+	macro_notify(self, "Recording a macro",
+	             "press the record key again to stop "
+	             "(Super+Shift+Escape also stops it)");
+	macro_event(self, "recording %s", name != NULL ? name : RECORD_LAST);
+	return g_strdup_printf("OK recording %s",
+	                       name != NULL ? name : RECORD_LAST);
+}
+
+static gchar *
+record_stop(
+	GowlModuleMacro *self
+){
+	GowlInputRecorder *rec;
+	g_autofree gchar *payload = NULL;
+	g_autoptr(GError) error = NULL;
+
+	if (self->rec_token == NULL)
+		return g_strdup("ERROR not recording");
+	rec = gowl_compositor_get_input_recorder(self->compositor);
+	payload = gowl_input_recorder_stop(rec, self->rec_token, &error);
+	if (payload == NULL) {
+		record_forget(self);
+		return g_strdup_printf("ERROR %s", error->message);
+	}
+	return record_finish(self, payload);
+}
+
+/* Stops a recording and throws it away: nothing is written. */
+static void
+record_cancel(
+	GowlModuleMacro *self
+){
+	GowlInputRecorder *rec;
+
+	if (self->rec_token != NULL && self->compositor != NULL) {
+		rec = gowl_compositor_get_input_recorder(self->compositor);
+		g_free(gowl_input_recorder_stop(rec, self->rec_token, NULL));
+	}
+	record_forget(self);
+}
+
+static void
+record_detach(
+	GowlModuleMacro *self
+){
+	record_cancel(self);
+	if (self->rec_changed_id != 0 && self->compositor != NULL)
+		g_signal_handler_disconnect(
+			gowl_compositor_get_input_recorder(self->compositor),
+			self->rec_changed_id);
+	self->rec_changed_id = 0;
+}
+
+/*
+ * cmd_record:
+ *
+ * macro-record [toggle|start [NAME]|stop|cancel|status].  A bare word
+ * that is none of those is a name to start recording as.
+ */
+static gchar *
+cmd_record(
+	GowlModuleMacro *self,
+	const gchar     *arg
+){
+	g_auto(GStrv) words = NULL;
+	const gchar *verb;
+	const gchar *name;
+
+	if (self->compositor == NULL)
+		return g_strdup("ERROR the macro module has not started");
+	if (!self->enabled)
+		return g_strdup("ERROR the macro module is disabled");
+
+	words = g_strsplit_set(arg != NULL ? arg : "", " \t", 2);
+	verb = words[0] != NULL && *words[0] != '\0' ? words[0] : "toggle";
+	name = words[0] != NULL ? words[1] : NULL;
+	if (name != NULL) {
+		g_strstrip((gchar *)name);
+		if (*name == '\0')
+			name = NULL;
+	}
+
+	if (g_strcmp0(verb, "toggle") == 0)
+		return self->rec_token != NULL ? record_stop(self)
+		                               : record_start(self, name);
+	if (g_strcmp0(verb, "start") == 0)
+		return record_start(self, name);
+	if (g_strcmp0(verb, "stop") == 0)
+		return record_stop(self);
+	if (g_strcmp0(verb, "cancel") == 0) {
+		if (self->rec_token == NULL)
+			return g_strdup("ERROR not recording");
+		record_cancel(self);
+		macro_event(self, "recording-cancelled");
+		return g_strdup("OK cancelled");
+	}
+	if (g_strcmp0(verb, "status") == 0) {
+		g_autoptr(JsonBuilder) b = json_builder_new();
+		g_autofree gchar *dir = record_dir(self);
+
+		json_builder_begin_object(b);
+		json_builder_set_member_name(b, "recording");
+		json_builder_add_boolean_value(b, self->rec_token != NULL);
+		json_add_string(b, "name", self->rec_token == NULL ? NULL
+		                : self->rec_name != NULL ? self->rec_name
+		                : RECORD_LAST);
+		json_add_string(b, "dir", dir);
+		json_builder_set_member_name(b, "max-seconds");
+		json_builder_add_int_value(b, self->record_max_seconds);
+		json_builder_end_object(b);
+		return json_finish_ok(b);
+	}
+	/* `macro-record NAME': start recording as NAME */
+	if (self->rec_token != NULL)
+		return g_strdup("ERROR already recording; macro-record stop");
+	return record_start(self, verb);
+}
+
+/* ===================================================================
+ * Voice
+ *
+ * `macro-voice' runs the `voice-command' -- a shell command that
+ * listens, transcribes, and prints what it heard -- and runs the macro
+ * that names.  The first press starts it; the second sends it SIGINT,
+ * which is the shipped gowl-stt's cue to stop listening and transcribe.
+ * `voice-max-seconds' sends the same SIGINT if nobody does.
+ *
+ * `macro-voice-match TEXT' is the second half alone, for a listener
+ * that is not a shell command: cmacs transcribes with its own embedded
+ * whisper and hands the text over.
+ * =================================================================== */
+
+#define DEFAULT_VOICE_COMMAND "gowl-stt"
+#define DEFAULT_VOICE_SECS    (10)
+/* After SIGINT the command still has to transcribe; a CPU model on a
+   ten-second clip takes a while, and a stuck one must not live forever. */
+#define VOICE_TRANSCRIBE_MS   (120000)
+
+/* Every name a voice may say: registered, defined and on disk. */
+static GStrv
+voice_names(
+	GowlModuleMacro *self
+){
+	g_autoptr(GPtrArray) out = g_ptr_array_new_with_free_func(g_free);
+	g_autoptr(GPtrArray) files = NULL;
+	g_auto(GStrv) registered = NULL;
+	GHashTableIter iter;
+	gpointer key;
+	guint i;
+
+	registered = gowl_macro_registry_names();
+	for (i = 0; registered[i] != NULL; i++)
+		g_ptr_array_add(out, g_strdup(registered[i]));
+	g_hash_table_iter_init(&iter, self->aliases);
+	while (g_hash_table_iter_next(&iter, &key, NULL))
+		g_ptr_array_add(out, g_strdup(key));
+	files = gowl_macro_loader_discover(self->loader);
+	for (i = 0; i + 1 < files->len; i += 2)
+		g_ptr_array_add(out, g_strdup(g_ptr_array_index(files, i)));
+	g_ptr_array_add(out, NULL);
+	return (GStrv)g_ptr_array_free(g_steal_pointer(&out), FALSE);
+}
+
+/* `voice-phrases', one "PHRASE: MACRO ARGS" per line, into a table. */
+static void
+voice_set_phrases(
+	GowlModuleMacro *self,
+	const gchar     *text
+){
+	g_auto(GStrv) lines = NULL;
+	guint i;
+
+	g_hash_table_remove_all(self->voice_phrases);
+	lines = g_strsplit(text != NULL ? text : "", "\n", -1);
+	for (i = 0; lines[i] != NULL; i++) {
+		gchar *colon = strchr(lines[i], ':');
+		g_autofree gchar *phrase = NULL;
+		g_autofree gchar *target = NULL;
+
+		if (colon == NULL)
+			continue;
+		phrase = g_strstrip(g_strndup(lines[i], (gsize)(colon - lines[i])));
+		target = g_strstrip(g_strdup(colon + 1));
+		if (*phrase == '\0' || *target == '\0') {
+			g_warning("macro: voice-phrases line '%s' -- expected "
+			          "\"PHRASE: MACRO ARGS\"", lines[i]);
+			continue;
+		}
+		g_hash_table_replace(self->voice_phrases,
+		                     g_steal_pointer(&phrase),
+		                     g_steal_pointer(&target));
+	}
+}
+
+/*
+ * voice_run_text:
+ *
+ * Matches @text to a macro and runs it, with the text as the run's
+ * detail.  With @dry_run, only says what it would run, as JSON.
+ */
+static gchar *
+voice_run_text(
+	GowlModuleMacro *self,
+	const gchar     *text,
+	gboolean         dry_run
+){
+	g_auto(GStrv) names = NULL;
+	g_auto(GStrv) argv = NULL;
+	g_autofree gchar *name = NULL;
+	g_autofree gchar *args = NULL;
+	g_autofree gchar *heard = NULL;
+	g_autofree gchar *body = NULL;
+	gboolean matched;
+
+	heard = g_strstrip(g_strdup(text != NULL ? text : ""));
+	if (*heard == '\0')
+		return g_strdup("ERROR nothing was heard");
+	names = voice_names(self);
+	matched = gowl_macro_voice_match(heard, (const gchar * const *)names,
+	                                 self->voice_phrases, &name, &args);
+	if (dry_run) {
+		g_autoptr(JsonBuilder) b = json_builder_new();
+		g_autofree gchar *norm = gowl_macro_voice_normalise(heard);
+
+		json_builder_begin_object(b);
+		json_add_string(b, "heard", heard);
+		json_add_string(b, "normalised", norm);
+		json_add_string(b, "macro", matched ? name : NULL);
+		json_add_string(b, "args", matched ? args : NULL);
+		json_builder_end_object(b);
+		return json_finish_ok(b);
+	}
+	g_free(self->voice_last);
+	self->voice_last = g_strdup(heard);
+	if (!matched) {
+		body = g_strdup_printf("heard \"%s\" -- no macro by that name",
+		                       heard);
+		macro_notify(self, "Voice", body);
+		macro_event(self, "voice-unmatched %s", heard);
+		return g_strdup_printf("ERROR %s", body);
+	}
+	body = g_strdup_printf("\"%s\" -> %s%s%s", heard, name,
+	                       *args != '\0' ? " " : "", args);
+	macro_notify(self, "Voice", body);
+	macro_event(self, "voice %s %s", name, heard);
+	argv = g_strsplit_set(args, " ", -1);
+	/* g_strsplit_set on "" gives one empty string: no arguments */
+	if (argv[0] != NULL && *argv[0] == '\0' && argv[1] == NULL)
+		g_clear_pointer(&argv, g_strfreev);
+	return run_macro(self, name, (const gchar * const *)argv,
+	                 GOWL_MACRO_TRIGGER_VOICE, heard);
+}
+
+static void
+voice_clear_timer(
+	GowlModuleMacro *self
+){
+	if (self->voice_timer != NULL) {
+		wl_event_source_remove(self->voice_timer);
+		self->voice_timer = NULL;
+	}
+}
+
+/* The listener finished: what it printed is what was said. */
+static void
+on_voice_done(
+	gint         status,
+	const gchar *out,
+	const gchar *err,
+	gpointer     data
+){
+	GowlModuleMacro *self = data;
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *text = NULL;
+	g_autofree gchar *reply = NULL;
+
+	self->voice_proc = NULL;
+	voice_clear_timer(self);
+	macro_event(self, "voice-stopped");
+
+	g_clear_pointer(&self->voice_error, g_free);
+	if (status == -1) {
+		self->voice_error = g_strdup("the voice command took too long "
+		                             "and was stopped");
+		macro_notify(self, "Voice", self->voice_error);
+		return;
+	}
+	if (!g_spawn_check_wait_status(status, &error)) {
+		g_autofree gchar *why = NULL;
+		g_auto(GStrv) lines = g_strsplit(err != NULL ? err : "", "\n", -1);
+		guint n = g_strv_length(lines);
+		const gchar *last = "";
+
+		/* the last line that says something: usually the reason */
+		while (n > 0 && *g_strstrip(lines[n - 1]) == '\0')
+			n--;
+		if (n > 0)
+			last = lines[n - 1];
+		why = g_strdup_printf("%s%s%s", error->message,
+		                      *last != '\0' ? ": " : "", last);
+		macro_notify(self, "Voice", why);
+		macro_log(self, LOG_FAULT, "voice command failed: %s", why);
+		self->voice_error = g_steal_pointer(&why);
+		return;
+	}
+	/* Every line is part of the sentence: a transcriber may print it
+	   in segments. */
+	text = g_strdelimit(g_strdup(out != NULL ? out : ""), "\r\n\t", ' ');
+	reply = voice_run_text(self, text, FALSE);
+}
+
+/* `voice-max-seconds' passed: stop listening as if pressed again. */
+static gint
+on_voice_timer(
+	gpointer data
+){
+	GowlModuleMacro *self = data;
+
+	self->voice_timer = NULL;
+	if (self->voice_proc != NULL)
+		gowl_subprocess_signal(self->voice_proc, SIGINT);
+	return 0;
+}
+
+static gchar *
+voice_start(
+	GowlModuleMacro *self
+){
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *dev = NULL;
+	struct wl_event_loop *loop;
+	const gchar *command;
+	const gchar *argv[4];
+
+	command = self->voice_command != NULL && *self->voice_command != '\0'
+		? self->voice_command : DEFAULT_VOICE_COMMAND;
+#ifdef GOWL_MACRO_DEV_STT
+	/* A build run from its tree has not installed gowl-stt: use the
+	   tree's copy, as the shipped example macros are found there. */
+	if (g_strcmp0(command, DEFAULT_VOICE_COMMAND) == 0) {
+		g_autofree gchar *found = g_find_program_in_path(command);
+
+		if (found == NULL
+		    && g_file_test(GOWL_MACRO_DEV_STT, G_FILE_TEST_IS_EXECUTABLE)) {
+			dev = g_shell_quote(GOWL_MACRO_DEV_STT);
+			command = dev;
+		}
+	}
+#endif
+	loop = gowl_compositor_get_event_loop(self->compositor);
+	if (loop == NULL)
+		return g_strdup("ERROR no event loop");
+	argv[0] = "/bin/sh";
+	argv[1] = "-c";
+	argv[2] = command;
+	argv[3] = NULL;
+	self->voice_proc = gowl_subprocess_spawn(loop, argv,
+		self->voice_max_seconds * 1000 + VOICE_TRANSCRIBE_MS,
+		on_voice_done, self, &error);
+	if (self->voice_proc == NULL) {
+		macro_notify(self, "Voice", error->message);
+		return g_strdup_printf("ERROR %s", error->message);
+	}
+	self->voice_timer = wl_event_loop_add_timer(loop, on_voice_timer, self);
+	if (self->voice_timer != NULL)
+		wl_event_source_timer_update(self->voice_timer,
+		                             (gint)self->voice_max_seconds * 1000);
+	macro_notify(self, "Listening", "say a macro's name; press the voice "
+	             "key again when done");
+	macro_event(self, "voice-listening");
+	return g_strdup("OK listening");
+}
+
+/* Stop listening: the command transcribes and the macro runs after. */
+static gchar *
+voice_stop(
+	GowlModuleMacro *self
+){
+	if (self->voice_proc == NULL)
+		return g_strdup("ERROR not listening");
+	voice_clear_timer(self);
+	gowl_subprocess_signal(self->voice_proc, SIGINT);
+	return g_strdup("OK transcribing");
+}
+
+static void
+voice_cancel(
+	GowlModuleMacro *self
+){
+	voice_clear_timer(self);
+	if (self->voice_proc != NULL) {
+		gowl_subprocess_cancel(self->voice_proc);
+		self->voice_proc = NULL;
+	}
+}
+
+/* macro-voice [toggle|start|stop|cancel|status] */
+static gchar *
+cmd_voice(
+	GowlModuleMacro *self,
+	const gchar     *arg
+){
+	const gchar *verb;
+
+	if (self->compositor == NULL)
+		return g_strdup("ERROR the macro module has not started");
+	if (!self->enabled)
+		return g_strdup("ERROR the macro module is disabled");
+	verb = arg != NULL && *arg != '\0' ? arg : "toggle";
+
+	if (g_strcmp0(verb, "toggle") == 0)
+		return self->voice_proc != NULL ? voice_stop(self)
+		                                : voice_start(self);
+	if (g_strcmp0(verb, "start") == 0)
+		return self->voice_proc != NULL
+			? g_strdup("ERROR already listening") : voice_start(self);
+	if (g_strcmp0(verb, "stop") == 0)
+		return voice_stop(self);
+	if (g_strcmp0(verb, "cancel") == 0) {
+		if (self->voice_proc == NULL)
+			return g_strdup("ERROR not listening");
+		voice_cancel(self);
+		macro_event(self, "voice-stopped");
+		return g_strdup("OK cancelled");
+	}
+	if (g_strcmp0(verb, "status") == 0) {
+		g_autoptr(JsonBuilder) b = json_builder_new();
+
+		json_builder_begin_object(b);
+		json_builder_set_member_name(b, "listening");
+		json_builder_add_boolean_value(b, self->voice_proc != NULL);
+		json_add_string(b, "command", self->voice_command != NULL
+		                && *self->voice_command != '\0'
+		                ? self->voice_command : DEFAULT_VOICE_COMMAND);
+		json_builder_set_member_name(b, "max-seconds");
+		json_builder_add_int_value(b, self->voice_max_seconds);
+		json_add_string(b, "last-heard", self->voice_last);
+		json_add_string(b, "last-error", self->voice_error);
+		json_builder_set_member_name(b, "phrases");
+		json_builder_add_int_value(b,
+			g_hash_table_size(self->voice_phrases));
+		json_builder_end_object(b);
+		return json_finish_ok(b);
+	}
+	return g_strdup_printf("ERROR macro-voice %s: expected toggle, start, "
+	                       "stop, cancel or status", verb);
+}
+
+/* macro-voice-match [--dry-run] TEXT */
+static gchar *
+cmd_voice_match(
+	GowlModuleMacro *self,
+	const gchar     *arg
+){
+	gboolean dry_run = FALSE;
+
+	if (self->compositor == NULL)
+		return g_strdup("ERROR the macro module has not started");
+	if (arg != NULL && g_str_has_prefix(arg, "--dry-run")) {
+		dry_run = TRUE;
+		arg += strlen("--dry-run");
+		while (*arg == ' ')
+			arg++;
+	}
+	return voice_run_text(self, arg, dry_run);
+}
+
 static gchar *
 list_json(GowlModuleMacro *self)
 {
@@ -1715,11 +2422,18 @@ macro_handle_command(
 		return triggers_json(self);
 	if (g_strcmp0(verb, "filter-test") == 0)
 		return cmd_filter_test(self, arg);
+	if (g_strcmp0(verb, "record") == 0)
+		return cmd_record(self, arg);
+	if (g_strcmp0(verb, "voice") == 0)
+		return cmd_voice(self, arg);
+	if (g_strcmp0(verb, "voice-match") == 0)
+		return cmd_voice_match(self, arg);
 	return g_strdup_printf("ERROR unknown command %s; the macro module "
 	                       "knows " MACRO_PREFIX "run, -stop, -list, -status, "
 	                       "-info, -compile, -dirs, -reload, -clear, "
-	                       "-define, -undefine, -log, -triggers and "
-	                       "-filter-test", command);
+	                       "-define, -undefine, -log, -triggers, "
+	                       "-filter-test, -record, -voice and -voice-match",
+	                       command);
 }
 
 static void
@@ -1842,7 +2556,9 @@ apply_dirs(GowlModuleMacro *self)
  * @config: a #GHashTable of string settings from `modules: macro:'
  *
  * macro-dir, timeout-ms, max-running, max-steps, reentrant, stop-key, log,
- * log-file, dbus, triggers (a list), on-fault, on-fault-custom, journal.
+ * log-file, dbus, triggers (a list), on-fault, on-fault-custom, journal,
+ * record-dir, record-max-seconds, record-max-gap-ms, voice-command,
+ * voice-max-seconds, voice-phrases (a list of "PHRASE: MACRO ARGS").
  */
 static void
 macro_configure(
@@ -1907,6 +2623,25 @@ macro_configure(
 		self->dbus_wanted = parse_bool(v);
 		update_dbus(self);
 	}
+	if ((v = g_hash_table_lookup(s, "record-dir")) != NULL) {
+		g_free(self->record_dir);
+		self->record_dir = g_strdup(v);
+	}
+	if ((v = g_hash_table_lookup(s, "record-max-seconds")) != NULL)
+		parse_uint(v, 1, 3600, &self->record_max_seconds,
+		           "record-max-seconds");
+	if ((v = g_hash_table_lookup(s, "record-max-gap-ms")) != NULL)
+		parse_uint(v, 0, 600000, &self->record_max_gap_ms,
+		           "record-max-gap-ms");
+	if ((v = g_hash_table_lookup(s, "voice-command")) != NULL) {
+		g_free(self->voice_command);
+		self->voice_command = g_strdup(v);
+	}
+	if ((v = g_hash_table_lookup(s, "voice-max-seconds")) != NULL)
+		parse_uint(v, 1, 300, &self->voice_max_seconds,
+		           "voice-max-seconds");
+	if ((v = g_hash_table_lookup(s, "voice-phrases")) != NULL)
+		voice_set_phrases(self, v);
 }
 
 static gboolean
@@ -1929,6 +2664,8 @@ macro_deactivate(GowlModule *mod)
 	self->enabled = FALSE;
 	drop_pending(self);
 	g_ptr_array_set_size(self->triggers, 0);
+	record_detach(self);
+	voice_cancel(self);
 	if (self->runner != NULL)
 		gowl_macro_runner_stop(self->runner, NULL);
 	update_dbus(self);
@@ -1972,6 +2709,10 @@ macro_display_destroyed(
 	self = wl_container_of(listener, self, display_destroy);
 	drop_pending(self);
 	g_ptr_array_set_size(self->triggers, 0);
+	/* the recording's idle and the listener's pipes and timer are all
+	   event sources of the loop that is about to go */
+	record_detach(self);
+	voice_cancel(self);
 	if (self->runner != NULL)
 		gowl_macro_runner_shutdown(self->runner);
 	wl_list_remove(&self->display_destroy.link);
@@ -2026,6 +2767,8 @@ gowl_module_macro_finalize(GObject *object)
 
 	wl_list_remove(&self->display_destroy.link);
 	drop_pending(self);
+	record_detach(self);
+	voice_cancel(self);
 	g_ptr_array_unref(self->triggers);
 	if (self->dbus != NULL)
 		gowl_macro_dbus_stop(self->dbus);
@@ -2047,6 +2790,11 @@ gowl_module_macro_finalize(GObject *object)
 	g_free(self->on_fault);
 	g_free(self->on_fault_custom);
 	g_free(self->triggers_text);
+	g_free(self->record_dir);
+	g_free(self->voice_command);
+	g_free(self->voice_last);
+	g_free(self->voice_error);
+	g_hash_table_unref(self->voice_phrases);
 
 	G_OBJECT_CLASS(gowl_module_macro_parent_class)->finalize(object);
 }
@@ -2082,6 +2830,11 @@ gowl_module_macro_init(GowlModuleMacro *self)
 	self->stop_keysym = XKB_KEY_Escape;
 	self->max_running = DEFAULT_MAX_RUNNING;
 	self->max_steps = DEFAULT_MAX_STEPS;
+	self->record_max_seconds = DEFAULT_RECORD_SECS;
+	self->record_max_gap_ms = DEFAULT_RECORD_GAP_MS;
+	self->voice_max_seconds = DEFAULT_VOICE_SECS;
+	self->voice_phrases = g_hash_table_new_full(g_str_hash, g_str_equal,
+	                                            g_free, g_free);
 	self->log_level = LOG_FAULT;
 	self->journal_path = g_build_filename(g_get_user_state_dir(), "gowl",
 	                                      "macros.journal", NULL);

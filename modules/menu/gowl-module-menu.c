@@ -404,7 +404,25 @@ menu_reload_rows(GowlModuleMenu *self)
 	g_clear_pointer(&self->rows, g_ptr_array_unref);
 	self->n_recent  = 0;
 	self->n_special = 0;
-	if (self->filter->len > 0) {
+	if (self->filter->len > 0
+	    && gowl_menu_is_private(self->menu, self->route)) {
+		/*
+		 * Typing inside a private submenu (the clipboard) filters
+		 * that submenu.  The global search deliberately never sees
+		 * its rows, so searching there would empty the list the
+		 * moment a letter was typed.
+		 */
+		self->rows = gowl_menu_list(self->menu, self->compositor,
+		                            self->route);
+		for (i = self->rows != NULL ? self->rows->len : 0; i > 0; i--) {
+			const GowlMenuRow *row = g_ptr_array_index(self->rows,
+			                                           i - 1);
+
+			if (gowl_menu_match(row->label, self->filter->str,
+			                    NULL) < 0)
+				g_ptr_array_remove_index(self->rows, i - 1);
+		}
+	} else if (self->filter->len > 0) {
 		self->rows = gowl_menu_search(self->menu, self->compositor,
 		                              self->filter->str);
 		/* The model puts the typed-text rows first; count them so

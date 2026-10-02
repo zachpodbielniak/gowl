@@ -1097,6 +1097,41 @@ test_an_empty_tree_still_opens(void)
 	g_assert_cmpuint(rows->len, ==, 0);
 }
 
+/*
+ * `private: true' is read, applies to the entry and to any row under
+ * it, and to nothing else.  (That a private provider's rows stay out
+ * of search and "recent" needs real rows: test-macro-runner checks it
+ * against the clipboard module.)
+ */
+static void
+test_private_entries(void)
+{
+	g_autoptr(GowlMenu) menu = gowl_menu_new();
+	g_autoptr(GPtrArray) found = NULL;
+
+	g_assert_true(gowl_menu_load_data(menu,
+		"menu:\n"
+		"  - id: vault\n"
+		"    label: Vault\n"
+		"    provider: clipboard\n"
+		"    private: true\n"
+		"    items:\n"
+		"      - {id: wipe, label: Wipe it, command: clipboard-clear}\n"
+		"  - {id: open, label: Open, command: x}\n", FALSE, NULL));
+	g_assert_true(gowl_menu_is_private(menu, "vault"));
+	g_assert_true(gowl_menu_is_private(menu, "vault.wipe"));
+	g_assert_true(gowl_menu_is_private(menu, "vault.anything"));
+	g_assert_false(gowl_menu_is_private(menu, "open"));
+	g_assert_false(gowl_menu_is_private(menu, "root"));
+	g_assert_false(gowl_menu_is_private(menu, NULL));
+	g_assert_false(gowl_menu_is_private(menu, "nowhere"));
+	/* the entry itself is still found by its name */
+	found = gowl_menu_search(menu, NULL, "vault");
+	g_assert_cmpuint(found->len, >=, 1);
+	g_assert_cmpstr(((GowlMenuRow *)g_ptr_array_index(found, 0))->label,
+	                ==, "Vault");
+}
+
 static void
 test_the_shipped_tree_parses(void)
 {
@@ -1117,6 +1152,18 @@ test_the_shipped_tree_parses(void)
 	g_assert_true(gowl_menu_has_route(menu, "system.lock"));
 	g_assert_true(gowl_menu_has_route(menu, "macros"));
 	g_assert_true(gowl_menu_has_route(menu, "macros.tools.stop"));
+	/* what the default keys open, and the rows beside them */
+	g_assert_true(gowl_menu_has_route(menu, "clipboard"));
+	g_assert_true(gowl_menu_has_route(menu, "clipboard.clear"));
+	g_assert_true(gowl_menu_has_route(menu, "capture.text"));
+	g_assert_true(gowl_menu_has_route(menu, "capture.color"));
+	g_assert_true(gowl_menu_has_route(menu, "macros.tools.record"));
+	g_assert_true(gowl_menu_has_route(menu, "macros.tools.replay"));
+	g_assert_true(gowl_menu_has_route(menu, "macros.tools.voice"));
+	g_assert_true(gowl_menu_has_route(menu, "macros.tools.voice-command"));
+	g_assert_true(gowl_menu_is_private(menu, "clipboard"));
+	g_assert_true(gowl_menu_is_private(menu, "clipboard.c42"));
+	g_assert_false(gowl_menu_is_private(menu, "capture"));
 
 	{
 		g_autofree gchar *power = gowl_menu_resolve(menu, "power");
@@ -1770,6 +1817,7 @@ main(int argc, char *argv[])
 	g_test_add_func("/menu/the-shipped-tree-parses",
 	                test_the_shipped_tree_parses);
 	g_test_add_func("/menu/provider/path", test_the_path_provider);
+	g_test_add_func("/menu/private-entries", test_private_entries);
 	g_test_add_func("/menu/shipped/programs-needs-menu-path",
 	                test_the_shipped_programs_row_needs_menu_path);
 	g_test_add_func("/menu/shipped/macros-without-the-module",

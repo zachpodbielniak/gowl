@@ -57,6 +57,9 @@
 
 #include <glib-object.h>
 #include <gmodule.h>
+/* KEY_* and BTN_* for gowl_macro_key_code() and gowl_macro_button():
+   a macro names BTN_MIDDLE, not 0x112. */
+#include <linux/input-event-codes.h>
 
 #include "gowl-types.h"
 #include "gowl-enums.h"
@@ -81,6 +84,8 @@ G_BEGIN_DECLS
  * @GOWL_MACRO_TRIGGER_EVENT: a compositor event (`triggers:')
  * @GOWL_MACRO_TRIGGER_TIMER: an interval (`every N: ...')
  * @GOWL_MACRO_TRIGGER_REMAP: an input-remap `{macro: ...}' target
+ * @GOWL_MACRO_TRIGGER_VOICE: a spoken command (`macro-voice'); the
+ *   detail is what was heard
  *
  * What started a run.  The detail string says more: the event name,
  * the remap rule and input, the IPC command line.
@@ -91,7 +96,8 @@ typedef enum {
 	GOWL_MACRO_TRIGGER_DBUS,
 	GOWL_MACRO_TRIGGER_EVENT,
 	GOWL_MACRO_TRIGGER_TIMER,
-	GOWL_MACRO_TRIGGER_REMAP
+	GOWL_MACRO_TRIGGER_REMAP,
+	GOWL_MACRO_TRIGGER_VOICE
 } GowlMacroTrigger;
 
 #define GOWL_TYPE_MACRO_TRIGGER (gowl_macro_trigger_get_type())
@@ -164,6 +170,16 @@ gboolean            gowl_macro_text                (GowlMacroContext *ctx,
                                                     const gchar      *text);
 gboolean            gowl_macro_button              (GowlMacroContext *ctx,
                                                     guint32           button);
+gboolean            gowl_macro_button_state        (GowlMacroContext *ctx,
+                                                    guint32           button,
+                                                    gboolean          pressed);
+gboolean            gowl_macro_pointer             (GowlMacroContext *ctx,
+                                                    gdouble           x,
+                                                    gdouble           y);
+gboolean            gowl_macro_scroll              (GowlMacroContext *ctx,
+                                                    gboolean          horizontal,
+                                                    gdouble           value,
+                                                    gint              discrete);
 gboolean            gowl_macro_wait                (GowlMacroContext *ctx,
                                                     guint             ms);
 gboolean            gowl_macro_command             (GowlMacroContext *ctx,

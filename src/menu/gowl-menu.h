@@ -288,6 +288,8 @@ gboolean gowl_menu_has_route (GowlMenu *self, const gchar *route);
  */
 gboolean gowl_menu_is_submenu (GowlMenu *self, const gchar *route);
 
+gboolean gowl_menu_is_private (GowlMenu *self, const gchar *route);
+
 /**
  * gowl_menu_get_title:
  * @self: a #GowlMenu

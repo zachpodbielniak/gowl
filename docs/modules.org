@@ -733,9 +733,13 @@ Runs *macros*: small C files, compiled at runtime with crispy and loaded into th
 
 *Containment:* every call into macro code runs under the fault guard (=src/util/gowl-fault-guard.c=) with a watchdog; a crash or a runaway loop is unwound, logged, notified and held back until =macro-clear=, and the journal holds back a macro that was running when a session died.
 
-*Settings:* =macro-dir=, =timeout-ms= (2000), =max-running= (4), =reentrant=, =stop-key= (=Super+Escape=), =max-steps=, =log= (=none=/=fault=/=run=/=all=), =log-file=, =journal=, =triggers= (=EVENT [FILTER]: MACRO= and =every MS [FILTER]: MACRO= lines; the filter combines conditions on the event's window, monitor, arguments and the time with and/or/not), =dbus= (=org.gowl.Macro1=), =on-fault=, =on-fault-custom=.
+*Recording:* =macro-record= (Super+Alt+r in the shipped config) records what you do next as a /private/ input recording --- no consent switch, no published token --- and writes it out as =last-recording.c= (=macro-record start NAME= also writes =NAME.c=); =macro-run last-recording= (Super+Alt+Shift+r) replays it.
 
-*Files:* =gowl-module-macro.c= (settings, IPC, triggers, journal), =gowl-macro-loader.c= (lookup, compile, open), =gowl-macro-runner.c= (guarded runs, timeline, workers), =gowl-macro-dbus.c=.  The API scripts call is =src/macro/gowl-macro.h=.  Full reference, with 25 shipped examples and use cases: [[file:macros.org][macros.org]].
+*Voice:* =macro-voice= (Super+Alt+m) runs =voice-command= (=gowl-stt= by default: pw-record or arecord, then whisper.cpp) until SIGINT and runs the macro whose name, or configured phrase, was said; =macro-voice-match TEXT= is the matching alone, which cmacs uses with its own whisper.
+
+*Settings:* =macro-dir=, =timeout-ms= (2000), =max-running= (4), =reentrant=, =stop-key= (=Super+Escape=), =max-steps=, =log= (=none=/=fault=/=run=/=all=), =log-file=, =journal=, =triggers= (=EVENT [FILTER]: MACRO= and =every MS [FILTER]: MACRO= lines; the filter combines conditions on the event's window, monitor, arguments and the time with and/or/not), =dbus= (=org.gowl.Macro1=), =on-fault=, =on-fault-custom=, =record-dir=, =record-max-seconds= (300), =record-max-gap-ms= (3000), =voice-command= (=gowl-stt=), =voice-max-seconds= (10), =voice-phrases=.
+
+*Files:* =gowl-module-macro.c= (settings, IPC, triggers, journal, recorder, voice), =gowl-macro-loader.c= (lookup, compile, open), =gowl-macro-runner.c= (guarded runs, timeline, workers), =gowl-macro-dbus.c=, =gowl-macro-record.c= (a recording into source), =gowl-macro-voice.c= (matching what was said).  The API scripts call is =src/macro/gowl-macro.h=.  Full reference, with 25 shipped examples and use cases: [[file:macros.org][macros.org]].
 
 *** The clipboard module
 
@@ -767,6 +771,13 @@ gowl clipboard-delete 12
 gowl clipboard-clear
 gowl clipboard-path 12       # where the bytes are
 #+end_src
+
+*In the Super+space menu* the history is the =clipboard= provider, under
+a =Clipboard= entry marked =private: true=: its rows are listed only
+when that entry is opened (typing =clipboard= finds it; =Super+Alt+v=
+opens it straight), never in a search and never in "recent", because a
+clipboard holds whatever was last copied --- a password included.
+Return on a row is =clipboard-copy ID=.
 
 Putting an entry back is itself a selection change, so the module
 ignores its own writes; without that, pasting from the history would add
@@ -863,6 +874,35 @@ first three to =Super+Shift+S=, =Super+Print= and =Print=.
 A bind reaching the module by name is what keeps the keybind, the CLI
 and cmacs from having to know that this module exists --- and what makes
 a missing module inert rather than broken.
+
+**** Text and colours: screenshot-ocr and screenshot-color
+
+Two more uses of the same machinery, which save no file:
+
+- *=screenshot-ocr=* (=Super+Alt+Shift+s=) arms the same rubber band;
+  the region is written to a private temporary PNG in
+  =$XDG_RUNTIME_DIR= (never the screenshots folder), read by
+  =ocr-command IMAGE stdout -l ocr-language= (=tesseract=, =eng=), and
+  the text goes on the clipboard.  A toast says how many characters, or
+  that there were none, or why tesseract failed; the image is deleted
+  either way.
+- *=screenshot-color=* (=Super+Alt+c=) frames the screen --- a thin
+  border, no dim, because a dim wash would change every colour --- and
+  the next left click puts that pixel's =#rrggbb= on the clipboard.
+
+Both take Escape or a right-click as a cancel.  tesseract runs on the
+side, watched on the compositor's event loop (=src/util/gowl-subprocess.c=)
+so neither a slow read nor a stuck one holds the desktop.  It needs the
+=tesseract= package and a language pack (=tesseract-langpack-eng= on
+Fedora).  Events: =EVENT screenshot ocr-reading=, =ocr N= (characters),
+=ocr-failed=, =color #rrggbb=.
+
+#+begin_src yaml
+modules:
+  screenshot:
+    ocr-command: tesseract      # called as COMMAND IMAGE stdout -l LANG
+    ocr-language: eng+deu
+#+end_src
 
 A clipboard payload is written to the pasting client *by the main loop*,
 not from the =wlr_data_source= send callback. That callback runs on the

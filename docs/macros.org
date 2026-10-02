@@ -8,6 +8,8 @@
 :END:
 A *macro* is a small C file that drives the compositor: sort the windows on a tag, type a command into the terminal while you keep working in the browser, move every window of one app to the current tag, put the desktop back the way it was this morning. Macros are compiled at runtime with crispy, loaded into the compositor, and run on demand --- from a keybind, =gowl-msg=, D-Bus, MCP, a compositor event, a timer, a foot pedal through the input remapper, or any C code. Edit the file, run it again, and the new code runs; there is no rebuild and no restart.
 
+You do not have to write one by hand: *Super+Alt+r* records what you do and writes it out as a macro ([[#macros-recording][Recording a macro]]), and *Super+Alt+m* runs one by name when you say it ([[#macros-voice][Voice]]).
+
 Macros run *in-process*, so they have the whole compositor API and cost nothing to start. That is also why the system is built around containment: a macro that dereferences NULL, calls =abort()=, or loops forever is stopped, unwound, logged, reported in a notification, and held back until you clear it. The desktop carries on.
 
 The feature has two parts:
@@ -128,8 +130,8 @@ Everything a macro knows arrives in its =GowlMacroContext=:
 | =gowl_macro_get_name(ctx)=             | the name it was run by                                        |
 | =gowl_macro_get_path(ctx)=             | its source file, or =NULL= (registered, defined)              |
 | =gowl_macro_get_argc/arg/argv(ctx)=    | its arguments, shell-parsed from the command line            |
-| =gowl_macro_get_trigger(ctx)=          | =API=, =IPC=, =DBUS=, =EVENT=, =TIMER= or =REMAP=             |
-| =gowl_macro_get_trigger_detail(ctx)=   | who started it: the IPC line, the event and its window, the remap rule and input, the interval |
+| =gowl_macro_get_trigger(ctx)=          | =API=, =IPC=, =DBUS=, =EVENT=, =TIMER=, =REMAP= or =VOICE=    |
+| =gowl_macro_get_trigger_detail(ctx)=   | who started it: the IPC line, the event and its window, the remap rule and input, the interval, what was said |
 | =gowl_macro_is_threaded(ctx)=          | which mode it is in                                           |
 
 And a macro reports through it:
@@ -154,10 +156,15 @@ Anything that is /input/, or that should happen /in order over time/, is a step:
 | =gowl_macro_key_code(ctx, target, KEY_A, mods)=    | the same by evdev keycode                                      |
 | =gowl_macro_text(ctx, target, "make\n")=           | type a string; =\n= is Return, =\t= is Tab                     |
 | =gowl_macro_button(ctx, BTN_MIDDLE)=               | one click at the cursor                                        |
+| =gowl_macro_button_state(ctx, BTN_LEFT, TRUE)=     | half a click: the press, or (=FALSE=) the release --- a drag with a move between |
+| =gowl_macro_pointer(ctx, 640, 360)=                | move the pointer to a layout position (motion: hover and drags see it) |
+| =gowl_macro_scroll(ctx, FALSE, 15, 120)=           | one scroll: vertical (=TRUE= horizontal), the delta, 120ths of a notch (=0= smooth) |
 | =gowl_macro_wait(ctx, 150)=                        | a pause in the sequence                                        |
 | =gowl_macro_command(ctx, "scratchpad-toggle")=     | one module IPC command line                                    |
 | =gowl_macro_action(ctx, GOWL_ACTION_..., arg)=     | one compositor action, as a keybind would run it               |
 | =gowl_macro_focus(ctx, client)=                    | focus a window (viewing its tags)                              |
+
+=<gowl/gowl.h>= brings =<linux/input-event-codes.h>= with it, so a macro names =KEY_F13= and =BTN_MIDDLE=, not numbers.
 
 *The =target= of a key or text step* decides where it goes:
 
@@ -270,6 +277,69 @@ modules:
 
 A timeline run stops at once: its queued steps are dropped. A threaded run is told, and ends at its next step, sleep or =gowl_macro_is_cancelled()= check.
 
+** Recording a macro
+:PROPERTIES:
+:CUSTOM_ID: macros-recording
+:END:
+*Super+Alt+r, do the thing, Super+Alt+r.*  What you did between the two presses --- keys, clicks, drags, scrolls, with their timing --- is written out as an ordinary macro file, =last-recording.c=, and *Super+Alt+Shift+r* plays it back.  It is C like any other macro: open it, edit it, rename it, bind it, put it on a trigger.
+
+#+begin_src sh
+gowl-msg macro-record                  # start; the same again stops
+gowl-msg macro-record start tidy-mail  # also write tidy-mail.c
+gowl-msg macro-run last-recording      # replay
+gowl-msg macro-run last-recording 2    # at double speed (0.5 = half)
+gowl-msg macro-record cancel           # stop and throw it away
+#+end_src
+
+*It uses the compositor's input recorder* ([[file:input-recording.org][input-recording.org]]) as a /private/ recording.  The recorder's =input-recording= consent exists to stop a /program/ watching somebody type; here the somebody pressed the key, so a private recording does not need it --- and in exchange its token is never published: status payloads show =token: null= and =owner: macro=, the =changed= signal carries no token, and nothing but the macro module can drain or stop it.  Everything else is the same recording:
+
+- the frame around the screen for as long as it runs;
+- nothing recorded while the session is locked or while a window on the deny list (password managers, pinentry, polkit, anything titled "password"...) has focus --- and the written file says how many events were left out;
+- a deadline (=record-max-seconds=, 300 by default) and *Super+Shift+Escape*, either of which stops it; what was recorded up to then is still written.
+
+*What the file contains.*  The recorder sees every raw event; the macro gets fewer, fatter steps:
+
+| Recorded                                          | Written                                                      |
+|---------------------------------------------------+--------------------------------------------------------------|
+| a key pressed and released                        | =gowl_macro_key_code(ctx, NULL, KEY, MODS)= --- one tap, with the modifiers held at the press |
+| Shift, Control, Alt, Super on their own           | nothing: they are in the next key's =MODS=                    |
+| the record key's release at the start, its press at the end | nothing: an event with no partner is dropped        |
+| pointer wandering                                 | one =gowl_macro_pointer()= to where the next click or scroll lands |
+| press and release in one place                    | =gowl_macro_button(ctx, BTN_LEFT)=                           |
+| press, movement, release                          | =gowl_macro_button_state()= down, the path (sampled every 16 ms), up |
+| a scroll                                          | =gowl_macro_scroll()= with its notches                        |
+| a pause                                           | =gowl_macro_wait(ctx, scaled(ctx, MS))=; longer than =record-max-gap-ms= (3000) is shortened to it |
+
+Keys replay into whatever window has focus when they play, and through the compositor's keybinds --- a recorded Super+3 views tag 3 --- and the pointer goes to the same screen positions.  A recording is as portable as the layout it was made on.  Caps Lock and Num Lock are not replayed.
+
+#+begin_src c
+/* last-recording.c - recorded by the gowl macro recorder, 2026-10-02 09:14.
+ * 3 step(s), 0.6 s at normal speed.  An optional first argument is a
+ * speed factor ... */
+G_MODULE_EXPORT gboolean
+gowl_macro_run(GowlMacroContext *ctx)
+{
+	gowl_macro_key_code(ctx, NULL, 46, GOWL_KEY_MOD_CTRL);	/* c */
+	gowl_macro_wait(ctx, scaled(ctx, 420));
+	gowl_macro_pointer(ctx, 812, 455);
+	gowl_macro_button(ctx, BTN_LEFT);
+	return TRUE;
+}
+#+end_src
+
+Recordings are written to =record-dir= (default =~/.config/gowl/macros=, the first place a bare name is looked up).
+
+| Command                           | Reply                                                       |
+|-----------------------------------+-------------------------------------------------------------|
+| =macro-record [toggle]=           | start (=OK recording last-recording=) or stop (=OK recorded NAME STEPS PATH=) |
+| =macro-record start [NAME]=       | start; on stop write =NAME.c= as well as =last-recording.c= |
+| =macro-record NAME=               | the same as =start NAME=                                    |
+| =macro-record stop=               | stop and write                                              |
+| =macro-record cancel=             | stop and write nothing                                      |
+| =macro-record status=             | JSON: recording, name, dir, max-seconds                     |
+
+Events: =EVENT macro recording NAME=, =recorded NAME STEPS PATH=, =recorded-nothing NAME=, =recording-cancelled=.
+
 ** Triggers
 :PROPERTIES:
 :CUSTOM_ID: macros-triggers
@@ -283,6 +353,41 @@ The shipped menu has a *Macros* submenu. Its rows are the macros themselves --- 
 Above the macros, *Macro tools* stops running macros, lets held-back ones run again and reloads macros and triggers (under cmacs also: manage, write a new macro, show the triggers). While the module is off, the submenu holds only *Load macros*: under cmacs it loads the module and reopens the menu on this list; in standalone gowl it is dimmed and says to enable =modules: macro=.
 
 The menu asks the module over IPC (=macro-list=), like any other client, so it links nothing of it. A macro that needs arguments is run without any from here and reports its usage; bind those to a key or trigger instead.
+
+*** Voice
+:PROPERTIES:
+:CUSTOM_ID: macros-voice
+:END:
+*Super+Alt+m, say a macro's name, Super+Alt+m.*  The module runs =voice-command=, a shell command that listens until it gets SIGINT, transcribes, and prints what it heard; the second press sends the SIGINT (so does =voice-max-seconds=, 10 by default, if nobody presses anything).  What it printed is matched to a macro, which runs with trigger =VOICE= and what was said as its detail.
+
+The default command is *=gowl-stt=*, a bash script installed beside =gowl-msg=: it records with =pw-record= (PipeWire) or =arecord= (ALSA) and transcribes with whisper.cpp's =whisper-cli=, using =$GOWL_STT_MODEL= or the first =ggml-base.en.bin= in =~/.local/share/cmacs/whisper-models=, =~/.local/share/whisper=, =/usr/share/cmacs/whisper-models= or =/usr/share/whisper.cpp=.  Anything that keeps the contract --- listen until SIGINT, print the words, exit 0 --- can replace it; a non-zero exit is reported in a toast with the last line of its stderr.
+
+*Matching*, on a normalised form (lower case, words only, number words as digits: "Pip corner, twenty-five." is =pip corner 25=; "run", "do", "please" and the like dropped from the front, "please" and "thank you" from the end), first hit wins:
+
+1. *A phrase* from =voice-phrases=, at the start of the sentence: =tidy up: sort-windows=.  Words said after it are added as arguments.
+2. *A macro's name said as words*, at the start: =pip-corner= is "pip corner", and what follows is its arguments --- "pip corner 25" runs =pip-corner 25=.  The longest name that fits wins.
+3. *Every word of a name, anywhere*: "windows, sort them" runs =sort-windows=, with no arguments.
+
+#+begin_src yaml
+modules:
+  macro:
+    enabled: true
+    voice-command: "gowl-stt -l en"
+    voice-max-seconds: 8
+    voice-phrases:
+      - "tidy up: sort-windows"
+      - "small video: pip-corner 20"
+#+end_src
+
+| Command                                  | Reply                                                     |
+|------------------------------------------+-----------------------------------------------------------|
+| =macro-voice [toggle]=                   | start listening (=OK listening=), or stop (=OK transcribing=) |
+| =macro-voice start=, =stop=, =cancel=    | as named; =cancel= kills the command and runs nothing     |
+| =macro-voice status=                     | JSON: listening, command, max-seconds, last-heard, last-error, phrases |
+| =macro-voice-match TEXT=                 | the matching alone: run the macro TEXT names              |
+| =macro-voice-match --dry-run TEXT=       | JSON: heard, normalised, macro, args --- runs nothing     |
+
+=macro-voice-match= is for a listener that is not a shell command: under =cmacs --gowl= Super+Alt+m records with cmacs's audio subsystem, transcribes with its embedded whisper, and hands the text over --- no extra program.  Events: =EVENT macro voice-listening=, =voice-stopped=, =voice NAME TEXT=, =voice-unmatched TEXT=.
 
 *** Keybinds
 :PROPERTIES:
@@ -667,6 +772,12 @@ gowl-msg macro-define note custom '(org-capture nil "n")'
 | =dbus=            | =false=                           | own =org.gowl.Macro1=                                    |
 | =on-fault=        | --                                | a command line run on every fault                        |
 | =on-fault-custom= | --                                | a =custom= action run on every fault                     |
+| =record-dir=      | =~/.config/gowl/macros=           | where =macro-record= writes                              |
+| =record-max-seconds= | =300=                          | a recording stops itself after this long                 |
+| =record-max-gap-ms= | =3000=                          | a longer recorded pause is replayed this long; =0= keeps all |
+| =voice-command=   | =gowl-stt=                        | the listener: until SIGINT, then print the words         |
+| =voice-max-seconds= | =10=                            | SIGINT the listener after this long                      |
+| =voice-phrases=   | --                                | a list of ="PHRASE: MACRO ARGS"=, matched first          |
 
 ** The examples
 :PROPERTIES:
@@ -749,6 +860,11 @@ Ideas, by kind; most are twenty lines.
 | =modules/macro/gowl-macro-runner.c=          | guarded runs, the timeline player, workers                   |
 | =modules/macro/gowl-macro-dbus.c=            | =org.gowl.Macro1=                                            |
 | =modules/macro/gowl-macro-filter.c=          | the trigger filter language (pure GLib)                      |
+| =modules/macro/gowl-macro-record.c=          | a recording into macro source (pure GLib + json-glib)        |
+| =modules/macro/gowl-macro-voice.c=           | what was said, matched to a macro (pure GLib)                |
+| =src/util/gowl-subprocess.{h,c}=             | children watched on the compositor's event loop (voice, OCR) |
+| =src/core/gowl-input-recorder.c=             | the input recorder, and its private recordings               |
+| =tools/gowl-stt/gowl-stt=                    | the default =voice-command=                                  |
 | =modules/mcp/gowl-mcp-tools-macro.c=         | the MCP tools                                                |
 | =data/macros/*.c=                            | the examples                                                 |
 
@@ -764,4 +880,9 @@ Ideas, by kind; most are twenty lines.
 | =test-macro-targeted-key=      | a real Wayland client: a targeted key reaches only its window and focus comes back; text with shifted and unmappable characters; refused while locked; the step API; reordering |
 | =test-macro-examples=          | every example compiled with =-std=gnu89 -Wall -Wextra -Werror=, opened, and run against three real windows; filtered =focus-changed= triggers each keeping their own subset of real windows |
 | =test-macro-filter=            | the filter language alone: every operator, and/or/not and precedence, quoting, numeric vs text comparison, absent fields, errors with their column, splitting a trigger line around its filter |
+| =test-macro-record=            | recordings into source alone: the record key dropped, chords as one step, lone modifiers and lock bits, click vs drag, scrolls, waits and the gap cap, empty and protected recordings, bad payloads |
+| =test-macro-voice=             | matching alone: normalising (numbers said in a row stay apart), names, scattered words, phrases, filler |
+| =test-subprocess=              | children on a bare event loop: output, exit status, the deadline, SIGINT to a pipeline, large output, cancel |
+| =test-macro-runner= (more)     | a keybind pressed on a real (fake) keyboard while recording, written, compiled and replayed; the token hidden and another start refused; Super+Shift+Escape, empty and cancelled recordings; voice from text and from commands that hear, fail, are stopped by the key and by the deadline; the clipboard kept out of menu search and "recent" |
+| =test-grab-keys.sh=            | the six default keys, the opt-in, the private clipboard entry, the hidden token, OCR placement, gowl-stt ShellCheck |
 | =test-macro-guard.sh=          | source invariants: every body guarded, nothing sleeps on the compositor thread, cross-thread locks held with the watchdog deferred, targeted keys refuse when locked, code stays mapped |

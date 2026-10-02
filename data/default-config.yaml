@@ -625,6 +625,24 @@ keybinds:
   "Super+Shift+s": { action: ipc_command, arg: "screenshot-area", desc: "Screenshot: select a region" }
   "Super+Print": { action: ipc_command, arg: "screenshot-window", desc: "Screenshot: focused window" }
   "Print": { action: ipc_command, arg: "screenshot-screen", desc: "Screenshot: whole screen" }
+  # The same region select, read rather than photographed: tesseract
+  # puts the text on the clipboard.  And one pixel's colour, as #rrggbb.
+  # Both live in the screenshot module, so both are inert until it is
+  # enabled; the OCR one also needs tesseract installed.
+  "Super+Alt+Shift+s": { action: ipc_command, arg: "screenshot-ocr", desc: "Copy text from a region (OCR)" }
+  "Super+Alt+c": { action: ipc_command, arg: "screenshot-color", desc: "Pick a colour" }
+
+  # Macros (modules/macro, opt-in below).  Super+Alt+r records what you
+  # do next and writes it out as last-recording.c; press it again to
+  # stop.  Super+Alt+Shift+r plays the last recording back.  Super+Alt+m
+  # listens through `voice-command' and runs the macro you named.
+  "Super+Alt+r": { action: ipc_command, arg: "macro-record", desc: "Macro: record / stop recording" }
+  "Super+Alt+Shift+r": { action: ipc_command, arg: "macro-run last-recording", desc: "Macro: replay the last recording" }
+  "Super+Alt+m": { action: ipc_command, arg: "macro-voice", desc: "Macro: say one" }
+  # The clipboard history, in the menu.  Its entries never show up in a
+  # search -- only here, or by opening `Clipboard' from the menu -- so a
+  # copied password is not two keystrokes from the screen.
+  "Super+Alt+v": { action: ipc_command, arg: "menu-open clipboard", desc: "Menu: clipboard history" }
 
   # Session
   "Super+Shift+q": { action: quit, desc: "Quit gowl" }
@@ -1065,12 +1083,30 @@ modules:
   # `osd brightness 70', `osd show "text"'.
   osd:
     enabled: false
-  # Screenshots: `screenshot', `screenshot-area', `screenshot-client'.
+  # Screenshots: `screenshot', `screenshot-area', `screenshot-client';
+  # `screenshot-ocr' (a region's text, through tesseract, onto the
+  # clipboard) and `screenshot-color' (a pixel's #rrggbb).
   screenshot:
     enabled: false
     save-directory: "~/Pictures"
     filename-format: "screenshot-%Y%m%d-%H%M%S.png"
     copy-to-clipboard: true
+    # ocr-command: tesseract   # called as COMMAND IMAGE stdout -l LANG
+    # ocr-language: eng        # tesseract -l: eng, deu, eng+deu, ...
+  # Macros: C files compiled with crispy and run in the compositor
+  # (docs/macros.org).  Opt-in -- CMacs loads it the first time a macro
+  # key or function is used.  The Super+Alt+r / Super+Alt+Shift+r /
+  # Super+Alt+m keys above reach it by name and do nothing until it is on.
+  macro:
+    enabled: false
+    # record-dir: "~/.config/gowl/macros"   # where recordings are written
+    # record-max-seconds: 300   # a forgotten recording stops itself
+    # record-max-gap-ms: 3000   # a longer pause is replayed this long
+    # voice-command: "gowl-stt" # listens until SIGINT, prints the words
+    # voice-max-seconds: 10     # stop listening after this long
+    # voice-phrases:            # "PHRASE: MACRO ARGS", checked first
+    #   - "tidy up: sort-windows"
+    #   - "presentation mode: presentation"
   # Screen recording through ffmpeg: `record-start', `record-stop'.
   recording:
     enabled: false

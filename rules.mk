@@ -448,6 +448,9 @@ install-bin: $(OBJDIR)/main.o $(OUTDIR)/$(LIB_SHARED_FULL)
 		-Wl,-rpath,$(LIBDIR)
 	chmod 755 $(DESTDIR)$(BINDIR)/gowl
 	$(INSTALL_PROGRAM) $(OUTDIR)/gowl-msg $(DESTDIR)$(BINDIR)/gowl-msg
+	@# The macro module's default voice-command: a bash script, so
+	@# nothing to build -- recorder and whisper.cpp are found at run time.
+	$(INSTALL_PROGRAM) tools/gowl-stt/gowl-stt $(DESTDIR)$(BINDIR)/gowl-stt
 	@# The lock, when there was PAM to build it against.  Its absence is
 	@# not an error: the compositor falls back to the built-in module.
 	@if [ -x "$(OUTDIR)/gowl-lock" ]; then \
@@ -601,6 +604,7 @@ uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/gowlbar
 	rm -f $(DESTDIR)$(BINDIR)/gowl-mcp
 	rm -f $(DESTDIR)$(BINDIR)/gowl-msg
+	rm -f $(DESTDIR)$(BINDIR)/gowl-stt
 	rm -f $(DESTDIR)$(BINDIR)/gowl-lock
 	rm -f $(DESTDIR)$(BINDIR)/xdg-desktop-portal-gowl
 	rm -f $(DESTDIR)$(DATADIR)/xdg-desktop-portal/portals/gowl.portal

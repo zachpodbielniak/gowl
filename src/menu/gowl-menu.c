@@ -121,6 +121,9 @@ struct _GowlMenuEntry {
 	gchar      *target;    /* a link to another route */
 	gchar      *provider;  /* rows produced at open time */
 	gboolean    keep_open;
+	/* Its provider's rows are shown only to somebody who opened it:
+	   never in search, never in "recent".  The clipboard. */
+	gboolean    is_private;
 
 	GowlMenuGuard when;
 	GowlMenuGuard checked;
@@ -599,6 +602,8 @@ apply_entry(GowlMenu *self, YamlMapping *map, GowlMenuEntry *e, gint depth)
 	}
 	if (yaml_mapping_has_member(map, "keep-open"))
 		e->keep_open = yaml_mapping_get_boolean_member(map, "keep-open");
+	if (yaml_mapping_has_member(map, "private"))
+		e->is_private = yaml_mapping_get_boolean_member(map, "private");
 
 	if (yaml_mapping_has_member(map, "aliases")) {
 		YamlSequence *seq = yaml_mapping_get_sequence_member(map, "aliases");
@@ -1041,6 +1046,36 @@ gowl_menu_is_submenu(GowlMenu *self, const gchar *route)
 	if (e == self->root)
 		return TRUE;
 	return e->children->len > 0 || e->provider != NULL || e->target != NULL;
+}
+
+/**
+ * gowl_menu_is_private:
+ * @self: a #GowlMenu
+ * @route: (nullable): a route
+ *
+ * Whether @route is a `private: true' entry, or a row of one: its rows
+ * are listed when it is opened and nowhere else.  The panel uses this
+ * to filter what is typed inside it instead of searching everywhere.
+ *
+ * Returns: %TRUE for a private submenu or one of its rows
+ */
+gboolean
+gowl_menu_is_private(GowlMenu *self, const gchar *route)
+{
+	GowlMenuEntry *e;
+	g_autofree gchar *parent = NULL;
+
+	g_return_val_if_fail(GOWL_IS_MENU(self), FALSE);
+
+	if (route == NULL || *route == '\0')
+		return FALSE;
+	e = lookup(self, route);
+	if (e != NULL && e->is_private)
+		return TRUE;
+	/* a row under one: declared (`Forget') or made by its provider */
+	parent = gowl_menu_get_parent(self, route);
+	e = parent != NULL ? lookup(self, parent) : NULL;
+	return e != NULL && e->is_private;
 }
 
 gchar *
@@ -1545,6 +1580,56 @@ provider_macros(GPtrArray *out, GowlCompositor *comp)
 	}
 }
 
+/*
+ * The clipboard history, from the clipboard module's index.
+ *
+ * Every line is `ID<TAB>MIME<TAB>BYTES<TAB>PREVIEW', newest first.  The
+ * entry that lists these is `private: true' in the shipped menu.yaml,
+ * because a clipboard holds whatever was last copied -- a password out
+ * of a password manager included -- and a menu that searched it would
+ * put that on the screen for anyone who typed two letters of it.
+ */
+static void
+provider_clipboard(GPtrArray *out, GowlCompositor *comp)
+{
+	g_autofree gchar *reply = NULL;
+	g_auto(GStrv) lines = NULL;
+	guint i;
+
+	if (comp == NULL)
+		return;
+	reply = gowl_compositor_ipc_command(comp, "clipboard-list");
+	if (reply == NULL || g_str_has_prefix(reply, "ERROR"))
+		return;
+	lines = g_strsplit(reply, "\n", -1);
+	for (i = 0; lines[i] != NULL; i++) {
+		g_auto(GStrv) f = NULL;
+		g_autofree gchar *id = NULL;
+		g_autofree gchar *size = NULL;
+		g_autofree gchar *detail = NULL;
+		guint64 n;
+		gboolean image;
+
+		f = g_strsplit(lines[i], "\t", 4);
+		if (g_strv_length(f) < 4
+		    || g_ascii_strtoull(f[0], NULL, 10) == 0)
+			continue;
+		n = g_ascii_strtoull(f[2], NULL, 10);
+		image = g_str_has_prefix(f[1], "image/");
+		size = g_format_size(n);
+		detail = g_strdup_printf("%s, %s",
+		                         *f[1] != '\0' ? f[1] : "text", size);
+		/* `c<ID>' rather than the preview: two entries can read the
+		   same, and the id is what clipboard-copy wants anyway */
+		id = g_strdup_printf("c%s", f[0]);
+		provider_add(out, id,
+		             image ? "\xf3\xb0\x8b\xa9"      /* image */
+		                   : "\xf3\xb0\x85\x8d",     /* clipboard */
+		             f[3], detail, NULL, FALSE, GOWL_ACTION_IPC_COMMAND,
+		             g_strdup_printf("clipboard-copy %s", f[0]));
+	}
+}
+
 static void
 provider_keybinds(GPtrArray *out, GowlCompositor *comp)
 {
@@ -1637,6 +1722,8 @@ provider_run(GowlMenu *self, const gchar *name, GowlCompositor *comp)
 		provider_macros(out, comp);
 	else if (g_strcmp0(name, "path") == 0)
 		provider_path(out);
+	else if (g_strcmp0(name, "clipboard") == 0)
+		provider_clipboard(out, comp);
 	else
 		g_warning("menu: unknown provider `%s'", name);
 
@@ -2416,7 +2503,8 @@ row_for_route(GowlMenu *self, GowlCompositor *comp, const gchar *route)
 		g_autoptr(GPtrArray) rows = NULL;
 		guint i;
 
-		if (parent == NULL || parent->provider == NULL || leaf == NULL)
+		if (parent == NULL || parent->provider == NULL || leaf == NULL
+		    || parent->is_private)
 			return NULL;
 		rows = provider_run(self, parent->provider, comp);
 		for (i = 0; rows != NULL && i < rows->len; i++) {
@@ -2816,7 +2904,9 @@ search_walk(GowlMenu *self, GowlMenuEntry *e, GowlCompositor *comp,
 		 * expensive one is cached (provider_ttl), which is what
 		 * makes this affordable on every keystroke.
 		 */
-		if (c->provider != NULL) {
+		/* A private submenu's rows are not searched: finding it by its
+		 * own name above, and opening it, is the way in. */
+		if (c->provider != NULL && !c->is_private) {
 			g_autoptr(GPtrArray) made =
 				provider_run(self, c->provider, comp);
 			/* The path TO the provider's submenu, which is its
@@ -2984,7 +3074,10 @@ gowl_menu_activate(GowlMenu *self, GowlCompositor *comp, const gchar *route,
 			GowlMenuResult r = activate_provider_row(self, comp,
 			                                         parent, leaf + 1);
 
-			if (r != GOWL_MENU_RESULT_NONE)
+			/* Not remembered for a private submenu: "recent" is on
+			 * the front page, and what was pasted from the
+			 * clipboard is not the front page's business. */
+			if (r != GOWL_MENU_RESULT_NONE && !parent->is_private)
 				gowl_menu_note_used(self, route);
 			return r;
 		}

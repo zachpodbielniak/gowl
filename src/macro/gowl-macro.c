@@ -78,6 +78,7 @@ gowl_macro_trigger_get_type(void)
 			{ GOWL_MACRO_TRIGGER_EVENT, "GOWL_MACRO_TRIGGER_EVENT", "event" },
 			{ GOWL_MACRO_TRIGGER_TIMER, "GOWL_MACRO_TRIGGER_TIMER", "timer" },
 			{ GOWL_MACRO_TRIGGER_REMAP, "GOWL_MACRO_TRIGGER_REMAP", "remap" },
+			{ GOWL_MACRO_TRIGGER_VOICE, "GOWL_MACRO_TRIGGER_VOICE", "voice" },
 			{ 0, NULL, NULL }
 		};
 		GType t = g_enum_register_static("GowlMacroTrigger", values);
@@ -741,6 +742,20 @@ gowl_macro_step_execute(
 		gowl_compositor_inject_button(compositor, step->button, TRUE);
 		gowl_compositor_inject_button(compositor, step->button, FALSE);
 		break;
+	case GOWL_MACRO_STEP_BUTTON_STATE:
+		gowl_compositor_inject_button(compositor, step->button,
+		                              step->pressed);
+		break;
+	case GOWL_MACRO_STEP_POINTER:
+		/* Motion, not a warp: the client under the pointer is told it
+		   moved, which is what a hover or a drag in a recording needs.
+		   It also obeys a pointer lock, as a hand on a mouse would. */
+		gowl_compositor_inject_pointer_warp(compositor, step->x, step->y);
+		break;
+	case GOWL_MACRO_STEP_SCROLL:
+		gowl_compositor_inject_axis(compositor, step->horizontal,
+		                            step->value, step->discrete);
+		break;
 	case GOWL_MACRO_STEP_COMMAND:
 		g_free(gowl_compositor_run_command(compositor, step->text));
 		break;
@@ -963,6 +978,90 @@ gowl_macro_button(
 	g_return_val_if_fail(ctx != NULL, FALSE);
 	step = gowl_macro_step_new(GOWL_MACRO_STEP_BUTTON);
 	step->button = button;
+	return submit(ctx, step);
+}
+
+/**
+ * gowl_macro_button_state:
+ * @ctx: the run
+ * @button: a BTN_* code
+ * @pressed: %TRUE for down, %FALSE for up
+ *
+ * Half a click: the press or the release alone.  With
+ * gowl_macro_pointer() between them it is a drag -- what the macro
+ * recorder writes for one.  A macro that presses and never releases
+ * leaves the button held, so pair them.
+ *
+ * Returns: %TRUE when queued (or performed)
+ */
+gboolean
+gowl_macro_button_state(
+	GowlMacroContext *ctx,
+	guint32           button,
+	gboolean          pressed
+){
+	GowlMacroStep *step;
+
+	g_return_val_if_fail(ctx != NULL, FALSE);
+	step = gowl_macro_step_new(GOWL_MACRO_STEP_BUTTON_STATE);
+	step->button = button;
+	step->pressed = pressed;
+	return submit(ctx, step);
+}
+
+/**
+ * gowl_macro_pointer:
+ * @ctx: the run
+ * @x: layout x, the same coordinates `gowl-msg clients' reports
+ * @y: layout y
+ *
+ * Moves the pointer there.  It is pointer motion, so the window under
+ * it hears about it (hover, a drag in progress); a point off every
+ * output is clamped to the nearest one.
+ *
+ * Returns: %TRUE when queued (or performed)
+ */
+gboolean
+gowl_macro_pointer(
+	GowlMacroContext *ctx,
+	gdouble           x,
+	gdouble           y
+){
+	GowlMacroStep *step;
+
+	g_return_val_if_fail(ctx != NULL, FALSE);
+	step = gowl_macro_step_new(GOWL_MACRO_STEP_POINTER);
+	step->x = x;
+	step->y = y;
+	return submit(ctx, step);
+}
+
+/**
+ * gowl_macro_scroll:
+ * @ctx: the run
+ * @horizontal: %TRUE for sideways
+ * @value: the delta, in surface units (15 is one notch on most mice)
+ * @discrete: the wheel amount in 120ths of a notch (120 = one notch),
+ *   or 0 for a smooth, touchpad-like scroll
+ *
+ * One scroll where the pointer is.
+ *
+ * Returns: %TRUE when queued (or performed)
+ */
+gboolean
+gowl_macro_scroll(
+	GowlMacroContext *ctx,
+	gboolean          horizontal,
+	gdouble           value,
+	gint              discrete
+){
+	GowlMacroStep *step;
+
+	g_return_val_if_fail(ctx != NULL, FALSE);
+	step = gowl_macro_step_new(GOWL_MACRO_STEP_SCROLL);
+	step->horizontal = horizontal;
+	step->value = value;
+	step->discrete = discrete;
 	return submit(ctx, step);
 }
 

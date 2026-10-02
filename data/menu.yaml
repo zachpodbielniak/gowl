@@ -17,6 +17,10 @@
 #   target      a link: this row opens another route
 #   keep-open   leave the menu up after running, for a row pressed
 #               repeatedly such as volume
+#   private     a provider's rows are shown only to somebody who opens
+#               this entry: never in search results, never in "recent".
+#               Typing inside it filters it.  For the clipboard, which
+#               holds whatever was last copied -- passwords included
 #
 # WHAT A ROW DOES.  Exactly one of:
 #
@@ -50,8 +54,9 @@
 #
 # PROVIDERS make their rows at open time: apps (desktop entries),
 # windows, tags, layouts, backdrops, keybinds, tray, macros (what the
-# macro module can run by name, when it is loaded) and path (every
-# executable on $PATH).
+# macro module can run by name, when it is loaded), path (every
+# executable on $PATH) and clipboard (the clipboard module's history;
+# Return puts an entry back on the clipboard).
 #
 # YOUR OWN.  Drop a file at ~/.config/gowl/menu.yaml with the same
 # `menu:' shape.  It is an OVERLAY, matched by id: repeat an id to
@@ -245,6 +250,19 @@ menu:
         icon: ""
         label: Every screen
         command: "screenshot-all"
+      - id: text
+        icon: "󰊄"
+        label: Copy text from a region
+        desc: drag over it; tesseract reads it onto the clipboard
+        aliases: [ocr, tesseract]
+        command: "screenshot-ocr"
+        disabled: {exists: tesseract, not: true}
+      - id: color
+        icon: "󰏘"
+        label: Pick a colour
+        desc: click a pixel; its #rrggbb goes on the clipboard
+        aliases: [colour, color-picker, eyedropper]
+        command: "screenshot-color"
       - id: record
         icon: "󰕧"
         label: Record the screen
@@ -277,6 +295,27 @@ menu:
         desc: stop, clear, write and inspect macros
         when: {module: macro}
         items:
+          - id: record
+            icon: "󰑋"
+            label: Record a macro
+            desc: what you do next becomes last-recording; the same row (or the key) stops it
+            command: "macro-record"
+          - id: replay
+            icon: "󰑙"
+            label: Replay the last recording
+            command: "macro-run last-recording"
+          - id: voice
+            icon: "󰍬"
+            label: Say a macro
+            desc: listen, then run the macro whose name was said
+            elisp: "(cmacs-gowl-macro-voice)"
+            when: {embedder: true}
+          - id: voice-command
+            icon: "󰍬"
+            label: Say a macro
+            desc: listen with voice-command (gowl-stt), then run what was said
+            command: "macro-voice"
+            when: {embedder: false}
           - id: stop
             icon: "󰓛"
             label: Stop running macros
@@ -307,6 +346,26 @@ menu:
             desc: each trigger's filter, and how often it fired
             elisp: "(pp-display-expression (cmacs-gowl-macro-list-triggers) \"*gowl macro triggers*\")"
             when: {embedder: true}
+
+  # ── The clipboard history ───────────────────────────────────────
+  # Private: none of its entries is ever a search result or a "recent"
+  # row.  Typing `clipboard' finds this entry; Return opens it, and only
+  # then are the entries listed (typing inside filters them).  Return on
+  # an entry puts it back on the clipboard.
+  - id: clipboard
+    icon: "󰅍"
+    label: Clipboard
+    title: Clipboard history
+    desc: what was copied -- open to see it
+    aliases: [paste, clip, copied]
+    provider: clipboard
+    private: true
+    when: {module: clipboard}
+    items:
+      - id: clear
+        icon: "󰃢"
+        label: Forget the clipboard history
+        command: "clipboard-clear"
 
   # ── The machine around the compositor ───────────────────────────
   - id: display

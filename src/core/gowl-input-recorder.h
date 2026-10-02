@@ -192,6 +192,14 @@ gchar *      gowl_input_recorder_start            (GowlInputRecorder *self,
                                                    guint              max_events,
                                                    GError           **error);
 
+gchar *      gowl_input_recorder_start_private    (GowlInputRecorder *self,
+                                                   const gchar       *owner,
+                                                   guint              max_seconds,
+                                                   guint              max_events,
+                                                   GError           **error);
+
+const gchar *gowl_input_recorder_get_owner        (GowlInputRecorder *self);
+
 gchar *      gowl_input_recorder_drain            (GowlInputRecorder *self,
                                                    const gchar       *token,
                                                    GError           **error);

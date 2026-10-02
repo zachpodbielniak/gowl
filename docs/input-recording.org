@@ -53,6 +53,20 @@ config and reloaded.  Three properties of that gate matter:
    affecting the next one.  A switch that applies to the future is not
    a way to make the thing stop now.
 
+*Private recordings* are the exception, and the only one.  The macro
+module's recorder (=macro-record=, Super+Alt+r) starts its recordings
+with =gowl_input_recorder_start_private()=: the person at the keyboard
+pressed the key, so no consent switch is asked, and in exchange the
+recording's token is never published --- every payload reports
+=token: null= and =owner: "macro"=, the =changed= signal carries no
+token, =gowl_input_recorder_get_token()= returns =NULL=, and so nothing
+but its owner can drain or stop it.  Withdrawing consent leaves a
+private recording running, since it never depended on it.  Everything
+else applies unchanged: the frame, the suppression, the deadline,
+Super+Shift+Escape, and one recording at a time (an MCP
+=start_recording= while one runs is refused, naming the owner).  See
+[[file:macros.org::#macros-recording][Recording a macro]].
+
 The MCP tools are registered whether or not consent has been given,
 and refuse with a message naming the config key.  That is deliberate:
 consent can be turned on at runtime, but an MCP client reads the tool

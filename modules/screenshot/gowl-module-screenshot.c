@@ -31,6 +31,13 @@
  * #GowlScreenshotProvider so that other modules (e.g. recording)
  * can reuse the area selection mechanism.
  *
+ * Two more uses of the same selection, which save no file at all:
+ *
+ *   - screenshot-ocr:   drag a region, read its text with tesseract
+ *                       and put the text on the clipboard
+ *   - screenshot-color: click a pixel, put its colour on the clipboard
+ *                       as #rrggbb
+ *
  * Configuration (YAML):
  *   modules:
  *     screenshot:
@@ -38,15 +45,21 @@
  *       save-directory: ~/Pictures/Screenshots
  *       filename-format: screenshot_%Y%m%d_%H%M%S
  *       copy-to-clipboard: true
+ *       ocr-command: tesseract      # given IMAGE stdout -l LANG
+ *       ocr-language: eng           # tesseract's -l: eng, deu, eng+deu
  */
 
 #undef G_LOG_DOMAIN
 #define G_LOG_DOMAIN "gowl-screenshot"
 
 #include <glib-object.h>
+#include <glib/gstdio.h>
 #include <gmodule.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <wordexp.h>
 
 #include <wlr/types/wlr_scene.h>
@@ -65,6 +78,8 @@
 #include "core/gowl-monitor.h"
 #include "core/gowl-seat.h"
 #include "boxed/gowl-capture-result.h"
+#include "ipc/gowl-ipc.h"
+#include "util/gowl-subprocess.h"
 
 /* ----------------------------------------------------------------
  * Module type declaration
@@ -103,10 +118,21 @@ struct _GowlModuleScreenshot {
 	GowlScreenshotCallback finish_cb;
 	gpointer    finish_data;
 
+	/* What the area selection is FOR: a picture (the default), or the
+	   text in it.  An OCR selection saves no file. */
+	gboolean    for_ocr;
+	GowlSubprocess *ocr_proc;     /* tesseract, while it reads */
+	gchar      *ocr_image;        /* its temporary input, unlinked after */
+
+	/* Colour picking: the next left click samples one pixel. */
+	gboolean    color_picking;
+
 	/* Configuration */
 	gchar      *save_directory;
 	gchar      *filename_format;
 	gboolean    copy_to_clipboard;
+	gchar      *ocr_command;
+	gchar      *ocr_language;
 };
 
 /* Signal IDs */
@@ -489,6 +515,274 @@ finish_window_pick(GowlModuleScreenshot *self, gboolean cancelled)
 	deliver_result(self, result);
 }
 
+/* ----------------------------------------------------------------
+ * Reading text (OCR) and colours off the screen
+ *
+ * Both put text on the clipboard rather than an image, so both say
+ * what they put there -- a toast, and an IPC event a script or cmacs
+ * can follow -- because a clipboard you cannot see is a clipboard you
+ * do not trust.
+ * ---------------------------------------------------------------- */
+
+/* A toast (bar-notify when the bar is loaded) and the compositor's
+   toast signal, the macro module's two routes. */
+static void
+grab_notify(
+	GowlModuleScreenshot *self,
+	const gchar          *summary,
+	const gchar          *body
+){
+	g_autofree gchar *s = NULL;
+	g_autofree gchar *b = NULL;
+	g_autofree gchar *line = NULL;
+
+	if (self->compositor == NULL)
+		return;
+	s = g_strdelimit(g_strdup(summary), "|\n", ' ');
+	b = g_strdelimit(g_strdup(body != NULL ? body : ""), "|\n", ' ');
+	line = g_strdup_printf("bar-notify %s|%s", s, b);
+	g_free(gowl_compositor_run_command(self->compositor, line));
+	g_signal_emit_by_name(self->compositor, "toast-requested",
+	                      gowl_compositor_get_selected_monitor(self->compositor),
+	                      s);
+}
+
+static void G_GNUC_PRINTF(2, 3)
+grab_event(
+	GowlModuleScreenshot *self,
+	const gchar          *format,
+	...
+){
+	GowlIpc *ipc;
+	g_autofree gchar *msg = NULL;
+	va_list ap;
+
+	if (self->compositor == NULL)
+		return;
+	ipc = gowl_compositor_get_ipc(self->compositor);
+	if (ipc == NULL)
+		return;
+	va_start(ap, format);
+	msg = g_strdup_vprintf(format, ap);
+	va_end(ap);
+	gowl_ipc_push_event(ipc, "EVENT screenshot %s", msg);
+}
+
+static void
+ocr_forget_image(
+	GowlModuleScreenshot *self
+){
+	if (self->ocr_image != NULL) {
+		g_unlink(self->ocr_image);
+		g_clear_pointer(&self->ocr_image, g_free);
+	}
+}
+
+/* tesseract finished: its stdout is the text. */
+static void
+on_ocr_done(
+	gint         status,
+	const gchar *out,
+	const gchar *err,
+	gpointer     data
+){
+	GowlModuleScreenshot *self = data;
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *text = NULL;
+	g_autofree gchar *body = NULL;
+	GowlSeat *seat;
+	glong chars;
+
+	self->ocr_proc = NULL;
+	ocr_forget_image(self);
+
+	if (status == -1 || !g_spawn_check_wait_status(status, &error)) {
+		g_autofree gchar *why = g_strdup_printf("%s%s%s",
+			status == -1 ? "it took too long" : error->message,
+			err != NULL && *err != '\0' ? ": " : "",
+			err != NULL ? err : "");
+
+		g_warning("gowl-screenshot: OCR failed: %s", why);
+		grab_notify(self, "Text from screen", why);
+		grab_event(self, "ocr-failed");
+		return;
+	}
+
+	/* tesseract ends every page with a form feed and blank lines */
+	text = g_strdelimit(g_strdup(out != NULL ? out : ""), "\f", '\n');
+	g_strstrip(text);
+	if (*text == '\0') {
+		grab_notify(self, "Text from screen", "no text found there");
+		grab_event(self, "ocr 0");
+		return;
+	}
+	seat = gowl_compositor_get_seat(self->compositor);
+	if (seat != NULL)
+		gowl_seat_set_clipboard(seat, text);
+	chars = g_utf8_strlen(text, -1);
+	body = g_strdup_printf("%ld character%s copied", chars,
+	                       chars == 1 ? "" : "s");
+	grab_notify(self, "Text from screen", body);
+	grab_event(self, "ocr %ld", chars);
+}
+
+/*
+ * ocr_region:
+ *
+ * The OCR half of an area selection: the region goes to a private
+ * temporary PNG (never the screenshots folder), tesseract reads it on
+ * the side, and on_ocr_done() takes it from there.
+ */
+static void
+ocr_region(
+	GowlModuleScreenshot *self,
+	gint                  x,
+	gint                  y,
+	gint                  w,
+	gint                  h
+){
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GBytes) data = NULL;
+	g_autoptr(GPtrArray) argv = NULL;
+	g_auto(GStrv) command = NULL;
+	struct wl_event_loop *loop;
+	gint out_w;
+	gint out_h;
+	gint fd;
+	guint i;
+
+	data = gowl_compositor_screenshot_region(self->compositor, NULL,
+	           x, y, w, h, &out_w, &out_h, &error);
+	if (data == NULL) {
+		grab_notify(self, "Text from screen",
+		            error != NULL ? error->message : "capture failed");
+		return;
+	}
+
+	/* $XDG_RUNTIME_DIR: per-user, 0700, in memory -- a picture of
+	   what was on the screen should not land anywhere more public */
+	self->ocr_image = g_build_filename(g_get_user_runtime_dir(),
+	                                   "gowl-ocr-XXXXXX.png", NULL);
+	fd = g_mkstemp_full(self->ocr_image, O_RDWR, 0600);
+	if (fd < 0) {
+		g_autofree gchar *why = g_strdup_printf("cannot create %s: %s",
+			self->ocr_image, g_strerror(errno));
+
+		g_clear_pointer(&self->ocr_image, g_free);
+		grab_notify(self, "Text from screen", why);
+		return;
+	}
+	close(fd);
+	if (!gowl_compositor_save_png(data, out_w, out_h, self->ocr_image,
+	                              &error)) {
+		ocr_forget_image(self);
+		grab_notify(self, "Text from screen", error->message);
+		return;
+	}
+
+	if (!g_shell_parse_argv(self->ocr_command, NULL, &command, &error)) {
+		ocr_forget_image(self);
+		grab_notify(self, "Text from screen", error->message);
+		return;
+	}
+	argv = g_ptr_array_new();
+	for (i = 0; command[i] != NULL; i++)
+		g_ptr_array_add(argv, command[i]);
+	g_ptr_array_add(argv, self->ocr_image);
+	g_ptr_array_add(argv, (gpointer)"stdout");
+	g_ptr_array_add(argv, (gpointer)"-l");
+	g_ptr_array_add(argv, self->ocr_language);
+	g_ptr_array_add(argv, NULL);
+
+	loop = gowl_compositor_get_event_loop(self->compositor);
+	self->ocr_proc = gowl_subprocess_spawn(loop,
+		(const gchar * const *)argv->pdata, 60000, on_ocr_done, self,
+		&error);
+	if (self->ocr_proc == NULL) {
+		g_autofree gchar *why = g_strdup_printf("%s -- is tesseract "
+			"installed? (the tesseract package, plus a language "
+			"pack such as tesseract-langpack-eng)", error->message);
+
+		ocr_forget_image(self);
+		grab_notify(self, "Text from screen", why);
+		return;
+	}
+	grab_event(self, "ocr-reading");
+}
+
+/* Ends colour picking: the overlay goes before the sample is taken, so
+   the frame is never what gets sampled. */
+static void
+finish_color_pick(
+	GowlModuleScreenshot *self,
+	gboolean              cancelled
+){
+	g_autoptr(GBytes) data = NULL;
+	g_autofree gchar *hex = NULL;
+	g_autofree gchar *body = NULL;
+	const guint8 *px;
+	gsize len = 0;
+	gint out_w = 0;
+	gint out_h = 0;
+	GowlSeat *seat;
+
+	self->color_picking = FALSE;
+	destroy_overlay(self);
+	g_signal_emit(self, screenshot_signals[SIGNAL_SELECTION_ACTIVE],
+	              0, FALSE);
+	if (cancelled)
+		return;
+
+	data = gowl_compositor_screenshot_region(self->compositor, NULL,
+	           (gint)self->sel_current_x, (gint)self->sel_current_y, 1, 1,
+	           &out_w, &out_h, NULL);
+	px = data != NULL ? g_bytes_get_data(data, &len) : NULL;
+	if (px == NULL || len < 4) {
+		grab_notify(self, "Colour", "could not read that pixel");
+		return;
+	}
+	/* The capture is ARGB8888 little-endian: B, G, R, A in memory (see
+	   gowl_compositor_save_png()).  A scaled output gives more than one
+	   device pixel for the one layout pixel; the first is the one
+	   under the hot spot. */
+	hex = g_strdup_printf("#%02x%02x%02x", px[2], px[1], px[0]);
+	seat = gowl_compositor_get_seat(self->compositor);
+	if (seat != NULL)
+		gowl_seat_set_clipboard(seat, hex);
+	body = g_strdup_printf("%s copied (rgb %u, %u, %u)", hex,
+	                       px[2], px[1], px[0]);
+	grab_notify(self, "Colour", body);
+	grab_event(self, "color %s", hex);
+}
+
+/* The armed look for the colour picker: a thin frame round the layout,
+   no dim -- a dim wash would change every colour on the screen. */
+static void
+create_color_overlay(
+	GowlModuleScreenshot *self
+){
+	struct wlr_scene_tree *overlay;
+	float frame[4] = { 0.95f, 0.75f, 0.2f, 0.9f };
+	gint lx, ly, lw, lh;
+	gint bw = 3;
+	gint i;
+
+	overlay = gowl_compositor_get_scene_layer(self->compositor,
+	                                          GOWL_SCENE_LAYER_OVERLAY);
+	if (overlay == NULL)
+		return;
+	layout_extent(self, &lx, &ly, &lw, &lh);
+	for (i = 0; i < 4; i++)
+		self->sel_border[i] = wlr_scene_rect_create(overlay,
+			(i < 2) ? lw : bw, (i < 2) ? bw : lh, frame);
+	wlr_scene_node_set_position(&self->sel_border[0]->node, lx, ly);
+	wlr_scene_node_set_position(&self->sel_border[1]->node, lx,
+	                            ly + lh - bw);
+	wlr_scene_node_set_position(&self->sel_border[2]->node, lx, ly);
+	wlr_scene_node_set_position(&self->sel_border[3]->node,
+	                            lx + lw - bw, ly);
+}
+
 static void
 finish_area_selection(GowlModuleScreenshot *self)
 {
@@ -498,6 +792,7 @@ finish_area_selection(GowlModuleScreenshot *self)
 
 	if (!self->anchor_set) {
 		/* Cancelled before anchor was placed */
+		self->for_ocr = FALSE;
 		result = gowl_capture_result_new(NULL, 0, 0, 0, NULL, TRUE);
 		self->selecting = FALSE;
 		self->anchor_set = FALSE;
@@ -529,6 +824,15 @@ finish_area_selection(GowlModuleScreenshot *self)
 	destroy_overlay(self);
 	g_signal_emit(self, screenshot_signals[SIGNAL_SELECTION_ACTIVE],
 	              0, FALSE);
+
+	if (self->for_ocr) {
+		/* Text, not a picture: no file, no image on the clipboard,
+		   and nothing for a provider caller -- OCR is IPC-only. */
+		self->for_ocr = FALSE;
+		if (w >= 1 && h >= 1)
+			ocr_region(self, x, y, w, h);
+		return;
+	}
 
 	if (w < 1 || h < 1) {
 		result = gowl_capture_result_new(NULL, 0, 0, 0, NULL, TRUE);
@@ -648,7 +952,7 @@ screenshot_is_selecting(GowlScreenshotProvider *provider)
 {
 	GowlModuleScreenshot *self = GOWL_MODULE_SCREENSHOT(provider);
 
-	return self->selecting || self->picking;
+	return self->selecting || self->picking || self->color_picking;
 }
 
 static void
@@ -661,12 +965,25 @@ screenshot_cancel(GowlScreenshotProvider *provider)
 		finish_window_pick(self, TRUE);
 		return;
 	}
+	if (self->color_picking) {
+		finish_color_pick(self, TRUE);
+		return;
+	}
 
 	if (!self->selecting)
 		return;
 
 	self->selecting = FALSE;
 	self->anchor_set = FALSE;
+	if (self->for_ocr) {
+		/* nobody asked for a picture, so nobody is told it was
+		   cancelled */
+		self->for_ocr = FALSE;
+		destroy_overlay(self);
+		g_signal_emit(self, screenshot_signals[SIGNAL_SELECTION_ACTIVE],
+		              0, FALSE);
+		return;
+	}
 	destroy_overlay(self);
 	g_signal_emit(self, screenshot_signals[SIGNAL_SELECTION_ACTIVE],
 	              0, FALSE);
@@ -712,11 +1029,20 @@ screenshot_on_shutdown(GowlShutdownHandler *handler, gpointer compositor)
 
 	(void)compositor;
 
-	if (self->selecting) {
+	if (self->selecting || self->color_picking) {
 		self->selecting = FALSE;
 		self->anchor_set = FALSE;
+		self->for_ocr = FALSE;
+		self->color_picking = FALSE;
 		destroy_overlay(self);
 	}
+	/* tesseract is watched on the compositor's event loop, which is
+	   about to go: stop it while the loop is still there. */
+	if (self->ocr_proc != NULL) {
+		gowl_subprocess_cancel(self->ocr_proc);
+		self->ocr_proc = NULL;
+	}
+	ocr_forget_image(self);
 
 	self->compositor = NULL;
 }
@@ -757,6 +1083,30 @@ screenshot_handle_command(GowlIpcHandler *handler, const gchar *command,
 			return g_strdup("ERROR no selection in progress");
 		screenshot_cancel(GOWL_SCREENSHOT_PROVIDER(self));
 		return g_strdup("OK selection cancelled");
+	}
+
+	if (g_strcmp0(command, "screenshot-ocr") == 0) {
+		if (self->selecting || self->picking || self->color_picking)
+			return g_strdup("ERROR a selection is already in progress");
+		if (self->ocr_proc != NULL)
+			return g_strdup("ERROR still reading the last region");
+		self->for_ocr = TRUE;
+		self->selecting = TRUE;
+		self->anchor_set = FALSE;
+		create_overlay(self);
+		g_signal_emit(self, screenshot_signals[SIGNAL_SELECTION_ACTIVE],
+		              0, TRUE);
+		return g_strdup("OK drag over the text, Escape to cancel");
+	}
+	if (g_strcmp0(command, "screenshot-color") == 0
+	    || g_strcmp0(command, "screenshot-colour") == 0) {
+		if (self->selecting || self->picking || self->color_picking)
+			return g_strdup("ERROR a selection is already in progress");
+		self->color_picking = TRUE;
+		create_color_overlay(self);
+		g_signal_emit(self, screenshot_signals[SIGNAL_SELECTION_ACTIVE],
+		              0, TRUE);
+		return g_strdup("OK click a pixel, Escape to cancel");
 	}
 
 	if (g_strcmp0(command, "screenshot-area") == 0
@@ -825,6 +1175,11 @@ screenshot_handle_key(GowlKeybindHandler *handler,
 			finish_window_pick(self, TRUE);
 		return TRUE;
 	}
+	if (self->color_picking) {
+		if (pressed && keysym == XKB_KEY_Escape)
+			finish_color_pick(self, TRUE);
+		return TRUE;
+	}
 
 	if (!self->selecting)
 		return FALSE;
@@ -866,6 +1221,15 @@ screenshot_handle_button(GowlMouseHandler *handler,
 		/* Every button is consumed while picking: a press that
 		   reached the client under the cursor would raise or focus
 		   the very window we are about to photograph. */
+		return TRUE;
+	}
+	if (self->color_picking) {
+		/* Sampled on release, like the window pick: the press is
+		   consumed too, so nothing under it is clicked. */
+		if (button == 0x111 && state == 1)          /* BTN_RIGHT */
+			finish_color_pick(self, TRUE);
+		else if (button == 0x110 && state == 0)     /* BTN_LEFT up */
+			finish_color_pick(self, FALSE);
 		return TRUE;
 	}
 
@@ -915,6 +1279,12 @@ screenshot_handle_motion(GowlMouseHandler *handler,
 		return TRUE;
 	}
 
+	if (self->color_picking) {
+		self->sel_current_x = x;
+		self->sel_current_y = y;
+		return TRUE;
+	}
+
 	if (!self->selecting)
 		return FALSE;
 
@@ -950,11 +1320,18 @@ screenshot_deactivate(GowlModule *mod)
 {
 	GowlModuleScreenshot *self = GOWL_MODULE_SCREENSHOT(mod);
 
-	if (self->selecting) {
+	if (self->selecting || self->color_picking) {
 		self->selecting = FALSE;
 		self->anchor_set = FALSE;
+		self->for_ocr = FALSE;
+		self->color_picking = FALSE;
 		destroy_overlay(self);
 	}
+	if (self->ocr_proc != NULL) {
+		gowl_subprocess_cancel(self->ocr_proc);
+		self->ocr_proc = NULL;
+	}
+	ocr_forget_image(self);
 }
 
 static const gchar *
@@ -1002,6 +1379,18 @@ screenshot_configure(GowlModule *mod, gpointer config)
 		self->filename_format = g_strdup(val);
 	}
 
+	val = g_hash_table_lookup(settings, "ocr-command");
+	if (val != NULL && *val != '\0') {
+		g_free(self->ocr_command);
+		self->ocr_command = g_strdup(val);
+	}
+
+	val = g_hash_table_lookup(settings, "ocr-language");
+	if (val != NULL && *val != '\0') {
+		g_free(self->ocr_language);
+		self->ocr_language = g_strdup(val);
+	}
+
 	val = g_hash_table_lookup(settings, "copy-to-clipboard");
 	if (val != NULL) {
 		self->copy_to_clipboard =
@@ -1022,6 +1411,12 @@ gowl_module_screenshot_finalize(GObject *object)
 
 	g_free(self->save_directory);
 	g_free(self->filename_format);
+	g_free(self->ocr_command);
+	g_free(self->ocr_language);
+	/* ocr_proc: cancelled by the shutdown handler and by deactivate,
+	   while the event loop it is watched on still exists.  Touching it
+	   here could reach a loop already destroyed. */
+	ocr_forget_image(self);
 	destroy_overlay(self);
 
 	G_OBJECT_CLASS(gowl_module_screenshot_parent_class)->finalize(object);
@@ -1097,6 +1492,8 @@ gowl_module_screenshot_init(GowlModuleScreenshot *self)
 	self->save_directory   = g_strdup("~/Pictures/Screenshots");
 	self->filename_format  = g_strdup("screenshot_%Y%m%d_%H%M%S");
 	self->copy_to_clipboard = TRUE;
+	self->ocr_command      = g_strdup("tesseract");
+	self->ocr_language     = g_strdup("eng");
 
 	memset(self->sel_border, 0, sizeof(self->sel_border));
 }

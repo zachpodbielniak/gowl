@@ -703,6 +703,21 @@ list is the interface you can use without having remembered anything.
 | =Super+Shift+space= | Open it with every program on =$PATH= listed and searched too |
 | =Super+Alt+space= | Open it at Applications |
 | =Super+Ctrl+Escape= | Open it at System |
+| =Super+Alt+v= | Open it at the clipboard history (private: see below) |
+
+The other keys the shipped config gives the new modules' commands, all
+inert until the module behind them is enabled:
+
+| Key | Does | Needs |
+|-----+------+-------|
+| =Super+Alt+Shift+s= | drag a region; its text goes on the clipboard (=screenshot-ocr=) | =screenshot=, and =tesseract= installed |
+| =Super+Alt+c= | click a pixel; its =#rrggbb= goes on the clipboard (=screenshot-color=) | =screenshot= |
+| =Super+Alt+r= | record what you do next as a macro; again to stop (=macro-record=) | =macro= |
+| =Super+Alt+Shift+r= | replay the last recording (=macro-run last-recording=) | =macro= |
+| =Super+Alt+m= | say a macro's name; again when done (=macro-voice=) | =macro=, and =gowl-stt='s recorder and whisper.cpp |
+
+See [[file:macros.org::#macros-recording][Recording a macro]], [[file:macros.org::#macros-voice][Voice]] and
+the screenshot module in [[file:modules.org][modules.org]].
 
 Once it is up: type to search the WHOLE tree, arrows and Page Up/Down to
 move, Return or Right to choose, Backspace or Left to go back a level,
@@ -819,7 +834,12 @@ of:
 | =elisp:= | evaluate Lisp; only does anything under =cmacs --gowl= |
 
 plus =keep-open: true= for a row meant to be pressed repeatedly, such as
-volume.
+volume, and =private: true= for a provider whose rows nobody should see
+by accident: they are listed when the entry is opened and nowhere else ---
+never in a search, never in "recent" --- and typing inside it filters it.
+The shipped =Clipboard= entry is private, because a clipboard holds
+whatever was copied last, a password from a password manager included;
+typing =clipboard= finds the entry, and Return opens it.
 
 *A menu row is a keybind without a key* --- same actions, same argument,
 same dispatcher --- so anything you can bind you can put here, and the
@@ -881,6 +901,7 @@ A submenu with =provider: NAME= gets its rows when it opens:
 | =tray= | what is in the system tray; choosing one activates it |
 | =macros= | every macro the macro module can run by name, where it lives, and whether it is held back; choosing one runs it (nothing while the module is off) |
 | =path= | every executable on =$PATH=, the first directory's copy of each name, sorted; choosing one runs it by full path |
+| =clipboard= | the clipboard module's history, newest first: the preview, its type and size; choosing one puts it back on the clipboard. Use it under a =private: true= entry |
 
 The shipped tree lists =path= under *Programs on $PATH* with =when: {ipc: "menu-with-path"}=, so it appears only when the card was opened with =menu-path= (bound to =Super+Shift+space= by default, in gowl and cmacs alike): thousands of command-line tools in every ordinary search would bury the applications.  Like the application list, it is cached for five seconds.
 

@@ -9,6 +9,7 @@ LIBDIR ?= .
 # The loader and runner are files of their own so the tests can include
 # them without the module's GObject half.
 SRC = gowl-module-macro.c gowl-macro-loader.c gowl-macro-runner.c gowl-macro-dbus.c \
+      gowl-macro-record.c gowl-macro-voice.c \
       gowl-macro-filter.c
 OUT = $(OUTDIR)/$(MODULE_NAME).so
 
@@ -21,6 +22,8 @@ OUT = $(OUTDIR)/$(MODULE_NAME).so
 #     from a build tree.
 DEV_INCLUDE := $(abspath $(LIBDIR)/../include)
 DEV_MACROS  := $(abspath ../../data/macros)
+# gowl-stt, the default voice-command, for a build that was not installed
+DEV_STT     := $(abspath ../../tools/gowl-stt/gowl-stt)
 
 all: $(OUT)
 
@@ -28,6 +31,7 @@ $(OUT): gowl-macro-loader.h gowl-macro-runner.h gowl-module-macro.h
 	$(CC) $(CFLAGS) \
 		-DGOWL_MACRO_DEV_INCLUDE='"$(DEV_INCLUDE)"' \
 		-DGOWL_MACRO_DEV_MACROS='"$(DEV_MACROS)"' \
+		-DGOWL_MACRO_DEV_STT='"$(DEV_STT)"' \
 		-o $@ $(SRC) $(LDFLAGS) -L$(LIBDIR) -lgowl $(PKG_LIBS)
 
 clean:

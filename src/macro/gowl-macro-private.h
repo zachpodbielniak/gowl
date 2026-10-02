@@ -46,7 +46,10 @@ typedef enum {
 	GOWL_MACRO_STEP_WAIT,
 	GOWL_MACRO_STEP_COMMAND,
 	GOWL_MACRO_STEP_ACTION,
-	GOWL_MACRO_STEP_FOCUS
+	GOWL_MACRO_STEP_FOCUS,
+	GOWL_MACRO_STEP_POINTER,
+	GOWL_MACRO_STEP_BUTTON_STATE,
+	GOWL_MACRO_STEP_SCROLL
 } GowlMacroStepKind;
 
 typedef struct {
@@ -57,6 +60,12 @@ typedef struct {
 	guint32           keycode;   /* KEY: or a fixed keycode */
 	guint32           modifiers;
 	guint32           button;
+	gboolean          pressed;   /* BUTTON_STATE */
+	gdouble           x;         /* POINTER: layout position */
+	gdouble           y;
+	gboolean          horizontal; /* SCROLL */
+	gdouble           value;     /* SCROLL: delta */
+	gint              discrete;  /* SCROLL: 120ths of a notch */
 	guint             ms;
 	gchar            *text;      /* TEXT text, COMMAND line, ACTION arg */
 	GowlAction        action;

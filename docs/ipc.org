@@ -66,6 +66,8 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =menu-close=                  | Closes the card |
 | =menu-refresh=                | Re-reads =menu.yaml= and the user's overlay |
 | =menu-list [ROUTE]=           | What is under a route: route, label, =menu= or =action=, and =checked=/=disabled=/=-=, tab separated |
+| =screenshot-ocr=              | Drag a region; tesseract reads it and the text goes on the clipboard (the screenshot module) |
+| =screenshot-color=            | Click a pixel; its =#rrggbb= goes on the clipboard (the screenshot module) |
 | anything else                 | A module's command (=expo=, =screenshot-area=, =scratchpad-toggle=, =clipboard-list=, =notify-dnd=, ...), or =ERROR unknown command= |
 
 A tag argument is a bitmask, as everywhere in gowl: tag 1 is =1=, tag 3 is =4=, all nine =511=.
@@ -91,6 +93,7 @@ A subscriber receives one line per event, =EVENT <name> <args>=:
 | =lock locked\vert{}unlocked=       | the session locked or unlocked, from any route |
 | =backdrop STYLE= | what shows through translucent windows changed; STYLE is the short name, one of the fourteen |
 | =command LINE=                     | a module command ran, from any source          |
+| =screenshot ocr N= / =ocr-failed= / =color #RRGGBB= | text or a colour was put on the clipboard (or OCR failed) |
 
 Events are pushed from the compositor's own code paths, so a change made from a keybind, from Elisp, from MCP or from this socket is announced the same way.
 
@@ -104,7 +107,7 @@ gowl-msg inputremap-devices
 
 * Macros
 
-With the opt-in =macro= module loaded, the =macro-= words run and manage macros: =macro-run [--trigger=K] [--detail=D] NAME ARGS=, =-stop [NAME|ID|all]=, =-list=, =-status=, =-info NAME=, =-compile NAME=, =-dirs=, =-reload=, =-clear [NAME]=, =-define NAME command|custom|action ...=, =-undefine NAME=, =-log [LEVEL]=, =-triggers= (the triggers and their filters, as understood), =-filter-test [--event=E] FILTER= (judge a filter against the current state).  Events: =EVENT macro started|finished|stopped NAME ID= and =EVENT macro fault NAME SIGNAL=.  See [[file:macros.org::#macros-ipc][macros.org]].
+With the opt-in =macro= module loaded, the =macro-= words run and manage macros: =macro-run [--trigger=K] [--detail=D] NAME ARGS=, =-stop [NAME|ID|all]=, =-list=, =-status=, =-info NAME=, =-compile NAME=, =-dirs=, =-reload=, =-clear [NAME]=, =-define NAME command|custom|action ...=, =-undefine NAME=, =-log [LEVEL]=, =-triggers= (the triggers and their filters, as understood), =-filter-test [--event=E] FILTER= (judge a filter against the current state), =-record [toggle|start [NAME]|stop|cancel|status]= (record what you do as a macro), =-voice [toggle|start|stop|cancel|status]= (listen through =voice-command= and run what was said), =-voice-match [--dry-run] TEXT= (run the macro TEXT names).  Events: =EVENT macro started|finished|stopped NAME ID=, =EVENT macro fault NAME SIGNAL=, =EVENT macro recording|recorded|recorded-nothing|recording-cancelled ...= and =EVENT macro voice-listening|voice-stopped|voice|voice-unmatched ...=.  See [[file:macros.org::#macros-ipc][macros.org]].
 
 #+begin_src bash
 gowl-msg macro-run sort-windows reverse

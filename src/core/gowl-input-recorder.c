@@ -120,6 +120,9 @@ struct _GowlInputRecorder {
 
 	/* why the last recording ended, a static literal or NULL */
 	const gchar        *stop_reason;
+
+	/* who started a private recording (see start_private), or NULL */
+	gchar              *owner;
 };
 
 enum {
@@ -284,6 +287,7 @@ gowl_input_recorder_finalize(GObject *object)
 
 	reset_recording(self);
 	g_clear_pointer(&self->token, g_free);
+	g_clear_pointer(&self->owner, g_free);
 	g_clear_pointer(&self->deny_patterns, g_strfreev);
 	g_clear_pointer(&self->deny_specs, unref_ptr_array);
 	g_clear_pointer(&self->suppress_reasons, unref_hash_table);
@@ -374,7 +378,9 @@ gowl_input_recorder_get_consent(GowlInputRecorder *self)
  *
  * Sets the consent flag.  Withdrawing consent stops any recording that
  * is running: a switch that only applies to the next recording is not a
- * switch anybody can use to make the current one stop.
+ * switch anybody can use to make the current one stop.  A private one
+ * (gowl_input_recorder_start_private()) is left alone: it never needed
+ * the consent, so taking the consent away says nothing about it.
  */
 void
 gowl_input_recorder_set_consent(GowlInputRecorder *self, gboolean consent)
@@ -386,7 +392,7 @@ gowl_input_recorder_set_consent(GowlInputRecorder *self, gboolean consent)
 		return;
 
 	self->consent = consent;
-	if (!consent && self->active)
+	if (!consent && self->active && self->owner == NULL)
 		gowl_input_recorder_force_stop(self, "consent withdrawn");
 }
 
@@ -538,35 +544,34 @@ gowl_input_recorder_suppress_reason(GowlInputRecorder *self,
  * Lifecycle
  * --------------------------------------------------------------- */
 
-/**
- * gowl_input_recorder_start:
- * @self: a #GowlInputRecorder
- * @max_seconds: self-stop deadline in seconds; 0 for the default
- * @max_events: ring size in events; 0 for the default
- * @error: (out) (optional): return location for a #GError
+/*
+ * public_token:
  *
- * Starts a recording and returns its token.  Refuses when consent has
- * not been given, and refuses -- naming the running token -- when a
- * recording is already in progress, rather than silently taking it
- * over.
- *
- * @max_seconds and @max_events are clamped to the module's ceilings.
- * The deadline exists because a recording somebody forgot is a
- * recording of whatever they did next.
- *
- * Returns: (transfer full) (nullable): the token, or %NULL on error
+ * The token as anyone but its holder may see it: hidden for a private
+ * recording (gowl_input_recorder_start_private()).
  */
-gchar *
-gowl_input_recorder_start(GowlInputRecorder *self,
-                          guint              max_seconds,
-                          guint              max_events,
-                          GError           **error)
+static const gchar *
+public_token(GowlInputRecorder *self)
+{
+	return self->owner != NULL ? NULL : self->token;
+}
+
+/*
+ * start_internal:
+ *
+ * The common half of the two starts.  @owner is NULL for an ordinary
+ * recording, which needs consent; a private one names its owner.
+ */
+static gchar *
+start_internal(GowlInputRecorder *self,
+               const gchar       *owner,
+               guint              max_seconds,
+               guint              max_events,
+               GError           **error)
 {
 	gchar *token;
 
-	g_return_val_if_fail(GOWL_IS_INPUT_RECORDER(self), NULL);
-
-	if (!self->consent) {
+	if (owner == NULL && !self->consent) {
 		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
 			"Input recording is not enabled.  It is a separate "
 			"permission from input injection and is off by "
@@ -579,7 +584,8 @@ gowl_input_recorder_start(GowlInputRecorder *self,
 		g_set_error(error, G_IO_ERROR, G_IO_ERROR_BUSY,
 			"A recording is already running (token %s).  Stop it "
 			"before starting another.",
-			self->token != NULL ? self->token : "?");
+			self->owner != NULL ? self->owner
+			: self->token != NULL ? self->token : "?");
 		return NULL;
 	}
 
@@ -611,15 +617,96 @@ gowl_input_recorder_start(GowlInputRecorder *self,
 	                        + (gint64)max_seconds * G_USEC_PER_SEC;
 
 	g_clear_pointer(&self->token, g_free);
+	g_clear_pointer(&self->owner, g_free);
 	self->token       = token;
+	self->owner       = g_strdup(owner);
 	self->active      = TRUE;
 	self->stop_reason = NULL;
 
-	g_signal_emit(self, signals[SIGNAL_CHANGED], 0, TRUE, self->token);
+	g_signal_emit(self, signals[SIGNAL_CHANGED], 0, TRUE, public_token(self));
 
 	return g_strdup(self->token);
 }
 
+/**
+ * gowl_input_recorder_start:
+ * @self: a #GowlInputRecorder
+ * @max_seconds: self-stop deadline in seconds; 0 for the default
+ * @max_events: ring size in events; 0 for the default
+ * @error: (out) (optional): return location for a #GError
+ *
+ * Starts a recording and returns its token.  Refuses when consent has
+ * not been given, and refuses -- naming the running token -- when a
+ * recording is already in progress, rather than silently taking it
+ * over.
+ *
+ * @max_seconds and @max_events are clamped to the module's ceilings.
+ * The deadline exists because a recording somebody forgot is a
+ * recording of whatever they did next.
+ *
+ * Returns: (transfer full) (nullable): the token, or %NULL on error
+ */
+gchar *
+gowl_input_recorder_start(GowlInputRecorder *self,
+                          guint              max_seconds,
+                          guint              max_events,
+                          GError           **error)
+{
+	g_return_val_if_fail(GOWL_IS_INPUT_RECORDER(self), NULL);
+
+	return start_internal(self, NULL, max_seconds, max_events, error);
+}
+
+/**
+ * gowl_input_recorder_start_private:
+ * @self: a #GowlInputRecorder
+ * @owner: who is recording, shown in every status payload (`macro')
+ * @max_seconds: self-stop deadline in seconds; 0 for the default
+ * @max_events: ring size in events; 0 for the default
+ * @error: (out) (optional): return location for a #GError
+ *
+ * Starts a recording the person at the keyboard asked for themselves --
+ * the macro recorder's key -- rather than one a program asked for.
+ *
+ * It does not need the `input-recording' consent, because that switch
+ * exists to stop a *program* from watching somebody type, and here the
+ * somebody pressed the key.  What keeps it from becoming a back door
+ * for such a program is that its token is never published: status,
+ * drain and stop payloads report it as null and name @owner instead,
+ * and the "changed" signal carries no token.  Only the caller, holding
+ * the returned token, can drain or stop it.  Everything else is the
+ * same recording: the same suppression, the same frame around the
+ * screen, the same deadline and the same Super+Shift+Escape.
+ *
+ * Returns: (transfer full) (nullable): the token, or %NULL on error
+ */
+gchar *
+gowl_input_recorder_start_private(GowlInputRecorder *self,
+                                  const gchar       *owner,
+                                  guint              max_seconds,
+                                  guint              max_events,
+                                  GError           **error)
+{
+	g_return_val_if_fail(GOWL_IS_INPUT_RECORDER(self), NULL);
+	g_return_val_if_fail(owner != NULL && *owner != '\0', NULL);
+
+	return start_internal(self, owner, max_seconds, max_events, error);
+}
+
+/**
+ * gowl_input_recorder_get_owner:
+ * @self: a #GowlInputRecorder
+ *
+ * Returns: (nullable) (transfer none): who started the current (or
+ *   last) private recording, or %NULL for an ordinary one
+ */
+const gchar *
+gowl_input_recorder_get_owner(GowlInputRecorder *self)
+{
+	g_return_val_if_fail(GOWL_IS_INPUT_RECORDER(self), NULL);
+
+	return self->owner;
+}
 /**
  * gowl_input_recorder_is_active:
  * @self: a #GowlInputRecorder
@@ -652,7 +739,7 @@ gowl_input_recorder_get_token(GowlInputRecorder *self)
 {
 	g_return_val_if_fail(GOWL_IS_INPUT_RECORDER(self), NULL);
 
-	return self->active ? self->token : NULL;
+	return self->active ? public_token(self) : NULL;
 }
 
 /**
@@ -698,7 +785,7 @@ gowl_input_recorder_check_expiry(GowlInputRecorder *self)
 
 	self->active      = FALSE;
 	self->stop_reason = "the maximum recording time elapsed";
-	g_signal_emit(self, signals[SIGNAL_CHANGED], 0, FALSE, self->token);
+	g_signal_emit(self, signals[SIGNAL_CHANGED], 0, FALSE, public_token(self));
 
 	return TRUE;
 }
@@ -724,7 +811,7 @@ gowl_input_recorder_force_stop(GowlInputRecorder *self, const gchar *reason)
 
 	self->active      = FALSE;
 	self->stop_reason = reason != NULL ? reason : "stopped";
-	g_signal_emit(self, signals[SIGNAL_CHANGED], 0, FALSE, self->token);
+	g_signal_emit(self, signals[SIGNAL_CHANGED], 0, FALSE, public_token(self));
 }
 
 /* ---------------------------------------------------------------
@@ -976,8 +1063,14 @@ add_common(GowlInputRecorder *self, JsonBuilder *b)
 	gpointer       key;
 
 	json_builder_set_member_name(b, "token");
-	if (self->token != NULL)
-		json_builder_add_string_value(b, self->token);
+	if (public_token(self) != NULL)
+		json_builder_add_string_value(b, public_token(self));
+	else
+		json_builder_add_null_value(b);
+
+	json_builder_set_member_name(b, "owner");
+	if (self->owner != NULL)
+		json_builder_add_string_value(b, self->owner);
 	else
 		json_builder_add_null_value(b);
 
@@ -1181,7 +1274,7 @@ gowl_input_recorder_stop(GowlInputRecorder *self,
 		self->active      = FALSE;
 		self->stop_reason = "stopped by the caller";
 		g_signal_emit(self, signals[SIGNAL_CHANGED], 0,
-		              FALSE, self->token);
+		              FALSE, public_token(self));
 	}
 
 	return build_payload(self, TRUE);

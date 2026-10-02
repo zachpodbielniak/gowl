@@ -167,6 +167,8 @@ A **macro** is a small C file that drives the compositor -- sort a tag's windows
 
 Every macro runs under the same kind of signal guard as bar plugins, plus a watchdog: a crash or a runaway loop is unwound, logged, notified and held back until you clear it, and the session carries on. A macro that knows it is long raises its own time budget, or runs on a worker thread where it may sleep. Opt in with `modules.macro.enabled: true`; 25 commented examples ship in `data/macros/` and are installed on the search path. See [docs/macros.org](docs/macros.org).
 
+Or do not write one: **Super+Alt+r** records what you do next and writes it out as `last-recording.c` (Super+Alt+Shift+r replays it), and **Super+Alt+m** runs a macro when you say its name, transcribed by whisper.cpp through `gowl-stt`. The screenshot module's region select also reads text (**Super+Alt+Shift+s**, tesseract) and picks colours (**Super+Alt+c**), and **Super+Alt+v** opens the clipboard history in the menu, where its entries never show up in a search.
+
 ## Documentation
 
 - [docs/architecture.org](docs/architecture.org) -- Type hierarchy, module system, interface dispatch, config system.

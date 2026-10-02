@@ -690,6 +690,8 @@ Macros are crispy C loaded into the compositor, so containment is part of the de
 
 The macro API (=src/macro/=) never touches compositor state from a worker: a threaded macro's steps and helpers are posted to the compositor thread over an eventfd and run there, and the compositor never waits for a worker.  Targeted keys (=src/core/gowl-client-input.c=) lend the seat's keyboard focus to one surface for one key and give it back, refusing while locked or while anything holds the keyboard.  Full reference: [[file:macros.org][Macros]].
 
+The macro recorder borrows =GowlInputRecorder= as a /private/ recording (no consent switch, no published token) and turns its payload into C in =modules/macro/gowl-macro-record.c=, pure GLib and json-glib.  Voice and the screenshot module's OCR run a program and wait for its words without waiting at all: =src/util/gowl-subprocess.c= watches the child's pipes and reaps it on the compositor's =wl_event_loop=, so its callback runs on the compositor thread --- GSubprocess's would run on the default main context, Emacs's thread under cmacs.
+
 ** Input Recording (teach-a-task)
 :PROPERTIES:
 :CUSTOM_ID: input-recording-arch

@@ -535,3 +535,19 @@ docs/                       # Documentation (architecture, building, configurati
 - Never declare variables mid-block -- declarations go at the top (gnu89).
 - Never use `camelCase` for C identifiers.
 - Do not run `make install` without explicit user request.
+- Never wait on a child process from a module with GSubprocess's async
+  calls, `g_child_watch_add()` or a GLib-context fd watch: under cmacs
+  they complete on the default main context, which is Emacs's thread,
+  where touching the seat or the clipboard races the compositor.  Use
+  `src/util/gowl-subprocess.h`, which watches the pipes and reaps on the
+  compositor's `wl_event_loop` (OCR and voice do).  Cancel it from a
+  shutdown handler, while that loop still exists.  `tests/test-grab-keys.sh`
+  refuses the GLib spawns in the screenshot and macro modules.
+- Never let a `private: true` menu entry's provider rows into search or
+  "recent" (`search_walk`, `row_for_route`, `gowl_menu_activate`); the
+  clipboard history lives behind one.
+- Never publish a private input recording's token
+  (`gowl_input_recorder_start_private()`): payloads, the `changed`
+  signal and `get_token()` go through `public_token()`.
+- Never name a GTest path `/subprocess/...`: GTest takes it for one of
+  its own forked helpers and skips it, and the suite passes with 0 tests.

@@ -101,6 +101,7 @@ LIB_SRCS := \
 	src/util/gowl-backdrop-plan.c \
 	src/util/gowl-fx-optout.c \
 	src/util/gowl-fault-guard.c \
+	src/util/gowl-subprocess.c \
 	src/tray/gowl-tray.c \
 	src/menu/gowl-menu.c \
 	src/fx/gowl-fx-gl.c \
@@ -237,6 +238,7 @@ LIB_HDRS := \
 	src/util/gowl-log.h \
 	src/util/gowl-easing.h \
 	src/util/gowl-fault-guard.h \
+	src/util/gowl-subprocess.h \
 	src/fx/gowl-fx.h \
 	src/tray/gowl-tray.h \
 	src/menu/gowl-menu.h \
@@ -741,8 +743,16 @@ $(OBJDIR)/tests/test-input-remap-engine.o: modules/inputremap/gowl-inputremap-en
 $(OBJDIR)/tests/test-macro-loader.o: modules/macro/gowl-macro-loader.c modules/macro/gowl-macro-loader.h
 # The filter language is pure GLib: its test includes the engine.
 $(OBJDIR)/tests/test-macro-filter.o: modules/macro/gowl-macro-filter.c modules/macro/gowl-macro-filter.h
+# So are the recorder's translator and the voice matcher.
+$(OBJDIR)/tests/test-macro-record.o: modules/macro/gowl-macro-record.c modules/macro/gowl-macro-record.h
+$(OBJDIR)/tests/test-macro-voice.o: modules/macro/gowl-macro-voice.c modules/macro/gowl-macro-voice.h
 $(OBJDIR)/tests/test-macro-loader.o: TEST_CFLAGS += -DGOWL_MACRO_DEV_INCLUDE='"$(abspath $(BUILDDIR)/include)"'
 $(OUTDIR)/test-macro-runner $(OUTDIR)/test-macro-examples: $(OUTDIR)/modules/macro.so $(OUTDIR)/modules/inputremap.so
+$(OUTDIR)/test-macro-runner: $(OUTDIR)/modules/clipboard.so
+# OCR and the colour picker against the real screenshot module.
+$(OUTDIR)/test-screengrab: $(OUTDIR)/modules/screenshot.so
+$(OBJDIR)/tests/test-screengrab.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+$(OUTDIR)/modules/screenshot.so: $(wildcard modules/screenshot/*.c)
 $(OUTDIR)/test-macro-examples: $(OUTDIR)/modules/tile.so $(OUTDIR)/modules/monocle.so
 $(OBJDIR)/tests/test-macro-runner.o: TEST_CFLAGS += -DGOWL_TEST_MENU_FILE='"$(abspath data/menu.yaml)"'
 $(OBJDIR)/tests/test-macro-runner.o $(OBJDIR)/tests/test-macro-examples.o: TEST_CFLAGS += -DGOWL_TEST_MACRO_MODULE='"$(abspath $(OUTDIR)/modules/macro.so)"' -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"' -DGOWL_TEST_MACRO_EXAMPLES='"$(abspath data/macros)"' -DGOWL_MACRO_DEV_INCLUDE='"$(abspath $(BUILDDIR)/include)"' $(shell $(PKG_CONFIG) --cflags gio-unix-2.0)

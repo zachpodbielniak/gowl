@@ -48,6 +48,8 @@
 
 #include "gowl.h"
 #include "core/gowl-core-private.h"
+#include "core/gowl-input-recorder.h"
+#include "core/gowl-seat.h"
 
 /* ── What came out ──────────────────────────────────────────────── */
 
@@ -119,7 +121,8 @@ typedef struct {
 enum {
 	RIG_PLAIN   = 0,
 	RIG_REMAP   = 1 << 0,
-	RIG_DBUS    = 1 << 1
+	RIG_DBUS    = 1 << 1,
+	RIG_CLIP    = 1 << 2
 };
 
 static GLogLevelFlags saved_mask;
@@ -222,6 +225,15 @@ rig_setup(
 		so = g_build_filename(GOWL_TEST_MODULE_DIR, "inputremap.so", NULL);
 		if (!gowl_module_manager_load_module(r->modules, so, &error)) {
 			g_test_skip("inputremap.so did not load");
+			g_clear_error(&error);
+			return;
+		}
+	}
+	if (flags & RIG_CLIP) {
+		g_clear_pointer(&so, g_free);
+		so = g_build_filename(GOWL_TEST_MODULE_DIR, "clipboard.so", NULL);
+		if (!gowl_module_manager_load_module(r->modules, so, &error)) {
+			g_test_skip("clipboard.so did not load");
 			g_clear_error(&error);
 			return;
 		}
@@ -388,6 +400,26 @@ action_seen(
 ){
 	(void)r;
 	return n_actions_named(data) > 0;
+}
+
+/* The custom action "recorded-key" seen at least N times. */
+static gboolean
+action_seen_n(
+	Rig      *r,
+	gpointer  n
+){
+	(void)r;
+	return n_actions_named("recorded-key") >= GPOINTER_TO_UINT(n);
+}
+
+/* @arg seen at least twice. */
+static gboolean
+action_seen_n2(
+	Rig      *r,
+	gpointer  arg
+){
+	(void)r;
+	return n_actions_named(arg) >= 2;
 }
 
 static gboolean
@@ -1323,6 +1355,404 @@ test_remap_target(
 	                 ==, 1);   /* the press only */
 }
 
+/* ── The recorder ───────────────────────────────────────────────── */
+
+/* A keyboard plugged into the headless backend: real key events, which
+   is what the recorder taps (an injected key is synthetic and never
+   recorded). */
+static struct wlr_keyboard *
+plug_keyboard(
+	Rig         *r,
+	const gchar *name
+){
+	struct wlr_keyboard *kb;
+
+	fake_keyboard_impl.name = "gowl-test-keyboard";
+	kb = g_new0(struct wlr_keyboard, 1);
+	wlr_keyboard_init(kb, &fake_keyboard_impl, name);
+	g_ptr_array_add(r->keyboards, kb);
+	wl_signal_emit_mutable(&r->compositor->backend->events.new_input,
+	                       &kb->base);
+	return kb;
+}
+
+static void
+press(
+	struct wlr_keyboard *kb,
+	guint32              keycode,
+	gboolean             down
+){
+	static guint32 t = 1;
+	struct wlr_keyboard_key_event ev;
+
+	memset(&ev, 0, sizeof ev);
+	ev.time_msec = t++;
+	ev.keycode = keycode;
+	ev.update_state = TRUE;
+	ev.state = down ? WL_KEYBOARD_KEY_STATE_PRESSED
+	                : WL_KEYBOARD_KEY_STATE_RELEASED;
+	wlr_keyboard_notify_key(kb, &ev);
+}
+
+/* Super+F12, as a hand on the keyboard would play it. */
+static void
+press_super_f12(
+	struct wlr_keyboard *kb
+){
+	press(kb, KEY_LEFTMETA, TRUE);
+	press(kb, KEY_F12, TRUE);
+	press(kb, KEY_F12, FALSE);
+	press(kb, KEY_LEFTMETA, FALSE);
+}
+
+static gboolean
+file_exists(
+	Rig      *r,
+	gpointer  path
+){
+	(void)r;
+	return g_file_test(path, G_FILE_TEST_EXISTS);
+}
+
+/*
+ * Recorded with real keys, written out, compiled and replayed: a
+ * keybind pressed while recording fires once live and once more on
+ * each replay.  And the recording is private: the recorder's status
+ * shows no token, and another caller cannot start one over it.
+ */
+static void
+test_record_and_replay(
+	Rig           *r,
+	gconstpointer  data
+){
+	g_autofree gchar *a = NULL;
+	g_autofree gchar *b = NULL;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *last = NULL;
+	g_autofree gchar *src = NULL;
+	g_autofree gchar *status = NULL;
+	g_autofree gchar *rstatus = NULL;
+	g_autofree gchar *busy = NULL;
+	g_autoptr(GError) error = NULL;
+	GowlInputRecorder *rec;
+	struct wlr_keyboard *kb;
+
+	(void)data;
+	RIG_UP(r);
+	configure(r, "record-dir", r->macros, NULL);
+	gowl_config_add_keybind(r->config, GOWL_KEY_MOD_LOGO, XKB_KEY_F12,
+	                        GOWL_ACTION_CUSTOM, "recorded-key");
+	kb = plug_keyboard(r, "Test Keyboard");
+	rec = gowl_compositor_get_input_recorder(r->compositor);
+
+	status = cmd(r, "macro-record status");
+	g_assert_nonnull(strstr(status, "\"recording\":false"));
+	a = cmd(r, "macro-record start rec-e2e");
+	g_assert_cmpstr(a, ==, "OK recording rec-e2e");
+
+	/* private: no token for anyone else, and the owner is named */
+	rstatus = gowl_input_recorder_status(rec);
+	g_assert_nonnull(strstr(rstatus, "\"token\":null"));
+	g_assert_nonnull(strstr(rstatus, "\"owner\":\"macro\""));
+	g_assert_null(gowl_input_recorder_get_token(rec));
+	/* with consent given, an ordinary start is still refused -- and
+	   the refusal names the owner, not the token */
+	gowl_input_recorder_set_consent(rec, TRUE);
+	busy = gowl_input_recorder_start(rec, 10, 0, &error);
+	g_assert_null(busy);
+	g_assert_error(error, G_IO_ERROR, G_IO_ERROR_BUSY);
+	g_assert_nonnull(strstr(error->message, "(token macro)"));
+	gowl_input_recorder_set_consent(rec, FALSE);
+
+	press_super_f12(kb);
+	pump_until(r, 1000, action_seen, "recorded-key");
+	g_assert_cmpuint(n_actions_named("recorded-key"), ==, 1);
+
+	b = cmd(r, "macro-record");      /* the toggle: stop */
+	g_assert_true(g_str_has_prefix(b, "OK recorded rec-e2e 1 "));
+	path = g_build_filename(r->macros, "rec-e2e.c", NULL);
+	last = g_build_filename(r->macros, "last-recording.c", NULL);
+	g_assert_true(g_file_test(path, G_FILE_TEST_EXISTS));
+	g_assert_true(g_file_test(last, G_FILE_TEST_EXISTS));
+	g_assert_true(g_file_get_contents(path, &src, NULL, NULL));
+	g_assert_nonnull(strstr(src, "gowl_macro_key_code(ctx, NULL, 88, "
+	                             "GOWL_KEY_MOD_LOGO);\t/* F12 */"));
+	/* the Super taps around it are folded into the chord */
+	g_assert_null(strstr(src, "Super_L"));
+
+	/* it compiles, and replaying it presses the keybind again */
+	assert_ok(r, "macro-compile rec-e2e");
+	assert_ok(r, "macro-run rec-e2e");
+	pump_until(r, 3000, action_seen_n, GUINT_TO_POINTER(2));
+	g_assert_cmpuint(n_actions_named("recorded-key"), ==, 2);
+	pump_until(r, 1000, nothing_running, NULL);
+	/* last-recording, at four times the speed */
+	assert_ok(r, "macro-run last-recording 4");
+	pump_until(r, 3000, action_seen_n, GUINT_TO_POINTER(3));
+	g_assert_cmpuint(n_actions_named("recorded-key"), ==, 3);
+	pump_until(r, 1000, nothing_running, NULL);
+
+	/* stopping twice, cancelling nothing, bad names */
+	g_free(a);
+	a = cmd(r, "macro-record stop");
+	g_assert_cmpstr(a, ==, "ERROR not recording");
+	g_free(a);
+	a = cmd(r, "macro-record start ../../evil");
+	g_assert_true(g_str_has_prefix(a, "ERROR ../../evil is not a macro "
+	                                  "name"));
+}
+
+/* Super+Shift+Escape (the recorder's own escape hatch) stops it behind
+   the module's back; what was recorded up to then is still saved. */
+static void
+test_record_escape_hatch(
+	Rig           *r,
+	gconstpointer  data
+){
+	g_autofree gchar *last = NULL;
+	g_autofree gchar *status = NULL;
+	struct wlr_keyboard *kb;
+
+	(void)data;
+	RIG_UP(r);
+	configure(r, "record-dir", r->macros, NULL);
+	gowl_config_add_keybind(r->config, GOWL_KEY_MOD_LOGO, XKB_KEY_F12,
+	                        GOWL_ACTION_CUSTOM, "recorded-key");
+	kb = plug_keyboard(r, "Test Keyboard");
+	last = g_build_filename(r->macros, "last-recording.c", NULL);
+
+	assert_ok(r, "macro-record");
+	press_super_f12(kb);
+	gowl_input_recorder_force_stop(
+		gowl_compositor_get_input_recorder(r->compositor),
+		"(Super+Shift+Escape)");
+	pump_until(r, 2000, file_exists, last);
+	g_assert_true(g_file_test(last, G_FILE_TEST_EXISTS));
+	status = cmd(r, "macro-record status");
+	g_assert_nonnull(strstr(status, "\"recording\":false"));
+
+	/* an empty recording writes nothing and says why */
+	g_unlink(last);
+	assert_ok(r, "macro-record");
+	g_free(status);
+	status = cmd(r, "macro-record");
+	g_assert_cmpstr(status, ==, "ERROR nothing was recorded");
+	g_assert_false(g_file_test(last, G_FILE_TEST_EXISTS));
+
+	/* cancel throws one away */
+	assert_ok(r, "macro-record");
+	press_super_f12(kb);
+	assert_ok(r, "macro-record cancel");
+	pump(r, 100);
+	g_assert_false(g_file_test(last, G_FILE_TEST_EXISTS));
+}
+
+/* ── Voice ──────────────────────────────────────────────────────── */
+
+static gboolean
+voice_macro(
+	GowlMacroContext *ctx,
+	gpointer          data
+){
+	g_autofree gchar *s = NULL;
+
+	(void)data;
+	s = g_strdup_printf("voice %s|%s|%s",
+		gowl_macro_get_trigger(ctx) == GOWL_MACRO_TRIGGER_VOICE
+		? "voice" : "other",
+		gowl_macro_get_trigger_detail(ctx),
+		gowl_macro_get_arg(ctx, 0) != NULL ? gowl_macro_get_arg(ctx, 0)
+		                                   : "-");
+	gowl_macro_action(ctx, GOWL_ACTION_CUSTOM, s);
+	return TRUE;
+}
+
+/* The listener is done and its failure mentions @needle. */
+static gboolean
+voice_failed(
+	Rig      *r,
+	gpointer  needle
+){
+	g_autofree gchar *st = cmd(r, "macro-voice status");
+
+	return strstr(st, "\"listening\":false") != NULL
+	       && strstr(st, needle) != NULL;
+}
+
+/*
+ * What was said, matched and run: from text (cmacs's whisper hands it
+ * over), and from the voice-command -- which prints and exits, which
+ * fails, which is stopped by the second press, and which is stopped
+ * by voice-max-seconds.  The commands stand in for gowl-stt and keep
+ * its contract: listen until SIGINT, print, exit 0.
+ */
+static void
+test_voice(
+	Rig           *r,
+	gconstpointer  data
+){
+	g_autofree gchar *dry = NULL;
+	g_autofree gchar *none = NULL;
+	g_autofree gchar *a = NULL;
+	g_autofree gchar *b = NULL;
+	const gchar *listener =
+		"sleep 30 & p=$!; trap 'kill $p; echo Rec two, forty.; exit 0' "
+		"INT TERM; wait";
+
+	(void)data;
+	RIG_UP(r);
+	gowl_macro_register_func("rec-two", voice_macro, NULL, NULL);
+
+	dry = cmd(r, "macro-voice-match --dry-run Rec two, twenty five.");
+	g_assert_nonnull(strstr(dry, "\"macro\":\"rec-two\""));
+	g_assert_nonnull(strstr(dry, "\"args\":\"25\""));
+	g_assert_nonnull(strstr(dry, "\"normalised\":\"rec 2 25\""));
+	none = cmd(r, "macro-voice-match make me a sandwich");
+	g_assert_true(g_str_has_prefix(none, "ERROR heard \"make me a "
+	                                     "sandwich\""));
+
+	/* text, as cmacs sends it */
+	assert_ok(r, "macro-voice-match rec two");
+	pump_until(r, 1000, action_seen, "voice voice|rec two|-");
+	g_assert_cmpuint(n_actions_named("voice voice|rec two|-"), ==, 1);
+
+	/* a command that hears at once */
+	configure(r, "voice-command", "printf 'Rec two please.\\n'", NULL);
+	a = cmd(r, "macro-voice");
+	g_assert_cmpstr(a, ==, "OK listening");
+	pump_until(r, 3000, action_seen, "voice voice|Rec two please.|-");
+	g_assert_cmpuint(n_actions_named("voice voice|Rec two please.|-"), ==, 1);
+
+	/* a command that fails: its last stderr line is the reason, in the
+	   notification and in the status */
+	configure(r, "voice-command", "echo 'no microphone here' >&2; exit 4",
+	          NULL);
+	assert_ok(r, "macro-voice");
+	pump_until(r, 3000, voice_failed, "no microphone here");
+	g_assert_true(voice_failed(r, "no microphone here"));
+
+	/* stopped by the second press */
+	configure(r, "voice-command", listener, "voice-max-seconds", "30", NULL);
+	assert_ok(r, "macro-voice");
+	pump(r, 300);
+	b = cmd(r, "macro-voice");
+	g_assert_cmpstr(b, ==, "OK transcribing");
+	pump_until(r, 3000, action_seen, "voice voice|Rec two, forty.|40");
+	g_assert_cmpuint(n_actions_named("voice voice|Rec two, forty.|40"), ==, 1);
+
+	/* stopped by voice-max-seconds, nobody pressing anything */
+	configure(r, "voice-max-seconds", "1", NULL);
+	assert_ok(r, "macro-voice");
+	pump_until(r, 4000, action_seen_n2, "voice voice|Rec two, forty.|40");
+	g_assert_cmpuint(n_actions_named("voice voice|Rec two, forty.|40"), ==, 2);
+
+	/* status, and cancel leaves nothing running */
+	g_free(a);
+	a = cmd(r, "macro-voice status");
+	g_assert_nonnull(strstr(a, "\"listening\":false"));
+	g_assert_nonnull(strstr(a, "\"last-heard\":\"Rec two, forty.\""));
+	configure(r, "voice-max-seconds", "30", NULL);
+	assert_ok(r, "macro-voice start");
+	assert_ok(r, "macro-voice cancel");
+	g_free(a);
+	a = cmd(r, "macro-voice stop");
+	g_assert_cmpstr(a, ==, "ERROR not listening");
+	gowl_macro_unregister_func("rec-two");
+}
+
+/* ── The clipboard, private in the menu ─────────────────────────── */
+
+static gboolean
+clipboard_has(
+	Rig      *r,
+	gpointer  needle
+){
+	g_autofree gchar *list = cmd(r, "clipboard-list");
+
+	return strstr(list, needle) != NULL;
+}
+
+/*
+ * The clipboard history is listed only inside its own submenu: not in
+ * a search for what was copied, not in "recent" after pasting from it.
+ * Searching for the submenu itself finds it.
+ */
+static void
+test_menu_clipboard_private(
+	Rig           *r,
+	gconstpointer  data
+){
+	g_autoptr(GowlMenu) menu = gowl_menu_new();
+	g_autoptr(GowlMenu) small = gowl_menu_new();
+	g_autoptr(GPtrArray) rows = NULL;
+	g_autoptr(GPtrArray) found = NULL;
+	g_autoptr(GPtrArray) entry = NULL;
+	g_autoptr(GPtrArray) recent = NULL;
+	g_autofree gchar *next = NULL;
+	const GowlMenuRow *secret;
+	GowlMenuResult result;
+	guint i;
+
+	(void)data;
+	RIG_UP(r);
+	/* The history as the clipboard module keeps it: an index line per
+	   entry and a blob beside it.  Seeded directly -- how a copy gets
+	   in is the clipboard module's business; this is about the menu. */
+	{
+		g_autofree gchar *dir = g_build_filename(g_get_user_state_dir(),
+		                                         "gowl", "clipboard", NULL);
+		g_autofree gchar *index = g_build_filename(dir, "index", NULL);
+		g_autofree gchar *blob = g_build_filename(dir, "1.bin", NULL);
+
+		g_mkdir_with_parents(dir, 0700);
+		g_assert_true(g_file_set_contents(blob, "hunter2 is my password",
+		                                  -1, NULL));
+		g_assert_true(g_file_set_contents(index,
+			"1\ttext/plain\t22\thunter2 is my password\n", -1, NULL));
+	}
+	g_assert_true(clipboard_has(r, "hunter2"));
+
+	/* the shipped entry: private, listed when opened */
+	g_assert_true(gowl_menu_load_file(menu, GOWL_TEST_MENU_FILE, FALSE,
+	                                  NULL));
+	g_assert_true(gowl_menu_is_private(menu, "clipboard"));
+	g_assert_false(gowl_menu_is_private(menu, "macros"));
+	rows = gowl_menu_list(menu, r->compositor, "clipboard");
+	g_assert_nonnull(menu_row(rows, "Forget the clipboard history"));
+	secret = menu_row(rows, "hunter2 is my password");
+	g_assert_nonnull(secret);
+	g_assert_true(gowl_menu_is_private(menu, secret->route));
+	g_assert_nonnull(strstr(secret->detail, "text/plain"));
+
+	/* search: on a menu of just this entry (the shipped tree's tray
+	   provider would hold a session-bus connection, see above) */
+	g_assert_true(gowl_menu_load_data(small,
+		"menu:\n"
+		"  - {id: clipboard, label: Clipboard, provider: clipboard,"
+		" private: true}\n", FALSE, NULL));
+	found = gowl_menu_search(small, r->compositor, "hunter2");
+	for (i = 0; i < found->len; i++) {
+		const GowlMenuRow *row = g_ptr_array_index(found, i);
+
+		g_assert_null(strstr(row->label != NULL ? row->label : "",
+		                     "hunter2"));
+	}
+	entry = gowl_menu_search(small, r->compositor, "clipboard");
+	g_assert_nonnull(menu_row(entry, "Clipboard"));
+	g_assert_true(menu_row(entry, "Clipboard")->submenu);
+
+	/* Return on it pastes it back -- and leaves no trace in recent */
+	result = gowl_menu_activate(small, r->compositor, secret->route, &next);
+	g_assert_cmpint(result, ==, GOWL_MENU_RESULT_RAN);
+	recent = gowl_menu_recent(small, r->compositor, 10);
+	g_assert_cmpuint(recent->len, ==, 0);
+	/* ... even a history that names it shows nothing */
+	gowl_menu_note_used(small, secret->route);
+	g_clear_pointer(&recent, g_ptr_array_unref);
+	recent = gowl_menu_recent(small, r->compositor, 10);
+	g_assert_cmpuint(recent->len, ==, 0);
+}
+
 /* ── D-Bus ──────────────────────────────────────────────────────── */
 
 static void
@@ -1485,6 +1915,10 @@ main(
 	ADD("registered-and-defined", RIG_PLAIN, test_registered_and_defined);
 	ADD("info-dirs-compile", RIG_PLAIN, test_info_dirs_compile);
 	ADD("remap-target", RIG_REMAP, test_remap_target);
+	ADD("record-and-replay", RIG_PLAIN, test_record_and_replay);
+	ADD("record-escape-hatch", RIG_PLAIN, test_record_escape_hatch);
+	ADD("voice", RIG_PLAIN, test_voice);
+	ADD("menu-clipboard-private", RIG_CLIP, test_menu_clipboard_private);
 	ADD("dbus", RIG_DBUS, test_dbus);
 #undef ADD
 

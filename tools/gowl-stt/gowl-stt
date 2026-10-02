@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# gowl-stt - listen until interrupted, then print what was said.
+#
+# gowl - GObject Wayland Compositor
+# Copyright (C) 2026  Zach Podbielniak
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The macro module's default `voice-command'.  The contract with it is
+# small: record from the microphone until SIGINT (the voice key pressed
+# a second time, or `voice-max-seconds' running out), transcribe, print
+# the text on stdout and exit 0.  Anything that keeps that contract can
+# replace this script -- set `voice-command' to it.
+#
+# Records with pw-record (PipeWire) or arecord (ALSA), transcribes with
+# whisper.cpp's whisper-cli.  Diagnostics go to stderr, which the macro
+# module shows in a toast when this exits non-zero.
+
+set -o nounset
+set -o pipefail
+
+# The recording, global so the EXIT trap still sees it after main returns.
+STT_WAV=""
+
+stt_usage () {
+	cat <<'USAGE'
+gowl-stt - listen until interrupted, then print what was said
+
+Usage: gowl-stt [-m MODEL] [-l LANG] [-s SECONDS]
+
+Records from the default microphone until SIGINT (or SECONDS pass),
+transcribes the recording with whisper.cpp and prints the text.
+
+Options:
+  -m, --model MODEL    whisper model file (default: $GOWL_STT_MODEL, or the
+                       first ggml-base.en.bin found in ~/.local/share/
+                       cmacs/whisper-models, ~/.local/share/whisper,
+                       /usr/share/cmacs/whisper-models, /usr/share/whisper.cpp)
+  -l, --language LANG  spoken language, or `auto' (default: en)
+  -s, --seconds N      stop listening after N seconds (default: 30)
+  -h, --help           show this help
+      --license        show the license
+
+Environment:
+  GOWL_STT_MODEL       the model file
+  GOWL_STT_WHISPER     the whisper.cpp program (default: whisper-cli)
+
+Examples:
+  gowl-stt                       # speak, then Ctrl+C: prints the text
+  gowl-stt -s 5                  # five seconds of listening
+  gowl-stt -m ~/models/ggml-small.en.bin -l en
+
+  # as the macro module's voice command, in the gowl config:
+  #   modules:
+  #     macro:
+  #       voice-command: "gowl-stt -l en"
+USAGE
+}
+
+stt_license () {
+	cat <<'LICENSE'
+gowl-stt is part of gowl.  Copyright (C) 2026  Zach Podbielniak
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or (at
+your option) any later version.  It is distributed WITHOUT ANY WARRANTY.
+See <https://www.gnu.org/licenses/>.
+LICENSE
+}
+
+stt_die () {
+	echo "gowl-stt: ${1}" >&2
+	exit 1
+}
+
+# The first model that exists, from $GOWL_STT_MODEL or the usual places.
+stt_find_model () {
+	local name="ggml-base.en.bin"
+	local dir
+
+	if [[ -n "${GOWL_STT_MODEL:-}" ]]
+	then
+		echo "${GOWL_STT_MODEL}"
+		return 0
+	fi
+	for dir in "${HOME}/.local/share/cmacs/whisper-models" \
+	           "${HOME}/.local/share/whisper" \
+	           "/usr/share/cmacs/whisper-models" \
+	           "/usr/share/whisper.cpp" \
+	           "/usr/share/whisper.cpp/models"
+	do
+		if [[ -f "${dir}/${name}" ]]
+		then
+			echo "${dir}/${name}"
+			return 0
+		fi
+	done
+	return 1
+}
+
+stt_main () {
+	local model=""
+	local lang="en"
+	local seconds=30
+	local whisper="${GOWL_STT_WHISPER:-whisper-cli}"
+	local rec_pid=""
+	local text=""
+
+	while [[ $# -gt 0 ]]
+	do
+		case "${1}" in
+			-m|--model)    model="${2:-}"; shift 2 ;;
+			-l|--language) lang="${2:-}"; shift 2 ;;
+			-s|--seconds)  seconds="${2:-}"; shift 2 ;;
+			-h|--help)     stt_usage; exit 0 ;;
+			--license)     stt_license; exit 0 ;;
+			*)             stt_usage >&2; exit 2 ;;
+		esac
+	done
+	[[ "${seconds}" =~ ^[0-9]+$ ]] || stt_die "--seconds wants a number"
+
+	if [[ -z "${model}" ]]
+	then
+		model="$(stt_find_model)" \
+			|| stt_die "no whisper model; set GOWL_STT_MODEL or put ggml-base.en.bin in ~/.local/share/whisper"
+	fi
+	[[ -f "${model}" ]] || stt_die "no model at ${model}"
+	command -v "${whisper}" >/dev/null 2>&1 \
+		|| stt_die "${whisper} not found (whisper.cpp; the whisper-cpp package)"
+
+	STT_WAV="$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/gowl-stt-XXXXXX.wav")" \
+		|| stt_die "cannot create a temporary file"
+	trap 'rm -f -- "${STT_WAV}"' EXIT
+
+	if command -v pw-record >/dev/null 2>&1
+	then
+		timeout -s TERM "${seconds}" \
+			pw-record --rate 16000 --channels 1 --format s16 "${STT_WAV}" &
+	elif command -v arecord >/dev/null 2>&1
+	then
+		arecord -q -d "${seconds}" -f S16_LE -r 16000 -c 1 "${STT_WAV}" &
+	else
+		stt_die "no recorder: install pipewire-utils (pw-record) or alsa-utils (arecord)"
+	fi
+	rec_pid=$!
+
+	# SIGINT ends the recording, not this script.  It is passed on as
+	# SIGTERM because a non-interactive shell starts background jobs
+	# with SIGINT ignored -- the recorder would never hear it.  Both
+	# recorders close their file cleanly on SIGTERM, and timeout hands
+	# it on to pw-record.
+	trap 'kill -TERM "${rec_pid}" 2>/dev/null' INT TERM
+
+	# `wait' returns early when a trapped signal arrives; wait again
+	# until the recorder is really gone, so the WAV header is written.
+	while kill -0 "${rec_pid}" 2>/dev/null
+	do
+		wait "${rec_pid}" 2>/dev/null || true
+	done
+	trap - INT TERM
+
+	[[ -s "${STT_WAV}" ]] || stt_die "nothing was recorded (is a microphone connected?)"
+
+	text="$("${whisper}" -m "${model}" -f "${STT_WAV}" -l "${lang}" -nt -np 2>/dev/null)" \
+		|| stt_die "${whisper} failed on the recording"
+	# one line, no leading or trailing space: whisper prints segments
+	text="$(printf '%s' "${text}" | tr '\n' ' ' | sed -e 's/^ *//' -e 's/ *$//' -e 's/  */ /g')"
+	# whisper's markers for silence are not words anybody said
+	case "${text}" in
+		""|"[BLANK_AUDIO]"|"(silence)"|"[silence]")
+			stt_die "heard nothing" ;;
+	esac
+	printf '%s\n' "${text}"
+}
+
+stt_main "$@"

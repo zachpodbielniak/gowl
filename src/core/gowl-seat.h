@@ -175,7 +175,9 @@ gchar    *gowl_seat_read_selection_fd   (gint          fd);
  * @self: a #GowlSeat
  * @text: the text to place on the clipboard
  *
- * Set the clipboard content to @text.
+ * Set the clipboard content to @text.  Emits #GowlSeat::clipboard-changed
+ * before returning, as a client's copy does, so the clipboard history
+ * and cmacs's kill-ring sync see it.
  */
 void      gowl_seat_set_clipboard       (GowlSeat     *self,
                                           const gchar  *text);
@@ -195,6 +197,7 @@ void      gowl_seat_set_clipboard       (GowlSeat     *self,
  * would therefore block the compositor for as long as it felt like.
  * This one hands the payload to the main loop and dribbles it out as
  * the pipe accepts it, so a slow or dead reader costs nothing.
+ * Emits #GowlSeat::clipboard-changed before returning.
  */
 void      gowl_seat_set_clipboard_bytes (GowlSeat     *self,
                                           GBytes       *data,

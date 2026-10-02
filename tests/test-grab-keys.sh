@@ -20,6 +20,10 @@
 #     folder, and children are watched on the compositor's event loop
 #     (gowl_subprocess_*): GSubprocess / g_child_watch_add complete on
 #     the default main context, which under cmacs is Emacs's thread.
+#   * gowl's own clipboard sets (OCR text, colours, screenshots, cmacs's
+#     kills) announce themselves, and the history does not close the fd
+#     wlr_data_source_send() owns -- it did, and every screenshot reached
+#     the history empty.
 #   * gowl-stt is ShellCheck-clean, when ShellCheck is installed.
 
 set -e
@@ -99,6 +103,19 @@ for f in "$s" "$root/modules/macro/gowl-module-macro.c"; do
 		say "$(basename "$f") spawns outside gowl_subprocess_*"
 	fi
 done
+
+# --- what gowl puts on the clipboard reaches the history ---
+seat="$root/src/core/gowl-seat.c"
+n=$(awk '/^gowl_seat_set_clipboard(_bytes)?\(/ { inside = 1 }
+	inside && /SIGNAL_CLIPBOARD_CHANGED/ { n++; inside = 0 }
+	END { print n + 0 }' "$seat")
+[ "$n" = 2 ] \
+	|| say "gowl_seat_set_clipboard{,_bytes}() do not both emit clipboard-changed ($n)"
+clip="$root/modules/clipboard/gowl-module-clipboard.c"
+if grep -A1 'wlr_data_source_send(source, mime, fds\[1\]);' "$clip" \
+	| grep -q 'close(fds\[1\])'; then
+	say "the clipboard module closes the fd wlr_data_source_send() owns"
+fi
 
 # --- gowl-stt ---
 stt="$root/tools/gowl-stt/gowl-stt"

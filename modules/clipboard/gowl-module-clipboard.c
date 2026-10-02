@@ -374,8 +374,14 @@ clip_on_clipboard_changed(GowlSeat *seat, gpointer data)
 		return;
 	}
 
+	/* send OWNS fds[1] and closes it: a client source after queuing
+	   the send event, a compositor source when it has written.  This
+	   used to close it again here, which a synchronous text source
+	   survived -- by closing an fd number that might already belong
+	   to something else -- and which left gowl's own image source
+	   (it writes later, from the main loop) a closed pipe: every
+	   screenshot reached the history as nothing at all. */
 	wlr_data_source_send(source, mime, fds[1]);
-	close(fds[1]);
 
 	r = g_new0(ClipRead, 1);
 	r->module = self;

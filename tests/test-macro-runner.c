@@ -1753,6 +1753,70 @@ test_menu_clipboard_private(
 	g_assert_cmpuint(recent->len, ==, 0);
 }
 
+/*
+ * What the compositor puts on the clipboard itself -- OCR text, a
+ * picked colour, a screenshot, cmacs's kills -- reaches the history
+ * like a client's copy.  gowl_seat_set_clipboard() used to change the
+ * selection without saying so, and the history never heard of it.
+ * Putting an entry back from the history is not a new entry.
+ */
+static void
+test_clipboard_history_own_sets(
+	Rig           *r,
+	gconstpointer  data
+){
+	GowlSeat *seat;
+	g_autoptr(GBytes) png = NULL;
+	g_autofree gchar *list = NULL;
+	g_autofree gchar *after = NULL;
+	g_autofree gchar *copy = NULL;
+	g_auto(GStrv) lines = NULL;
+	guint before;
+
+	(void)data;
+	RIG_UP(r);
+	seat = gowl_compositor_get_seat(r->compositor);
+
+	gowl_seat_set_clipboard(seat, "#336699");
+	pump_until(r, 3000, clipboard_has, "#336699");
+	g_assert_true(clipboard_has(r, "#336699"));
+
+	png = g_bytes_new_static("\x89PNG\r\n\x1a\nfake", 12);
+	gowl_seat_set_clipboard_bytes(seat, png, "image/png");
+	pump_until(r, 3000, clipboard_has, "image/png");
+	g_assert_true(clipboard_has(r, "[image/png, 12 bytes]"));
+
+	gowl_seat_set_clipboard(seat, "Hello from the screen");
+	pump_until(r, 3000, clipboard_has, "Hello from the screen");
+	list = cmd(r, "clipboard-list");
+	lines = g_strsplit(list, "\n", -1);
+	before = g_strv_length(lines);
+	/* newest first */
+	g_assert_nonnull(strstr(lines[0], "Hello from the screen"));
+
+	/* restore the colour: it goes on the clipboard, not in the list */
+	{
+		g_autofree gchar *line = NULL;
+		guint i;
+
+		for (i = 0; lines[i] != NULL; i++)
+			if (strstr(lines[i], "#336699") != NULL)
+				line = g_strdup_printf("clipboard-copy %" G_GUINT64_FORMAT,
+				                       g_ascii_strtoull(lines[i], NULL,
+				                                        10));
+		g_assert_nonnull(line);
+		copy = cmd(r, line);
+	}
+	g_assert_cmpstr(copy, ==, "OK copied");
+	pump(r, 300);
+	after = cmd(r, "clipboard-list");
+	{
+		g_auto(GStrv) again = g_strsplit(after, "\n", -1);
+
+		g_assert_cmpuint(g_strv_length(again), ==, before);
+	}
+}
+
 /* ── D-Bus ──────────────────────────────────────────────────────── */
 
 static void
@@ -1919,6 +1983,8 @@ main(
 	ADD("record-escape-hatch", RIG_PLAIN, test_record_escape_hatch);
 	ADD("voice", RIG_PLAIN, test_voice);
 	ADD("menu-clipboard-private", RIG_CLIP, test_menu_clipboard_private);
+	ADD("clipboard-history-own-sets", RIG_CLIP,
+	    test_clipboard_history_own_sets);
 	ADD("dbus", RIG_DBUS, test_dbus);
 #undef ADD
 

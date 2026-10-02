@@ -101,9 +101,11 @@ gowl_seat_class_init(GowlSeatClass *klass)
 	 * GowlSeat::clipboard-changed:
 	 * @seat: the #GowlSeat that emitted the signal
 	 *
-	 * Emitted when a Wayland client changes the clipboard selection.
-	 * Listeners can call gowl_seat_get_clipboard() to read the
-	 * new content.
+	 * Emitted when the clipboard selection changes: a Wayland client
+	 * copied, or the compositor set it itself with
+	 * gowl_seat_set_clipboard() or gowl_seat_set_clipboard_bytes()
+	 * (emitted synchronously from inside those).  Listeners read the
+	 * new content asynchronously, e.g. gowl_seat_read_clipboard_async().
 	 */
 	seat_signals[SIGNAL_CLIPBOARD_CHANGED] =
 		g_signal_new("clipboard-changed",
@@ -844,6 +846,14 @@ gowl_seat_set_clipboard(
 
 	wlr_seat_set_selection(seat, &ts->base,
 	                       wl_display_next_serial(seat->display));
+
+	/* Said aloud, as a client's copy is (on_request_set_sel): the
+	   clipboard history and cmacs's kill-ring sync both listen for
+	   this, and a set from inside the compositor -- OCR text, a
+	   picked colour, cmacs's own kills -- is a clipboard change like
+	   any other.  Synchronous, so a caller can mark its own write
+	   (the history's `restoring') around the call. */
+	g_signal_emit(self, seat_signals[SIGNAL_CLIPBOARD_CHANGED], 0);
 }
 
 /**
@@ -895,6 +905,10 @@ gowl_seat_set_clipboard_bytes(
 
 	wlr_seat_set_selection(seat, &bs->base,
 	                       wl_display_next_serial(seat->display));
+
+	/* See gowl_seat_set_clipboard(): a screenshot on the clipboard is
+	   a clipboard change too. */
+	g_signal_emit(self, seat_signals[SIGNAL_CLIPBOARD_CHANGED], 0);
 }
 
 /**

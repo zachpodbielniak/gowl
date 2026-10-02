@@ -68,6 +68,7 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =menu-list [ROUTE]=           | What is under a route: route, label, =menu= or =action=, and =checked=/=disabled=/=-=, tab separated |
 | =screenshot-ocr=              | Drag a region; tesseract reads it and the text goes on the clipboard (the screenshot module) |
 | =screenshot-color=            | Click a pixel; its =#rrggbb= goes on the clipboard (the screenshot module) |
+| =screenshot-ocr-config=       | ={"command", "language"}=: what OCR runs, for a caller reading a region itself |
 | anything else                 | A module's command (=expo=, =screenshot-area=, =scratchpad-toggle=, =clipboard-list=, =notify-dnd=, ...), or =ERROR unknown command= |
 
 A tag argument is a bitmask, as everywhere in gowl: tag 1 is =1=, tag 3 is =4=, all nine =511=.

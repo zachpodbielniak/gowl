@@ -64,7 +64,11 @@ but its owner can drain or stop it.  Withdrawing consent leaves a
 private recording running, since it never depended on it.  Everything
 else applies unchanged: the frame, the suppression, the deadline,
 Super+Shift+Escape, and one recording at a time (an MCP
-=start_recording= while one runs is refused, naming the owner).  See
+=start_recording= while one runs is refused, naming the owner).  The
+exemption is the keypress's, not the macro module's: the MCP
+=macro_record= tool (and cmacs's =gowl_macro_record=) starts with
+=--require-consent=, so a program asking to record still needs
+=input-recording: true=.  See
 [[file:macros.org::#macros-recording][Recording a macro]].
 
 The MCP tools are registered whether or not consent has been given,

@@ -65,6 +65,9 @@ void gowl_mcp_register_inputremap_tools(McpServer *server, GowlModuleMcp *module
 /* Macros: thin wrappers over the opt-in macro module's IPC words.  See
  * modules/mcp/gowl-mcp-tools-macro.c. */
 void gowl_mcp_register_macro_tools(McpServer *server, GowlModuleMcp *module);
+/* Text and colours off the screen: screen_text, pick_color.  See
+ * modules/mcp/gowl-mcp-tools-grab.c. */
+void gowl_mcp_register_grab_tools(McpServer *server, GowlModuleMcp *module);
 
 /* Resource registration */
 void gowl_mcp_register_resources     (McpServer *server, GowlModuleMcp *module);

@@ -1481,7 +1481,8 @@ on_recorder_changed(
 static gchar *
 record_start(
 	GowlModuleMacro *self,
-	const gchar     *name
+	const gchar     *name,
+	gboolean         require_consent
 ){
 	GowlInputRecorder *rec;
 	g_autoptr(GError) error = NULL;
@@ -1495,6 +1496,13 @@ record_start(
 	rec = gowl_compositor_get_input_recorder(self->compositor);
 	if (rec == NULL)
 		return g_strdup("ERROR this compositor has no input recorder");
+	/* A program asking -- an MCP client -- is not the person at the
+	   keyboard pressing the key, so it gets the recorder's own rule:
+	   the `input-recording' consent, which is off by default. */
+	if (require_consent && !gowl_input_recorder_get_consent(rec))
+		return g_strdup("ERROR recording your input for a program needs "
+		                "`input-recording: true' in the gowl config "
+		                "(off by default); the record key needs nothing");
 	if (self->rec_changed_id == 0)
 		self->rec_changed_id = g_signal_connect(rec, "changed",
 			G_CALLBACK(on_recorder_changed), self);
@@ -1564,8 +1572,10 @@ record_detach(
 /*
  * cmd_record:
  *
- * macro-record [toggle|start [NAME]|stop|cancel|status].  A bare word
- * that is none of those is a name to start recording as.
+ * macro-record [--require-consent] [toggle|start [NAME]|stop|cancel|status].
+ * A bare word that is none of those is a name to start recording as.
+ * --require-consent is what an MCP tool passes: start only when the
+ * input recorder's `input-recording' consent is on.
  */
 static gchar *
 cmd_record(
@@ -1575,26 +1585,43 @@ cmd_record(
 	g_auto(GStrv) words = NULL;
 	const gchar *verb;
 	const gchar *name;
+	gboolean consent;
 
 	if (self->compositor == NULL)
 		return g_strdup("ERROR the macro module has not started");
 	if (!self->enabled)
 		return g_strdup("ERROR the macro module is disabled");
 
-	words = g_strsplit_set(arg != NULL ? arg : "", " \t", 2);
+	consent = FALSE;
+	if (arg != NULL && g_str_has_prefix(arg, "--require-consent")) {
+		consent = TRUE;
+		arg += strlen("--require-consent");
+		while (*arg == ' ' || *arg == '\t')
+			arg++;
+	}
+	/* Shell-parsed, as macro-run's arguments are: the Elisp and MCP
+	   callers quote the name, and a plain split kept the quotes. */
+	if (arg != NULL && *arg != '\0') {
+		g_autoptr(GError) error = NULL;
+
+		if (!g_shell_parse_argv(arg, NULL, &words, &error))
+			return g_strdup_printf("ERROR %s", error->message);
+	} else {
+		words = g_new0(gchar *, 1);
+	}
 	verb = words[0] != NULL && *words[0] != '\0' ? words[0] : "toggle";
 	name = words[0] != NULL ? words[1] : NULL;
-	if (name != NULL) {
-		g_strstrip((gchar *)name);
-		if (*name == '\0')
-			name = NULL;
-	}
+	if (name != NULL && *name == '\0')
+		name = NULL;
+	if (name != NULL && words[2] != NULL)
+		return g_strdup_printf("ERROR one macro name, not \"%s %s\"", name,
+		                       words[2]);
 
 	if (g_strcmp0(verb, "toggle") == 0)
 		return self->rec_token != NULL ? record_stop(self)
-		                               : record_start(self, name);
+		                               : record_start(self, name, consent);
 	if (g_strcmp0(verb, "start") == 0)
-		return record_start(self, name);
+		return record_start(self, name, consent);
 	if (g_strcmp0(verb, "stop") == 0)
 		return record_stop(self);
 	if (g_strcmp0(verb, "cancel") == 0) {
@@ -1623,7 +1650,7 @@ cmd_record(
 	/* `macro-record NAME': start recording as NAME */
 	if (self->rec_token != NULL)
 		return g_strdup("ERROR already recording; macro-record stop");
-	return record_start(self, verb);
+	return record_start(self, verb, consent);
 }
 
 /* ===================================================================

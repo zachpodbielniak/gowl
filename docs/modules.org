@@ -785,7 +785,13 @@ and =_bytes()= emit =clipboard-changed= the way a client's copy does;
 they used to change the selection silently, so none of it reached the
 history.  The module hands the pipe's write end to
 =wlr_data_source_send()= and does not touch it again: the source owns
-it, and gowl's image source writes later, from the main loop.
+it, and gowl's image source writes later, from the compositor's event
+loop.  That loop is deliberately not GLib's default context: under
+cmacs the default context is Emacs's thread, and Emacs reads the
+clipboard with a blocking read behind every yank, so a restored entry
+would have hung Emacs waiting on a writer that could only run once the
+read returned.  The blocking read (=gowl_seat_get_clipboard()=) also
+gives up after three seconds of silence.
 
 Putting an entry back is itself a selection change, so the module
 ignores its own writes; without that, pasting from the history would add
@@ -897,6 +903,11 @@ Two more uses of the same machinery, which save no file:
 - *=screenshot-color=* (=Super+Alt+c=) frames the screen --- a thin
   border, no dim, because a dim wash would change every colour --- and
   the next left click puts that pixel's =#rrggbb= on the clipboard.
+
+=screenshot-ocr-config= answers ={"command": ..., "language": ...}=:
+what OCR runs, for a caller that reads a region itself (the MCP
+=screen_text= tool, cmacs's =cmacs-gowl-screen-text=), so they and the
+key run the same program.
 
 Both take Escape or a right-click as a cancel.  tesseract runs on the
 side, watched on the compositor's event loop (=src/util/gowl-subprocess.c=)

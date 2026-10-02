@@ -53,9 +53,12 @@ gowl_mcp_register_all_tools(McpServer *server, GowlModuleMcp *module)
 	gowl_mcp_register_screenshot_tools(server, module);
 	gowl_mcp_register_inputremap_tools(server, module);
 	gowl_mcp_register_macro_tools(server, module);
+	gowl_mcp_register_grab_tools(server, module);
+	/* The clipboard history tools were written and left out of this
+	   list, so no agent ever saw them; test-mcp-grab lists them now. */
+	gowl_mcp_register_clipboard_tools(server, module);
 
 	/* TODO: enable as tool files are implemented
-	gowl_mcp_register_clipboard_tools(server, module);
 	gowl_mcp_register_resources(server, module);
 	*/
 

@@ -332,11 +332,14 @@ Recordings are written to =record-dir= (default =~/.config/gowl/macros=, the fir
 | Command                           | Reply                                                       |
 |-----------------------------------+-------------------------------------------------------------|
 | =macro-record [toggle]=           | start (=OK recording last-recording=) or stop (=OK recorded NAME STEPS PATH=) |
+| =macro-record --require-consent ...= | the same, but =start= is refused unless =input-recording= is on: what the MCP tools pass |
 | =macro-record start [NAME]=       | start; on stop write =NAME.c= as well as =last-recording.c= |
 | =macro-record NAME=               | the same as =start NAME=                                    |
 | =macro-record stop=               | stop and write                                              |
 | =macro-record cancel=             | stop and write nothing                                      |
 | =macro-record status=             | JSON: recording, name, dir, max-seconds                     |
+
+Arguments are shell-parsed, as =macro-run='s are: =macro-record start 'tidy-mail'= is the name =tidy-mail=, and a name with a space in it is refused rather than half-used.
 
 Events: =EVENT macro recording NAME=, =recorded NAME STEPS PATH=, =recorded-nothing NAME=, =recording-cancelled=.
 
@@ -694,7 +697,7 @@ The bus lives on a thread of its own with a private main context; calls are carr
 :PROPERTIES:
 :CUSTOM_ID: macros-mcp
 :END:
-=macro_run= (=name=, =args=), =macro_stop=, =macro_list=, =macro_status=, =macro_info=, =macro_clear=, =macro_triggers= and =macro_filter_test= (=filter=, =event=), thin wrappers over the IPC words. See [[file:mcp.org][mcp.org]].
+=macro_run= (=name=, =args=), =macro_stop=, =macro_list=, =macro_status=, =macro_info=, =macro_clear=, =macro_triggers=, =macro_filter_test= (=filter=, =event=), =macro_record= (=action=, =name=), =macro_voice_match= (=text=, =dry_run=) and =macro_voice_status=, thin wrappers over the IPC words.  =macro_record start= is refused unless the input recorder's =input-recording= consent is on (it passes =--require-consent=): the key needs no consent because the person pressed it, a program asking does.  No tool turns the microphone on.  Under =cmacs --gowl= the same tools are on cmacs's own MCP server, prefixed =gowl_=.  See [[file:mcp.org][mcp.org]].
 
 *** The input remapper
 :PROPERTIES:
@@ -884,5 +887,6 @@ Ideas, by kind; most are twenty lines.
 | =test-macro-voice=             | matching alone: normalising (numbers said in a row stay apart), names, scattered words, phrases, filler |
 | =test-subprocess=              | children on a bare event loop: output, exit status, the deadline, SIGINT to a pipeline, large output, cancel |
 | =test-macro-runner= (more)     | a keybind pressed on a real (fake) keyboard while recording, written, compiled and replayed; the token hidden and another start refused; Super+Shift+Escape, empty and cancelled recordings; voice from text and from commands that hear, fail, are stopped by the key and by the deadline; the clipboard kept out of menu search and "recent" |
+| =test-mcp-grab=                | the MCP tools over the real module's socket: listed (=tools/list= is paged), =pick_color= reading the exact pixel, =screen_text= with a stand-in tesseract leaving the clipboard alone unless =copy=, =macro_record= refused without consent and working with it, =macro_voice_match= dry and for real, =macro_voice_status=, the clipboard history tools |
 | =test-grab-keys.sh=            | the six default keys, the opt-in, the private clipboard entry, the hidden token, OCR placement, gowl-stt ShellCheck |
 | =test-macro-guard.sh=          | source invariants: every body guarded, nothing sleeps on the compositor thread, cross-thread locks held with the watchdog deferred, targeted keys refuse when locked, code stays mapped |

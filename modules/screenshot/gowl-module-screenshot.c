@@ -524,6 +524,32 @@ finish_window_pick(GowlModuleScreenshot *self, gboolean cancelled)
  * do not trust.
  * ---------------------------------------------------------------- */
 
+/*
+ * json_quote:
+ *
+ * @text as the inside of a JSON string.  Not g_strescape(): that writes
+ * octal escapes for anything non-ASCII, which JSON does not have, and a
+ * command or language with a UTF-8 path in it would come out unreadable.
+ */
+static gchar *
+json_quote(
+	const gchar *text
+){
+	GString *out;
+	const guchar *p;
+
+	out = g_string_new(NULL);
+	for (p = (const guchar *)(text != NULL ? text : ""); *p != '\0'; p++) {
+		if (*p == '"' || *p == '\\')
+			g_string_append_printf(out, "\\%c", *p);
+		else if (*p < 0x20)
+			g_string_append_printf(out, "\\u%04x", *p);
+		else
+			g_string_append_c(out, (gchar)*p);
+	}
+	return g_string_free(out, FALSE);
+}
+
 /* A toast (bar-notify when the bar is loaded) and the compositor's
    toast signal, the macro module's two routes. */
 static void
@@ -1085,6 +1111,15 @@ screenshot_handle_command(GowlIpcHandler *handler, const gchar *command,
 		return g_strdup("OK selection cancelled");
 	}
 
+	if (g_strcmp0(command, "screenshot-ocr-config") == 0) {
+		/* What OCR runs, for a caller that reads a region itself
+		   (the MCP screen_text tool): one source of truth. */
+		g_autofree gchar *qc = json_quote(self->ocr_command);
+		g_autofree gchar *ql = json_quote(self->ocr_language);
+
+		return g_strdup_printf("OK {\"command\":\"%s\","
+		                       "\"language\":\"%s\"}", qc, ql);
+	}
 	if (g_strcmp0(command, "screenshot-ocr") == 0) {
 		if (self->selecting || self->picking || self->color_picking)
 			return g_strdup("ERROR a selection is already in progress");

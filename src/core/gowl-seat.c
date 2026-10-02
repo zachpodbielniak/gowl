@@ -531,36 +531,52 @@ static const struct wlr_data_source_impl gowl_text_source_impl = {
 struct gowl_bytes_source {
 	struct wlr_data_source base;
 	GBytes *data;
+	/* the compositor's event loop, where the payload is written from */
+	struct wl_event_loop *loop;
 };
 
 typedef struct {
-	GBytes *data;
-	gsize   offset;
-	gint    fd;
+	GBytes                 *data;
+	gsize                   offset;
+	gint                    fd;
+	struct wl_event_source *source;
 } GowlClipboardWrite;
 
 static void
-gowl_clipboard_write_free(gpointer user_data)
+gowl_clipboard_write_free(GowlClipboardWrite *w)
 {
-	GowlClipboardWrite *w = user_data;
-
 	/* The source owns the fd: the requesting client is waiting on EOF
 	   to know the paste is complete, so this close IS the terminator. */
+	if (w->source != NULL)
+		wl_event_source_remove(w->source);
 	if (w->fd >= 0)
 		close(w->fd);
 	g_bytes_unref(w->data);
 	g_free(w);
 }
 
-static gboolean
-gowl_clipboard_write_cb(gint fd, GIOCondition condition, gpointer user_data)
+/*
+ * gowl_clipboard_write_cb:
+ *
+ * Writes as much of the payload as the pipe takes, from the compositor's
+ * wl_event_loop.  It used to run on GLib's default main context, which
+ * under cmacs is EMACS'S thread -- and Emacs reads the clipboard with a
+ * blocking read on that same thread (gowl-clipboard-get, behind every
+ * yank).  With a gowl-owned source on the clipboard (a screenshot, an
+ * entry put back from the history) the writer could then never run and
+ * Emacs hung.  The dispatch thread is never the one blocked reading.
+ */
+static gint
+gowl_clipboard_write_cb(gint fd, guint32 mask, gpointer user_data)
 {
 	GowlClipboardWrite *w = user_data;
 	const guchar       *bytes;
 	gsize               len;
 
-	if ((condition & (G_IO_ERR | G_IO_HUP)) != 0)
-		return G_SOURCE_REMOVE;
+	if ((mask & (WL_EVENT_ERROR | WL_EVENT_HANGUP)) != 0) {
+		gowl_clipboard_write_free(w);
+		return 0;
+	}
 
 	bytes = g_bytes_get_data(w->data, &len);
 	while (w->offset < len) {
@@ -576,12 +592,13 @@ gowl_clipboard_write_cb(gint fd, GIOCondition condition, gpointer user_data)
 		if (written < 0 && errno == EINTR)
 			continue;
 		if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-			return G_SOURCE_CONTINUE;
+			return 0;          /* the pipe is full: called again */
 		/* EPIPE and friends: the reader gave up.  Nothing to
 		   report -- a cancelled paste is not an error. */
 		break;
 	}
-	return G_SOURCE_REMOVE;
+	gowl_clipboard_write_free(w);
+	return 0;
 }
 
 static void
@@ -596,7 +613,7 @@ gowl_bytes_source_send(
 	bs = wl_container_of(source, bs, base);
 	(void)mime_type;
 
-	if (bs->data == NULL) {
+	if (bs->data == NULL || bs->loop == NULL) {
 		close(fd);
 		return;
 	}
@@ -612,10 +629,10 @@ gowl_bytes_source_send(
 	w = g_new0(GowlClipboardWrite, 1);
 	w->data = g_bytes_ref(bs->data);
 	w->fd = fd;
-	g_unix_fd_add_full(G_PRIORITY_DEFAULT, fd,
-	                   G_IO_OUT | G_IO_ERR | G_IO_HUP,
-	                   gowl_clipboard_write_cb, w,
-	                   gowl_clipboard_write_free);
+	w->source = wl_event_loop_add_fd(bs->loop, fd, WL_EVENT_WRITABLE,
+	                                 gowl_clipboard_write_cb, w);
+	if (w->source == NULL)
+		gowl_clipboard_write_free(w);
 }
 
 static void
@@ -696,13 +713,39 @@ read_text_from_source_pipe(int read_fd)
 	GString *buf;
 	gchar tmp[4096];
 	ssize_t n;
+	gint64 deadline;
 
+	/*
+	 * A deadline, so no read can wait forever.  The writer is a client
+	 * (which may be stuck), or gowl's own image source, which writes
+	 * from the compositor's event loop -- and a caller that blocks the
+	 * thread that loop runs on would otherwise wait on itself.  Three
+	 * seconds of silence ends the read with whatever arrived.
+	 */
+	deadline = g_get_monotonic_time() + 3 * G_USEC_PER_SEC;
 	buf = g_string_new(NULL);
 	for (;;) {
+		GPollFD pfd;
+		gint64 left = (deadline - g_get_monotonic_time()) / 1000;
+
+		if (left <= 0)
+			break;
+		pfd.fd = read_fd;
+		pfd.events = G_IO_IN | G_IO_HUP | G_IO_ERR;
+		pfd.revents = 0;
+		if (g_poll(&pfd, 1, (gint)left) <= 0) {
+			if (errno == EINTR)
+				continue;
+			break;          /* timed out, or poll failed */
+		}
 		n = read(read_fd, tmp, sizeof(tmp));
+		if (n < 0 && errno == EINTR)
+			continue;
 		if (n <= 0)
 			break;
 		g_string_append_len(buf, tmp, n);
+		/* a slow writer that keeps writing keeps the read alive */
+		deadline = g_get_monotonic_time() + 3 * G_USEC_PER_SEC;
 	}
 	close(read_fd);
 
@@ -898,6 +941,7 @@ gowl_seat_set_clipboard_bytes(
 
 	bs = g_new0(struct gowl_bytes_source, 1);
 	bs->data = g_bytes_ref(data);
+	bs->loop = wl_display_get_event_loop(seat->display);
 	wlr_data_source_init(&bs->base, &gowl_bytes_source_impl);
 
 	slot = wl_array_add(&bs->base.mime_types, sizeof(char *));

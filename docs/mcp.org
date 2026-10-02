@@ -263,6 +263,24 @@ Thin wrappers over the opt-in =macro= module's IPC words ([[file:macros.org][mac
 | =macro_clear=  | =name= (optional)                 | Let a held-back macro run again                          |
 | =macro_triggers= | --                              | Triggers, their filters as understood, fired/skipped     |
 | =macro_filter_test= | =filter=, =event= (optional) | Judge a filter now, with every field's value             |
+| =macro_record= | =action= (=start=, =stop=, =cancel=, =status=), =name= (optional) | The macro recorder; =stop= writes =last-recording.c= (and =NAME.c=) and replies =recorded NAME STEPS PATH= |
+| =macro_voice_match= | =text=, =dry_run= (boolean, optional) | Run the macro a sentence names, as Super+Alt+m does; dry, only say what it would run |
+| =macro_voice_status= | -- | The listener: listening, command, limit, last heard, last error |
+
+*=macro_record start= needs consent.*  The Super+Alt+r key needs none ---
+the person pressed it --- but a program asking to watch the person's
+input is the case the input recorder's =input-recording= key exists
+for, so this tool passes =--require-consent= and is refused while that
+key is off (the default).  Everything else about the recording is the
+key's: the frame round the screen, no capture in password prompts or on
+the lock screen, Super+Shift+Escape, the deadline.
+
+*There is no tool that turns the microphone on.*  =macro_voice_match= is
+the half an agent has a use for: it matches a sentence to a macro the
+way the voice key does --- a configured phrase, a macro's name said as
+words (="pip corner 25"= runs =pip-corner 25=), every word of a name ---
+and runs it with trigger =voice=.  =dry_run= returns what was heard, the
+normalised form, and the macro and arguments, and runs nothing.
 
 *** Input Recording
 :PROPERTIES:
@@ -301,6 +319,54 @@ ordinary window* -- read [[file:input-recording.org][Input Recording]] before en
 Screenshots are returned as base64-encoded PNG images via the MCP image content type.
 
 =screenshot_region= takes its rectangle in *layout* coordinates --- the same ones =gowl_list_monitors= reports and a client's geometry is in --- not in the output's raw pixels. On a scaled monitor the image that comes back is correspondingly larger than the rectangle asked for: a 400x300 region at =scale: 2= is an 800x600 PNG. See [[file:modules.org::*Layout coordinates and device pixels][Layout coordinates and device pixels]].
+
+*** Text and Colours off the Screen
+:PROPERTIES:
+:CUSTOM_ID: grab-tools-mcp
+:END:
+The non-interactive halves of Super+Alt+Shift+s and Super+Alt+c: an
+agent names the place instead of dragging or clicking.
+
+| Tool          | Parameters                                                        | Description                                         |
+|---------------+-------------------------------------------------------------------+-----------------------------------------------------|
+| =screen_text= | =x=, =y=, =width=, =height=, =language= (optional), =copy= (boolean, optional) | The text in a region (OCR); =""= when there is none |
+| =pick_color=  | =x=, =y=                                                          | ={"color":"#rrggbb","r":..,"g":..,"b":..}=          |
+
+Layout coordinates, as =screenshot_region=.  *Neither touches the
+clipboard* unless =copy= is true: a program reading the screen should
+not replace what the person copied.
+
+=screen_text= runs the screenshot module's own =ocr-command= and
+=ocr-language= (asked for with =screenshot-ocr-config=; =tesseract= and
+=eng= without the module), so the tool and the key run the same
+program.  The capture happens on the compositor thread and is quick;
+tesseract runs on the MCP thread, where a second costs nothing --- on the
+compositor thread it would freeze the desktop.  The region is a 0600
+PNG in =$XDG_RUNTIME_DIR=, deleted afterwards.  Needs =tesseract= and a
+language pack (Fedora: =tesseract=, =tesseract-langpack-eng=).
+
+*** Clipboard History
+:PROPERTIES:
+:CUSTOM_ID: clipboard-tools-mcp
+:END:
+Over the clipboard module's store.  These were written long ago and
+left out of the registration list, so no client ever saw them; they are
+registered now and tested end to end.
+
+| Tool                     | Parameters | Description                                                 |
+|--------------------------+------------+-------------------------------------------------------------|
+| =list_clipboard=         | --         | The history, newest first: =ID TAB MIME TAB BYTES TAB PREVIEW= |
+| =get_clipboard_entry=    | =id=       | The path of one entry's stored bytes                        |
+| =copy_clipboard_entry=   | =id=       | Put an entry back on the clipboard                          |
+| =delete_clipboard_entry= | =id=       | Forget one entry                                            |
+| =clear_clipboard=        | --         | Forget them all                                             |
+
+The history is everything the person copied, passwords included --- the
+Super+space menu keeps it out of search for that reason.  The read and
+write tools are separate allowlist entries, so a =tools:= list can grant
+reading without granting =copy_clipboard_entry=.  What gowl puts on the
+clipboard itself (OCR text, a colour, a screenshot, cmacs's kills) is in
+the history too.
 
 *** Process Introspection
 :PROPERTIES:
@@ -386,6 +452,11 @@ modules/mcp/
   gowl-mcp-tools-screenshot.c   # 3 screenshot tools
   gowl-mcp-tools-process.c      # 2 process introspection tools
   gowl-mcp-tools-compound.c     # 2 compound/aggregate tools
+  gowl-mcp-tools-record.c       # 4 input recording tools
+  gowl-mcp-tools-inputremap.c   # per-device input remapping tools
+  gowl-mcp-tools-macro.c        # 11 macro tools (incl. recorder, voice)
+  gowl-mcp-tools-grab.c         # screen_text, pick_color
+  gowl-mcp-tools-clipboard.c    # 5 clipboard history tools
 
 tools/gowl-mcp/
   Makefile                      # Relay binary build

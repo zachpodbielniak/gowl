@@ -749,6 +749,9 @@ $(OBJDIR)/tests/test-macro-voice.o: modules/macro/gowl-macro-voice.c modules/mac
 $(OBJDIR)/tests/test-macro-loader.o: TEST_CFLAGS += -DGOWL_MACRO_DEV_INCLUDE='"$(abspath $(BUILDDIR)/include)"'
 $(OUTDIR)/test-macro-runner $(OUTDIR)/test-macro-examples: $(OUTDIR)/modules/macro.so $(OUTDIR)/modules/inputremap.so
 $(OUTDIR)/test-macro-runner: $(OUTDIR)/modules/clipboard.so
+# The new MCP tools, spoken to over the MCP socket of the real module.
+$(OUTDIR)/test-mcp-grab: $(OUTDIR)/modules/macro.so $(OUTDIR)/modules/screenshot.so $(OUTDIR)/modules/clipboard.so
+$(OBJDIR)/tests/test-mcp-grab.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"' $(shell $(PKG_CONFIG) --cflags gio-unix-2.0)
 # OCR and the colour picker against the real screenshot module.
 $(OUTDIR)/test-screengrab: $(OUTDIR)/modules/screenshot.so
 $(OBJDIR)/tests/test-screengrab.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

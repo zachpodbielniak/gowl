@@ -195,8 +195,11 @@ void      gowl_seat_set_clipboard       (GowlSeat     *self,
  * the text source writes the whole payload from the send callback --
  * which runs on the compositor thread.  A client that reads slowly
  * would therefore block the compositor for as long as it felt like.
- * This one hands the payload to the main loop and dribbles it out as
- * the pipe accepts it, so a slow or dead reader costs nothing.
+ * This one hands the payload to the compositor's wl_event_loop and
+ * dribbles it out as the pipe accepts it, so a slow or dead reader
+ * costs nothing -- and, being the compositor's loop rather than GLib's
+ * default context, it is never the thread a reader blocks (under cmacs
+ * that context is Emacs's, which reads the clipboard synchronously).
  * Emits #GowlSeat::clipboard-changed before returning.
  */
 void      gowl_seat_set_clipboard_bytes (GowlSeat     *self,

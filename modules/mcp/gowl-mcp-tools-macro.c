@@ -20,7 +20,15 @@
  * gowl-mcp-tools-macro.c - Macros over MCP.
  *
  * Tools: macro_run, macro_stop, macro_list, macro_status, macro_info,
- *        macro_clear, macro_triggers, macro_filter_test
+ *        macro_clear, macro_triggers, macro_filter_test, macro_record,
+ *        macro_voice_match, macro_voice_status
+ *
+ * macro_record starts a recording only with the input recorder's
+ * `input-recording' consent (the module's --require-consent): the
+ * Super+Alt+r key needs none because the person pressed it, and a
+ * program asking is a different thing.  There is deliberately no tool
+ * that turns the microphone on; macro_voice_match runs the macro a
+ * sentence names, which is the half an agent has a use for.
  *
  * Thin wrappers over the macro module's IPC words (`macro-run',
  * `macro-stop', ...), run on the compositor thread through
@@ -266,7 +274,83 @@ tool_clear(
 		                              func, arguments, NULL);            \
 	}
 
+/* macro_record: action start|stop|cancel|status, optional name */
+static McpToolResult *
+tool_record(
+	GowlModuleMcp *module,
+	JsonObject    *arguments,
+	gpointer       user_data
+){
+	const gchar *action;
+	const gchar *name;
+	g_autofree gchar *line = NULL;
+
+	(void)user_data;
+	action = string_arg(arguments, "action");
+	name = string_arg(arguments, "name");
+	if (action == NULL || *action == '\0')
+		action = "status";
+	if (g_strcmp0(action, "start") == 0) {
+		g_autofree gchar *q = NULL;
+
+		if (name != NULL && *name != '\0') {
+			q = g_shell_quote(name);
+			line = g_strdup_printf("macro-record --require-consent "
+			                       "start %s", q);
+		} else {
+			line = g_strdup("macro-record --require-consent start");
+		}
+	} else if (g_strcmp0(action, "stop") == 0
+	           || g_strcmp0(action, "cancel") == 0
+	           || g_strcmp0(action, "status") == 0) {
+		line = g_strdup_printf("macro-record %s", action);
+	} else {
+		return error_result("action must be start, stop, cancel or "
+		                    "status");
+	}
+	return run_ipc(module, line);
+}
+
+/* macro_voice_match: text, optional dry_run */
+static McpToolResult *
+tool_voice_match(
+	GowlModuleMcp *module,
+	JsonObject    *arguments,
+	gpointer       user_data
+){
+	const gchar *text;
+	gboolean dry;
+	g_autofree gchar *flat = NULL;
+	g_autofree gchar *line = NULL;
+
+	(void)user_data;
+	text = string_arg(arguments, "text");
+	if (text == NULL || *text == '\0')
+		return error_result("Missing required argument: text");
+	dry = arguments != NULL && json_object_has_member(arguments, "dry_run")
+	      && json_object_get_boolean_member(arguments, "dry_run");
+	/* one line: the IPC word reads to the end of it */
+	flat = g_strdelimit(g_strdup(text), "\r\n\t", ' ');
+	line = g_strdup_printf("macro-voice-match %s%s",
+	                       dry ? "--dry-run " : "", flat);
+	return run_ipc(module, line);
+}
+
+static McpToolResult *
+tool_voice_status(
+	GowlModuleMcp *module,
+	JsonObject    *arguments,
+	gpointer       user_data
+){
+	(void)arguments;
+	(void)user_data;
+	return run_ipc(module, "macro-voice status");
+}
+
 GOWL_MCP_MACRO_HANDLER(handle_run, tool_run)
+GOWL_MCP_MACRO_HANDLER(handle_record, tool_record)
+GOWL_MCP_MACRO_HANDLER(handle_voice_match, tool_voice_match)
+GOWL_MCP_MACRO_HANDLER(handle_voice_status, tool_voice_status)
 GOWL_MCP_MACRO_HANDLER(handle_stop, tool_stop)
 GOWL_MCP_MACRO_HANDLER(handle_list, tool_list)
 GOWL_MCP_MACRO_HANDLER(handle_status, tool_status)
@@ -450,6 +534,40 @@ gowl_mcp_register_macro_tools(
 		"monitor now: the verdict, the filter as understood, and every "
 		"field's current value -- write a filter against real values.",
 		TRUE, string_schema(filter_props, "filter"), handle_filter_test);
+	register_tool(server, module, "macro_record",
+		"The macro recorder (Super+Alt+r): `start' records the person's "
+		"keys, clicks, drags and scrolls until `stop', which writes "
+		"last-recording.c (and NAME.c when a name was given) and replies "
+		"`recorded NAME STEPS PATH'; `cancel' discards; `status' says "
+		"whether one is running. Starting from here needs the gowl "
+		"config's `input-recording: true' -- the same consent as "
+		"start_recording -- because it watches the person's input. The "
+		"screen is framed while it runs, password prompts are not "
+		"recorded, and Super+Shift+Escape stops it.",
+		FALSE, json_from_string(
+			"{\"type\":\"object\",\"properties\":{"
+			"\"action\":{\"type\":\"string\",\"enum\":[\"start\","
+			"\"stop\",\"cancel\",\"status\"]},"
+			"\"name\":{\"type\":\"string\",\"description\":"
+			"\"Also write NAME.c (letters, digits, - and _)\"}},"
+			"\"required\":[\"action\"]}", NULL), handle_record);
+	register_tool(server, module, "macro_voice_match",
+		"Run the macro a sentence names, as if it had been said to "
+		"Super+Alt+m: a configured voice phrase, else a macro's name said "
+		"as words (\"pip corner 25\" runs pip-corner 25), else every "
+		"word of a name in any order. With dry_run, only report what it "
+		"would run (heard, normalised, macro, args).",
+		FALSE, json_from_string(
+			"{\"type\":\"object\",\"properties\":{"
+			"\"text\":{\"type\":\"string\"},"
+			"\"dry_run\":{\"type\":\"boolean\"}},"
+			"\"required\":[\"text\"]}", NULL), handle_voice_match);
+	register_tool(server, module, "macro_voice_status",
+		"The voice listener: whether it is listening, the voice-command, "
+		"the time limit, the last sentence heard, the last error and "
+		"how many phrases are configured. There is no tool to start "
+		"listening: the microphone is the person's to turn on.",
+		TRUE, string_schema(NULL, NULL), handle_voice_status);
 	register_tool(server, module, "macro_clear",
 		"Let a macro that was held back after a crash or a runaway loop "
 		"run again.",

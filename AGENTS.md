@@ -543,6 +543,17 @@ docs/                       # Documentation (architecture, building, configurati
   compositor's `wl_event_loop` (OCR and voice do).  Cancel it from a
   shutdown handler, while that loop still exists.  `tests/test-grab-keys.sh`
   refuses the GLib spawns in the screenshot and macro modules.
+- Never write a gowl-owned clipboard source's payload from GLib's default
+  context: under cmacs that is Emacs's thread, which reads the clipboard
+  with a blocking read, so the paste deadlocks.  `gowl_bytes_source_send`
+  writes from the compositor's `wl_event_loop`, and
+  `read_text_from_source_pipe` has a deadline; `test-screenshot-guard.sh`
+  holds both.  A test that reads the clipboard on the thread that
+  dispatches the loop must read asynchronously (`test-mcp-grab`).
+- `wlr_data_source_send()` owns the fd it is given; never close it after.
+- `tools/list` over MCP is paged -- follow `nextCursor` before concluding
+  a tool is missing.  The clipboard tools sat unregistered behind a TODO
+  for this long.
 - Never let a `private: true` menu entry's provider rows into search or
   "recent" (`search_walk`, `row_for_route`, `gowl_menu_activate`); the
   clipboard history lives behind one.

@@ -58,9 +58,16 @@ fi
 # client that reads a megabyte slowly holds the compositor for as long
 # as it likes, and one that never reads at all holds it forever.
 #
-# So the bytes source must hand the fd to the main loop instead.  The
+# So the bytes source must hand the fd to an event loop instead.  The
 # symptom of getting this wrong is not a crash -- it is a session that
 # hangs when something pastes.
+#
+# And the loop must be the COMPOSITOR'S (wl_event_loop_add_fd), not
+# GLib's default context (g_unix_fd_add): under cmacs that context is
+# Emacs's thread, which reads the clipboard with a blocking read --
+# behind every yank -- so with a gowl-owned source on the clipboard (a
+# screenshot, an entry put back from the history) the writer could
+# never run and Emacs hung.  The blocking read has a deadline too.
 seat="src/core/gowl-seat.c"
 send_body=$(awk '
 	/^gowl_bytes_source_send\(/ { inside = 1 }
@@ -69,11 +76,21 @@ send_body=$(awk '
 if [ -z "$send_body" ]; then
 	fail "$seat has no gowl_bytes_source_send; a guard naming a function that does not exist checks nothing"
 else
-	echo "$send_body" | grep -q "g_unix_fd_add" ||
-		fail "gowl_bytes_source_send does not hand the fd to the main loop; a slow reader now blocks the compositor"
+	echo "$send_body" | grep -q "wl_event_loop_add_fd" ||
+		fail "gowl_bytes_source_send does not hand the fd to the compositor's event loop; a slow reader now blocks the compositor"
+	if echo "$send_body" | grep -q "g_unix_fd_add"; then
+		fail "gowl_bytes_source_send writes from GLib's default context, which under cmacs is Emacs's thread -- a yank then hangs Emacs"
+	fi
 	echo "$send_body" | grep -q "g_unix_set_fd_nonblocking" ||
 		fail "gowl_bytes_source_send does not set the fd non-blocking; the first write of a large payload blocks"
 fi
+
+read_body=$(awk '
+	/^read_text_from_source_pipe\(/ { inside = 1 }
+	inside { print }
+	inside && /^}/ { exit }' "$seat")
+echo "$read_body" | grep -q "g_poll" ||
+	fail "read_text_from_source_pipe has no deadline; a reader can wait on a writer forever"
 
 # 4. An async capture must not hold the plugin by raw pointer.
 #

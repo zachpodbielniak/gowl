@@ -42,6 +42,7 @@
 #include <gio/gio.h>
 #include <linux/input-event-codes.h>
 #include <string.h>
+#include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/interfaces/wlr_keyboard.h>
 #include <xkbcommon/xkbcommon.h>
@@ -1447,7 +1448,8 @@ test_record_and_replay(
 
 	status = cmd(r, "macro-record status");
 	g_assert_nonnull(strstr(status, "\"recording\":false"));
-	a = cmd(r, "macro-record start rec-e2e");
+	/* quoted, as cmacs and the MCP tool send it */
+	a = cmd(r, "macro-record start 'rec-e2e'");
 	g_assert_cmpstr(a, ==, "OK recording rec-e2e");
 
 	/* private: no token for anyone else, and the owner is named */
@@ -1496,6 +1498,13 @@ test_record_and_replay(
 	g_free(a);
 	a = cmd(r, "macro-record stop");
 	g_assert_cmpstr(a, ==, "ERROR not recording");
+	g_free(a);
+	a = cmd(r, "macro-record start 'two words'");
+	g_assert_true(g_str_has_prefix(a, "ERROR two words is not a macro "
+	                                  "name"));
+	g_free(a);
+	a = cmd(r, "macro-record start one two");
+	g_assert_true(g_str_has_prefix(a, "ERROR one macro name"));
 	g_free(a);
 	a = cmd(r, "macro-record start ../../evil");
 	g_assert_true(g_str_has_prefix(a, "ERROR ../../evil is not a macro "
@@ -1809,6 +1818,20 @@ test_clipboard_history_own_sets(
 	}
 	g_assert_cmpstr(copy, ==, "OK copied");
 	pump(r, 300);
+	/* a blocking read of a writer that never writes gives up instead of
+	   waiting forever (the deadline in read_text_from_source_pipe) */
+	{
+		gint fds[2];
+		gint64 t0;
+		g_autofree gchar *nothing = NULL;
+
+		g_assert_cmpint(pipe(fds), ==, 0);
+		t0 = g_get_monotonic_time();
+		nothing = gowl_seat_read_selection_fd(fds[0]);
+		g_assert_null(nothing);
+		g_assert_cmpint(g_get_monotonic_time() - t0, <, 6 * G_USEC_PER_SEC);
+		close(fds[1]);
+	}
 	after = cmd(r, "clipboard-list");
 	{
 		g_auto(GStrv) again = g_strsplit(after, "\n", -1);

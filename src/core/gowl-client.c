@@ -1093,8 +1093,12 @@ apply_alpha(GowlClient *self)
 
 	/* Decorations are independent scene nodes. Repaint them with the
 	 * composed opacity and provider's displayed geometry, including the
-	 * final reset when an effect is disabled. */
-	if (!gowl_effects_has_geometry(self) && self->compositor != NULL
+	 * final reset when an effect is disabled.  Not on a window mapped
+	 * as an X11 override-redirect popup: it carries no frame, and a
+	 * frame on one (SteamVR's vrmonitor got one) outlived the scene
+	 * tree it hung from when the popup unmapped. */
+	if (!gowl_effects_has_geometry(self) && !self->isunmanaged
+	    && self->compositor != NULL
 	    && self->compositor->module_mgr != NULL) {
 		GowlClientDecorator *dec = gowl_module_manager_get_decorator(
 			self->compositor->module_mgr);

@@ -131,14 +131,34 @@ struct _GowlMouseHandlerInterface {
 :PROPERTIES:
 :CUSTOM_ID: gowlclientdecorator
 :END:
-Decorate/undecorate client windows.
+Draw the frame round client windows in place of the compositor's four border rects.  The first active decorator (=gowl_module_manager_get_decorator()=) draws every frame.
 
 #+begin_src C
 struct _GowlClientDecoratorInterface {
     GTypeInterface parent_iface;
-    void (*decorate)   (GowlClientDecorator *self, gpointer client);
-    void (*undecorate) (GowlClientDecorator *self, gpointer client);
+    gint     (*get_border_width)   (GowlClientDecorator *self, gpointer client);
+    gboolean (*should_draw_border) (GowlClientDecorator *self, gpointer client);
+    void     (*render_decoration)  (GowlClientDecorator *self, gpointer client,
+                                    gint width, gint height, guint bw,
+                                    const float *color);
+    void     (*destroy_decoration) (GowlClientDecorator *self, gpointer client);
+    gint     (*get_corner_radius)  (GowlClientDecorator *self);
 };
+#+end_src
+
+*Frame lifetime.*  A decorator draws into the client's scene tree (=gowl_client_get_scene()=), so its nodes are children of a tree the compositor owns.  The compositor calls =destroy_decoration= before it destroys that tree -- on managed unmap, on unmanaged (X11 override-redirect) unmap, and on destroy -- and never calls =render_decoration= for an unmanaged window.  =render_decoration= with =bw= 0 or an empty size means "no frame": drop any existing one.  A decorator should still follow its own nodes' =events.destroy= rather than trust the call order: a node pointer cached past its tree is a use-after-free the next time it is touched.  roundcorners does (see [[#rounded-corners-module][the roundcorners module]]).
+
+#+begin_src C
+/* minimal pattern: forget the node when the scene destroys it */
+static void
+on_frame_destroy(struct wl_listener *listener, void *data)
+{
+    MyDecor *decor = wl_container_of(listener, decor, frame_destroy);
+
+    wl_list_remove(&decor->frame_destroy.link);
+    wl_list_init(&decor->frame_destroy.link);
+    decor->frame = NULL;
+}
 #+end_src
 
 *** GowlClientPlacer
@@ -1227,7 +1247,8 @@ modules:
 - Implements =GowlClientDecorator= interface --- the compositor delegates border rendering to this module when active
 - Per-client decoration state cached in a GHashTable (key: GowlClient pointer, value: RoundDecor struct)
 - Rendering uses cairo: rounded rectangle path with 4 arcs, stroked with border width/color
-- Cached --- only re-rendered when client size, border width, or color changes
+- Cached --- only re-rendered when client size, border width, or color changes, and the frame node still exists
+- Each frame's =wlr_scene_buffer= is followed through its =events.destroy=: when the client's scene tree is destroyed with the frame in it, =frame_buf= is cleared, the next render builds a new frame on the client's current tree, and =destroy_decoration= only releases the bookkeeping.  It never destroys a node twice, whatever order the compositor tears things down in.  =tests/test-roundcorners.c= covers this against the real =.so=
 - When the module is disabled, the compositor reverts to its default 4-rect borders
 - The =GowlClientDecorator= interface is extensible --- other modules could implement custom decoration styles (e.g., title bars, shadows)
 

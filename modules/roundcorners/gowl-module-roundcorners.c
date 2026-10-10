@@ -102,12 +102,38 @@ static const struct wlr_buffer_impl round_buffer_impl = {
  * ---------------------------------------------------------------- */
 
 typedef struct {
+	/* The frame, a child of the client's scene tree; NULL once that
+	 * node is gone.  The compositor owns the tree and can destroy it
+	 * (and so this node) on paths that never call back into this
+	 * module first, so frame_destroy tracks the node itself rather
+	 * than trusting every caller to ask for destroy_decoration in
+	 * time. */
 	struct wlr_scene_buffer *frame_buf;
+	struct wl_listener       frame_destroy;
 	gint    width;
 	gint    height;
 	guint   bw;
 	float   color[4];
 } RoundDecor;
+
+/*
+ * The frame's scene node is being destroyed -- by rc_destroy_decoration,
+ * or with the client's whole scene tree.  Forget it, so nothing here
+ * touches the freed node again: the next render builds a new frame on
+ * whatever tree the client has then, and destroy_decoration has only
+ * the bookkeeping left to undo.
+ */
+static void
+rc_on_frame_destroy(struct wl_listener *listener, void *data)
+{
+	RoundDecor *decor;
+
+	(void)data;
+	decor = wl_container_of(listener, decor, frame_destroy);
+	wl_list_remove(&decor->frame_destroy.link);
+	wl_list_init(&decor->frame_destroy.link);
+	decor->frame_buf = NULL;
+}
 
 /* Pointer hit-test callback for the decoration buffer. Always
    reports "not hit" so the cairo stroke pixels never block clicks
@@ -262,8 +288,11 @@ rc_render_decoration(GowlClientDecorator *decorator,
 
 	decor = (RoundDecor *)g_hash_table_lookup(self->decorations, client);
 
-	/* Check if we can skip re-rendering (size/color unchanged) */
-	if (decor != NULL && decor->width == width && decor->height == height
+	/* Check if we can skip re-rendering (size/color unchanged).  Not
+	   when the frame node is gone -- its scene tree went with it --
+	   whatever was cached: there is nothing on screen to keep. */
+	if (decor != NULL && decor->frame_buf != NULL
+	    && decor->width == width && decor->height == height
 	    && decor->bw == bw
 	    && decor->color[0] == color[0] && decor->color[1] == color[1]
 	    && decor->color[2] == color[2] && decor->color[3] == color[3]) {
@@ -275,18 +304,30 @@ rc_render_decoration(GowlClientDecorator *decorator,
 	if (buf == NULL)
 		return;
 
-	if (decor == NULL) {
-		/* First decoration for this client */
-		decor = g_new0(RoundDecor, 1);
-
+	if (decor == NULL || decor->frame_buf == NULL) {
+		/* No frame on screen: the first decoration for this client,
+		   or the old frame died with the scene tree it hung from.
+		   Build one on the client's current tree. */
 		scene = gowl_client_get_scene(client);
 		if (scene == NULL) {
-			g_free(decor);
 			wlr_buffer_drop(&buf->base);
 			return;
 		}
 
+		if (decor == NULL) {
+			decor = g_new0(RoundDecor, 1);
+			wl_list_init(&decor->frame_destroy.link);
+			g_hash_table_insert(self->decorations,
+			                    g_object_ref(client), decor);
+		}
+
 		decor->frame_buf = wlr_scene_buffer_create(scene, &buf->base);
+		if (decor->frame_buf == NULL) {
+			/* Allocation failure; the entry stays, frameless,
+			   for destroy_decoration to release. */
+			wlr_buffer_drop(&buf->base);
+			return;
+		}
 		wlr_scene_node_set_position(&decor->frame_buf->node, 0, 0);
 		/* Make the decoration transparent to pointer input so clicks
 		   pass through to the client surface underneath.  Without
@@ -295,8 +336,11 @@ rc_render_decoration(GowlClientDecorator *decorator,
 		   thin border. */
 		decor->frame_buf->point_accepts_input = rc_no_input;
 
-		g_hash_table_insert(self->decorations,
-		                    g_object_ref(client), decor);
+		/* Hear about the node's end however it comes, so frame_buf
+		   never outlives it (see rc_on_frame_destroy). */
+		decor->frame_destroy.notify = rc_on_frame_destroy;
+		wl_signal_add(&decor->frame_buf->node.events.destroy,
+		              &decor->frame_destroy);
 	} else {
 		/* Update existing buffer */
 		wlr_scene_buffer_set_buffer(decor->frame_buf, &buf->base);
@@ -325,8 +369,12 @@ rc_destroy_decoration(GowlClientDecorator *decorator,
 	if (decor == NULL)
 		return;
 
+	/* A live frame is destroyed here; rc_on_frame_destroy runs inside
+	   and unhooks the listener.  NULL means the client's scene tree
+	   already took the node, and there is nothing left to free. */
 	if (decor->frame_buf != NULL)
 		wlr_scene_node_destroy(&decor->frame_buf->node);
+	wl_list_remove(&decor->frame_destroy.link);
 
 	g_hash_table_remove(self->decorations, client);
 	/* Release the extra reference taken when the decoration was
@@ -436,6 +484,7 @@ rc_destroy_decor_entry(gpointer key, gpointer value, gpointer user_data)
 
 	if (decor->frame_buf != NULL)
 		wlr_scene_node_destroy(&decor->frame_buf->node);
+	wl_list_remove(&decor->frame_destroy.link);
 	/* Match the g_object_ref taken at insert (key is the GowlClient). */
 	g_object_unref(GOWL_CLIENT(key));
 	g_free(decor);

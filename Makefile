@@ -545,9 +545,11 @@ $(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags 
 # test-x11-popup-focus is a real X11 client under the compositor's own
 # Xwayland: it maps a toplevel and an override-redirect menu over it,
 # drives the pointer onto the menu, and asks the X server who has the
-# keyboard.  Without xcb it builds as a skip.
-X11_TESTS := $(OUTDIR)/test-x11-popup-focus $(OUTDIR)/test-x11-windows
-X11_TEST_OBJS := $(OBJDIR)/tests/test-x11-popup-focus.o $(OBJDIR)/tests/test-x11-windows.o
+# keyboard.  test-x11-unmanaged-decoration flips windows' override-
+# redirect bit around map and unmap with roundcorners loaded.  Without
+# xcb they build as a skip.
+X11_TESTS := $(OUTDIR)/test-x11-popup-focus $(OUTDIR)/test-x11-windows $(OUTDIR)/test-x11-unmanaged-decoration
+X11_TEST_OBJS := $(OBJDIR)/tests/test-x11-popup-focus.o $(OBJDIR)/tests/test-x11-windows.o $(OBJDIR)/tests/test-x11-unmanaged-decoration.o
 $(X11_TEST_OBJS): tests/x11-rig.h
 ifeq ($(XWAYLAND_AVAILABLE),1)
 $(X11_TESTS): TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs xcb xcb-icccm)
@@ -795,6 +797,11 @@ $(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
+# The roundcorners decorator against its real .so: on a bare wlr_scene,
+# and under X11 windows whose override-redirect bit changes (SteamVR).
+$(OUTDIR)/test-roundcorners $(OUTDIR)/test-x11-unmanaged-decoration: $(OUTDIR)/modules/roundcorners.so
+$(OBJDIR)/tests/test-roundcorners.o $(OBJDIR)/tests/test-x11-unmanaged-decoration.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 # The blur module's shadow and backdrop against the real .so, in a
 # headless compositor drawing with GLES2: a window whose effects are reset

@@ -203,7 +203,7 @@ Gowl defines 18 GObject interfaces. A module implements one or more of these to 
 | =GowlLayoutProvider=      | =arrange(monitor, clients, area)=, =get_symbol()=                                                   | First matching provider arranges the monitor.         |
 | =GowlKeybindHandler=      | =handle_key(modifiers, keysym, pressed)=                                                            | First handler returning TRUE consumes the event.      |
 | =GowlMouseHandler=        | =handle_button(button, state, modifiers)=, =handle_motion(x, y)=, =handle_axis(value, orientation)= | First handler returning TRUE consumes the event.      |
-| =GowlClientDecorator=     | =decorate(client)=, =undecorate(client)=                                                            | All decorators are called (broadcast).                |
+| =GowlClientDecorator=     | =render_decoration(client, w, h, bw, color)=, =destroy_decoration(client)=                          | The first active decorator draws every frame.         |
 | =GowlClientPlacer=        | =place(client, monitor)=                                                                            | First placer returning TRUE claims placement.         |
 | =GowlFocusPolicy=         | =should_focus(client)=, =focus_changed(client)=                                                     | First policy returning FALSE vetoes focus.            |
 | =GowlMonitorConfigurator= | =configure(monitor, mode)=                                                                          | First configurator returning TRUE claims the monitor. |
@@ -2565,10 +2565,25 @@ toplevels:
 - =client_is_unmanaged()= = X11 surface with =override_redirect=;
   =client_wants_focus()= wraps
   =wlr_xwayland_surface_override_redirect_wants_focus()=.
+- The answer is *settled at map and held until unmap*.  =on_client_map=
+  reads the live bit once into =GowlClient.isunmanaged=; while the
+  client has a scene tree, =client_is_unmanaged()= returns that flag,
+  not the bit.  An X client can change =override_redirect= on a mapped
+  window (a ConfigureNotify carries it, and wlroots updates the
+  surface), and every path has to agree with the one the map took: an
+  unmanaged-mapped window is in no list and has no frame, and its unmap
+  must undo only what the unmanaged map built.  Unmapped, the live bit
+  is all there is.
 - On map (=on_client_map=): use the surface's own x/y, float in the
   =FLOAT= scene layer, no border, and -- if it wants focus -- set
   =GowlCompositor.exclusive_focus= and focus it.  The surface is *not*
   added to the client/focus lists and is never arranged.
+- *No frame, by any route.*  =c->bw= is set when the X surface is
+  /created/, from the bit at that moment, so a window created ordinary
+  and mapped override-redirect still has a border width.
+  =client_set_border_color()=, =gowl_compositor_apply_frame_geometry()=
+  and the decorator repaint in =apply_alpha()= therefore refuse an
+  unmanaged client outright rather than trusting =bw=.
 - =gowl_compositor_focus_client= refuses to focus anything else while
   =exclusive_focus= still wants focus (so the popup keeps its grab --
   the =GOWL_FOCUS_DENY_EXCLUSIVE_CLIENT= arm of =gowl_focus_decide()=,
@@ -2579,7 +2594,17 @@ toplevels:
   (=!client_wants_focus(c)= plus "never deactivate an override-redirect
   old surface") is what keeps the dialog on screen.
 - On unmap/destroy: =exclusive_focus= is cleared and focus returns to the
-  top managed client.
+  top managed client.  Both unmap branches call =client_drop_decoration()=
+  before destroying the scene tree, so a decorator never holds a frame
+  that went with the tree.  Before 2026-10 the unmanaged branch did not:
+  SteamVR's =vrmonitor= window is created ordinary and mapped
+  override-redirect, a repaint had roundcorners frame it, the unmanaged
+  unmap freed the frame with the tree, and destroying the window had the
+  decorator destroy it again -- SIGSEGV in =wlr_scene_node_destroy=
+  every time SteamVR closed.  =tests/test-x11-unmanaged-decoration.c=
+  drives that sequence, and a window flipping the bit in each direction
+  while mapped, under the compositor's own Xwayland with roundcorners
+  loaded.
 - A surface that does *not* want focus -- =_NET_WM_WINDOW_TYPE= menu,
   dropdown, popup menu, tooltip, combo, DND, notification, splash,
   utility -- is never focused from any path: =gowl_focus_decide()=

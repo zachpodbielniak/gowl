@@ -5216,11 +5216,22 @@ client_is_x11(GowlClient *c)
  * reparent into the managed hierarchy, or move.  Always %FALSE for
  * Wayland (xdg) clients and when built without XWayland.
  * Ported from dwl's client_is_unmanaged().
+ *
+ * While the client is mapped (it has a scene tree) the answer is the
+ * one on_client_map acted on, not the live override_redirect bit.  An
+ * X client can change that bit at any time, mapped or not -- SteamVR's
+ * vrmonitor is created ordinary and mapped override-redirect -- and
+ * every path that asks must agree with the map: an unmanaged-mapped
+ * window is in no list and gets no decoration, and its unmap must tear
+ * down only what the unmanaged map built.  Unmapped, the live bit is
+ * all there is.
  */
 static gboolean
 client_is_unmanaged(GowlClient *c)
 {
 #ifdef GOWL_HAVE_XWAYLAND
+	if (c->scene != NULL)
+		return c->isunmanaged;
 	return c->xwayland_surface != NULL
 	       && c->xwayland_surface->override_redirect;
 #else
@@ -5392,7 +5403,12 @@ gowl_compositor_apply_frame_geometry(
 	      ? (GowlClientDecorator *)gowl_module_manager_get_decorator(
 	            self->module_mgr)
 	      : NULL;
-	if (dec != NULL) {
+	if (client_is_unmanaged(c)) {
+		/* An override-redirect popup carries no frame of either
+		 * kind: on_client_map's unmanaged path made no border rects,
+		 * and a decorator frame would be a child of a scene tree its
+		 * unmap tears down without being arranged.  Nothing to draw. */
+	} else if (dec != NULL) {
 		/* Hide rect borders when a decorator is active */
 		for (bi = 0; bi < 4; bi++) {
 			if (c->border[bi] != NULL)
@@ -5961,6 +5977,35 @@ pointerfocus(
 }
 
 /**
+ * client_drop_decoration:
+ * @self: the compositor
+ * @c: the client whose decoration goes
+ *
+ * Has the active decorator module (roundcorners) release whatever it
+ * holds for @c: its frame scene node and the client reference it took.
+ * The frame is a child of c->scene, so every path that destroys the
+ * scene tree calls this first.  Idempotent, and a no-op without a
+ * module manager or a decorator.
+ */
+static void
+client_drop_decoration(
+	GowlCompositor *self,
+	GowlClient     *c
+){
+	GowlClientDecorator *dec;
+
+	/* A compositor with no module manager -- a test fixture, or an
+	 * embedder that loads none -- has no decorator, and asking for one
+	 * is a critical rather than a NULL. */
+	if (self->module_mgr == NULL)
+		return;
+	dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
+	          self->module_mgr);
+	if (dec != NULL)
+		gowl_client_decorator_destroy_decoration(dec, c);
+}
+
+/**
  * client_set_border_color:
  *
  * Sets the border colour of all 4 border rects on a client.
@@ -5977,6 +6022,11 @@ client_set_border_color(
 	float faded[4];
 
 	memcpy(c->border_color, color, sizeof(c->border_color));
+
+	/* An override-redirect popup has no border to colour: no rects,
+	 * and no decorator frame (see gowl_compositor_apply_frame_geometry). */
+	if (client_is_unmanaged(c))
+		return;
 	for (i = 0; i < 4; i++)
 		faded[i] = color[i] * c->effect_alpha;
 	color = faded;
@@ -13099,6 +13149,13 @@ on_client_map(struct wl_listener *listener, void *data)
 	self = c->compositor;
 	(void)data;
 
+	/* Settle managed versus unmanaged for the whole time this window
+	 * is mapped.  c->scene is still NULL, so this reads the live
+	 * override_redirect bit; once the scene exists client_is_unmanaged
+	 * answers from the flag instead, whatever the X client does to the
+	 * bit before it unmaps. */
+	c->isunmanaged = client_is_unmanaged(c);
+
 	/* Create scene tree in the tiling layer */
 	c->scene = wlr_scene_tree_create(self->layers[GOWL_SCENE_LAYER_TILE]);
 	client_surface(c)->data = c->scene;
@@ -13508,11 +13565,18 @@ on_client_unmap(struct wl_listener *listener, void *data)
 		if (c == self->exclusive_focus)
 			self->exclusive_focus = NULL;
 
+		/* "Got no decoration" is the rule, but the decorator is a
+		 * module and its frame would be a child of c->scene: drop
+		 * anything it holds before the tree goes, exactly as the
+		 * managed path does below.  A no-op when nothing was drawn. */
+		client_drop_decoration(self, c);
+
 		if (c->scene != NULL) {
 			wlr_scene_node_destroy(&c->scene->node);
 			c->scene = NULL;
 			c->scene_surface = NULL;
 		}
+		c->isunmanaged = FALSE;
 
 		if (had_kbd)
 			gowl_compositor_focus_client(self,
@@ -13549,22 +13613,14 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	 * memory -- the SIGSEGV in roundcorners.c wlr_scene_buffer_set_buffer
 	 * seen when Zoom's transient "Leave meeting" panel unmaps then
 	 * re-maps on Share Screen.  Mirrors the embed path's bw==0 call. */
-	{
-		GowlClientDecorator *dec;
-
-		dec = self->module_mgr != NULL
-		      ? (GowlClientDecorator *)gowl_module_manager_get_decorator(
-		            self->module_mgr)
-		      : NULL;
-		if (dec != NULL)
-			gowl_client_decorator_destroy_decoration(dec, c);
-	}
+	client_drop_decoration(self, c);
 
 	/* Destroy the scene tree (including borders) */
 	wlr_scene_node_destroy(&c->scene->node);
 	c->scene = NULL;
 	c->scene_surface = NULL;
 	memset(c->border, 0, sizeof(c->border));
+	c->isunmanaged = FALSE;
 
 	/* An adopted overlay goes back to being an ordinary window when it
 	 * unmaps.  Its owner let go of it on client-removed, and a toplevel
@@ -13647,14 +13703,8 @@ on_client_destroy(struct wl_listener *listener, void *data)
 	 * entry is already gone and this is a no-op.  This covers the
 	 * destroy-without-unmap path so the decorator's extra ref can't
 	 * pin the GowlClient and leak. */
-	if (c->compositor != NULL && c->compositor->module_mgr != NULL) {
-		GowlClientDecorator *dec;
-
-		dec = (GowlClientDecorator *)gowl_module_manager_get_decorator(
-		          c->compositor->module_mgr);
-		if (dec != NULL)
-			gowl_client_decorator_destroy_decoration(dec, c);
-	}
+	if (c->compositor != NULL)
+		client_drop_decoration(c->compositor, c);
 
 	g_debug("Client destroyed");
 	g_object_unref(c);

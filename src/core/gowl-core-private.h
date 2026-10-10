@@ -898,6 +898,13 @@ struct _GowlClient {
 	 * modules and the idle manager leave alone or take up. */
 	guint    rule_flags;
 	gboolean isembedded;     /* externally managed (skip arrange) */
+	/* Mapped down the X11 override-redirect (unmanaged) path.  Decided
+	 * once in on_client_map from the surface's override_redirect bit
+	 * and held until unmap: an X client may change that bit at any
+	 * time, mapped or not, and teardown has to undo the path the map
+	 * actually took, not the one the bit names now.  Read through
+	 * client_is_unmanaged(). */
+	gboolean isunmanaged;
 	gfloat   alpha;          /* opacity: 0.0 (transparent) to 1.0 (opaque) */
 
 	/*

@@ -295,6 +295,10 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  *   tags on its monitor, select that monitor and give it focus.  The
  *   argument is "app-id:GLOB" or "title:GLOB"; a bare GLOB is an
  *   app-id.  The first match in the client list wins.
+ * @GOWL_ACTION_TOGGLE_POINTER_CONFINE: Confine the pointer to the
+ *   focused window, or let it go.  The argument may be "on", "off" or
+ *   nothing, which toggles.  Compositor-initiated, so it works for a
+ *   program that never asks for a pointer constraint itself.
  *
  * Compositor actions that can be bound to keys or IPC commands.
  */
@@ -337,7 +341,8 @@ typedef enum {
 	GOWL_ACTION_TOGGLE_BELOW,
 	GOWL_ACTION_TOGGLE_BELOW_ALL,
 	GOWL_ACTION_TOGGLE_CRT,
-	GOWL_ACTION_FOCUS_CLIENT
+	GOWL_ACTION_FOCUS_CLIENT,
+	GOWL_ACTION_TOGGLE_POINTER_CONFINE
 } GowlAction;
 
 #define GOWL_TYPE_ACTION (gowl_action_get_type())

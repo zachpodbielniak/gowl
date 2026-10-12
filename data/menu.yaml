@@ -140,6 +140,13 @@ menu:
         label: Send behind the tiling
         desc: for a floating window you want out of the way
         action: toggle-below
+      - id: confine
+        icon: "󰳽"
+        label: Keep the pointer in this window
+        desc: a game being streamed; Super+Ctrl+Escape lets go
+        aliases: [confine, grab, game]
+        action: toggle-pointer-confine
+        arg: "on"
 
   - id: tags
     icon: "󰓹"

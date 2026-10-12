@@ -2479,6 +2479,62 @@ deactivated would be a use-after-free.
 locked pointer is indistinguishable from a frozen cursor to anyone who
 does not know a constraint exists.
 
+**** Compositor-initiated confinement
+:PROPERTIES:
+:CUSTOM_ID: compositor-pointer-confine
+:END:
+
+Everything above waits for the *client* to ask. A program that never does --- a game under Proton is an X11 client that does not ask for pointer-constraints-v1 --- gets no help from it, and that matters in one situation in particular: streaming a game with Steam to a headset (a Steam Frame). Steam's capture follows *keyboard focus*. With =sloppyfocus= on, the mouse drifting off the game's window moves focus, and the stream switches to the whole desktop (=Changing record window: (nil)= → =Switching video stream from GameOverlay_MovieStream to Desktop_MovieStream= in Steam's log).
+
+So gowl can confine the pointer on the *user's* say-so: the =toggle_pointer_confine= action (=Super+g= in the shipped configs), the =confine-pointer= window rule, =gowl-msg pointer-confine=, the =org.cmacs.Editor1.Compositor= =PointerConfine= method in cmacs. The code is in two halves:
+
+- =src/core/gowl-pointer-confine.c= --- pure decisions with no compositor in them: the box, the clamp at every output scale, what a focus change does, what focus pinning refuses, when a workspace change lets go, whether a key is the escape. =tests/test-pointer-confine.c= tests each as a truth table.
+- "Compositor pointer confinement" in =gowl-compositor.c= --- gathers the inputs, acts on the answers, and announces the result.
+
+***** State
+
+=confine_client= (unowned), =confine_by_rule=, =confine_pin=, the output and tagset it began on, and =confine_suppressed_id=. The client pointer is cleared at the *top* of =on_client_unmap()= --- before any of the window is torn down, on every unmap path, X11 override-redirect included --- and again in =on_client_destroy()= for a destroy without an unmap. Every use re-checks that the client still has a scene, and releases rather than reads one that does not. =dispose= drops it silently before the clients go.
+
+***** Where the clamp happens
+
+=constraint_resolve_target()= is the one gate every motion path asks where the cursor may go: the relative and absolute device handlers, all three injectors (relative, normalised absolute, the KVM portal's layout warp), and --- new with this --- the tablet, whose =wlr_cursor_warp_absolute()= calls now go through =gowl_compositor_warp_absolute_constrained()=. With a client constraint active it decides alone, exactly as before. With none, =pointer_confine_resolve()= clamps the target into the box. That ordering *is* the precedence rule: a game that locks the pointer for mouselook gets exactly its lock, and the moment it lets go the box is back --- nothing has to "resume" it, because nothing ever turned it off.
+
+The relative stream is untouched. Every handler sends it before asking where the cursor may go, so a client reading raw deltas still gets them with the cursor pinned against the box edge.
+
+The box is never cached. =pointer_confine_box_of()= recomputes it from the window each time: its geometry inside the border, cut to the frame as drawn (a scrolling layout leaves the geometry hanging off the screen on purpose) and to its own output, with either cut skipped when it would leave nothing --- a frame that does not overlap the geometry is an animation in flight, and the destination stands. The far edges are one *physical* pixel short of exclusive, so at scale 2 the last physical column is reachable and the first pixel of the neighbour never is. Moving, resizing, going fullscreen and changing output or scale are therefore all just "the window is somewhere else now". =pointer_confine_enforce()=, at the top of =motionnotify=, pulls the cursor back in when the window moved out from under it; every geometry change ends in a motionnotify (=arrange= runs one), so that is the one place that keeps cursor and box together. Neither runs during an interactive move or resize, which starts on the border, outside the box.
+
+The InputCapture barrier test is suppressed while confined, for the same reason it is under a client constraint: the raw delta of a flick reaches a barrier the clamped cursor never could.
+
+***** Focus
+
+=pointer_confine_focus_changed()= runs inside =gowl_compositor_focus_client()= once the change is certain and *before* it resolves pointer focus, so the motionnotify that follows already sees the new box. The truth table (=gowl_pointer_confine_focus_step()=):
+
+| Focus moves to                                  | Result                         |
+|-------------------------------------------------+--------------------------------|
+| the confined window again                       | keep                           |
+| an X11 override-redirect window (a popup)       | keep --- it belongs to its opener |
+| a window with a =confine-pointer= rule          | confine to it (moving it)      |
+| ... that the user just released by hand         | keep (not confined) until focus has been elsewhere |
+| anything else, or nothing                       | release (=focus=)              |
+
+*Focus pinning* (=pointer-confine-focus-pin=, on by default) refuses the *automatic* focus changes, matched by =gowl_pointer_confine_pin_blocks()=: sloppy focus in =pointerfocus()=, a managed window mapping (sent to the bottom of the focus stack, exactly as a =no-focus= rule does), an X11 override-redirect popup that wants the keyboard, and an activation request (downgraded to =urgent=). The confined program's own windows --- matched by process id --- are let through: a game's dialog is the game talking. A focus change the user *asks* for --- a key, a click, IPC --- is never refused; it releases instead. For streaming this is the half that matters: the focus change is what switches the stream.
+
+***** Never a trap
+
+- *The escape key* (=pointer-confine-escape=, =Super+Ctrl+Escape= by default) is checked in =compositor_handle_key()= directly after the session-lock block --- ahead of the InputCapture diversion, every configured bind, the key mode and keyboard-shortcuts-inhibit, which a fullscreen game often holds. It is only consumed while a confinement is active, so the shipped =Super+Ctrl+Escape= bind (the menu at System) still works the rest of the time. An unparsable =pointer-confine-escape= is a config problem and the default stays; there is never "no escape".
+- *A workspace change* releases: =pointer_confine_check_view()= at the end of =gowl_compositor_arrange()= compares the window's output's tagset with the one it began on, and its visibility. Every route that changes what an output shows ends in an arrange. A window that moved to another output is followed, not released.
+- *Locking* releases, in =gowl_compositor_notify_lock_state()=, which all four lock routes call; nothing can confine while locked.
+- *The menu* releases when its card opens: it is drawn outside the window, and a held pointer could never reach a row.
+- Unmap and destroy, above.
+
+A user's release of a *ruled* window (escape, =toggle_pointer_confine off=, IPC) records its id in =confine_suppressed_id=, so its rule does not take the pointer straight back on the next focus event; focus being anywhere else ends that.
+
+***** Announcing
+
+=pointer_confine_announce()= is the one place a change is said, on every channel at once: the =GowlCompositor::pointer-confine-changed= signal (=active=, =client=, =reason=), =EVENT pointer-confine on ID REASON= / =off REASON= on the IPC stream, a toast through =toast-requested= (which the =layout-indicator= module draws without a bar), and the log. The =confine= bar widget polls the state for a persistent light; cmacs draws a mode-line lighter from the signal.
+
+=tests/test-pointer-confine-live.c= drives all of it against real clients on a headless compositor: every motion path clamped with the relative stream still flowing, the box following a moved window, release on unmap, destroy, lock, a tag switch (sticky window included) and a focus key, a client lock taking precedence and the box resuming after, the escape under a key mode and the same chord as an ordinary bind while not confined, and the rule through the real windowrules module.
+
 *** Embedder-defined keybind actions
 
 The keybind action list is a C enum, so every bind resolves to one of a

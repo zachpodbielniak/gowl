@@ -585,6 +585,16 @@ menu_open_route(GowlModuleMenu *self, const gchar *route)
 		}
 	}
 
+	/*
+	 * Opening the card lets go of a pointer confinement.  The card is
+	 * drawn wherever the selected output puts it, usually outside the
+	 * confined window, and a pointer held in the window could never
+	 * reach a row.  The user opening the menu is also the user saying
+	 * they are doing something other than the game.
+	 */
+	if (!self->open)
+		gowl_compositor_release_pointer_confine(self->compositor, "menu");
+
 	self->open = TRUE;
 	menu_read_style(self);
 	menu_reload_rows(self);

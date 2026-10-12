@@ -296,6 +296,7 @@ gowl_action_get_type(void)
 			{ GOWL_ACTION_TOGGLE_BELOW_ALL,  "GOWL_ACTION_TOGGLE_BELOW_ALL",  "toggle-below-all" },
 			{ GOWL_ACTION_TOGGLE_CRT,        "GOWL_ACTION_TOGGLE_CRT",        "toggle-crt" },
 			{ GOWL_ACTION_FOCUS_CLIENT,      "GOWL_ACTION_FOCUS_CLIENT",      "focus-client" },
+			{ GOWL_ACTION_TOGGLE_POINTER_CONFINE, "GOWL_ACTION_TOGGLE_POINTER_CONFINE", "toggle-pointer-confine" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static("GowlAction", values);

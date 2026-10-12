@@ -201,6 +201,9 @@ typedef struct {
  * @no_anim: no open/close/move animation (animation module)
  * @idle_inhibit: while visible, hold the idle and dpms timers off as
  *   an idle-inhibit-v1 inhibitor would
+ * @confine_pointer: confine the pointer to the window whenever it has
+ *   the keyboard (compositor-initiated; see
+ *   gowl_compositor_confine_pointer())
  *
  * A window rule entry stored in the config.
  */
@@ -231,6 +234,7 @@ typedef struct {
 	gboolean  focus;             /* take the keyboard when it maps */
 	gdouble   width_pct;         /* width as a fraction of the usable area */
 	gdouble   height_pct;        /* height as a fraction of the usable area */
+	gboolean  confine_pointer;   /* keep the pointer in it while focused */
 } GowlRuleEntry;
 
 /* --- GowlMonitorConfig --- */
@@ -351,6 +355,12 @@ typedef struct {
  * @GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE: "focus-on-activate" property.
  *   What a window's request to be activated does: "smart", "urgent",
  *   "focus" or "none".
+ * @GOWL_CONFIG_PROP_POINTER_CONFINE_FOCUS_PIN: "pointer-confine-focus-pin"
+ *   property.  While the compositor confines the pointer to a window,
+ *   sloppy focus, newly mapped windows and activation requests from
+ *   other programs cannot take the keyboard from it.
+ * @GOWL_CONFIG_PROP_POINTER_CONFINE_ESCAPE: "pointer-confine-escape"
+ *   property.  The key that always ends a compositor confinement.
  * @GOWL_CONFIG_PROP_INPUT_RECORDING: "input-recording" property.
  *   Consent for recording real input.  Deliberately separate from the
  *   switches that gate input *injection*.
@@ -400,6 +410,8 @@ typedef enum {
 	GOWL_CONFIG_PROP_DPMS_TIMEOUT,
 	GOWL_CONFIG_PROP_ALLOW_TEARING,
 	GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE,
+	GOWL_CONFIG_PROP_POINTER_CONFINE_FOCUS_PIN,
+	GOWL_CONFIG_PROP_POINTER_CONFINE_ESCAPE,
 	GOWL_CONFIG_PROP_INPUT_RECORDING,
 	GOWL_CONFIG_PROP_INPUT_RECORDING_DENY_APPS,
 	GOWL_CONFIG_PROP_LOG_LEVEL,
@@ -745,6 +757,28 @@ gboolean gowl_config_get_allow_tearing(GowlConfig *self);
  *   and focuses it; "none" ignores the request.
  */
 const gchar *gowl_config_get_focus_on_activate(GowlConfig *self);
+
+/**
+ * gowl_config_get_pointer_confine_focus_pin:
+ * @self: a #GowlConfig
+ *
+ * Returns: %TRUE if keyboard focus is pinned to a window the
+ *   compositor has confined the pointer to.  On by default: for a game
+ *   being streamed it is the focus change, not the cursor, that switches
+ *   the stream to the desktop.
+ */
+gboolean gowl_config_get_pointer_confine_focus_pin(GowlConfig *self);
+
+/**
+ * gowl_config_get_pointer_confine_escape:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none): the key that always ends a compositor
+ *   pointer confinement, as a keybind string ("Super+Ctrl+Escape" by
+ *   default).  Checked before every bind, key mode and
+ *   keyboard-shortcuts-inhibit, and only while a confinement is active.
+ */
+const gchar *gowl_config_get_pointer_confine_escape(GowlConfig *self);
 
 /**
  * gowl_config_get_input_recording:

@@ -357,6 +357,7 @@ A host whose =tailscale= command is installed but whose daemon gives no answer i
 | =weather=  | Conditions and temperature   | Feels-like, wind, three-day forecast    |
 | =git=      | The focused window's branch  | ---                                     |
 | =keymap=   | The compositor's keyboard layout | ---                                 |
+| =confine=  | =confined=, only while the pointer is held in a window | --- (a click lets go) |
 | =display=  | Brightness                   | Brightness, text size, night light, HDR |
 | =notifications= | Unread count, or DND     | Do not disturb, last, history, clear    |
 | =clipboard= | Entries held             | The history: pick, yank, delete         |
@@ -374,6 +375,8 @@ A host whose =tailscale= command is installed but whose daemon gives no answer i
 =git= finds the working tree by walking up to a =.git= that may be a *file* --- a worktree under =trees/= or a submodule, whose =.git= reads =gitdir: <path>= --- as well as a directory. It showed no branch at all in every worktree before. A detached HEAD shows the first eight characters of the commit.
 
 =keymap= asks the compositor which layout its keyboard is on, which is the one your keys produce after a layout toggle. =localectl= --- the old source --- reports the system default, which is what the console boots with. It is still the fallback for a bar hosted with no compositor. =short= (the default) shows the part in parentheses, =US= for =English (US)=; the full name is the hover text.
+
+=confine= is a warning light: it appears only while the compositor holds the pointer in a window (=Super+g=, a =confine-pointer= rule --- see [[file:configuration.org::#pointer-confine][Keeping the pointer in a window]]) and is gone the rest of the time. The hover text names the window and the escape key; a left click lets go, as the escape does. =label= replaces the word, =color= the peach it is drawn in. It reads the compositor directly every second, so it costs no subprocess.
 
 **** Display
 

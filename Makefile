@@ -136,6 +136,7 @@ LIB_SRCS := \
 	src/core/gowl-effects.c \
 	src/interfaces/gowl-scene-effect.c \
 	src/core/gowl-focus-rules.c \
+	src/core/gowl-pointer-confine.c \
 	src/core/gowl-overlay-layout.c \
 	src/core/gowl-monitor.c \
 	src/core/gowl-client.c \
@@ -532,6 +533,16 @@ $(OBJDIR)/tests/test-pointer-lock.o: pointer-constraints-unstable-v1-client-prot
                                      xdg-shell-client-protocol.h
 $(OUTDIR)/test-pointer-lock: TEST_LDFLAGS += $(POINTER_LOCK_PROTO) $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-pointer-lock.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
+# test-pointer-confine-live drives the compositor's own confinement
+# against the same kind of client, and loads the real windowrules
+# module for the `confine-pointer' rule.
+$(OUTDIR)/test-pointer-confine-live: $(POINTER_LOCK_PROTO) $(OUTDIR)/modules/windowrules.so
+$(OBJDIR)/tests/test-pointer-confine-live.o: pointer-constraints-unstable-v1-client-protocol.h \
+                                             relative-pointer-unstable-v1-client-protocol.h \
+                                             xdg-shell-client-protocol.h
+$(OUTDIR)/test-pointer-confine-live: TEST_LDFLAGS += $(POINTER_LOCK_PROTO) $(shell $(PKG_CONFIG) --libs wayland-client)
+$(OBJDIR)/tests/test-pointer-confine-live.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client) \
+	-DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 # test-macro-targeted-key is a real client too: two toplevels and a
 # keyboard, to see which window a targeted key actually reaches.
 # test-macro-examples runs the shipped macros against the same client.

@@ -666,6 +666,37 @@ struct _GowlCompositor {
 	struct wl_listener new_pointer_constraint;
 	struct wl_listener active_constraint_destroy;
 
+	/*
+	 * Compositor-initiated confinement: the pointer kept inside the
+	 * focused window because the USER asked (a keybind, a
+	 * `confine-pointer' rule, IPC), not the client.  See "Compositor
+	 * pointer confinement" in gowl-compositor.c.
+	 *
+	 * confine_client is unowned.  It is cleared on that client's unmap
+	 * and destroy, before anything of it is torn down, and every use
+	 * re-checks that it still has a scene -- a client that is gone
+	 * between the two is released rather than read.
+	 *
+	 * A client's own constraint outranks this one: while
+	 * active_constraint is set the motion path consults it alone, and
+	 * this resumes by itself the moment the client lets go.
+	 */
+	GowlClient *confine_client;
+	/* The confinement came from a `confine-pointer' rule, not a key. */
+	gboolean    confine_by_rule;
+	/* Keyboard focus is pinned while confined (pointer-confine-focus-pin
+	 * at the moment it began). */
+	gboolean    confine_pin;
+	/* What its output was viewing when it began; a change releases.
+	 * confine_mon is that output, compared by identity only -- never
+	 * dereferenced -- so a window that changes output is followed. */
+	GowlMonitor *confine_mon;
+	guint32     confine_tagset;
+	/* The id of a ruled client the user let go of by hand.  Its rule
+	 * does not take it again until focus has been elsewhere; 0 for
+	 * none.  An id, not a pointer, so it can never dangle. */
+	guint       confine_suppressed_id;
+
 	/* Client map callback (embedder hook) */
 	GowlClientMapFunc client_map_func;
 	gpointer          client_map_data;
@@ -1131,6 +1162,16 @@ void gowl_compositor_focus_client (GowlCompositor *self,
 void gowl_compositor_arrangelayers(GowlCompositor *self, GowlMonitor *m);
 void gowl_compositor_motionnotify (GowlCompositor *self,
                                    guint32         time_msec);
+
+/* Compositor pointer confinement, for the other core files: a rule
+ * that matched late (gowl-client.c) asks for the focused window to be
+ * looked at again; the tablet (gowl-tablet.c) moves the cursor only
+ * where a lock or a confinement allows. */
+void gowl_compositor_pointer_confine_reevaluate (GowlCompositor *self);
+void gowl_compositor_warp_absolute_constrained  (GowlCompositor          *self,
+                                                 struct wlr_input_device *device,
+                                                 gdouble                  nx,
+                                                 gdouble                  ny);
 
 /* colour parsing: "#rrggbb" or "#rrggbbaa" -> float[4] */
 void gowl_color_parse_to_floats   (const gchar *hex, float out[4]);

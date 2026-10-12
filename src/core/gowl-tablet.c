@@ -151,9 +151,11 @@ on_tablet_axis(struct wl_listener *listener, void *data)
 	if (tool == NULL)
 		return;
 
+	/* Through the same gate as every pointer: a client's lock or a
+	 * compositor confinement holds the pen's cursor too. */
 	if (ev->updated_axes & (WLR_TABLET_TOOL_AXIS_X | WLR_TABLET_TOOL_AXIS_Y)) {
-		wlr_cursor_warp_absolute(
-			self->wlr_cursor, &tablet->wlr_tablet->base,
+		gowl_compositor_warp_absolute_constrained(
+			self, &tablet->wlr_tablet->base,
 			(ev->updated_axes & WLR_TABLET_TOOL_AXIS_X) ? ev->x : NAN,
 			(ev->updated_axes & WLR_TABLET_TOOL_AXIS_Y) ? ev->y : NAN);
 	}
@@ -223,8 +225,8 @@ on_tablet_proximity(struct wl_listener *listener, void *data)
 		return;
 	}
 
-	wlr_cursor_warp_absolute(self->wlr_cursor,
-	                          &tablet->wlr_tablet->base, ev->x, ev->y);
+	gowl_compositor_warp_absolute_constrained(
+		self, &tablet->wlr_tablet->base, ev->x, ev->y);
 	gowl_compositor_motionnotify(self, ev->time_msec);
 }
 

@@ -68,6 +68,17 @@ allow-tearing: false
 # What a window's request to be activated does: smart (focus if visible
 # on the selected monitor, else mark urgent), urgent, focus, none.
 focus-on-activate: smart
+# Pointer confinement (Super+g, the toggle_pointer_confine action, or a
+# `confine-pointer' rule): while the compositor holds the pointer in a
+# window, also keep the keyboard there -- sloppy focus, a new window and
+# another program's activation request cannot take it.  For a game
+# streamed by Steam that focus change is what switches the stream to
+# the desktop, so it matters more than the cursor.
+pointer-confine-focus-pin: true
+# The key that always lets go, whatever holds the keyboard -- a key
+# mode, a game inhibiting shortcuts.  Only taken while confined, so it
+# still opens the menu at System (below) the rest of the time.
+pointer-confine-escape: "Super+Ctrl+Escape"
 
 # Palette -- one set of colours for the whole session.
 #
@@ -463,7 +474,8 @@ no-fx-apps: ""
 # Action values:  spawn, kill_client, toggle_float, toggle_fullscreen, focus_stack,
 #                 focus_monitor, tag_view, tag_set, tag_toggle_view, tag_toggle,
 #                 move_to_monitor, set_mfact, inc_nmaster, set_layout, cycle_layout,
-#                 set_split, zoom, quit, reload_config, ipc_command, lock, custom
+#                 set_split, zoom, quit, reload_config, ipc_command, lock, custom,
+#                 toggle_pointer_confine (and see configuration.org for the rest)
 #
 # "arg"  is action-specific and optional.
 # "desc" is optional, never affects dispatch, and is what a cheatsheet
@@ -524,6 +536,12 @@ keybinds:
     { action: toggle_below, desc: "This floating window behind the tiling" }
   "Super+Ctrl+Alt+b":
     { action: toggle_below_all, desc: "All floating windows behind the tiling" }
+  # Keep the pointer inside the focused window, or let it go.  For a
+  # game that never asks for a pointer lock itself (anything under
+  # Proton): the mouse drifting off it no longer moves focus away.
+  # Super+Ctrl+Escape always lets go (pointer-confine-escape, above).
+  "Super+g":
+    { action: toggle_pointer_confine, desc: "Keep the pointer in this window" }
   "Super+m": { action: set_layout, arg: "monocle", desc: "Monocle layout" }
   "Super+Shift+m": { action: set_layout, arg: "tabbed", desc: "Tabbed layout" }
   # HDR on this output, where it is offered.  Not tone mapping: SDR
@@ -760,6 +778,11 @@ rules:
     floating: true
   - app-id: "feh"
     floating: true
+  # A game that should hold the pointer whenever it has the keyboard.
+  # An X11 window's app-id is its WM_CLASS class; read the real one
+  # with `gowl-msg clients' while the game runs.
+  # - app-id: "wow.exe"
+  #   confine-pointer: true
 
 # Guake-style dropdown windows
 # Each entry is lazy-spawned on first keybind press, captured via the

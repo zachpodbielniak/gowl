@@ -51,6 +51,7 @@
 #include <wlr/types/wlr_cursor_shape_v1.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include "gowl-tablet.h"
+#include "gowl-pointer-confine.h"
 #include "gowl-layout-registry.h"
 #include "../interfaces/gowl-layout-provider.h"
 #include "gowl-effects.h"
@@ -82,6 +83,7 @@ enum {
 	SIGNAL_WORKSPACE_SWITCHED,
 	SIGNAL_WORKSPACE_DESTROYED,
 	SIGNAL_RENDERER_REPLACED,
+	SIGNAL_POINTER_CONFINE_CHANGED,
 	N_SIGNALS
 };
 
@@ -348,6 +350,27 @@ static void     compositor_handle_motion_absolute (GowlCompositor *self,
                                                    gdouble        *dx_out,
                                                    gdouble        *dy_out);
 
+/* compositor pointer confinement (definitions follow the pointer
+ * constraints, beside the motion handlers); the focus, arrange, map,
+ * unmap, key and action paths above them all call in. */
+static void     pointer_confine_resolve        (GowlCompositor *self,
+                                                gdouble        *x,
+                                                gdouble        *y);
+static void     pointer_confine_enforce        (GowlCompositor *self);
+static void     pointer_confine_focus_changed  (GowlCompositor *self,
+                                                GowlClient     *c);
+static gboolean pointer_confine_pin_blocks_client (GowlCompositor *self,
+                                                   GowlClient     *c);
+static void     pointer_confine_check_view     (GowlCompositor *self);
+static void     pointer_confine_release_by_user (GowlCompositor *self,
+                                                 const gchar    *reason);
+static gboolean pointer_confine_escape_pressed (GowlCompositor      *self,
+                                                guint32              mods,
+                                                const xkb_keysym_t  *syms,
+                                                gint                 nsyms,
+                                                struct wlr_keyboard *kb,
+                                                xkb_keycode_t        keycode);
+
 
 /* layout helpers */
 static void resize_client         (GowlCompositor *self, GowlClient *c,
@@ -496,6 +519,11 @@ gowl_compositor_dispose(GObject *object)
 
 	self = GOWL_COMPOSITOR(object);
 	self->running = FALSE;
+
+	/* The confinement points at a client the teardown below frees.
+	 * Dropped silently: there is nobody left to announce it to. */
+	self->confine_client = NULL;
+	self->confine_suppressed_id = 0;
 
 	/* Release every closing window's held buffer while the renderer
 	 * that owns it is still alive. */
@@ -950,6 +978,35 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 		             NULL,
 		             G_TYPE_NONE,
 		             0);
+
+	/**
+	 * GowlCompositor::pointer-confine-changed:
+	 * @compositor: the #GowlCompositor that emitted the signal
+	 * @active: %TRUE when a compositor confinement began (or moved to
+	 *   another window), %FALSE when it ended
+	 * @client: (nullable): the #GowlClient now confined to, or %NULL
+	 *   when @active is %FALSE
+	 * @reason: why: "manual", "rule", "escape", "focus", "unmap",
+	 *   "destroy", "lock", "workspace", "menu"
+	 *
+	 * The compositor started or stopped holding the pointer inside a
+	 * window on the user's behalf (see gowl_compositor_confine_pointer()).
+	 * A client's own pointer-constraints-v1 lock or confinement does not
+	 * emit this.  cmacs draws its mode-line indicator from it; the IPC
+	 * stream carries the same news as `EVENT pointer-confine'.
+	 */
+	compositor_signals[SIGNAL_POINTER_CONFINE_CHANGED] =
+		g_signal_new("pointer-confine-changed",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             3,
+		             G_TYPE_BOOLEAN,
+		             GOWL_TYPE_CLIENT,
+		             G_TYPE_STRING);
 
 	/**
 	 * GowlCompositor::client-pre-map:
@@ -2772,6 +2829,11 @@ void
 gowl_compositor_notify_lock_state(GowlCompositor *self, gboolean locked)
 {
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	/* Locking lets go of a pointer confinement, by every route a lock
+	 * can take -- which is why it is here and not in each of them. */
+	if (locked)
+		gowl_compositor_release_pointer_confine(self, "lock");
 
 	g_signal_emit_by_name(self, "lock-changed", locked);
 	if (self->ipc != NULL)
@@ -5956,9 +6018,13 @@ pointerfocus(
 	if (self->config != NULL)
 		sloppy = gowl_config_get_sloppyfocus(self->config);
 
+	/* Sloppy focus is the automatic focus change that confinement's
+	 * focus pin exists to stop: a window overlapping the confined one
+	 * must not take the keyboard just because the pointer is over it. */
 	if (surface != self->wlr_seat->pointer_state.focused_surface &&
 	    sloppy && time_msec && c != NULL &&
-	    !gowl_client_get_embedded(c))
+	    !gowl_client_get_embedded(c) &&
+	    !pointer_confine_pin_blocks_client(self, c))
 		gowl_compositor_focus_client(self, c, FALSE);
 
 	/* If no surface, clear pointer focus */
@@ -6152,6 +6218,12 @@ gowl_compositor_arrange(
 		if (c->mon == m && c->isfullscreen && VISIBLEON(c, m))
 			resize_client(self, c, m->m, FALSE);
 	}
+
+	/* A workspace change lets go of a pointer confinement -- here,
+	 * after visibility settled, because every way of changing what an
+	 * output shows (a key, IPC, cmacs, a rule viewing a tag) ends in
+	 * an arrange. */
+	pointer_confine_check_view(self);
 
 	/* Restore pointer focus */
 	gowl_compositor_motionnotify(self, 0);
@@ -7303,6 +7375,9 @@ gowl_compositor_focus_client(
 	}
 
 	if (c == NULL) {
+		/* Nothing has the keyboard now, so nothing holds the pointer. */
+		pointer_confine_focus_changed(self, NULL);
+
 		/* No client: clear focus */
 		wlr_seat_keyboard_notify_clear_focus(self->wlr_seat);
 		gowl_shortcuts_inhibit_sync(self);
@@ -7319,6 +7394,11 @@ gowl_compositor_focus_client(
 		}
 		return;
 	}
+
+	/* Move, take or let go of a pointer confinement BEFORE pointer focus
+	 * is resolved, so the motionnotify below already sees the new box
+	 * rather than pulling the cursor into the old one. */
+	pointer_confine_focus_changed(self, c);
 
 	/* Restore pointer focus */
 	gowl_compositor_motionnotify(self, 0);
@@ -8883,6 +8963,13 @@ gowl_compositor_activate_client(
 
 	if (g_strcmp0(policy, "none") == 0)
 		return;
+
+	/* Pinned by a pointer confinement: another program asking to be
+	 * activated is a focus steal, and a steal is what switches a game
+	 * stream to the desktop.  It is marked urgent instead, so it is not
+	 * lost -- the same thing "urgent" does. */
+	if (pointer_confine_pin_blocks_client(self, c))
+		policy = "urgent";
 
 	visible = c->mon == self->selmon && VISIBLEON(c, c->mon);
 	if (g_strcmp0(policy, "urgent") == 0
@@ -10820,6 +10907,22 @@ run_keybind_entry(
 		gowl_compositor_set_crt(self, on);
 		return TRUE;
 	}
+	case GOWL_ACTION_TOGGLE_POINTER_CONFINE: {
+		/* "on" confines to the focused window, "off" lets go, and
+		 * nothing or "toggle" does whichever it is not.  "on" while
+		 * already confined to another window moves the confinement
+		 * to the focused one. */
+		gboolean want;
+
+		if (!keybind_arg_wanted(kb->arg,
+		                        self->confine_client == NULL, &want))
+			return TRUE;
+		if (want)
+			gowl_compositor_confine_pointer(self, NULL);
+		else
+			pointer_confine_release_by_user(self, "manual");
+		return TRUE;
+	}
 	case GOWL_ACTION_TOGGLE_HDR: {
 		/* "on", "off" or toggle (the default), on the output named
 		 * by the argument or the selected one. */
@@ -11165,6 +11268,24 @@ compositor_handle_key(
 	/* Notify lock handlers of activity for idle timer reset */
 	if (self->module_mgr != NULL)
 		gowl_module_manager_notify_lock_activity(self->module_mgr);
+
+	/*
+	 * The pointer-confinement escape.  Ahead of everything that could
+	 * claim the key -- the KVM diversion, configured binds, a key mode,
+	 * module binds, a client inhibiting shortcuts (a game in fullscreen
+	 * often does) -- because a confinement the user cannot get out of
+	 * is a trap.  Only while one is active, so the same chord is free
+	 * for an ordinary bind the rest of the time: gowl's shipped config
+	 * opens the menu at System with it.
+	 */
+	if (self->confine_client != NULL
+	    && state == WL_KEYBOARD_KEY_STATE_PRESSED
+	    && pointer_confine_escape_pressed(self, mods, syms, nsyms,
+	                                      kb, keycode)) {
+		pointer_confine_release_by_user(self, "escape");
+		wl_event_source_timer_update(self->key_repeat_source, 0);
+		return;
+	}
 
 	handled = FALSE;
 
@@ -11581,6 +11702,12 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 		                            (gint)round(self->wlr_cursor->x),
 		                            (gint)round(self->wlr_cursor->y));
 
+	/* A confined pointer goes back inside its window if the window
+	 * moved, resized or changed output under it.  Every geometry change
+	 * ends here (arrange and the commit paths run motionnotify), so this
+	 * is the one place that keeps the box and the cursor together. */
+	pointer_confine_enforce(self);
+
 	/*
 	 * Modules get the motion before focus is resolved, so one that is
 	 * running an interactive gesture -- a screenshot rubber band, a
@@ -11671,7 +11798,11 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 		 * and the KVM egress are one path here: the same constraint
 		 * that keeps the cursor in keeps the machine.
 		 */
-		if (self->active_constraint == NULL)
+		/* The same goes for a compositor confinement: the raw
+		 * delta of a mouselook flick reaches a barrier the clamped
+		 * cursor never could. */
+		if (self->active_constraint == NULL
+		    && self->confine_client == NULL)
 			gowl_input_capture_check_crossing(
 				self->input_capture,
 				self->prev_cursor_x,
@@ -12017,6 +12148,11 @@ constraint_allows_position(GowlCompositor *self, gdouble x, gdouble y)
  * constraint.  @x/@y come in as the position the event asked for and
  * go out as the position to take; FALSE means the cursor stays put.
  *
+ * With no client constraint, a compositor confinement (the user's, see
+ * "Compositor pointer confinement") clamps the target into the confined
+ * window instead -- this is the one gate every motion path goes
+ * through, so that is where it is enforced too.
+ *
  * A LOCKED pointer never moves.  A CONFINED one is clamped to its
  * region rather than stopped by it: the request used to be dropped
  * whole whenever any part of it left the region, so a pointer pushed
@@ -12034,8 +12170,11 @@ constraint_resolve_target(GowlCompositor *self, gdouble *x, gdouble *y)
 	gdouble cx, cy, sx = 0, sy = 0;
 	gdouble tx = *x, ty = *y;
 
-	if (c == NULL)
+	if (c == NULL) {
+		/* The client's constraint outranks ours; with none, ours. */
+		pointer_confine_resolve(self, x, y);
 		return TRUE;
+	}
 	if (c->type == WLR_POINTER_CONSTRAINT_V1_LOCKED)
 		return FALSE;
 	if (constraint_allows_position(self, tx, ty))
@@ -12232,6 +12371,588 @@ gowl_compositor_get_active_pointer_constraint(GowlCompositor *self)
 	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
 
 	return self->active_constraint;
+}
+
+/* ── Compositor pointer confinement ──────────────────────────────────
+ *
+ * The pointer kept inside the focused window because the USER said so
+ * -- a key, a `confine-pointer' window rule, IPC -- rather than because
+ * the client asked through pointer-constraints-v1.
+ *
+ * It exists for one failure: a game streamed by Steam to a headset.
+ * Steam's capture follows keyboard focus, and with sloppy focus the
+ * mouse drifting off the game's window moves focus, and the stream
+ * switches to the whole desktop.  The game (WoW under Proton, an X11
+ * client) never asks for a constraint, so gowl's protocol support
+ * never engaged.
+ *
+ * How it fits with the protocol:
+ *
+ *   - constraint_resolve_target() is the one place every motion path
+ *     asks where the cursor may go: relative and absolute devices,
+ *     injected input, the KVM portal, the tablet.  A client's own
+ *     constraint is consulted there first and alone; only with none
+ *     active does this box apply.  So a game that locks the pointer
+ *     for mouselook gets exactly its lock, and the moment it lets go
+ *     the confinement is back without anything having to resume it.
+ *
+ *   - The relative stream is untouched -- every handler sends it before
+ *     asking where the cursor may go -- so a client reading raw deltas
+ *     still gets them when the cursor is pinned against the box edge.
+ *
+ *   - The box is recomputed from the window on every use, never cached:
+ *     moving, resizing, going fullscreen, changing output or scale are
+ *     all just "the window is somewhere else now".  motionnotify pulls
+ *     the cursor back in when the window moved out from under it.
+ *
+ * What holding focus means (`pointer-confine-focus-pin', on by
+ * default): sloppy focus, a newly mapped window and an activation
+ * request from another program cannot take the keyboard.  That focus
+ * change is what actually switches the stream, so it matters more than
+ * the cursor.  A focus change the user ASKS for -- a key, a click, IPC
+ * -- is never refused; it releases instead.
+ *
+ * And it can never trap anyone: the escape key (Super+Ctrl+Escape by
+ * default) is checked before every bind, key mode and
+ * keyboard-shortcuts-inhibit, and unmapping, locking, a workspace
+ * change and the menu all let go on their own.
+ */
+
+/* The client behind whatever surface has the keyboard -- managed or an
+ * X11 override-redirect one, which the client list does not hold. */
+static GowlClient *
+keyboard_focused_client(GowlCompositor *self)
+{
+	struct wlr_surface *surface;
+	GowlClient *c;
+
+	if (self->wlr_seat == NULL)
+		return NULL;
+	surface = self->wlr_seat->keyboard_state.focused_surface;
+	if (surface == NULL)
+		return NULL;
+	c = client_for_surface(self, surface);
+#ifdef GOWL_HAVE_XWAYLAND
+	if (c == NULL) {
+		struct wlr_xwayland_surface *xs;
+
+		xs = wlr_xwayland_surface_try_from_wlr_surface(surface);
+		if (xs != NULL)
+			c = (GowlClient *)xs->data;
+	}
+#endif
+	return c;
+}
+
+/* The output a confined window is on: its own, or -- for an X11
+ * override-redirect window, which has none -- the one under its middle. */
+static GowlMonitor *
+pointer_confine_monitor(GowlCompositor *self, GowlClient *c)
+{
+	if (c->mon != NULL)
+		return c->mon;
+	return xytomon(self, c->geom.x + c->geom.width / 2.0,
+	               c->geom.y + c->geom.height / 2.0);
+}
+
+/*
+ * The box @c holds the pointer in, and the scale of its output.  The
+ * arithmetic is gowl_pointer_confine_compute_box(); this only gathers
+ * the window's geometry, its drawn frame and its output.  FALSE for a
+ * window with no scene (unmapping) or no area.
+ */
+static gboolean
+pointer_confine_box_of(
+	GowlCompositor *self,
+	GowlClient     *c,
+	struct wlr_box *box,
+	gdouble        *scale
+){
+	GowlMonitor   *m;
+	struct wlr_box output;
+
+	if (c == NULL || c->scene == NULL)
+		return FALSE;
+
+	memset(&output, 0, sizeof output);
+	m = pointer_confine_monitor(self, c);
+	if (scale != NULL)
+		*scale = 1.0;
+	if (m != NULL && m->wlr_output != NULL) {
+		output = m->m;
+		if (scale != NULL && m->wlr_output->scale > 0.0f)
+			*scale = (gdouble)m->wlr_output->scale;
+	}
+	return gowl_pointer_confine_compute_box(&c->geom, c->bw, &c->frame,
+	                                        &output, box);
+}
+
+/*
+ * The confinement's say in where a motion may put the cursor, for
+ * constraint_resolve_target() when no client constraint is active.
+ * Clamps @x/@y into the box.  Not during an interactive move or resize:
+ * dragging the confined window's own edge starts on its border, outside
+ * the box, and must be allowed to go where the hand goes.
+ */
+static void
+pointer_confine_resolve(GowlCompositor *self, gdouble *x, gdouble *y)
+{
+	struct wlr_box box;
+	gdouble scale;
+
+	if (self->confine_client == NULL
+	    || self->cursor_mode != GOWL_CURSOR_MODE_NORMAL)
+		return;
+	if (!pointer_confine_box_of(self, self->confine_client, &box, &scale))
+		return;
+	gowl_pointer_confine_clamp(&box, scale, x, y);
+}
+
+/*
+ * Pull the cursor back inside the box when something other than motion
+ * left it outside: the window moved, resized, went fullscreen or
+ * changed output, a warp put it elsewhere, or the confinement just
+ * began with the cursor somewhere else.  Called at the top of
+ * motionnotify, which every one of those paths ends in.
+ *
+ * Releases instead when the confined window has lost its scene -- a
+ * window caught between unmap and the release that unmap does first
+ * is read nowhere.
+ */
+static void
+pointer_confine_enforce(GowlCompositor *self)
+{
+	struct wlr_box box;
+	gdouble scale, x, y;
+
+	if (self->confine_client == NULL || self->wlr_cursor == NULL)
+		return;
+	if (self->confine_client->scene == NULL) {
+		gowl_compositor_release_pointer_confine(self, "unmap");
+		return;
+	}
+	/* The client's own constraint is in charge while it holds one. */
+	if (self->active_constraint != NULL)
+		return;
+	if (self->cursor_mode != GOWL_CURSOR_MODE_NORMAL)
+		return;
+	if (self->input_capture != NULL
+	    && gowl_input_capture_is_active(self->input_capture))
+		return;
+	if (!pointer_confine_box_of(self, self->confine_client, &box, &scale))
+		return;
+
+	x = self->wlr_cursor->x;
+	y = self->wlr_cursor->y;
+	if (!gowl_pointer_confine_clamp(&box, scale, &x, &y))
+		return;
+	wlr_cursor_warp_closest(self->wlr_cursor, NULL, x, y);
+	self->prev_cursor_x = self->wlr_cursor->x;
+	self->prev_cursor_y = self->wlr_cursor->y;
+}
+
+/* The escape key's text, for the toast that says how to get out. */
+static const gchar *
+pointer_confine_escape_text(GowlCompositor *self)
+{
+	return self->config != NULL
+	       ? gowl_config_get_pointer_confine_escape(self->config)
+	       : GOWL_POINTER_CONFINE_DEFAULT_ESCAPE;
+}
+
+/*
+ * Announce a confinement starting or ending on every channel at once:
+ * the log, the GObject signal (cmacs and modules), the IPC event
+ * stream (gowl-msg -s, bar scripts) and a toast on the screen.
+ *
+ * No toast for a window that went away -- there is nothing to tell the
+ * user that the window vanishing did not already -- and none during
+ * teardown, when the monitors the toast would be drawn on are going.
+ */
+static void
+pointer_confine_announce(
+	GowlCompositor *self,
+	gboolean        on,
+	const gchar    *reason
+){
+	GowlClient *c = on ? self->confine_client : NULL;
+
+	if (reason == NULL)
+		reason = "manual";
+
+	if (on)
+		g_info("pointer-confine: on, client %u (%s), %s%s",
+		       c->id, c->app_id != NULL ? c->app_id : "?", reason,
+		       self->confine_pin ? ", focus pinned" : "");
+	else
+		g_info("pointer-confine: off, %s", reason);
+
+	g_signal_emit(self,
+	              compositor_signals[SIGNAL_POINTER_CONFINE_CHANGED], 0,
+	              on, c, reason);
+
+	if (self->ipc != NULL) {
+		if (on)
+			gowl_ipc_push_event(self->ipc,
+			                    "EVENT pointer-confine on %u %s",
+			                    c->id, reason);
+		else
+			gowl_ipc_push_event(self->ipc,
+			                    "EVENT pointer-confine off %s", reason);
+	}
+
+	if (g_strcmp0(reason, "unmap") != 0
+	    && g_strcmp0(reason, "destroy") != 0
+	    && self->running && self->selmon != NULL) {
+		g_autofree gchar *text = NULL;
+
+		text = on ? g_strdup_printf("Pointer confined — %s releases",
+		                            pointer_confine_escape_text(self))
+		          : g_strdup("Pointer released");
+		g_signal_emit_by_name(self, "toast-requested", self->selmon, text);
+	}
+}
+
+/*
+ * Begin (or move) a confinement to @c.  The internal half of
+ * gowl_compositor_confine_pointer(), also used by the focus hook for a
+ * ruled window -- which is why it does not run motionnotify itself:
+ * focus_client runs it straight after.
+ */
+static gboolean
+pointer_confine_start(
+	GowlCompositor *self,
+	GowlClient     *c,
+	gboolean        by_rule,
+	const gchar    *reason
+){
+	GowlMonitor *m;
+
+	/* A mapped window, not necessarily a placed one: a ruled window is
+	 * focused during its own map, sometimes before it has a size.  The
+	 * clamp takes hold as soon as there is a box to clamp to. */
+	if (self->locked || c == NULL || c->isembedded || c->scene == NULL)
+		return FALSE;
+
+	if (self->confine_client == c) {
+		/* Already here: a rule arriving later does not turn a
+		 * confinement the user asked for into a ruled one. */
+		return TRUE;
+	}
+
+	self->confine_client = c;
+	self->confine_by_rule = by_rule;
+	self->confine_pin = self->config != NULL
+		? gowl_config_get_pointer_confine_focus_pin(self->config)
+		: TRUE;
+	if (self->confine_suppressed_id == c->id)
+		self->confine_suppressed_id = 0;
+
+	/* What its output shows now; arrange() compares against it. */
+	m = c->mon;
+	self->confine_mon = m;
+	self->confine_tagset = (m != NULL) ? m->tagset[m->seltags] : 0;
+
+	pointer_confine_announce(self, TRUE, reason);
+	pointer_confine_enforce(self);
+	return TRUE;
+}
+
+/*
+ * Let go because the USER said so -- the escape key, the action's "off",
+ * a toggle.  A ruled window is remembered, so its rule does not take
+ * the pointer straight back on the next focus event; it may again once
+ * focus has been somewhere else.
+ */
+static void
+pointer_confine_release_by_user(GowlCompositor *self, const gchar *reason)
+{
+	GowlClient *c = self->confine_client;
+
+	if (c == NULL)
+		return;
+	if ((c->rule_flags & GOWL_CLIENT_RULE_CONFINE_POINTER) != 0)
+		self->confine_suppressed_id = c->id;
+	gowl_compositor_release_pointer_confine(self, reason);
+	gowl_compositor_motionnotify(self, 0);
+}
+
+/*
+ * Keyboard focus moved to @c (%NULL: cleared).  Called from
+ * gowl_compositor_focus_client() once the change is certain and before
+ * it resolves pointer focus.  The decision is
+ * gowl_pointer_confine_focus_step(); this gathers its inputs.
+ */
+static void
+pointer_confine_focus_changed(GowlCompositor *self, GowlClient *c)
+{
+	gboolean unmanaged = c != NULL && client_is_unmanaged(c);
+	gboolean ruled = c != NULL
+		&& (c->rule_flags & GOWL_CLIENT_RULE_CONFINE_POINTER) != 0;
+	gboolean suppressed = c != NULL && c->id == self->confine_suppressed_id;
+
+	/* Focus that has been elsewhere ends the suppression.  A popup
+	 * taking the keyboard is not elsewhere. */
+	if (!unmanaged && !suppressed)
+		self->confine_suppressed_id = 0;
+
+	switch (gowl_pointer_confine_focus_step(self->confine_client != NULL,
+	                                        c == NULL,
+	                                        c == self->confine_client,
+	                                        unmanaged, ruled, suppressed)) {
+	case GOWL_CONFINE_FOCUS_CONFINE:
+		pointer_confine_start(self, c, TRUE, "rule");
+		break;
+	case GOWL_CONFINE_FOCUS_RELEASE:
+		gowl_compositor_release_pointer_confine(self, "focus");
+		break;
+	case GOWL_CONFINE_FOCUS_KEEP:
+		break;
+	}
+}
+
+/*
+ * Would focus pinning refuse to give @c the keyboard automatically?
+ * See gowl_pointer_confine_pin_blocks() for the rule.  The confined
+ * program's own windows are let through, matched by process.
+ */
+static gboolean
+pointer_confine_pin_blocks_client(GowlCompositor *self, GowlClient *c)
+{
+	GowlClient *k = self->confine_client;
+	pid_t pid;
+
+	if (k == NULL || !self->confine_pin || c == NULL)
+		return FALSE;
+	pid = gowl_client_get_pid(c);
+	return gowl_pointer_confine_pin_blocks(
+		TRUE, c == k, pid > 0 && pid == gowl_client_get_pid(k));
+}
+
+/*
+ * After an arrange: did the confined window's output change workspace,
+ * or the window drop out of view?  Either releases.  A window that
+ * moved to another output is followed, not released -- the output it
+ * is measured against moves with it.
+ */
+static void
+pointer_confine_check_view(GowlCompositor *self)
+{
+	GowlClient *c = self->confine_client;
+	guint32 now;
+
+	if (c == NULL)
+		return;
+	if (c->scene == NULL) {
+		gowl_compositor_release_pointer_confine(self, "unmap");
+		return;
+	}
+	/* An overlay -- the scratchpad, a dropdown -- is shown and hidden by
+	 * its module rather than by the view, and a hidden one must not go
+	 * on holding the pointer in a window nobody can see. */
+	if (c->isoverlay) {
+		if (!c->overlay_visible)
+			gowl_compositor_release_pointer_confine(self, "workspace");
+		return;
+	}
+	/* An override-redirect window has no tags. */
+	if (client_is_unmanaged(c) || c->mon == NULL)
+		return;
+
+	now = c->mon->tagset[c->mon->seltags];
+	if (c->mon != self->confine_mon) {
+		self->confine_mon = c->mon;
+		self->confine_tagset = now;
+	}
+	if (gowl_pointer_confine_view_lost(self->confine_tagset, now,
+	                                   VISIBLEON(c, c->mon)))
+		gowl_compositor_release_pointer_confine(self, "workspace");
+}
+
+/*
+ * The escape key, pressed while confined?  Matched against both the
+ * keysyms the key produces now and its level-0 keysyms, exactly as a
+ * configured bind is, so a Shift in the escape chord still matches.
+ */
+static gboolean
+pointer_confine_escape_pressed(
+	GowlCompositor     *self,
+	guint32             mods,
+	const xkb_keysym_t *syms,
+	gint                nsyms,
+	struct wlr_keyboard *kb,
+	xkb_keycode_t       keycode
+){
+	guint want_mods = 0, want_sym = 0;
+	const xkb_keysym_t *raw_syms;
+	gint n_raw, i;
+	guint clean;
+
+	if (!gowl_keybind_parse(pointer_confine_escape_text(self),
+	                        &want_mods, &want_sym)
+	    && !gowl_keybind_parse(GOWL_POINTER_CONFINE_DEFAULT_ESCAPE,
+	                           &want_mods, &want_sym))
+		return FALSE;
+
+	clean = GOWL_CLEANMASK(mods);
+	want_mods = GOWL_CLEANMASK(want_mods);
+	for (i = 0; i < nsyms; i++)
+		if (gowl_pointer_confine_escape_matches(want_mods, want_sym,
+		                                        clean, (guint)syms[i]))
+			return TRUE;
+
+	n_raw = xkb_keymap_key_get_syms_by_level(kb->keymap, keycode,
+		xkb_state_key_get_layout(kb->xkb_state, keycode), 0, &raw_syms);
+	for (i = 0; i < n_raw; i++)
+		if (gowl_pointer_confine_escape_matches(want_mods, want_sym,
+		                                        clean, (guint)raw_syms[i]))
+			return TRUE;
+	return FALSE;
+}
+
+gboolean
+gowl_compositor_confine_pointer(
+	GowlCompositor *self,
+	GowlClient     *client
+){
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	if (client == NULL)
+		client = keyboard_focused_client(self);
+	if (client == NULL)
+		return FALSE;
+
+	/* Asking by hand overrides having let go of it by hand. */
+	if (self->confine_suppressed_id == client->id)
+		self->confine_suppressed_id = 0;
+	if (!pointer_confine_start(self, client, FALSE, "manual"))
+		return FALSE;
+	gowl_compositor_motionnotify(self, 0);
+	return TRUE;
+}
+
+void
+gowl_compositor_release_pointer_confine(
+	GowlCompositor *self,
+	const gchar    *reason
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->confine_client == NULL)
+		return;
+	self->confine_client = NULL;
+	self->confine_by_rule = FALSE;
+	self->confine_pin = FALSE;
+	self->confine_mon = NULL;
+	self->confine_tagset = 0;
+	pointer_confine_announce(self, FALSE, reason);
+}
+
+gboolean
+gowl_compositor_toggle_pointer_confine(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	if (self->confine_client != NULL) {
+		pointer_confine_release_by_user(self, "manual");
+		return FALSE;
+	}
+	return gowl_compositor_confine_pointer(self, NULL);
+}
+
+GowlClient *
+gowl_compositor_get_pointer_confine_client(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	return self->confine_client;
+}
+
+gboolean
+gowl_compositor_pointer_confine_is_active(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	return self->confine_client != NULL;
+}
+
+gboolean
+gowl_compositor_pointer_confine_pins_focus(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	return self->confine_client != NULL && self->confine_pin;
+}
+
+gboolean
+gowl_compositor_get_pointer_confine_box(
+	GowlCompositor *self,
+	gint           *x,
+	gint           *y,
+	gint           *width,
+	gint           *height
+){
+	struct wlr_box box;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	if (!pointer_confine_box_of(self, self->confine_client, &box, NULL))
+		return FALSE;
+	if (x != NULL)      *x = box.x;
+	if (y != NULL)      *y = box.y;
+	if (width != NULL)  *width = box.width;
+	if (height != NULL) *height = box.height;
+	return TRUE;
+}
+
+/*
+ * A `confine-pointer' rule matched a window late (gowl-client.c, on a
+ * title change).  If that window already has the keyboard, it gets the
+ * confinement now rather than on a focus change that is not coming.
+ */
+void
+gowl_compositor_pointer_confine_reevaluate(GowlCompositor *self)
+{
+	GowlClient *c;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	c = keyboard_focused_client(self);
+	if (c == NULL || c == self->confine_client
+	    || (c->rule_flags & GOWL_CLIENT_RULE_CONFINE_POINTER) == 0
+	    || c->id == self->confine_suppressed_id)
+		return;
+	if (pointer_confine_start(self, c, TRUE, "rule"))
+		gowl_compositor_motionnotify(self, 0);
+}
+
+/*
+ * The tablet's absolute warp, through the same gate as every other
+ * pointer motion.  @nx/@ny are the device's normalised position and
+ * may be NAN for "this axis did not change", which is how wlr_cursor
+ * spells it -- the matching layout coordinate is then the cursor's own.
+ */
+void
+gowl_compositor_warp_absolute_constrained(
+	GowlCompositor          *self,
+	struct wlr_input_device *device,
+	gdouble                  nx,
+	gdouble                  ny
+){
+	gdouble lx, ly;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_cursor == NULL)
+		return;
+	wlr_cursor_absolute_to_layout_coords(self->wlr_cursor, device,
+		isnan(nx) ? 0.0 : nx, isnan(ny) ? 0.0 : ny, &lx, &ly);
+	if (isnan(nx))
+		lx = self->wlr_cursor->x;
+	if (isnan(ny))
+		ly = self->wlr_cursor->y;
+	if (constraint_resolve_target(self, &lx, &ly))
+		wlr_cursor_warp_closest(self->wlr_cursor, device, lx, ly);
 }
 
 /* Send a relative-motion event to whichever client is listening.  A
@@ -13231,7 +13952,10 @@ on_client_map(struct wl_listener *listener, void *data)
 		wlr_scene_node_set_enabled(&c->scene->node, TRUE);
 		wlr_scene_node_raise_to_top(&c->scene->node);
 
-		if (client_wants_focus(c)) {
+		/* Not another program's popup while focus is pinned to a
+		 * confined window; the confined program's own still is. */
+		if (client_wants_focus(c)
+		    && !pointer_confine_pin_blocks_client(self, c)) {
 			/* Set exclusive_focus BEFORE focusing: gowl's
 			 * focus_client calls motionnotify -> pointerfocus
 			 * internally, which could otherwise steal focus back
@@ -13334,7 +14058,11 @@ on_client_map(struct wl_listener *listener, void *data)
 	/* A rule that says no-focus: the window goes to the bottom of the
 	 * focus stack before placement, so the focustop() setmon() runs
 	 * lands on whatever had the keyboard. */
-	if (c->rule_flags & GOWL_CLIENT_RULE_NO_FOCUS) {
+	/* So does a pointer confinement that pins focus, for a window that
+	 * is not the confined program's own: it maps, but the keyboard
+	 * stays where the user left it. */
+	if ((c->rule_flags & GOWL_CLIENT_RULE_NO_FOCUS)
+	    || pointer_confine_pin_blocks_client(self, c)) {
 		self->fstack = g_list_remove(self->fstack, c);
 		self->fstack = g_list_append(self->fstack, c);
 	}
@@ -13541,6 +14269,13 @@ on_client_unmap(struct wl_listener *listener, void *data)
 	self = c->compositor;
 	(void)data;
 
+	/* First, before any of the window is torn down: a confinement must
+	 * never outlive the surface it measures.  Every unmap path --
+	 * managed, X11 override-redirect, a window that maps again later --
+	 * passes through here. */
+	if (c == self->confine_client)
+		gowl_compositor_release_pointer_confine(self, "unmap");
+
 	/* Let effects release surface resources before unmapping. */
 	gowl_effects_client_event(self, c, GOWL_SCENE_EFFECT_UNMAP, NULL, FALSE);
 
@@ -13651,6 +14386,11 @@ on_client_destroy(struct wl_listener *listener, void *data)
 
 	c = wl_container_of(listener, c, destroy_surface);
 	(void)data;
+
+	/* Safety belt for a destroy without an unmap: the confinement holds
+	 * an unowned pointer to this client. */
+	if (c->compositor != NULL && c == c->compositor->confine_client)
+		gowl_compositor_release_pointer_confine(c->compositor, "destroy");
 
 	/* Modules must release captured client pointers before the object dies. */
 	g_signal_emit_by_name(c, "destroy");

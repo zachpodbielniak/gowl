@@ -1592,6 +1592,109 @@ struct wlr_pointer_constraint_v1 *
 gowl_compositor_get_active_pointer_constraint (GowlCompositor *self);
 
 /**
+ * gowl_compositor_confine_pointer:
+ * @self: a #GowlCompositor
+ * @client: (nullable): the window to confine to, or %NULL for the
+ *   focused one
+ *
+ * Keeps the cursor inside @client's surface until released --
+ * compositor-initiated, so it works for a program that never asks for
+ * pointer-constraints-v1 (a game under Proton).  The box follows the
+ * window as it moves, resizes, goes fullscreen or changes output.
+ *
+ * A client's own lock or confinement takes precedence while it holds
+ * one; this resumes when it lets go.  With `pointer-confine-focus-pin'
+ * on (the default), sloppy focus, newly mapped windows and activation
+ * requests from other programs cannot take the keyboard away either.
+ *
+ * Released by gowl_compositor_release_pointer_confine(), by the escape
+ * key (`pointer-confine-escape', Super+Ctrl+Escape by default), and on
+ * its own when the window unmaps, focus moves elsewhere, the output
+ * changes tags, the session locks or the menu opens.
+ *
+ * Emits #GowlCompositor::pointer-confine-changed and the IPC event
+ * `EVENT pointer-confine on ID REASON'.
+ *
+ * Returns: %TRUE if the pointer is now confined to @client; %FALSE if
+ *   there is no such window, it is not mapped, or the session is locked
+ */
+gboolean gowl_compositor_confine_pointer (GowlCompositor *self,
+                                          GowlClient     *client);
+
+/**
+ * gowl_compositor_release_pointer_confine:
+ * @self: a #GowlCompositor
+ * @reason: (nullable): why, for the event and the log -- "manual",
+ *   "escape", "focus", "unmap", "lock", "workspace", "menu" ...
+ *
+ * Lets go of a compositor confinement.  A no-op when there is none.
+ * A client's own pointer constraint is not touched.
+ *
+ * Emits #GowlCompositor::pointer-confine-changed and
+ * `EVENT pointer-confine off REASON'.
+ */
+void gowl_compositor_release_pointer_confine (GowlCompositor *self,
+                                              const gchar    *reason);
+
+/**
+ * gowl_compositor_toggle_pointer_confine:
+ * @self: a #GowlCompositor
+ *
+ * Confines to the focused window, or releases if a confinement is
+ * active.  What the `toggle_pointer_confine' action does with no
+ * argument.
+ *
+ * Returns: %TRUE if the pointer is confined afterwards
+ */
+gboolean gowl_compositor_toggle_pointer_confine (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_pointer_confine_client:
+ * @self: a #GowlCompositor
+ *
+ * Returns: (transfer none) (nullable): the window the pointer is
+ *   confined to by the compositor, or %NULL
+ */
+GowlClient *gowl_compositor_get_pointer_confine_client (GowlCompositor *self);
+
+/**
+ * gowl_compositor_pointer_confine_is_active:
+ * @self: a #GowlCompositor
+ *
+ * Returns: %TRUE while a compositor confinement is in force, whether
+ *   or not a client's own constraint is overriding it at this moment
+ */
+gboolean gowl_compositor_pointer_confine_is_active (GowlCompositor *self);
+
+/**
+ * gowl_compositor_get_pointer_confine_box:
+ * @self: a #GowlCompositor
+ * @x: (out) (optional): layout X of the box
+ * @y: (out) (optional): layout Y of the box
+ * @width: (out) (optional): width of the box
+ * @height: (out) (optional): height of the box
+ *
+ * The region the cursor is held in right now: the confined window's
+ * surface, cut to what is drawn and to its output.  Recomputed on every
+ * call, so it is wherever the window is now.
+ *
+ * Returns: %TRUE if a confinement is active and has a box
+ */
+gboolean gowl_compositor_get_pointer_confine_box (GowlCompositor *self,
+                                                  gint           *x,
+                                                  gint           *y,
+                                                  gint           *width,
+                                                  gint           *height);
+
+/**
+ * gowl_compositor_pointer_confine_pins_focus:
+ * @self: a #GowlCompositor
+ *
+ * Returns: %TRUE while keyboard focus is pinned to the confined window
+ */
+gboolean gowl_compositor_pointer_confine_pins_focus (GowlCompositor *self);
+
+/**
  * gowl_compositor_dispatch_keybind:
  * @self: a #GowlCompositor
  * @mods: modifier bitmask (#GowlKeyMod flags), cleaned internally

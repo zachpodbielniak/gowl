@@ -560,6 +560,8 @@
 /* 0 asks for ten bits and settles for eight; 8 never asks. */
 #define GOWL_CONFIG_DEFAULT_HDR_BPC             (0)
 #define GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE   ("smart")
+#define GOWL_CONFIG_DEFAULT_POINTER_CONFINE_FOCUS_PIN (TRUE)
+#define GOWL_CONFIG_DEFAULT_POINTER_CONFINE_ESCAPE    ("Super+Ctrl+Escape")
 #define GOWL_CONFIG_DEFAULT_INPUT_RECORDING     (FALSE)
 #define GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS ""
 #define GOWL_CONFIG_DEFAULT_LOG_LEVEL           "warning"
@@ -1046,6 +1048,8 @@ struct _GowlConfig {
 	gboolean hdr_encode;
 	gint     hdr_bpc;
 	gchar   *focus_on_activate;
+	gboolean pointer_confine_focus_pin;
+	gchar   *pointer_confine_escape;
 	gboolean input_recording;
 	gchar   *input_recording_deny_apps;
 
@@ -1393,6 +1397,13 @@ gowl_config_set_property(
 		g_free(self->focus_on_activate);
 		self->focus_on_activate = g_value_dup_string(value);
 		break;
+	case GOWL_CONFIG_PROP_POINTER_CONFINE_FOCUS_PIN:
+		self->pointer_confine_focus_pin = g_value_get_boolean(value);
+		break;
+	case GOWL_CONFIG_PROP_POINTER_CONFINE_ESCAPE:
+		g_free(self->pointer_confine_escape);
+		self->pointer_confine_escape = g_value_dup_string(value);
+		break;
 	case GOWL_CONFIG_PROP_INPUT_RECORDING:
 		self->input_recording = g_value_get_boolean(value);
 		break;
@@ -1528,6 +1539,12 @@ gowl_config_get_property(
 	case GOWL_CONFIG_PROP_FOCUS_ON_ACTIVATE:
 		g_value_set_string(value, self->focus_on_activate);
 		break;
+	case GOWL_CONFIG_PROP_POINTER_CONFINE_FOCUS_PIN:
+		g_value_set_boolean(value, self->pointer_confine_focus_pin);
+		break;
+	case GOWL_CONFIG_PROP_POINTER_CONFINE_ESCAPE:
+		g_value_set_string(value, self->pointer_confine_escape);
+		break;
 	case GOWL_CONFIG_PROP_INPUT_RECORDING:
 		g_value_set_boolean(value, self->input_recording);
 		break;
@@ -1618,6 +1635,7 @@ gowl_config_finalize(GObject *object)
 	g_free(self->log_file);
 	g_free(self->input_recording_deny_apps);
 	g_free(self->focus_on_activate);
+	g_free(self->pointer_confine_escape);
 	g_free(self->animation_curve);
 	g_free(self->animation_curve_open);
 	g_free(self->animation_curve_close);
@@ -1921,6 +1939,22 @@ gowl_config_class_init(GowlConfigClass *klass)
 		                    "What a window's activation request does: "
 		                    "smart, urgent, focus or none",
 		                    GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE,
+		                    G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_POINTER_CONFINE_FOCUS_PIN] =
+		g_param_spec_boolean("pointer-confine-focus-pin",
+		                     "Pointer Confine Focus Pin",
+		                     "Keep keyboard focus on a window the "
+		                     "compositor has confined the pointer to",
+		                     GOWL_CONFIG_DEFAULT_POINTER_CONFINE_FOCUS_PIN,
+		                     G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+	properties[GOWL_CONFIG_PROP_POINTER_CONFINE_ESCAPE] =
+		g_param_spec_string("pointer-confine-escape",
+		                    "Pointer Confine Escape",
+		                    "The key that always ends a compositor "
+		                    "pointer confinement",
+		                    GOWL_CONFIG_DEFAULT_POINTER_CONFINE_ESCAPE,
 		                    G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
 	properties[GOWL_CONFIG_PROP_INPUT_RECORDING] =
@@ -2475,6 +2509,9 @@ gowl_config_init(GowlConfig *self)
 	self->hdr_encode          = GOWL_CONFIG_DEFAULT_HDR_ENCODE;
 	self->hdr_bpc             = GOWL_CONFIG_DEFAULT_HDR_BPC;
 	self->focus_on_activate   = g_strdup(GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE);
+	self->pointer_confine_focus_pin = GOWL_CONFIG_DEFAULT_POINTER_CONFINE_FOCUS_PIN;
+	self->pointer_confine_escape =
+		g_strdup(GOWL_CONFIG_DEFAULT_POINTER_CONFINE_ESCAPE);
 	self->input_recording     = GOWL_CONFIG_DEFAULT_INPUT_RECORDING;
 	self->input_recording_deny_apps =
 		g_strdup(GOWL_CONFIG_DEFAULT_INPUT_RECORDING_DENY_APPS);
@@ -2788,6 +2825,7 @@ static const gchar *const top_level_keys[] = {
 	"dpms-timeout", "allow-tearing", "hdr-unmanaged", "hdr-advertise-pq", "hdr-sdr-white",
 	"hdr-encode", "hdr-bpc",
 	"focus-on-activate",
+	"pointer-confine-focus-pin", "pointer-confine-escape",
 	"input-recording", "input-recording-deny-apps",
 	"evaluate_gowl_config_with_cmacs", "evaluate-gowl-config-with-cmacs",
 	"evaluate_c_config_with_cmacs", "evaluate-c-config-with-cmacs",
@@ -2911,7 +2949,7 @@ static const gchar *const rule_keys[] = {
 	"height", "center", "regex", "sticky", "initial-title", "xwayland",
 	"pid", "no-focus", "fullscreen", "opacity", "no-blur", "no-shadow",
 	"no-anim", "idle-inhibit", "is-floating", "is-fullscreen", "on-tag",
-	"focus", "width-pct", "height-pct", NULL
+	"focus", "width-pct", "height-pct", "confine-pointer", NULL
 };
 
 static const gchar *const bind_keys[] = {
@@ -5201,6 +5239,29 @@ gowl_config_apply_mapping(
 		if (val != NULL)
 			g_object_set(self, "focus-on-activate", val, NULL);
 	}
+	if (yaml_mapping_has_member(mapping, "pointer-confine-focus-pin")) {
+		gboolean val = yaml_mapping_get_boolean_member(mapping,
+			"pointer-confine-focus-pin");
+		g_object_set(self, "pointer-confine-focus-pin", val, NULL);
+	}
+	/* The escape must always work, so a key that does not parse is a
+	 * reported problem and the default stays -- never "no escape". */
+	if (yaml_mapping_has_member(mapping, "pointer-confine-escape")) {
+		const gchar *val = yaml_mapping_get_string_member(mapping,
+			"pointer-confine-escape");
+		guint mods = 0, sym = 0;
+
+		if (val != NULL && gowl_keybind_parse(val, &mods, &sym)
+		    && sym != 0) {
+			g_object_set(self, "pointer-confine-escape", val, NULL);
+		} else {
+			g_warning("gowl_config: pointer-confine-escape '%s' is "
+			          "not a key; keeping %s",
+			          val != NULL ? val : "(null)",
+			          GOWL_CONFIG_DEFAULT_POINTER_CONFINE_ESCAPE);
+			self->problems++;
+		}
+	}
 	if (yaml_mapping_has_member(mapping, "input-recording")) {
 		gboolean val = yaml_mapping_get_boolean_member(mapping,
 			"input-recording");
@@ -5652,6 +5713,10 @@ gowl_config_apply_mapping(
 					if (yaml_mapping_has_member(rule_map, "idle-inhibit"))
 						added->idle_inhibit = yaml_mapping_get_boolean_member(
 							rule_map, "idle-inhibit");
+					if (yaml_mapping_has_member(rule_map, "confine-pointer"))
+						added->confine_pointer =
+							yaml_mapping_get_boolean_member(
+								rule_map, "confine-pointer");
 					/* State matchers.  `floating:' and `fullscreen:'
 					 * are what the rule DOES; `is-floating:' and
 					 * `is-fullscreen:' are what the window must
@@ -6206,6 +6271,11 @@ gowl_config_generate_yaml(GowlConfig *self)
 	g_string_append_printf(yaml, "focus-on-activate: \"%s\"\n",
 	                       self->focus_on_activate != NULL
 	                       ? self->focus_on_activate : "smart");
+	g_string_append_printf(yaml, "pointer-confine-focus-pin: %s\n",
+	                       self->pointer_confine_focus_pin
+	                       ? "true" : "false");
+	g_string_append_printf(yaml, "pointer-confine-escape: \"%s\"\n",
+	                       gowl_config_get_pointer_confine_escape(self));
 	{
 		const gchar *const xkb_keys[] = {
 			"xkb-layout", "xkb-variant", "xkb-model",
@@ -6438,6 +6508,8 @@ gowl_config_generate_yaml(GowlConfig *self)
 				g_string_append(yaml, "    no-anim: true\n");
 			if (rule->idle_inhibit)
 				g_string_append(yaml, "    idle-inhibit: true\n");
+			if (rule->confine_pointer)
+				g_string_append(yaml, "    confine-pointer: true\n");
 			if (rule->match_floating >= 0)
 				g_string_append_printf(yaml, "    is-floating: %s\n",
 				                       rule->match_floating ? "true" : "false");
@@ -6641,6 +6713,38 @@ gowl_config_get_focus_on_activate(GowlConfig *self)
 	       ? self->focus_on_activate : GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE;
 }
 
+/**
+ * gowl_config_get_pointer_confine_focus_pin:
+ * @self: a #GowlConfig
+ *
+ * Returns: %TRUE if keyboard focus is pinned while the compositor
+ *   confines the pointer
+ */
+gboolean
+gowl_config_get_pointer_confine_focus_pin(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_POINTER_CONFINE_FOCUS_PIN);
+	return self->pointer_confine_focus_pin;
+}
+
+/**
+ * gowl_config_get_pointer_confine_escape:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none): the confinement escape key string
+ */
+const gchar *
+gowl_config_get_pointer_confine_escape(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_POINTER_CONFINE_ESCAPE);
+	return (self->pointer_confine_escape != NULL
+	        && *self->pointer_confine_escape != '\0')
+	       ? self->pointer_confine_escape
+	       : GOWL_CONFIG_DEFAULT_POINTER_CONFINE_ESCAPE;
+}
+
 gboolean
 gowl_config_get_input_recording(GowlConfig *self)
 {
@@ -6763,6 +6867,10 @@ gowl_config_reset_values_to_defaults(GowlConfig *self)
 	             "dpms-timeout",        GOWL_CONFIG_DEFAULT_DPMS_TIMEOUT,
 	             "allow-tearing",       GOWL_CONFIG_DEFAULT_ALLOW_TEARING,
 	             "focus-on-activate",   GOWL_CONFIG_DEFAULT_FOCUS_ON_ACTIVATE,
+	             "pointer-confine-focus-pin",
+	                 GOWL_CONFIG_DEFAULT_POINTER_CONFINE_FOCUS_PIN,
+	             "pointer-confine-escape",
+	                 GOWL_CONFIG_DEFAULT_POINTER_CONFINE_ESCAPE,
 	             "xkb-layout",          NULL,
 	             "xkb-variant",         NULL,
 	             "xkb-model",           NULL,

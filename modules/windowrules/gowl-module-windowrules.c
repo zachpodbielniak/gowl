@@ -533,6 +533,11 @@ wr_apply_rules_to_client(
 				flags |= GOWL_CLIENT_RULE_NO_ANIM;
 			if (rule->idle_inhibit)
 				flags |= GOWL_CLIENT_RULE_IDLE_INHIBIT;
+			/* Read by the compositor on every focus change, not
+			 * just at map: a rule that matches on a later title
+			 * still takes the pointer the moment it is set. */
+			if (rule->confine_pointer)
+				flags |= GOWL_CLIENT_RULE_CONFINE_POINTER;
 			if (rule->no_focus && initial)
 				flags |= GOWL_CLIENT_RULE_NO_FOCUS;
 			/* The opposite of no-focus, and it wins: a rule that

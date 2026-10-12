@@ -48,6 +48,9 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =hdr [on\vert{}off\vert{}toggle] [OUTPUT]= | Switches an output between HDR and SDR (the focused one by default); =ERROR= when it cannot do HDR |
 | =hdr-state [OUTPUT]= | Whether an output is in HDR, without changing it --- =hdr= with no argument toggles, which a status line or a menu guard must not do |
 | =crt [on\vert{}off\vert{}toggle]= | The cathode ray tube; no argument reports it |
+| =pointer-confine= | The compositor's pointer confinement as JSON: =active=, =client= (id or =null=), =app_id=, =title=, =by_rule=, =focus_pin=, =escape=, =client_constraint= (=locked=, =confined= or =null= --- a client's own constraint, which overrides it while held) and =box= (={x, y, width, height}= in layout coordinates, or =null=) |
+| =pointer-confine state= | Bare =on= or =off=, for a bar =toggle= widget's =state-command= (which reads ="OK off"= as on) |
+| =pointer-confine on\vert{}off\vert{}toggle= | Confines the pointer to the focused window, lets it go, or flips it --- the =toggle_pointer_confine= action, so a release here is the same as the escape key's. Replies =OK on= or =OK off=; =on= with nothing focused is =ERROR= |
 | =tray [list\vert{}activate\vert{}menu\vert{}secondary KEY]= | The system tray register: =list= answers JSON, the rest click an item the way a bar widget would |
 | =backdrop [STYLE\vert{}next\vert{}prev]= | What shows through translucent windows; no argument reports it. STYLE is one of =none=, =blur=, =bokeh=, =glass=, =water=, =rain=, =storm=, =snow=, =leaves=, =fizz=, =soap=, =submerged=, =embers=, =dew=. Every backdrop module reads it, so the change is immediate. =carbonation=, =autumn=, =thunderstorm=, =underwater= and a few other spellings resolve too |
 | =hints [-show\vert{}-hide]= | Put a letter on every visible window; press it to focus that window. Toggles with no argument |
@@ -92,11 +95,29 @@ A subscriber receives one line per event, =EVENT <name> <args>=:
 | =monitor-added OUTPUT=             | an output was plugged in                       |
 | =monitor-removed OUTPUT=           | an output was unplugged                        |
 | =lock locked\vert{}unlocked=       | the session locked or unlocked, from any route |
+| =pointer-confine on ID REASON= | the compositor started holding the pointer in window =ID= (or moved it there). REASON is =manual= (a key, IPC, cmacs) or =rule= (a =confine-pointer= window rule) |
+| =pointer-confine off REASON= | it let go. REASON is =manual=, =escape=, =focus= (focus moved elsewhere), =unmap=, =destroy=, =workspace=, =lock= or =menu= |
+| =crt on\vert{}off= | the cathode ray tube was switched on or off |
 | =backdrop STYLE= | what shows through translucent windows changed; STYLE is the short name, one of the fourteen |
 | =command LINE=                     | a module command ran, from any source          |
 | =screenshot ocr N= / =ocr-failed= / =color #RRGGBB= | text or a colour was put on the clipboard (or OCR failed) |
 
 Events are pushed from the compositor's own code paths, so a change made from a keybind, from Elisp, from MCP or from this socket is announced the same way.
+
+** Pointer confinement
+:PROPERTIES:
+:CUSTOM_ID: pointer-confine-ipc
+:END:
+
+#+begin_src bash
+gowl-msg action toggle_pointer_confine        # the key's action; on/off as ARG
+gowl-msg pointer-confine on                   # the same, replying OK on / OK off
+gowl-msg pointer-confine                      # {"active":true,"client":7,"app_id":"wow.exe",...}
+gowl-msg pointer-confine state                # on | off
+gowl-msg -s | grep --line-buffered 'EVENT pointer-confine'
+#+end_src
+
+=client_constraint= in the JSON says when the *client's* own lock or confinement is in charge --- a game in mouselook --- which is why the cursor may not move even within the box. See [[file:configuration.org::#pointer-confine][Keeping the pointer in a window]].
 
 * Per-device input remapping
 

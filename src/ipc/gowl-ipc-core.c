@@ -35,7 +35,9 @@
 #include "gowl-ipc.h"
 #include "../config/gowl-keybind.h"
 #include "../tray/gowl-tray.h"
+#include "../core/gowl-pointer-confine.h"
 #include <json-glib/json-glib.h>
+#include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -271,6 +273,7 @@ static const gchar *const help_text =
 	"hdr [on|off|toggle] [OUTPUT] | "
 	"backdrop [none|blur|glass|water|rain|snow|leaves|fizz|next|prev] | "
 	"crt [on|off|toggle] | hdr-state [OUTPUT] | "
+	"pointer-confine [on|off|toggle|state] | "
 	"tray [list|activate|menu|secondary KEY] | "
 	"lock | unlock | locked | "
 	"reload | version | ping | subscribe | help";
@@ -587,6 +590,113 @@ gowl_compositor_ipc_command(
 			return g_strdup("ERROR expected on, off or toggle");
 		gowl_compositor_set_crt(self, on);
 		return g_strdup(gowl_compositor_get_crt(self) ? "OK on" : "OK off");
+	}
+	if (g_strcmp0(word, "pointer-confine") == 0) {
+		/*
+		 * The compositor's pointer confinement: query and switch.
+		 *
+		 *   pointer-confine            JSON: active, the window, why,
+		 *                              focus pin, the box, and any
+		 *                              client constraint overriding it
+		 *   pointer-confine state      bare `on' or `off' -- what the
+		 *                              bar's toggle widget reads, which
+		 *                              takes "OK off" as on
+		 *   pointer-confine on|off|toggle
+		 *                              the action, replying the state
+		 *
+		 * Switching goes through the action, so a release from here is
+		 * exactly a release from the key: a ruled window is not taken
+		 * straight back by its rule.
+		 */
+		GowlClient *cc;
+
+		if (args != NULL && g_ascii_strcasecmp(args, "state") == 0)
+			return g_strdup(gowl_compositor_pointer_confine_is_active(self)
+			                ? "on" : "off");
+		if (args != NULL && *args != '\0') {
+			GowlKeybindEntry kb;
+			g_autofree gchar *arg = NULL;
+
+			if (g_ascii_strcasecmp(args, "on") != 0
+			    && g_ascii_strcasecmp(args, "off") != 0
+			    && g_ascii_strcasecmp(args, "toggle") != 0)
+				return g_strdup("ERROR expected on, off, toggle "
+				                "or state");
+			/* The entry's arg is not const; "toggle" is no arg. */
+			if (g_ascii_strcasecmp(args, "toggle") != 0)
+				arg = g_strdup(args);
+			memset(&kb, 0, sizeof kb);
+			kb.action = GOWL_ACTION_TOGGLE_POINTER_CONFINE;
+			kb.arg = arg;
+			gowl_compositor_run_keybind_entry(self, &kb);
+			if (g_ascii_strcasecmp(args, "on") == 0
+			    && !gowl_compositor_pointer_confine_is_active(self))
+				return g_strdup("ERROR no focused window to "
+				                "confine to");
+			return g_strdup(gowl_compositor_pointer_confine_is_active(self)
+			                ? "OK on" : "OK off");
+		}
+
+		{
+			JsonBuilder *b = json_builder_new();
+			struct wlr_pointer_constraint_v1 *pc;
+			gint bx, by, bw, bh;
+
+			cc = gowl_compositor_get_pointer_confine_client(self);
+			pc = gowl_compositor_get_active_pointer_constraint(self);
+			json_builder_begin_object(b);
+			json_builder_set_member_name(b, "active");
+			json_builder_add_boolean_value(b, cc != NULL);
+			json_builder_set_member_name(b, "client");
+			if (cc != NULL)
+				json_builder_add_int_value(b, cc->id);
+			else
+				json_builder_add_null_value(b);
+			json_builder_set_member_name(b, "app_id");
+			json_builder_add_string_value(b,
+				(cc != NULL && cc->app_id != NULL) ? cc->app_id : "");
+			json_builder_set_member_name(b, "title");
+			json_builder_add_string_value(b,
+				(cc != NULL && cc->title != NULL) ? cc->title : "");
+			json_builder_set_member_name(b, "by_rule");
+			json_builder_add_boolean_value(b,
+				cc != NULL && self->confine_by_rule);
+			json_builder_set_member_name(b, "focus_pin");
+			json_builder_add_boolean_value(b,
+				gowl_compositor_pointer_confine_pins_focus(self));
+			json_builder_set_member_name(b, "escape");
+			json_builder_add_string_value(b, self->config != NULL
+				? gowl_config_get_pointer_confine_escape(self->config)
+				: GOWL_POINTER_CONFINE_DEFAULT_ESCAPE);
+			/* A client's own constraint is in charge while it holds
+			 * one; say so, or a cursor that will not move looks like
+			 * this feature misbehaving. */
+			json_builder_set_member_name(b, "client_constraint");
+			if (pc == NULL)
+				json_builder_add_null_value(b);
+			else
+				json_builder_add_string_value(b,
+					pc->type == WLR_POINTER_CONSTRAINT_V1_LOCKED
+					? "locked" : "confined");
+			json_builder_set_member_name(b, "box");
+			if (gowl_compositor_get_pointer_confine_box(self, &bx, &by,
+			                                            &bw, &bh)) {
+				json_builder_begin_object(b);
+				json_builder_set_member_name(b, "x");
+				json_builder_add_int_value(b, bx);
+				json_builder_set_member_name(b, "y");
+				json_builder_add_int_value(b, by);
+				json_builder_set_member_name(b, "width");
+				json_builder_add_int_value(b, bw);
+				json_builder_set_member_name(b, "height");
+				json_builder_add_int_value(b, bh);
+				json_builder_end_object(b);
+			} else {
+				json_builder_add_null_value(b);
+			}
+			json_builder_end_object(b);
+			return json_finish(b);
+		}
 	}
 	if (g_strcmp0(word, "tray") == 0) {
 		/*

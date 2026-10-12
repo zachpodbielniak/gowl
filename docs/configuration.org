@@ -256,6 +256,44 @@ Only what is on screen: a floating window on a tag nobody is looking at
 is not in front of anything, and re-stacking it would be a surprise
 waiting on the next tag switch.
 
+**** Keeping the pointer in a window
+:PROPERTIES:
+:CUSTOM_ID: pointer-confine
+:END:
+
+=Super+g= (=toggle_pointer_confine=) keeps the pointer inside the focused window until you let go; press it again to let go. =Super+Ctrl+Escape= *always* lets go, whatever else has the keyboard.
+
+A game that wants the pointer asks for it itself, with pointer-constraints-v1, and gowl honours that (see [[file:architecture.org::#compositor-pointer-confine][architecture.org]]). This is for the game that does not ask --- anything under Proton is an X11 client that does not --- and in particular for streaming one. Steam's game capture follows *keyboard focus*: with =sloppyfocus= on, moving the mouse off the game moves focus, and Steam switches the stream to the whole desktop. Confined, the pointer cannot leave the window, and with focus pinned (the default) nothing else can take the keyboard either.
+
+What it does:
+
+- The cursor cannot leave the window's surface --- not its border --- from a mouse, a tablet, a VM's absolute pointer or a software KVM. The window's relative motion keeps flowing, so a game's camera still turns with the cursor against the edge.
+- The box follows the window: moved, resized, fullscreened, sent to another output or rescaled, the cursor comes with it.
+- With =pointer-confine-focus-pin: true= (the default), the keyboard stays on the window: sloppy focus does not move it, a newly mapped window does not take it, and another program asking to be activated is marked urgent instead. The confined program's own windows --- a launcher, a dialog --- are let through. *This is the half that keeps a stream on the game.*
+- A client's own lock or confinement wins while it holds one --- a game's mouselook lock is exactly what it asked for --- and the box is back the moment it lets go.
+
+It lets go by itself when the window unmaps or closes, when you move focus elsewhere yourself (a key, a click, IPC), when the output switches workspace, when the session locks, and when the menu (=Super+space=) opens. A toast says so either way; the =confine= bar widget stays lit while it lasts, and cmacs shows =Confined= in the mode line.
+
+To confine a game whenever it has the keyboard, give it a rule. An X11 window's app-id is its =WM_CLASS= class; read the real one with =gowl-msg clients= while the game runs:
+
+#+begin_src yaml
+rules:
+  # World of Warcraft under Proton.  Check the class with
+  # `gowl-msg clients' -- Wine names it after the executable.
+  - app-id: "wow.exe"
+    confine-pointer: true
+
+keybinds:
+  "Super+g": { action: toggle_pointer_confine, desc: "Keep the pointer in this window" }
+
+pointer-confine-focus-pin: true         # the default
+pointer-confine-escape: "Super+Ctrl+Escape"   # the default
+#+end_src
+
+Letting go of a ruled window by hand --- the escape, =Super+g=, =gowl-msg pointer-confine off= --- sticks until focus has been somewhere else; the rule does not take the pointer straight back. Focus the game again later and it does.
+
+The escape is only taken while a confinement is active, so the shipped =Super+Ctrl+Escape= bind (the menu at System) works the rest of the time. It is checked before every bind, key mode and keyboard-shortcuts inhibitor. A =pointer-confine-escape= that does not parse is reported by =gowl --check-config= and the default stays: there is never no escape.
+
 **** Motion
 :PROPERTIES:
 :CUSTOM_ID: animations
@@ -702,7 +740,7 @@ list is the interface you can use without having remembered anything.
 | =Super+space= | Open it, or close it |
 | =Super+Shift+space= | Open it with every program on =$PATH= listed and searched too |
 | =Super+Alt+space= | Open it at Applications |
-| =Super+Ctrl+Escape= | Open it at System |
+| =Super+Ctrl+Escape= | Open it at System --- except while the pointer is confined, when it is the escape ([[#pointer-confine][Keeping the pointer in a window]]) |
 | =Super+Alt+v= | Open it at the clipboard history (private: see below) |
 | =Super+?= (=Super+Shift+slash=) | Open it at Keybindings: every key bound right now, and what it runs |
 
@@ -2923,6 +2961,8 @@ idle-timeout: 300       # seconds without input before the session is idle
 dpms-timeout: 0         # seconds without input before every output powers off; 0 never
 allow-tearing: false    # let a fullscreen window that asks for it tear
 focus-on-activate: smart  # smart | urgent | focus | none
+pointer-confine-focus-pin: true            # see "Keeping the pointer in a window"
+pointer-confine-escape: "Super+Ctrl+Escape"
 #+end_src
 
 | Key                 | Type   | Default | Meaning                                                        |
@@ -2931,6 +2971,8 @@ focus-on-activate: smart  # smart | urgent | focus | none
 | =dpms-timeout=      | int    | 0       | After this many seconds without input every output is powered off. Any input powers them back on. 0 never. |
 | =allow-tearing=     | bool   | false   | A fullscreen window that asks for it through tearing-control-v1 (a game) is page-flipped without waiting for vblank. Never applied to anything but a fullscreen window. |
 | =focus-on-activate= | string | smart   | What a window's request to be activated does -- xdg-activation, an X11 =_NET_ACTIVE_WINDOW=, a taskbar's foreign-toplevel request. =smart= focuses it if it is visible on the selected monitor and marks it urgent otherwise; =urgent= only ever marks; =focus= views its tags and focuses it; =none= ignores the request. |
+| =pointer-confine-focus-pin= | bool | true | While the compositor confines the pointer to a window (=toggle_pointer_confine=, a =confine-pointer= rule), keep the keyboard there: sloppy focus, a newly mapped window and another program's activation request cannot take it. The confined program's own windows are let through. See [[#pointer-confine][Keeping the pointer in a window]]. |
+| =pointer-confine-escape= | string | =Super+Ctrl+Escape= | The key that always ends a compositor confinement --- checked before every bind, key mode and shortcuts inhibitor, and only taken while one is active. A key that does not parse is a config problem and the default stays. |
 
 Both timers are held off while a visible window holds an *idle inhibitor* (idle-inhibit-v1): a video player, a presentation. So is the screenlock module's auto-lock. An inhibitor on a window on another tag does not count -- a paused video behind the work you are doing must not keep the screen on.
 
@@ -3027,6 +3069,7 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =focus_urgent=      | --                               | Focus the window marked urgent, viewing its tags if need be |
 | =focus_last=        | --                               | Focus the window that had focus before this one |
 | =focus_client=      | ="app-id:GLOB"=, ="title:GLOB"= or a bare app-id glob | Jump to the first matching window: view its tags, select its monitor, focus it |
+| =toggle_pointer_confine= | --, ="on"=, ="off"=          | Keep the pointer inside the focused window, or let it go (see [[#pointer-confine][Keeping the pointer in a window]]). ="on"= with another window confined moves it to this one |
 | =custom=            | passed to the embedder           | Embedder-defined action (see below)         |
 
 **** Key modes
@@ -3168,6 +3211,7 @@ Rules match clients by =app_id= and/or =title= and apply settings.
 | =focus=    | bool   | =false= | Take the keyboard when it maps, viewing the tags the rule assigns.  The opposite of =no-focus=, and it wins if both are set |
 | =width-pct= | float | unset   | Width as a fraction of the output's usable area (=0.6= or ="60%"=), so one rule fits every screen.  An explicit =width= overrides it |
 | =height-pct= | float | unset  | Height as a fraction of the usable area                     |
+| =confine-pointer= | bool | =false= | Keep the pointer inside the window whenever it has the keyboard (see [[#pointer-confine][Keeping the pointer in a window]]).  Read on every focus change, so a rule that matches a later title still takes effect |
 
 Matchers (=app_id=, =title=, =initial-title=, =xwayland=, =pid=, =is-floating=, =is-fullscreen=, =on-tag=) must all match for a rule to apply; the first matching rule wins. =title= rules are re-evaluated when a window renames itself; =initial-title= ones are not, and the state matchers are read again each time a rule is re-applied.
 

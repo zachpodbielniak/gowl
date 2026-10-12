@@ -531,10 +531,20 @@ gowl_client_set_rule_flags(
 ){
 	g_return_if_fail(GOWL_IS_CLIENT(self));
 
+	guint gained;
+
 	if (self->rule_flags == flags)
 		return;
+	gained = flags & ~self->rule_flags;
 	self->rule_flags = flags;
 	g_signal_emit(self, client_signals[SIGNAL_STATE_CHANGED], 0);
+
+	/* A `confine-pointer' rule can match AFTER the window mapped -- on
+	 * a title change -- while it already has the keyboard.  No focus
+	 * change is coming to act on it, so ask the compositor now. */
+	if ((gained & GOWL_CLIENT_RULE_CONFINE_POINTER) != 0
+	    && self->compositor != NULL)
+		gowl_compositor_pointer_confine_reevaluate(self->compositor);
 }
 
 gboolean

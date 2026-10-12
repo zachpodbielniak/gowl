@@ -33,6 +33,7 @@
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"
 #include "core/gowl-monitor.h"
+#include "config/gowl-config.h"
 #include "boxed/gowl-process-info.h"
 #include "barkit/gowl-bar-host.h"
 
@@ -1702,6 +1703,102 @@ static const GowlBarPluginVTable keymap_vtable = {
 	NULL, NULL, NULL, NULL, NULL,
 	keymap_interval, keymap_poll, keymap_poll_async,
 	NULL, NULL, NULL, NULL,
+	NULL, NULL,
+	NULL, NULL,
+	NULL,
+	NULL
+};
+
+/* ----------------------------------------------------------------
+ * confine -- the compositor's pointer confinement
+ * ---------------------------------------------------------------- */
+
+static gint
+confine_interval(GowlBarPlugin *plugin, gpointer data)
+{
+	(void)plugin;
+	(void)data;
+	return 1;
+}
+
+/*
+ * Shown only while the compositor holds the pointer in a window --
+ * `toggle_pointer_confine', a `confine-pointer' rule -- and gone the
+ * rest of the time: a widget with no label and no icon measures zero
+ * and is dropped.  It is a warning light, not a control panel.  The
+ * tooltip says which window and how to get out.
+ *
+ * Read straight from the compositor on the dispatch thread, so it is
+ * never more than a second behind and costs no subprocess.
+ */
+static void
+confine_poll(GowlBarPlugin *plugin, gpointer data)
+{
+	const BarEnv *env = bar_env();
+	GowlCompositor *comp;
+	GowlClient *c;
+	g_autofree gchar *tip = NULL;
+	const gchar *label;
+
+	(void)data;
+
+	c = NULL;
+	comp = NULL;
+	if (env != NULL && env->compositor != NULL) {
+		comp = GOWL_COMPOSITOR(env->compositor);
+		c = gowl_compositor_get_pointer_confine_client(comp);
+	}
+	if (c == NULL) {
+		gowl_bar_plugin_set_icon(plugin, NULL);
+		gowl_bar_plugin_set_label(plugin, NULL);
+		gowl_bar_plugin_set_tooltip(plugin, NULL);
+		return;
+	}
+
+	tip = g_strdup_printf("Pointer confined to %s%s\n%s releases",
+		gowl_client_get_app_id(c) != NULL
+			? gowl_client_get_app_id(c) : "the window",
+		gowl_compositor_pointer_confine_pins_focus(comp)
+			? " (focus pinned)" : "",
+		gowl_config_get_pointer_confine_escape(
+			gowl_compositor_get_config(comp)));
+	label = gowl_bar_plugin_get_setting(plugin, "label");
+	/* nf-md-cursor_default_click (U+F0CFD): a pointer, held. */
+	gowl_bar_plugin_set_icon(plugin, "\xf3\xb0\xb3\xbd");
+	gowl_bar_plugin_set_label(plugin, label != NULL ? label : "confined");
+	gowl_bar_plugin_set_tooltip(plugin, tip);
+	bar_plugin_apply_color(plugin,
+		gowl_bar_plugin_get_setting(plugin, "color"),
+		GOWL_BAR_COLOR_PEACH);
+}
+
+/* A left click lets go -- the same release the escape key does. */
+static gboolean
+confine_click(GowlBarPlugin *plugin, gpointer data, guint button,
+              gint x, gint y, guint modifiers)
+{
+	const BarEnv *env = bar_env();
+	GowlCompositor *comp;
+
+	(void)plugin;
+	(void)data;
+	(void)x;
+	(void)y;
+	(void)modifiers;
+
+	if (button != BTN_LEFT || env == NULL || env->compositor == NULL)
+		return FALSE;
+	comp = GOWL_COMPOSITOR(env->compositor);
+	if (gowl_compositor_pointer_confine_is_active(comp))
+		gowl_compositor_toggle_pointer_confine(comp);
+	return TRUE;
+}
+
+static const GowlBarPluginVTable confine_vtable = {
+	sizeof(GowlBarPluginVTable),
+	NULL, NULL, NULL, NULL, NULL,
+	confine_interval, confine_poll, NULL,
+	NULL, NULL, confine_click, NULL,
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
@@ -4292,6 +4389,8 @@ bar_register_desktop_plugins(GowlBarRegistry *registry)
 		"The focused window's repository", &git_vtable);
 	gowl_bar_registry_register_vtable(registry, "keymap", "Keyboard layout",
 		"The active keyboard layout", &keymap_vtable);
+	gowl_bar_registry_register_vtable(registry, "confine", "Pointer confined",
+		"Shown while the pointer is held in a window", &confine_vtable);
 	gowl_bar_registry_register_vtable(registry, "display", "Display",
 		"Brightness and output settings", &display_vtable);
 

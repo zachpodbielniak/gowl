@@ -52,6 +52,7 @@ gowl_mcp_register_all_tools(McpServer *server, GowlModuleMcp *module)
 	gowl_mcp_register_record_tools(server, module);
 	gowl_mcp_register_screenshot_tools(server, module);
 	gowl_mcp_register_inputremap_tools(server, module);
+	gowl_mcp_register_broadcast_tools(server, module);
 	gowl_mcp_register_macro_tools(server, module);
 	gowl_mcp_register_grab_tools(server, module);
 	/* The clipboard history tools were written and left out of this

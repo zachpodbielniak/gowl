@@ -1,0 +1,310 @@
+* Input Broadcasting (Multiboxing)
+:PROPERTIES:
+:CUSTOM_ID: broadcast
+:END:
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: broadcast-overview
+:END:
+Playing several copies of one program at once --- /multiboxing/, almost always several clients of one game --- wants the keys typed into one window repeated into the others: the group follows the leader, every healer presses its heal, one key cycles a target through each window in turn. On Windows that is ISBoxer, HotkeyNet, Keyclone or an AutoHotkey script. On Linux there was nothing that worked: =xdotool key --window= sends synthetic X events that Wine ignores, and "focus each window, type, focus back" is slow, flickers and races.
+
+A compositor is the one place that can put /real/ input into a window that does not have focus. gowl's =broadcast= module does exactly that, from rules:
+
+- A *team* is a set of named *slots*, each filled by at most one window. A slot names the window it wants with a filter (=app-id = eqgame.exe=), or is filled by hand.
+- A *rule* says: while a window of the team has focus (and an optional condition holds), these keys go to these other slots --- as the same key, or as another one per slot.
+- A *toggle key* (=Super+b=) switches broadcasting on and off with a toast either way; a *panic key* (=Super+Shift+b=) switches it off and releases every key held anywhere.
+
+The feature has three parts:
+
+- *=GowlInputObserver=* --- an interface the core offers each key early (before every bind and keyboard-shortcuts-inhibit) and tells about each key and click that reached a window.
+- *Targeted delivery in the core* --- =gowl_compositor_deliver_key()= / =_deliver_button()= put one press or release into any window, Wayland or X11, and give focus back.
+- *The =broadcast= module* --- the opt-in engine: teams and rules from the YAML =broadcast:= section, the C config, and runtime ones over IPC, MCP, D-Bus and Elisp.
+
+With the module not loaded, the compositor's input path is unchanged: every observer hook is behind =gowl_module_manager_has_input_observers()=, and =tests/test-input-observer-guard.sh= holds that in place.
+
+*** Check the game's rules first
+:PROPERTIES:
+:CUSTOM_ID: broadcast-game-rules
+:END:
+Whether broadcasting is allowed is the game's decision, and games differ:
+
+| Game | Multiple clients | Broadcasting |
+|------+------------------+--------------|
+| EverQuest (live servers) | Allowed | Allowed (boxing is part of the game's culture) |
+| EverQuest (truebox servers) | Two per PC | No automation |
+| World of Warcraft | Allowed | Forbidden since November 2020: "1 keypress = 1 action" |
+| EVE Online | Allowed | Forbidden since 2015 (input broadcasting and multiplexing) |
+| Final Fantasy XIV | --- | Every third-party tool forbidden |
+
+That is why every example here uses EverQuest, and why there is a *strict mode* ([[#broadcast-strict][below]]) that refuses any rule able to turn one key press into input for more than one window --- the terms some games accept multiple clients on. Window layouts, slot focus keys and click-to-focus are window management and break no such rule; repeating a key into several clients does. Read the current terms of the game you play; this table is a summary, not advice.
+
+** Quick start: an EverQuest group
+:PROPERTIES:
+:CUSTOM_ID: broadcast-quick-start
+:END:
+Three clients under Wine: a tank you play, a cleric and a wizard that follow. =data/example-broadcast.yaml= is the complete file; the core of it:
+
+#+begin_src yaml
+modules:
+  broadcast:
+    enabled: true
+
+broadcast:
+  teams:
+    - name: eq
+      slots:
+        - {name: tank,   match: 'app-id = eqgame.exe', focus-key: Super+F1}
+        - {name: cleric, match: 'app-id = eqgame.exe', focus-key: Super+F2}
+        - {name: wizard, match: 'app-id = eqgame.exe', focus-key: Super+F3}
+      groups:
+        casters: [cleric, wizard]
+  rules:
+    - name: follow
+      team: eq
+      when: 'focused-slot = tank'
+      keys: {include: ['1-9', w, a, s, d], exclude: [Return, slash]}
+      modifiers: none
+      targets: all-other
+    - name: heal
+      team: eq
+      keys: [h]
+      targets: slot:cleric
+      local: block
+      translate: {cleric: {h: '3'}}
+#+end_src
+
+Then:
+
+1. Start the three clients. Every EverQuest window is titled "EverQuest", so three slots with the same =match= take the clients in the order they opened. To pin a window, focus it and run =gowl-msg broadcast-assign eq tank= (the example binds that to =Super+Alt+1=..=3=).
+2. =gowl-msg broadcast-status= shows which window fills each slot, and any rule that cannot run and why.
+3. Focus the tank and press =Super+b=: a toast says /Broadcast ON --- team eq, 3 window(s)/.
+4. Movement and the hotbar now follow from the tank; =h= makes the cleric press =3= without the tank doing anything; =Super+F2= jumps to the cleric from anywhere.
+5. =Super+b= again, or =Super+Shift+b= to stop and release everything at once.
+
+** Teams and slots
+:PROPERTIES:
+:CUSTOM_ID: broadcast-teams
+:END:
+#+begin_src yaml
+teams:
+  - name: eq                        # one word: no spaces, no `:'
+    slots:
+      - name: tank                  # one word, unique in the team
+        match: 'app-id = eqgame.exe and title ~ Tank'
+        focus-key: Super+F1         # optional
+        delivery: auto              # optional: auto | seat | activate
+      - cleric                      # a bare name: filled by hand only
+    groups:
+      casters: [cleric]             # optional named subsets
+#+end_src
+
+- *match* is a [[file:macros.org::*Trigger filters][gowl filter]] --- =and=, =or=, =not=, parentheses; === and !== globs, =~= and =!~= regular expressions, =< <= > >== numbers or strings --- over these fields of a window: =app-id= (the X11 class for an X11 window, =eqgame.exe= under Wine), =title=, =pid=, =xwayland= (=true= / =false=), =tag= (its first tag, 1-based), =tags= (all of them, =1,3=), =monitor= (the output's name), =floating=, =fullscreen=. A typo in a field name is refused when the config loads.
+- *Filling.* Slots are filled in order: a slot assigned by hand keeps its window while that window exists; every other slot takes the first window its =match= accepts that holds no other slot of the team. Two slots with the same =match= therefore take two windows of the same program, in the order the compositor knows them. A slot without a =match= is only ever filled by hand. Filling is redone whenever a window maps, unmaps or changes title.
+- *By hand.* =broadcast-assign TEAM SLOT [ID]= puts window =ID= --- the focused one when omitted --- in a slot (ISBoxer binds a slot to the client it launched; this is that, done afterwards). The window leaves any other slot of the team. =broadcast-unassign TEAM SLOT= returns the slot to its =match=.
+- *focus-key* focuses the slot's window from anywhere, viewing its tag --- whether broadcasting is on or not, and while a fullscreen game inhibits shortcuts. An empty slot says so with a toast.
+- *delivery* --- how keys reach this slot's window; see [[#broadcast-delivery][Delivery]]. =auto= is right unless you know otherwise.
+- *groups* name subsets of slots for =group:NAME= targets.
+
+A slot is also addressable by its 1-based number (=slot:2=) wherever a name is.
+
+** Rules
+:PROPERTIES:
+:CUSTOM_ID: broadcast-rules
+:END:
+Every field but =name= and =team= is optional:
+
+#+begin_src yaml
+rules:
+  - name: follow                    # one word
+    team: eq                        # the team whose windows it is about
+    when: 'focused-slot = tank'     # a filter over the focused window
+    enabled: true
+    keys:
+      include: ['1-9', w, a, s, d]  # default: every key
+      exclude: [Return, slash]
+    modifiers: any                  # any | none
+    targets: [all-other]            # default: all-other
+    translate:
+      cleric: {'1': '2'}            # per slot
+      '*': {f: Shift+g}             # every other target
+    mode: mirror                    # mirror | round-robin
+    reset-ms: 0                     # round-robin: start over after idling
+    delivery: auto                  # auto | seat | activate
+    mouse: off                      # off | same | scaled
+    delay-ms: 0                     # pause between one target and the next
+    local: pass                     # pass | block
+#+end_src
+
+- *A rule applies* only while the focused window fills a slot of its team, and only if =when= holds. =when= is a gowl filter over the focused window's fields (as for =match=) plus =team= and =focused-slot=. Without =when= a rule works from every window of the team --- usually you want =focused-slot = LEADER= so typing in a follower stays in the follower.
+- *keys* --- key names are xkb keysym names (=a=, =F1=, =space=, =Return=, =KP_Add=, =minus=), compared case-insensitively against the key's own symbol /and/ its shifted one, so =1= matches the 1 key with or without Shift and =exclam= only with it. A range is two names with a dash: single characters (=1-9=, =a-z=) or one prefix with two numbers (=F1-F12=, =KP_0-KP_9=). =all= is every key. =keys: [h, j]= is shorthand for =include=. An explicitly empty list (=keys: []=) is *no* keys: a rule that only repeats clicks. Modifier and lock keys are never repeated on their own whatever these say --- the modifiers a key was typed with travel with it.
+- *modifiers: none* repeats a key only while no Ctrl, Alt, Super, Mod3 or Mod5 is held --- so =Ctrl+1= stays local while =1= is broadcast. Shift does not count; use =exclude= for shifted symbols.
+- *targets* --- any of:
+  | =all= | every slot of the team, the focused one included (it gets the key twice unless =local: block=) |
+  | =all-other= | every slot but the focused one |
+  | =current= | the focused slot only --- with =local: block= and a translation, a key rewrite for one window |
+  | =slot:NAME= | one slot |
+  | =group:NAME= | the slots of a group |
+  | =under-mouse= | the team window under the pointer |
+  A window named by several targets, or by several rules, gets the key once --- from the first rule, in file order.
+- *translate* sends another key instead: per slot, with =*= for every target that has no translation of its own. The output may carry modifiers (=Shift+2=, =Ctrl+F1=). A key no key of the current layout produces is reported in =broadcast-status= and skipped.
+- *mode: round-robin* sends each press to the /next/ target only, in slot order (ISBoxer's steps, AutoHotkey's counter); the release follows its press there. =reset-ms= starts over at the first target after that long without a press.
+- *mouse* repeats clicks too (press and release, every button) that land on the main surface of a team window --- never a popup or a menu, whose coordinates mean nothing elsewhere, and never into the window clicked. =same= lands at the same surface coordinates; =scaled= at the same /relative/ position, scaled to each target's size, which is what windows of different sizes need.
+- *delay-ms* waits between one target's delivery and the next (ISBoxer's keystroke delay), at most 1000. Delayed deliveries are queued in order, so a release never overtakes its press.
+- *local: block* keeps the key from the focused window: it reaches only the targets.
+
+A rule that cannot run --- its team, a named slot or group does not exist, or strict mode refuses it --- is kept, reported by =broadcast-status= (and the reply to =broadcast-add-rule=), and never used.
+
+*** Strict mode: one press, one window
+:PROPERTIES:
+:CUSTOM_ID: broadcast-strict
+:END:
+=strict: true= (a module setting, or =broadcast-strict on=) refuses at run time every rule by which one key press, or click, could reach more than one window --- the focused window counting whenever the key also reaches it. What remains:
+
+- =local: block= with =mode: round-robin= --- each press goes to exactly one window, in turn;
+- =local: block= with a single =slot:=, =current= or =under-mouse= target --- a key redirected to one other window, or rewritten in place.
+
+Slot focus keys are always allowed: they move focus and send nothing.
+
+** Delivery: how a key reaches a window without focus
+:PROPERTIES:
+:CUSTOM_ID: broadcast-delivery
+:END:
+=gowl_compositor_deliver_key(compositor, client, keycode, pressed, modifiers, delivery)= puts one key /event/ --- a press or a release, so a key can be /held/ in another window --- into any window, and gives focus back. Two routes:
+
+- *seat* --- the seat's keyboard enters the target surface, the key goes, the keyboard re-enters the surface it was on with the keys still physically held. Right for a Wayland client.
+- *activate* --- for an X11 window (every game under Wine/Proton). The seat route /cannot/ reach one: Xwayland hands every key to the window holding X INPUT focus, whatever =wl_surface= the seat entered. So the core moves X focus to the target (the xwm's activate), *waits until the X server says it has* (=GetInputFocus= on gowl's own X connection; a client using =WM_TAKE_FOCUS=, Wine for one, takes focus itself and is given the time), sends the key through the seat, and *waits until the X server has processed it* --- an XI2 raw key event on the root window is that proof --- before focus moves on. Measured against a real Xwayland, skipping either wait loses the key to the wrong window about half the time. Without =xcb-xinput= the second wait degrades to a fixed 8 ms settle (correct on an idle machine, a race on a busy one).
+
+=auto= picks /activate/ for an X11 window and /seat/ otherwise. A rule's =delivery= overrides the slot's.
+
+*Batches.* =gowl_compositor_input_batch_begin()= / =_end()= around several deliveries restore focus once, at the end, instead of after each. The module delivers each key's targets in one batch.
+
+*Timeouts.* Each wait is bounded by =timeout-ms= (default 80, 5--2000). The compositor's input thread waits on the X server only --- answering =GetInputFocus= or processing a key needs nothing from the compositor, so this cannot deadlock --- but a wedged Xwayland costs each step its timeout, which is why it is bounded and every failure is counted in =broadcast-status=.
+
+*** What the protocols allow, and what they do not
+:PROPERTIES:
+:CUSTOM_ID: broadcast-limits
+:END:
+- *A Wayland client cannot hold a key it does not have focus for.* It forgets every pressed key on =wl_keyboard.leave=, so to a Wayland target a broadcast press is a tap. Holding a movement key works into X11 windows, not into native Wayland ones. (Wine's own Wayland driver is Wayland in this sense.)
+- *An X server has one key state for every window.* A press of a key that is already down --- the focused window holding it, or another target just given it --- is dropped as autorepeat; a release of a key that is up goes nowhere. The core asks the server (=QueryKeymap=) before each event and precedes it with its opposite when needed, and at the end of a batch puts every touched key back to the state it was in before, for the window focus returns to. A target may therefore see a key pressed twice (to it, autorepeat) or released once more than pressed; what is guaranteed is the end state: every key a target was given is released in it when the physical key is.
+- *Every X11 delivery is a focus change.* The target sees =FocusIn= / =FocusOut= around each key, and the focused X11 window the reverse. Games that pause on focus loss notice; most multibox-friendly games do not.
+- *Mixed teams* (X11 and Wayland windows together) work, with each limit above applying to its own windows. A Wayland target moves the seat's keyboard off Xwayland for a moment, which releases and re-presses held keys for the focused X11 window.
+
+** Keys this module owns
+:PROPERTIES:
+:CUSTOM_ID: broadcast-keys
+:END:
+The toggle key, the panic key and every slot's =focus-key= are taken /before/ anything else sees a key --- after the lock screen and the pointer-confinement escape, ahead of the KVM diversion, configured binds, module binds and keyboard-shortcuts-inhibit --- so they keep working while a fullscreen game inhibits shortcuts, which is exactly when they are needed. They are consumed: no window sees them. Set either key to =none= to free it.
+
+Synthetic input --- a software KVM driving this machine, =gowl_compositor_inject_key()=, a macro --- is never repeated: a broadcast of a broadcast, or of a replayed macro, would multiply.
+
+** Module settings
+:PROPERTIES:
+:CUSTOM_ID: broadcast-settings
+:END:
+Under =modules: broadcast:=:
+
+| Key | Default | Meaning |
+|-----+---------+---------|
+| =enabled= | =false= | load the module at all |
+| =toggle-key= | =Super+b= | switch broadcasting on/off, with a toast; =none= frees it |
+| =panic-key= | =Super+Shift+b= | switch off and release every key held anywhere; =none= frees it |
+| =start-on= | =false= | broadcast from the start, without the toggle |
+| =strict= | =false= | [[#broadcast-strict][strict mode]] |
+| =toast= | =true= | toasts on toggle, panic and empty slots |
+| =log= | =false= | every repeated key to the journal (=gowl-broadcast= domain) |
+| =max-targets= | =16= | at most this many windows per key (1--64) |
+| =timeout-ms= | =80= | per-step wait for Xwayland (5--2000) |
+
+Locking the session switches broadcasting off and releases everything; so do disabling the module and stopping the compositor.
+
+** The C config
+:PROPERTIES:
+:CUSTOM_ID: broadcast-c-config
+:END:
+Everything the YAML can say, typed --- =data/example-broadcast.c= is the EverQuest team again:
+
+#+begin_src c
+g_autoptr(GowlBroadcastTeam) team = gowl_broadcast_team_new("eq");
+gowl_broadcast_team_add_slot(team, "tank", "app-id = eqgame.exe",
+                             "Super+F1", GOWL_KEY_DELIVERY_AUTO, &error);
+gowl_config_add_broadcast_team(gowl_config, team);
+
+g_autoptr(GowlBroadcastRule) rule = gowl_broadcast_rule_new("follow");
+gowl_broadcast_rule_set_team(rule, "eq");
+gowl_broadcast_rule_set_when(rule, "focused-slot = tank", &error);
+gowl_broadcast_rule_set_keys(rule, keys, NULL, &error);
+gowl_config_add_broadcast_rule(gowl_config, rule);
+
+/* or the same schema as text */
+rule = gowl_broadcast_rule_new_from_yaml(
+	"{name: heal, team: eq, keys: [h], targets: slot:cleric,"
+	" local: block, translate: {cleric: {h: '3'}}}", &error);
+#+end_src
+
+=gowl_config_add_broadcast_team/_rule()= replace an entry of the same name in place, so a C config and a YAML one cannot stack two. =gowl_config_generate_yaml()= writes the section back out.
+
+** IPC
+:PROPERTIES:
+:CUSTOM_ID: broadcast-ipc
+:END:
+Every surface --- =gowl-msg=, MCP, cmacs's D-Bus and Elisp --- goes through these words, so they cannot disagree. Replies are one line: =OK ...=, =OK <json>= or =ERROR ...=.
+
+| Command | Does |
+|---------+------|
+| =broadcast-on=, =-off=, =-toggle= | switch broadcasting |
+| =broadcast-panic= | off, and release every key held anywhere |
+| =broadcast-status= | JSON: on, strict, keys, counters, the focused window's team and slot, every team with the window in each slot, every rule with its problem |
+| =broadcast-list= | JSON: every team and rule in force, as YAML |
+| =broadcast-add-team YAML= | add or replace a team for this session |
+| =broadcast-add-rule YAML= | add or replace a rule for this session; says when it cannot run |
+| =broadcast-remove-team NAME=, =-remove-rule NAME= | remove one |
+| =broadcast-enable-rule NAME=, =-disable-rule NAME= | in or out of force without removing |
+| =broadcast-clear= | forget every runtime team, rule and hand assignment |
+| =broadcast-reload= | re-read the config's teams and rules |
+| =broadcast-assign TEAM SLOT [ID]= | put a window (default: the focused one) in a slot by hand |
+| =broadcast-unassign TEAM SLOT= | back to the slot's =match= |
+| =broadcast-focus-slot [TEAM] SLOT= | focus a slot's window |
+| =broadcast-step-reset [RULE]= | round-robin back to the first target |
+| =broadcast-strict on/off/toggle= | strict mode |
+
+A team or rule given over IPC is one line: flow YAML, or JSON (which is flow YAML). Runtime entries replace config entries of the same name and survive a config reload; =broadcast-clear= drops them.
+
+The module announces changes as =EVENT broadcast on TEAM=, =EVENT broadcast off panic=, =EVENT broadcast strict on= and the like to IPC subscribers, and as the compositor's =module-event= signal (module ="broadcast"=) in-process --- which is what cmacs's mode line listens to.
+
+*MCP* (the =mcp= module): =broadcast_status=, =broadcast_list=, =broadcast_set= (on/off/toggle/panic, or strict), =broadcast_add_team=, =broadcast_add_rule=, =broadcast_remove=, =broadcast_assign=, =broadcast_focus_slot=.
+
+** For module authors: GowlInputObserver
+:PROPERTIES:
+:CUSTOM_ID: broadcast-observer
+:END:
+The interface is general --- anything that wants to watch input on its way to windows can implement it:
+
+- =filter_key(observer, key)= --- offered every key early, as above; return =TRUE= to consume it. A module that consumes a press must consume its release too.
+- =key_forwarded(observer, key)= --- the key just reached the focused window, after every bind had its chance.
+- =button_forwarded(observer, button)= --- a click just reached a window's main surface; coordinates surface-local, with the surface's size for scaling.
+
+=GowlInputObserverKey= carries the focused client, the evdev keycode, the keysym with modifiers applied and the level-0 keysym, the cleaned modifier mask, the direction, whether the input was synthetic, and the time. Every active implementation is called, in priority order, on the compositor thread, in the middle of input handling: answer from memory, and deliver through =gowl_compositor_deliver_key/_button()=, never the seat.
+
+** Testing
+:PROPERTIES:
+:CUSTOM_ID: broadcast-testing
+:END:
+- =tests/test-broadcast-engine.c= --- key names and ranges, team and rule parsing and refusals, YAML round trips, strict mode, slot filling and hand assignment, and every routing decision: mirror, =when=, =modifiers: none=, every target kind, translations, round-robin with reset, clicks, focus keys, rule problems, the runtime overlay.
+- =tests/test-broadcast-config.c= --- the =broadcast:= section: a bad entry reported and skipped, unknown keys warned about, =gowl_config_generate_yaml()= reading back to the same set, the C API, and both shipped examples (the C one compiled into the test).
+- =tests/test-broadcast-delivery.c= --- end to end against real Wayland toplevels, a keyboard and a pointer plugged in through the backend: targeted delivery, the toggle, mirroring, translation with =local: block=, a held key released by switching off and by panic, round-robin, a focus key and hand assignment, a scaled click at the right relative point in windows of three sizes, strict mode refusing.
+- =tests/test-broadcast-x11.c= --- against the compositor's own Xwayland: the seat route missing an X11 window (the fact the activate route exists for), the activate route reaching it ten times in a row with focus confirmed back, a batch, macros' targeted text reaching a background X11 window, and the module broadcasting between three real X windows.
+- =tests/test-input-observer-guard.sh= --- every hook gated, the filter between the lock/escape and shortcuts-inhibit, the forwarded hook after the forward, no seat access and no GLib-default-context sources in the module.
+
+** Ideas not built yet
+:PROPERTIES:
+:CUSTOM_ID: broadcast-future
+:END:
+- *Video FX* --- live thumbnails of team windows (a healer's party frame, a minimap) drawn inside another window or on the bar, straight from the scene graph, with click-through.
+- *A multibox layout* --- one main window and small ones, a /swap/ key that promotes a slot to main, focus-follows-mouse inside the team.
+- *Frame throttling for background team windows* --- slowing =wl_surface.frame= callbacks for the windows you are not looking at saves the CPU and GPU ISBoxer saves with its "CPU strategy", without pinning cores.
+- *Team launch* --- spawn every slot's client, each with its own prefix and tag, and assign it as it maps.
+- *Variables* --- ISBoxer's variable keystrokes: a named key a rule sends, redirected in one place.
+- *Click bars* --- a bar plugin of buttons that fire broadcast actions.
+- *A =broadcast= macro step*, podomation events, voice triggers.
+- *A ghost cursor* drawn in target windows where a repeated click will land.
+- *Across machines* --- over the deskflow/libei plumbing gowl already has.

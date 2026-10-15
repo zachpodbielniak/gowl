@@ -17,13 +17,14 @@
  */
 
 /*
- * gowl-macro-filter.h - Trigger filters: a small boolean language.
+ * gowl-macro-filter.h - Trigger filters: the shared filter language
+ * (src/util/gowl-filter.h) with the macro module's fields.
  *
  *   client-added [app-id=firefox* and (title=*YouTube* or title=*Twitch*)]: x
  *
- * Pure GLib, no compositor: a filter is parsed once, when the trigger is
- * installed, and evaluated against a table of field -> string values the
- * module collects from the event.  Tested directly by
+ * The language moved into libgowl when the broadcast module needed it
+ * too; what stays here is the one thing that is the macro module's
+ * own, the set of fields collect_fields() supplies.  Tested directly by
  * tests/test-macro-filter.c.
  */
 
@@ -32,40 +33,27 @@
 
 #include <glib.h>
 
+#include "util/gowl-filter.h"
+
 G_BEGIN_DECLS
 
-#define GOWL_MACRO_FILTER_ERROR (gowl_macro_filter_error_quark())
+typedef GowlFilter GowlMacroFilter;
 
-/**
- * GowlMacroFilterError:
- * @GOWL_MACRO_FILTER_ERROR_SYNTAX: the expression does not parse
- * @GOWL_MACRO_FILTER_ERROR_FIELD: an unknown field name
- * @GOWL_MACRO_FILTER_ERROR_REGEX: a `~' pattern that is not a regex
- */
-typedef enum {
-	GOWL_MACRO_FILTER_ERROR_SYNTAX,
-	GOWL_MACRO_FILTER_ERROR_FIELD,
-	GOWL_MACRO_FILTER_ERROR_REGEX
-} GowlMacroFilterError;
+#define GOWL_MACRO_FILTER_ERROR        GOWL_FILTER_ERROR
+#define GOWL_MACRO_FILTER_ERROR_SYNTAX GOWL_FILTER_ERROR_SYNTAX
+#define GOWL_MACRO_FILTER_ERROR_FIELD  GOWL_FILTER_ERROR_FIELD
+#define GOWL_MACRO_FILTER_ERROR_REGEX  GOWL_FILTER_ERROR_REGEX
 
-GQuark gowl_macro_filter_error_quark (void);
+#define gowl_macro_filter_free       gowl_filter_free
+#define gowl_macro_filter_eval       gowl_filter_eval
+#define gowl_macro_filter_to_string  gowl_filter_to_string
+#define gowl_macro_filter_split_line gowl_filter_split_line
 
-typedef struct _GowlMacroFilter GowlMacroFilter;
-
-GowlMacroFilter     *gowl_macro_filter_parse        (const gchar            *text,
-                                                     GError                **error);
-void                 gowl_macro_filter_free         (GowlMacroFilter        *self);
-gboolean             gowl_macro_filter_eval         (const GowlMacroFilter  *self,
-                                                     GHashTable             *fields);
-gchar               *gowl_macro_filter_to_string    (const GowlMacroFilter  *self);
+GowlMacroFilter     *gowl_macro_filter_parse        (const gchar  *text,
+                                                     GError      **error);
 const gchar * const *gowl_macro_filter_known_fields (void);
-gboolean             gowl_macro_filter_split_line   (const gchar            *line,
-                                                     gchar                 **out_what,
-                                                     gchar                 **out_filter,
-                                                     gchar                 **out_rest,
-                                                     GError                **error);
 
-G_DEFINE_AUTOPTR_CLEANUP_FUNC(GowlMacroFilter, gowl_macro_filter_free)
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GowlMacroFilter, gowl_filter_free)
 
 G_END_DECLS
 

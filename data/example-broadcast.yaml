@@ -1,0 +1,111 @@
+# gowl - input broadcasting (multiboxing), example
+#
+# Three EverQuest clients under Wine, played as one group: keys typed in
+# the tank's window are repeated into the cleric's and the wizard's, some
+# as the same key and some as another, and a few go to one window only.
+#
+# Check the rules of the game you play before broadcasting anything.
+# EverQuest's live servers allow boxing; its truebox servers allow two
+# characters per PC and no automation; many other games forbid
+# broadcasting outright.  docs/broadcast.org has the details and a
+# strict mode (one key press reaches one window) for games that allow
+# multiple clients only on those terms.
+#
+# The broadcast module is OPT-IN: nothing here does anything until it is
+# enabled under `modules:', and even then it repeats nothing until you
+# press the toggle key.  Merge these two sections into
+# ~/.config/gowl/config.yaml.
+#
+# Seeing what it made of this:
+#   gowl-msg broadcast-status      # teams, which window fills each slot,
+#                                  # rules and any rule that cannot run
+#   gowl-msg broadcast-toggle      # same as the toggle key
+
+modules:
+  broadcast:
+    enabled: true
+    toggle-key: Super+b          # on/off, with a toast either way
+    panic-key: Super+Shift+b     # off, and release every key held anywhere
+    start-on: false              # never broadcast before you ask
+    strict: false                # true: one key press reaches one window
+    toast: true
+    log: false                   # every repeated key to the journal
+    max-targets: 16
+    timeout-ms: 80               # per step, for X11 windows (Wine)
+
+broadcast:
+  teams:
+    - name: eq
+      # Every EverQuest window is titled "EverQuest", so the three slots
+      # match the same thing and take the clients in the order they were
+      # opened.  To pin a window to a slot instead, focus it and run
+      #   gowl-msg broadcast-assign eq tank
+      # (bound to Super+Alt+1..3 below); it holds until that window
+      # closes.
+      slots:
+        - name: tank
+          match: 'app-id = eqgame.exe'
+          focus-key: Super+F1      # focus this client from anywhere
+        - name: cleric
+          match: 'app-id = eqgame.exe'
+          focus-key: Super+F2
+        - name: wizard
+          match: 'app-id = eqgame.exe'
+          focus-key: Super+F3
+      groups:
+        casters: [cleric, wizard]
+
+  rules:
+    # The hotbar and movement follow the tank.  Only while the tank has
+    # focus: from the cleric's window, keys stay in the cleric's window.
+    - name: follow
+      team: eq
+      when: 'focused-slot = tank'
+      keys:
+        include: ['1-9', w, a, s, d, q, e, space]
+        exclude: [Return, slash]   # typing in chat is not broadcast
+      modifiers: none              # Ctrl+1 stays in the tank's window
+      targets: all-other
+
+    # H heals: the cleric presses hotbar 3, the tank does nothing.
+    - name: heal
+      team: eq
+      keys: [h]
+      targets: slot:cleric
+      local: block
+      translate:
+        cleric: {h: '3'}
+
+    # N nukes: each caster fires its own hotbar 4.
+    - name: nuke
+      team: eq
+      when: 'focused-slot = tank'
+      keys: [n]
+      targets: group:casters
+      local: block
+      translate:
+        '*': {n: '4'}
+
+    # F12 targets the next mob in each window in turn, one per press.
+    - name: cycle-target
+      team: eq
+      keys: [F12]
+      mode: round-robin
+      reset-ms: 2000               # start over after two idle seconds
+      targets: all
+      local: block
+
+    # Clicks on a UI button, repeated at the same spot of each window,
+    # scaled to its size.  Off until you want it.
+    - name: clicks
+      team: eq
+      enabled: false
+      keys: []                     # clicks only
+      mouse: scaled
+      targets: all-other
+
+# Pinning windows to slots by hand (see the team above).
+keybinds:
+  "Super+Alt+1": { action: ipc-command, arg: "broadcast-assign eq tank", desc: "This window is the tank" }
+  "Super+Alt+2": { action: ipc-command, arg: "broadcast-assign eq cleric", desc: "This window is the cleric" }
+  "Super+Alt+3": { action: ipc-command, arg: "broadcast-assign eq wizard", desc: "This window is the wizard" }

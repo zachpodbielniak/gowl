@@ -232,6 +232,23 @@ gpointer            gowl_module_manager_get_recording_provider (GowlModuleManage
 gpointer            gowl_module_manager_get_input_remapper (GowlModuleManager *self);
 
 /**
+ * gowl_module_manager_has_input_observers:
+ * @self: a #GowlModuleManager
+ *
+ * %FALSE is the common case and the core's fast path: no observer hook
+ * builds an event or calls anything without one.
+ *
+ * Returns: %TRUE when an active module implements #GowlInputObserver
+ */
+gboolean            gowl_module_manager_has_input_observers (GowlModuleManager *self);
+gboolean            gowl_module_manager_filter_key          (GowlModuleManager *self,
+                                                             gconstpointer      key);
+void                gowl_module_manager_key_forwarded       (GowlModuleManager *self,
+                                                             gconstpointer      key);
+void                gowl_module_manager_button_forwarded    (GowlModuleManager *self,
+                                                             gconstpointer      button);
+
+/**
  * gowl_module_manager_get_screenshot_provider:
  * @self: a #GowlModuleManager
  *

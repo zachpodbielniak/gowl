@@ -666,6 +666,33 @@ typedef enum {
 #define GOWL_TYPE_INPUT_REMAP_EVENT_KIND (gowl_input_remap_event_kind_get_type())
 GType gowl_input_remap_event_kind_get_type(void) G_GNUC_CONST;
 
+/* --- GowlKeyDelivery --- */
+
+/**
+ * GowlKeyDelivery:
+ * @GOWL_KEY_DELIVERY_AUTO: %GOWL_KEY_DELIVERY_ACTIVATE for an X11
+ *   (XWayland) window, %GOWL_KEY_DELIVERY_SEAT for everything else.
+ * @GOWL_KEY_DELIVERY_SEAT: Move the seat's keyboard focus to the window
+ *   for the length of the input and back.  Right for Wayland clients;
+ *   an X11 window never sees it, because Xwayland hands every key to the
+ *   window holding X input focus.
+ * @GOWL_KEY_DELIVERY_ACTIVATE: Also move X input focus to the window,
+ *   wait until the X server agrees, deliver, wait until the X server has
+ *   processed the input, and move focus back.  Only meaningful for X11
+ *   windows; a Wayland window gets %GOWL_KEY_DELIVERY_SEAT.
+ *
+ * How input is put into a window that does not have keyboard focus.
+ * See gowl_compositor_deliver_key().
+ */
+typedef enum {
+	GOWL_KEY_DELIVERY_AUTO,
+	GOWL_KEY_DELIVERY_SEAT,
+	GOWL_KEY_DELIVERY_ACTIVATE
+} GowlKeyDelivery;
+
+#define GOWL_TYPE_KEY_DELIVERY (gowl_key_delivery_get_type())
+GType gowl_key_delivery_get_type(void) G_GNUC_CONST;
+
 G_END_DECLS
 
 #endif /* GOWL_ENUMS_H */

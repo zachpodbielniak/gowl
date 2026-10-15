@@ -639,4 +639,33 @@ gowl_input_remap_event_kind_get_type(void)
 	return (GType)g_type_id;
 }
 
+
+/* --- GowlKeyDelivery GType registration --- */
+
+/**
+ * gowl_key_delivery_get_type:
+ *
+ * Retrieves the #GType for #GowlKeyDelivery.
+ *
+ * Returns: the #GType for #GowlKeyDelivery
+ */
+GType
+gowl_key_delivery_get_type(void)
+{
+	static volatile gsize g_type_id = 0;
+
+	if (g_once_init_enter(&g_type_id)) {
+		static const GEnumValue values[] = {
+			{ GOWL_KEY_DELIVERY_AUTO,     "GOWL_KEY_DELIVERY_AUTO",     "auto" },
+			{ GOWL_KEY_DELIVERY_SEAT,     "GOWL_KEY_DELIVERY_SEAT",     "seat" },
+			{ GOWL_KEY_DELIVERY_ACTIVATE, "GOWL_KEY_DELIVERY_ACTIVATE", "activate" },
+			{ 0, NULL, NULL }
+		};
+		GType type_id = g_enum_register_static("GowlKeyDelivery", values);
+		g_once_init_leave(&g_type_id, type_id);
+	}
+
+	return (GType)g_type_id;
+}
+
 #pragma GCC diagnostic pop

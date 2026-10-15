@@ -498,7 +498,38 @@ struct _GowlCompositor {
 	struct wlr_xwayland *xwayland;
 	struct wl_listener   new_xwayland_surface;
 	struct wl_listener   xwayland_ready;
+	/* Our own X connection, for confirming that Xwayland has moved
+	 * focus / processed a key before input moves on (see
+	 * gowl-xwayland-sync.c).  Made on the first X11 delivery, dropped
+	 * when its connection dies. */
+	struct _GowlXwaylandSync *xsync;
+	struct wl_event_source   *xsync_source;
 #endif
+
+	/*
+	 * Targeted delivery (gowl-client-input.c).  A batch defers putting
+	 * focus back until its outermost end, so input for several windows
+	 * costs one restore instead of one per window.
+	 *
+	 * batch_x_moved: X input focus was moved off batch_x_origin, which
+	 * is the X11 window to give it back to (NULL: nothing had it).
+	 * batch_wl_moved: the seat's keyboard was moved off batch_wl_origin
+	 * onto an Xwayland surface for X11 delivery.  Both pointers are
+	 * unowned and only live for the length of one batch, which never
+	 * outlives the call stack that opened it.
+	 */
+	guint                       batch_depth;
+	gboolean                    batch_x_moved;
+	GowlClient                 *batch_x_origin;
+	gboolean                    batch_wl_moved;
+	struct wlr_surface         *batch_wl_origin;
+	/* Keycodes sent to X11 windows in this batch, with the X server's
+	 * state for each before the batch touched it: the end puts that
+	 * state back, so the window focus returns to finds the server as
+	 * it left it (see gowl_xwayland_sync_key_is_down()).  element-type
+	 * GowlBatchKey, NULL until a batch first needs it. */
+	GArray                     *batch_x_keys;
+	guint                       delivery_timeout_ms;
 
 	/* session lock state */
 	struct wlr_session_lock_v1 *cur_lock;

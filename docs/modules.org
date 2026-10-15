@@ -392,6 +392,24 @@ struct _GowlInputRemapperInterface {
 
 After changing its rules at runtime, a remapper calls =gowl_compositor_input_remap_reevaluate()=, which moves keyboards out of and back into the keyboard group.
 
+*** GowlInputObserver
+:PROPERTIES:
+:CUSTOM_ID: gowlinputobserver
+:END:
+Watches input on its way to windows.  =filter_key= is offered every key early --- after the lock screen and the pointer-confinement escape, before the KVM diversion, every bind and keyboard-shortcuts-inhibit --- and may consume it (consume a press, consume its release too).  =key_forwarded= hears a key that just reached the focused window, after every bind had its chance; =button_forwarded= a click that reached a window's main surface, with surface-local coordinates and the surface's size.  Every active implementation is called, in priority order, and with none active the core builds no event at all (=gowl_module_manager_has_input_observers()=).  Called on the compositor thread mid-input: answer from memory, and put input into other windows with =gowl_compositor_deliver_key()= / =_deliver_button()=, never the seat.  Implemented by the =broadcast= module; see [[file:broadcast.org][broadcast.org]].
+
+#+begin_src C
+struct _GowlInputObserverInterface {
+    GTypeInterface parent_iface;
+    gboolean (*filter_key)       (GowlInputObserver *self,
+                                  const GowlInputObserverKey *key);
+    void     (*key_forwarded)    (GowlInputObserver *self,
+                                  const GowlInputObserverKey *key);
+    void     (*button_forwarded) (GowlInputObserver *self,
+                                  const GowlInputObserverButton *button);
+};
+#+end_src
+
 ** Creating a Module: Step by Step
 :PROPERTIES:
 :CUSTOM_ID: creating-a-module-step-by-step
@@ -740,6 +758,22 @@ Remaps keys, buttons and wheel notches on one physical device --- a foot pedal, 
 *Finding a device:* =gowl-msg inputremap-devices= lists every keyboard and pointer with its vendor:product; =gowl-msg inputremap-identify= reports the next device pressed.
 
 *Files:* =gowl-module-inputremap.c= (the GObject half: IPC, logging, identify mode, config sync) and =gowl-inputremap-engine.c= (the pure rule set, tested directly).  The core half is =src/core/gowl-input-remap-core.c=.  Full reference: [[file:input-remap.org][input-remap.org]].
+
+*** The broadcast module
+:PROPERTIES:
+:CUSTOM_ID: broadcast-module
+:END:
+Input broadcasting for multiboxing: keys --- and, where a rule asks, clicks --- typed into one window of a /team/ are repeated into its other windows, as the same key or another per window, the way ISBoxer or an AutoHotkey multibox script does it on Windows.  Opt-in twice over: it loads only with =modules: broadcast: {enabled: true}=, and even then repeats nothing until switched on with its toggle key (=Super+b=, with a toast); =Super+Shift+b= switches it off and releases every key held anywhere.
+
+*Interfaces:* =GowlInputObserver=, =GowlIpcHandler=, =GowlStartupHandler=, =GowlShutdownHandler=
+
+*Teams and rules* come from the top-level =broadcast:= section (and =gowl_config_add_broadcast_team/_rule()= in C) plus runtime ones over IPC (=broadcast-add-team=, =broadcast-add-rule=), MCP and, under cmacs, Elisp.  A slot names its window with a filter (=app-id = eqgame.exe=) or is filled by hand (=broadcast-assign=); a rule names keys, targets (=all-other=, =slot:NAME=, =group:NAME=, ...), per-slot translations, mirror or round-robin, click repetition, a delay, and whether the focused window keeps the key.  =strict: true= refuses any rule that could turn one press into input for more than one window.
+
+*Delivery* is the core's =gowl_compositor_deliver_key()=: a Wayland window through a brief seat focus, an X11 window (every game under Wine) through an X focus move confirmed with the X server before and after the key (=src/core/gowl-xwayland-sync.c=).
+
+*Settings:* =toggle-key=, =panic-key=, =start-on=, =strict=, =toast=, =log=, =max-targets=, =timeout-ms=.
+
+*Files:* =gowl-module-broadcast.c= (the GObject half: keys, delivery, IPC, config sync) and =gowl-broadcast-engine.c= (the pure routing decisions, tested directly).  The data model is =src/boxed/gowl-broadcast.c=.  Full reference, including which games allow broadcasting: [[file:broadcast.org][broadcast.org]].
 
 *** The macro module
 :PROPERTIES:

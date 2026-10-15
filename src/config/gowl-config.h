@@ -25,6 +25,7 @@
 /* For GowlBackdropStyle, which `window-backdrop' resolves to. */
 #include "gowl-enums.h"
 #include "boxed/gowl-input-remap-rule.h"
+#include "boxed/gowl-broadcast.h"
 
 G_BEGIN_DECLS
 
@@ -1120,6 +1121,70 @@ void       gowl_config_clear_input_remap_rules (GowlConfig         *self);
  * Returns: (transfer none) (element-type GowlInputRemapRule): the rules
  */
 GPtrArray *gowl_config_get_input_remap_rules   (GowlConfig         *self);
+
+/**
+ * gowl_config_add_broadcast_team:
+ * @self: a #GowlConfig
+ * @team: a team; the config takes its own reference
+ *
+ * Adds a team to `broadcast: teams:', replacing one of the same name.
+ */
+void       gowl_config_add_broadcast_team      (GowlConfig         *self,
+                                                GowlBroadcastTeam  *team);
+
+/**
+ * gowl_config_remove_broadcast_team:
+ * @self: a #GowlConfig
+ * @name: the team's name
+ *
+ * Returns: %TRUE when removed
+ */
+gboolean   gowl_config_remove_broadcast_team   (GowlConfig         *self,
+                                                const gchar        *name);
+
+/**
+ * gowl_config_get_broadcast_teams:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlBroadcastTeam): the teams
+ */
+GPtrArray *gowl_config_get_broadcast_teams     (GowlConfig         *self);
+
+/**
+ * gowl_config_add_broadcast_rule:
+ * @self: a #GowlConfig
+ * @rule: a rule; the config takes its own reference
+ *
+ * Adds a rule to `broadcast: rules:', replacing one of the same name.
+ */
+void       gowl_config_add_broadcast_rule      (GowlConfig         *self,
+                                                GowlBroadcastRule  *rule);
+
+/**
+ * gowl_config_remove_broadcast_rule:
+ * @self: a #GowlConfig
+ * @name: the rule's name
+ *
+ * Returns: %TRUE when removed
+ */
+gboolean   gowl_config_remove_broadcast_rule   (GowlConfig         *self,
+                                                const gchar        *name);
+
+/**
+ * gowl_config_get_broadcast_rules:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlBroadcastRule): the rules
+ */
+GPtrArray *gowl_config_get_broadcast_rules     (GowlConfig         *self);
+
+/**
+ * gowl_config_clear_broadcast:
+ * @self: a #GowlConfig
+ *
+ * Removes every broadcast team and rule.
+ */
+void       gowl_config_clear_broadcast         (GowlConfig         *self);
 
 /**
  * gowl_config_get_keybinds:

@@ -62,6 +62,10 @@ void gowl_mcp_register_compound_tools(McpServer *server, GowlModuleMcp *module);
  * module's IPC words.  See modules/mcp/gowl-mcp-tools-inputremap.c. */
 void gowl_mcp_register_inputremap_tools(McpServer *server, GowlModuleMcp *module);
 
+/* Input broadcasting (multiboxing): thin wrappers over the opt-in
+ * broadcast module's IPC words.  See modules/mcp/gowl-mcp-tools-broadcast.c. */
+void gowl_mcp_register_broadcast_tools(McpServer *server, GowlModuleMcp *module);
+
 /* Macros: thin wrappers over the opt-in macro module's IPC words.  See
  * modules/mcp/gowl-mcp-tools-macro.c. */
 void gowl_mcp_register_macro_tools(McpServer *server, GowlModuleMcp *module);

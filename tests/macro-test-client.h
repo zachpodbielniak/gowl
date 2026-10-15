@@ -47,7 +47,18 @@ typedef struct {
 	const gchar         *title;
 	const gchar         *app_id;
 	gint                 configured;
+	gint                 width;     /* buffer size; 0 for SURFACE_W/H */
+	gint                 height;
 } Window;
+
+/* A pointer button as one of the client's surfaces saw it. */
+typedef struct {
+	gint     window;   /* index into windows, -1 for none */
+	guint32  button;
+	guint32  state;
+	gdouble  x;        /* surface-local, where the pointer was */
+	gdouble  y;
+} ButtonSeen;
 
 typedef struct {
 	gint     window;   /* index into windows, -1 for none */
@@ -65,6 +76,7 @@ typedef struct {
 	struct wl_shm        *shm;
 	struct wl_seat       *seat;
 	struct wl_keyboard   *keyboard;
+	struct wl_pointer    *pointer;
 	struct xdg_wm_base   *wm_base;
 	Window                windows[N_WINDOWS];
 	gint                  n_windows;
@@ -76,6 +88,11 @@ typedef struct {
 	KeySeen  keys[MAX_KEYS];
 	gint     n_keys;
 	gint     enters[N_WINDOWS];
+	gint       pointer_window;   /* window under the pointer, -1 none */
+	gdouble    px;
+	gdouble    py;
+	ButtonSeen buttons[MAX_KEYS];
+	gint       n_buttons;
 	gint     stop;
 	gint     ready;
 } Client;
@@ -198,6 +215,79 @@ static const struct wl_keyboard_listener keyboard_listener = {
 };
 
 G_GNUC_UNUSED static void
+ptr_enter(void *data, struct wl_pointer *p, uint32_t serial,
+          struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy)
+{
+	Client *c = data;
+
+	(void)p; (void)serial;
+	g_mutex_lock(&c->lock);
+	c->pointer_window = window_of(c, surface);
+	c->px = wl_fixed_to_double(sx);
+	c->py = wl_fixed_to_double(sy);
+	g_mutex_unlock(&c->lock);
+}
+
+G_GNUC_UNUSED static void
+ptr_leave(void *data, struct wl_pointer *p, uint32_t serial,
+          struct wl_surface *surface)
+{
+	Client *c = data;
+
+	(void)p; (void)serial; (void)surface;
+	g_mutex_lock(&c->lock);
+	c->pointer_window = -1;
+	g_mutex_unlock(&c->lock);
+}
+
+G_GNUC_UNUSED static void
+ptr_motion(void *data, struct wl_pointer *p, uint32_t time,
+           wl_fixed_t sx, wl_fixed_t sy)
+{
+	Client *c = data;
+
+	(void)p; (void)time;
+	g_mutex_lock(&c->lock);
+	c->px = wl_fixed_to_double(sx);
+	c->py = wl_fixed_to_double(sy);
+	g_mutex_unlock(&c->lock);
+}
+
+G_GNUC_UNUSED static void
+ptr_button(void *data, struct wl_pointer *p, uint32_t serial,
+           uint32_t time, uint32_t button, uint32_t state)
+{
+	Client *c = data;
+
+	(void)p; (void)serial; (void)time;
+	g_mutex_lock(&c->lock);
+	if (c->n_buttons < MAX_KEYS) {
+		c->buttons[c->n_buttons].window = c->pointer_window;
+		c->buttons[c->n_buttons].button = button;
+		c->buttons[c->n_buttons].state = state;
+		c->buttons[c->n_buttons].x = c->px;
+		c->buttons[c->n_buttons].y = c->py;
+		c->n_buttons++;
+	}
+	g_mutex_unlock(&c->lock);
+}
+
+G_GNUC_UNUSED static void
+ptr_axis(void *data, struct wl_pointer *p, uint32_t time, uint32_t axis,
+         wl_fixed_t value)
+{
+	(void)data; (void)p; (void)time; (void)axis; (void)value;
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+	.enter = ptr_enter,
+	.leave = ptr_leave,
+	.motion = ptr_motion,
+	.button = ptr_button,
+	.axis = ptr_axis,
+};
+
+G_GNUC_UNUSED static void
 xdg_surface_configure(void *data, struct xdg_surface *s, uint32_t serial)
 {
 	Client *c = data;
@@ -208,10 +298,17 @@ xdg_surface_configure(void *data, struct xdg_surface *s, uint32_t serial)
 	for (i = 0; i < c->n_windows; i++) {
 		if (c->windows[i].xdg_surface != s)
 			continue;
-		buffer = make_buffer(c, SURFACE_W, SURFACE_H);
-		wl_surface_attach(c->windows[i].surface, buffer, 0, 0);
-		wl_surface_damage_buffer(c->windows[i].surface, 0, 0,
-		                         SURFACE_W, SURFACE_H);
+		{
+			gint bw = c->windows[i].width > 0 ? c->windows[i].width
+			                                  : SURFACE_W;
+			gint bh = c->windows[i].height > 0 ? c->windows[i].height
+			                                   : SURFACE_H;
+
+			buffer = make_buffer(c, bw, bh);
+			wl_surface_attach(c->windows[i].surface, buffer, 0, 0);
+			wl_surface_damage_buffer(c->windows[i].surface, 0, 0,
+			                         bw, bh);
+		}
 		wl_surface_commit(c->windows[i].surface);
 		g_atomic_int_set(&c->windows[i].configured, 1);
 	}
@@ -291,6 +388,8 @@ client_thread(gpointer data)
 	xdg_wm_base_add_listener(c->wm_base, &wm_base_listener, c);
 	c->keyboard = wl_seat_get_keyboard(c->seat);
 	wl_keyboard_add_listener(c->keyboard, &keyboard_listener, c);
+	c->pointer = wl_seat_get_pointer(c->seat);
+	wl_pointer_add_listener(c->pointer, &pointer_listener, c);
 
 	for (i = 0; i < c->n_windows; i++) {
 		Window *w = &c->windows[i];
@@ -324,6 +423,10 @@ client_thread(gpointer data)
 }
 
 /* ── The rig ────────────────────────────────────────────────────── */
+
+/* Optional buffer sizes, set by a test before rig_up(); 0 for the
+ * default SURFACE_W x SURFACE_H. */
+G_GNUC_UNUSED static gint rig_window_size[N_WINDOWS][2];
 
 typedef struct {
 	gchar             *runtime;
@@ -417,14 +520,18 @@ rig_up(
 	/* No input devices on a headless backend: announce a keyboard so
 	   the client can bind one.  Keys come from the compositor's group. */
 	wlr_seat_set_capabilities(r->compositor->wlr_seat,
-	                          WL_SEAT_CAPABILITY_KEYBOARD);
+	                          WL_SEAT_CAPABILITY_KEYBOARD
+	                          | WL_SEAT_CAPABILITY_POINTER);
 
 	g_mutex_init(&r->client.lock);
 	r->client.focused = -1;
+	r->client.pointer_window = -1;
 	r->client.socket = gowl_compositor_get_socket_name(r->compositor);
 	for (i = 0; titles[i] != NULL && i < N_WINDOWS; i++) {
 		r->client.windows[i].title = titles[i];
 		r->client.windows[i].app_id = app_ids != NULL ? app_ids[i] : NULL;
+		r->client.windows[i].width = rig_window_size[i][0];
+		r->client.windows[i].height = rig_window_size[i][1];
 	}
 	r->client.n_windows = r->n = i;
 	r->thread = g_thread_new("wl-client", client_thread, &r->client);

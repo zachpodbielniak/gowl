@@ -212,10 +212,21 @@ XWAYLAND_AVAILABLE := 1
 else
 XWAYLAND_AVAILABLE := 0
 endif
+
+# Optional on top of XWayland: xcb-xinput, for the X11 delivery sync
+# (src/core/gowl-xwayland-sync.c).  Delivering a key to a background X11
+# window means moving X input focus and knowing the key has been
+# processed before moving it back; an XI2 raw-key event is that proof.
+# Without the library the sync falls back to a fixed settle delay, which
+# works on an idle machine and races on a busy one -- so it is optional
+# rather than a reason to lose XWayland altogether.
+DEPS_XWAYLAND_SYNC := xcb-xinput
+XWAYLAND_SYNC_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_XWAYLAND_SYNC) 2>/dev/null && echo 1 || echo 0)
 else
 XWAYLAND_XCB := 0
 WLROOTS_HAS_XWAYLAND := 0
 XWAYLAND_AVAILABLE := 0
+XWAYLAND_SYNC_AVAILABLE := 0
 endif
 
 # Optional MCP dependencies (requires mcp-glib submodule at deps/mcp-glib)
@@ -254,6 +265,13 @@ ifeq ($(XWAYLAND_AVAILABLE),1)
     CFLAGS_BASE += -DGOWL_HAVE_XWAYLAND=1
     CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags $(DEPS_XWAYLAND) 2>/dev/null)
     LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs $(DEPS_XWAYLAND) 2>/dev/null)
+    GOWL_PC_XWAYLAND := $(DEPS_XWAYLAND)
+ifeq ($(XWAYLAND_SYNC_AVAILABLE),1)
+    GOWL_PC_XWAYLAND += $(DEPS_XWAYLAND_SYNC)
+    CFLAGS_BASE += -DGOWL_HAVE_XWAYLAND_SYNC=1
+    CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags $(DEPS_XWAYLAND_SYNC) 2>/dev/null)
+    LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs $(DEPS_XWAYLAND_SYNC) 2>/dev/null)
+endif
 endif
 
 # Add libdecor flags if available
@@ -365,6 +383,7 @@ show-config:
 	@echo "XWAYLAND_AVAILABLE: $(XWAYLAND_AVAILABLE)"
 	@echo "  wlroots has xwayland: $(WLROOTS_HAS_XWAYLAND)"
 	@echo "  xcb + xcb-icccm:      $(XWAYLAND_XCB)"
+	@echo "  xcb-xinput (sync):    $(XWAYLAND_SYNC_AVAILABLE)"
 	@echo "MCP:             $(MCP)"
 	@echo "MCP_AVAILABLE:   $(MCP_AVAILABLE)"
 	@echo "LIBDECOR_AVAILABLE: $(LIBDECOR_AVAILABLE)"

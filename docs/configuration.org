@@ -3368,6 +3368,31 @@ Each input maps to exactly ONE target (=pass=, =drop=, =key=, =button=, =action=
 
 In a C config, the same rule is =gowl_input_remap_rule_new()= plus =gowl_config_add_input_remap_rule()= (see [[file:input-remap.org::#input-remap-c-config][C config]]), and =gowl_input_remap_rule_map_callback()= maps an input to a C function.
 
+*** Input broadcasting
+:PROPERTIES:
+:CUSTOM_ID: broadcast-config
+:END:
+The =broadcast= section defines the /teams/ and /rules/ of the opt-in =broadcast= module, which repeats keys (and clicks) typed in one window of a team into its other windows --- multiboxing.  Without the module enabled the section is inert, and with it enabled nothing is repeated until its toggle key (=Super+b=) switches it on.
+
+#+begin_src yaml
+modules:
+  broadcast: { enabled: true }
+
+broadcast:
+  teams:
+    - name: eq
+      slots:
+        - {name: tank,   match: 'app-id = eqgame.exe', focus-key: Super+F1}
+        - {name: cleric, match: 'app-id = eqgame.exe', focus-key: Super+F2}
+  rules:
+    - {name: follow, team: eq, when: 'focused-slot = tank',
+       keys: ['1-9', w, a, s, d], targets: all-other}
+#+end_src
+
+A bad team or rule --- an unknown key name, a filter that does not parse, an unknown field --- is reported and counted as a config problem; the rest still load.  The full schema, the delivery model (and its limits for X11 and Wayland windows), strict mode and the IPC commands are in [[file:broadcast.org][Input Broadcasting]]; =data/example-broadcast.yaml= and =data/example-broadcast.c= are complete examples.  In a C config: =gowl_broadcast_team_new()= / =gowl_broadcast_rule_new()= (or =_new_from_yaml()=) plus =gowl_config_add_broadcast_team()= / =_rule()=.
+
+Check the rules of the game before broadcasting: several forbid it outright (see [[file:broadcast.org::#broadcast-game-rules][the table]]).
+
 *** Monitor Configuration
 :PROPERTIES:
 :CUSTOM_ID: monitor-configuration

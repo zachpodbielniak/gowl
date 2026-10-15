@@ -52,8 +52,10 @@
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include "gowl-tablet.h"
 #include "gowl-pointer-confine.h"
+#include "gowl-xwayland-sync.h"
 #include "gowl-layout-registry.h"
 #include "../interfaces/gowl-layout-provider.h"
+#include "../interfaces/gowl-input-observer.h"
 #include "gowl-effects.h"
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
@@ -84,6 +86,7 @@ enum {
 	SIGNAL_WORKSPACE_DESTROYED,
 	SIGNAL_RENDERER_REPLACED,
 	SIGNAL_POINTER_CONFINE_CHANGED,
+	SIGNAL_MODULE_EVENT,
 	N_SIGNALS
 };
 
@@ -633,6 +636,14 @@ gowl_compositor_finalize(GObject *object)
 		wl_display_destroy_clients(self->wl_display);
 
 #ifdef GOWL_HAVE_XWAYLAND
+		/* Our own X connection first: it is a client of the server
+		 * being destroyed next. */
+		if (self->xsync_source != NULL) {
+			wl_event_source_remove(self->xsync_source);
+			self->xsync_source = NULL;
+		}
+		g_clear_pointer(&self->xsync, gowl_xwayland_sync_free);
+		g_clear_pointer(&self->batch_x_keys, g_array_unref);
 		/* Destroy XWayland before the backend/display so it can tear
 		 * down its X11 clients cleanly. */
 		g_clear_pointer(&self->xwayland, wlr_xwayland_destroy);
@@ -1009,6 +1020,30 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 		             G_TYPE_STRING);
 
 	/**
+	 * GowlCompositor::module-event:
+	 * @compositor: the #GowlCompositor that emitted the signal
+	 * @module: the module's name, e.g. "broadcast"
+	 * @text: what happened, the same text as the IPC event line
+	 *
+	 * A module announced a change of state, through
+	 * gowl_compositor_emit_module_event().  The IPC stream carries the
+	 * same news as `EVENT MODULE TEXT'; this is the in-process form, for
+	 * an embedder that has no IPC socket (cmacs relays it to the Lisp
+	 * hook `cmacs-gowl-module-event-functions').
+	 */
+	compositor_signals[SIGNAL_MODULE_EVENT] =
+		g_signal_new("module-event",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             2,
+		             G_TYPE_STRING,
+		             G_TYPE_STRING);
+
+	/**
 	 * GowlCompositor::client-pre-map:
 	 * @compositor: the #GowlCompositor that emitted the signal
 	 * @client: the #GowlClient that is about to be placed
@@ -1197,6 +1232,11 @@ static void
 gowl_compositor_init(GowlCompositor *self)
 {
 	/* GObject already zeroes the allocation; just set non-zero defaults */
+
+	/* How long a targeted delivery waits for Xwayland per step
+	 * (gowl-client-input.c).  Generous: a wine client takes focus
+	 * itself through WM_TAKE_FOCUS and answers on its own schedule. */
+	self->delivery_timeout_ms = 80;
 
 	/* default colours (grey background, white focus border) */
 	self->root_color[0] = 0.3f;
@@ -11140,6 +11180,43 @@ gowl_compositor_dispatch_keybind(
 }
 
 /*
+ * Fills a #GowlInputObserverKey for the input-observer hooks.  Only
+ * called once gowl_module_manager_has_input_observers() said yes, so a
+ * session without an observer never pays for the level-0 lookup.
+ */
+static void
+observer_key_fill(
+	GowlCompositor       *self,
+	GowlInputObserverKey *okey,
+	struct wlr_keyboard  *kb,
+	xkb_keycode_t         keycode,
+	guint32               raw_keycode,
+	const xkb_keysym_t   *syms,
+	gint                  nsyms,
+	guint32               mods,
+	guint32               state,
+	gboolean              synthetic,
+	guint32               time_msec
+){
+	const xkb_keysym_t *raw_syms;
+	xkb_layout_index_t layout;
+	gint n_raw;
+
+	memset(okey, 0, sizeof *okey);
+	okey->focused     = gowl_compositor_get_focused_client(self);
+	okey->keycode     = raw_keycode;
+	okey->keysym      = nsyms > 0 ? (guint32)syms[0] : 0;
+	layout = xkb_state_key_get_layout(kb->xkb_state, keycode);
+	n_raw = xkb_keymap_key_get_syms_by_level(kb->keymap, keycode, layout,
+	                                         0, &raw_syms);
+	okey->base_keysym = n_raw > 0 ? (guint32)raw_syms[0] : okey->keysym;
+	okey->modifiers   = GOWL_CLEANMASK(mods);
+	okey->pressed     = state == WL_KEYBOARD_KEY_STATE_PRESSED;
+	okey->synthetic   = synthetic;
+	okey->time_msec   = time_msec;
+}
+
+/*
  * The whole keyboard decision, shared by the real keyboard and by
  * injected input.
  *
@@ -11285,6 +11362,26 @@ compositor_handle_key(
 		pointer_confine_release_by_user(self, "escape");
 		wl_event_source_timer_update(self->key_repeat_source, 0);
 		return;
+	}
+
+	/*
+	 * Input observers (the broadcast module) are offered the key here:
+	 * after the lock screen and the confinement escape, ahead of the
+	 * KVM diversion, every bind and keyboard-shortcuts-inhibit.  A game
+	 * in fullscreen usually inhibits shortcuts, and an observer's
+	 * toggle that stopped working exactly when the game has focus would
+	 * be useless.  Nothing at all happens without an active observer.
+	 */
+	if (self->module_mgr != NULL
+	    && gowl_module_manager_has_input_observers(self->module_mgr)) {
+		GowlInputObserverKey okey;
+
+		observer_key_fill(self, &okey, kb, keycode, raw_keycode, syms,
+		                  nsyms, mods, state, synthetic, time_msec);
+		if (gowl_module_manager_filter_key(self->module_mgr, &okey)) {
+			wl_event_source_timer_update(self->key_repeat_source, 0);
+			return;
+		}
 	}
 
 	handled = FALSE;
@@ -11505,6 +11602,21 @@ compositor_handle_key(
 		                             time_msec,
 		                             raw_keycode,
 		                             state);
+
+		/* ...and tell the input observers it got there.  After
+		 * the forward, so what they see is what the focused window
+		 * received -- never a key a bind or a module claimed. */
+		if (self->module_mgr != NULL
+		    && gowl_module_manager_has_input_observers(
+			       self->module_mgr)) {
+			GowlInputObserverKey okey;
+
+			observer_key_fill(self, &okey, kb, keycode,
+			                  raw_keycode, syms, nsyms, mods,
+			                  state, synthetic, time_msec);
+			gowl_module_manager_key_forwarded(self->module_mgr,
+			                                  &okey);
+		}
 	}
 
 	/* Set up key repeat state.  Not for injected keys: the sender is
@@ -13339,6 +13451,42 @@ compositor_handle_button(
 	                               time_msec,
 	                               button,
 	                               state);
+
+	/* Input observers hear clicks that reached a window's main
+	 * surface.  A popup or subsurface is not reported: its
+	 * coordinates mean nothing in another window, and a menu in one
+	 * window has no counterpart to click in the others. */
+	if (self->module_mgr != NULL
+	    && gowl_module_manager_has_input_observers(self->module_mgr)) {
+		struct wlr_surface *focused;
+		struct wlr_keyboard *okbd;
+		GowlClient *oc = NULL;
+
+		focused = self->wlr_seat->pointer_state.focused_surface;
+		xytonode(self, self->wlr_cursor->x, self->wlr_cursor->y,
+		         NULL, &oc, NULL, NULL);
+		if (oc != NULL && focused != NULL
+		    && focused == gowl_client_get_wlr_surface(oc)) {
+			GowlInputObserverButton ob;
+
+			memset(&ob, 0, sizeof ob);
+			okbd = wlr_seat_get_keyboard(self->wlr_seat);
+			ob.client    = oc;
+			ob.button    = button;
+			ob.pressed   = state == WL_POINTER_BUTTON_STATE_PRESSED;
+			ob.sx        = self->wlr_seat->pointer_state.sx;
+			ob.sy        = self->wlr_seat->pointer_state.sy;
+			ob.width     = focused->current.width;
+			ob.height    = focused->current.height;
+			ob.modifiers = okbd != NULL
+				? GOWL_CLEANMASK(wlr_keyboard_get_modifiers(okbd))
+				: 0;
+			ob.synthetic = synthetic;
+			ob.time_msec = time_msec;
+			gowl_module_manager_button_forwarded(self->module_mgr,
+			                                     &ob);
+		}
+	}
 }
 /**
  * on_cursor_button:
@@ -15649,4 +15797,39 @@ gowl_compositor_scroll_by(GowlCompositor *self, GowlMonitor *m, gint dx)
  if (e == NULL || e->provider == NULL) return;
  iface = GOWL_LAYOUT_PROVIDER_GET_IFACE(e->provider);
  if (iface->scroll != NULL) iface->scroll(e->provider, m, dx);
+}
+
+/**
+ * gowl_compositor_emit_module_event:
+ * @self: a #GowlCompositor
+ * @module: the module's name
+ * @format: printf-style format for what happened
+ * @...: arguments for @format
+ *
+ * Announces a module's change of state twice over: as the
+ * #GowlCompositor::module-event signal, for an embedder, and as an
+ * `EVENT MODULE TEXT' line to IPC subscribers when there is a socket.
+ * Must be called on the compositor thread.
+ */
+void
+gowl_compositor_emit_module_event(
+	GowlCompositor *self,
+	const gchar    *module,
+	const gchar    *format,
+	...
+){
+	g_autofree gchar *text = NULL;
+	va_list args;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(module != NULL && format != NULL);
+
+	va_start(args, format);
+	text = g_strdup_vprintf(format, args);
+	va_end(args);
+
+	g_signal_emit(self, compositor_signals[SIGNAL_MODULE_EVENT], 0,
+	              module, text);
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT %s %s", module, text);
 }

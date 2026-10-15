@@ -389,6 +389,7 @@ $(OUTDIR)/gowl.pc: gowl.pc.in | $(OUTDIR)
 		-e 's|@INCLUDEDIR@|$(INCLUDEDIR)|g' \
 		-e 's|@VERSION@|$(VERSION)|g' \
 		-e 's|@WLROOTS_PC@|$(WLROOTS_PC)|g' \
+		-e 's|@XWAYLAND_PC@|$(GOWL_PC_XWAYLAND)|g' \
 		$< > $@
 
 # Version header generation

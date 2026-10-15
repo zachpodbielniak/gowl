@@ -38,6 +38,7 @@
 #include "boxed/gowl-process-info.h"
 #include "boxed/gowl-capture-source.h"
 #include "boxed/gowl-input-remap-rule.h"
+#include "boxed/gowl-broadcast.h"
 
 /* Module system */
 #include "module/gowl-module.h"
@@ -74,6 +75,7 @@
 #include "interfaces/gowl-workspace-provider.h"
 #include "interfaces/gowl-capture-provider.h"
 #include "interfaces/gowl-input-remapper.h"
+#include "interfaces/gowl-input-observer.h"
 
 /* Macros (the API a macro script calls) */
 #include "macro/gowl-macro.h"

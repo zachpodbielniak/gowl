@@ -46,6 +46,7 @@ LIB_SRCS := \
 	src/boxed/gowl-input-zone.c \
 	src/boxed/gowl-input-barrier.c \
 	src/boxed/gowl-input-remap-rule.c \
+	src/boxed/gowl-broadcast.c \
 	src/module/gowl-module.c \
 	src/module/gowl-module-manager.c \
 	src/module/gowl-module-info.c \
@@ -79,6 +80,7 @@ LIB_SRCS := \
 	src/interfaces/gowl-workspace-provider.c \
 	src/interfaces/gowl-capture-provider.c \
 	src/interfaces/gowl-input-remapper.c \
+	src/interfaces/gowl-input-observer.c \
 	src/barkit/gowl-bar-theme.c \
 	src/barkit/gowl-bar-icon.c \
 	src/barkit/gowl-bar-json.c \
@@ -102,6 +104,7 @@ LIB_SRCS := \
 	src/util/gowl-fx-optout.c \
 	src/util/gowl-fault-guard.c \
 	src/util/gowl-subprocess.c \
+	src/util/gowl-filter.c \
 	src/tray/gowl-tray.c \
 	src/menu/gowl-menu.c \
 	src/fx/gowl-fx-gl.c \
@@ -156,6 +159,7 @@ LIB_SRCS := \
 	src/core/gowl-input-config.c \
 	src/core/gowl-input-remap-core.c \
 	src/core/gowl-client-input.c \
+	src/core/gowl-xwayland-sync.c \
 	src/macro/gowl-macro.c \
 	src/core/gowl-decor.c \
 	src/core/gowl-static-prefix-key-policy.c \
@@ -187,6 +191,7 @@ LIB_HDRS := \
 	src/boxed/gowl-focus-token.h \
 	src/boxed/gowl-workspace-id.h \
 	src/boxed/gowl-input-remap-rule.h \
+	src/boxed/gowl-broadcast.h \
 	src/barkit/gowl-barkit-types.h \
 	src/barkit/gowl-bar-theme.h \
 	src/barkit/gowl-bar-icon.h \
@@ -231,6 +236,7 @@ LIB_HDRS := \
 	src/interfaces/gowl-embed-renderer.h \
 	src/interfaces/gowl-workspace-provider.h \
 	src/interfaces/gowl-input-remapper.h \
+	src/interfaces/gowl-input-observer.h \
 	src/macro/gowl-macro.h \
 	src/config/gowl-config.h \
 	src/config/gowl-config-compiler.h \
@@ -240,6 +246,7 @@ LIB_HDRS := \
 	src/util/gowl-easing.h \
 	src/util/gowl-fault-guard.h \
 	src/util/gowl-subprocess.h \
+	src/util/gowl-filter.h \
 	src/fx/gowl-fx.h \
 	src/tray/gowl-tray.h \
 	src/menu/gowl-menu.h \
@@ -550,6 +557,13 @@ $(OUTDIR)/test-macro-targeted-key $(OUTDIR)/test-macro-examples: $(OBJDIR)/tests
 $(OBJDIR)/tests/test-macro-targeted-key.o $(OBJDIR)/tests/test-macro-examples.o: xdg-shell-client-protocol.h tests/macro-test-client.h
 $(OUTDIR)/test-macro-targeted-key $(OUTDIR)/test-macro-examples: TEST_LDFLAGS += $(OBJDIR)/tests/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-macro-targeted-key.o $(OBJDIR)/tests/test-macro-examples.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
+# test-broadcast-delivery: the same client (now also recording clicks),
+# three toplevels, a keyboard and a pointer plugged in through the
+# backend, and the real broadcast.so.
+$(OUTDIR)/test-broadcast-delivery: $(OBJDIR)/tests/xdg-shell-protocol.o $(OUTDIR)/modules/broadcast.so
+$(OBJDIR)/tests/test-broadcast-delivery.o: xdg-shell-client-protocol.h tests/macro-test-client.h
+$(OUTDIR)/test-broadcast-delivery: TEST_LDFLAGS += $(OBJDIR)/tests/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
+$(OBJDIR)/tests/test-broadcast-delivery.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client) -DGOWL_TEST_BROADCAST_MODULE='"$(abspath $(OUTDIR)/modules/broadcast.so)"'
 $(OUTDIR)/test-protocols: TEST_LDFLAGS += $(OBJDIR)/bar/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 
@@ -559,9 +573,12 @@ $(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags 
 # keyboard.  test-x11-unmanaged-decoration flips windows' override-
 # redirect bit around map and unmap with roundcorners loaded.  Without
 # xcb they build as a skip.
-X11_TESTS := $(OUTDIR)/test-x11-popup-focus $(OUTDIR)/test-x11-windows $(OUTDIR)/test-x11-unmanaged-decoration
-X11_TEST_OBJS := $(OBJDIR)/tests/test-x11-popup-focus.o $(OBJDIR)/tests/test-x11-windows.o $(OBJDIR)/tests/test-x11-unmanaged-decoration.o
+X11_TESTS := $(OUTDIR)/test-x11-popup-focus $(OUTDIR)/test-x11-windows $(OUTDIR)/test-x11-unmanaged-decoration $(OUTDIR)/test-broadcast-x11
+X11_TEST_OBJS := $(OBJDIR)/tests/test-x11-popup-focus.o $(OBJDIR)/tests/test-x11-windows.o $(OBJDIR)/tests/test-x11-unmanaged-decoration.o $(OBJDIR)/tests/test-broadcast-x11.o
 $(X11_TEST_OBJS): tests/x11-rig.h
+# test-broadcast-x11 also loads the real broadcast.so.
+$(OUTDIR)/test-broadcast-x11: $(OUTDIR)/modules/broadcast.so
+$(OBJDIR)/tests/test-broadcast-x11.o: TEST_CFLAGS += -DGOWL_TEST_BROADCAST_MODULE='"$(abspath $(OUTDIR)/modules/broadcast.so)"'
 ifeq ($(XWAYLAND_AVAILABLE),1)
 $(X11_TESTS): TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs xcb xcb-icccm)
 $(X11_TEST_OBJS): TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags xcb xcb-icccm)
@@ -748,6 +765,12 @@ $(OUTDIR)/test-input-remap-claim: $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modu
 $(OBJDIR)/tests/test-input-remap-claim.o: TEST_CFLAGS += -DGOWL_TEST_INPUTREMAP_MODULE='"$(abspath $(OUTDIR)/modules/inputremap.so)"' -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 # The engine test includes the module's pure rule engine directly.
 $(OBJDIR)/tests/test-input-remap-engine.o: modules/inputremap/gowl-inputremap-engine.c modules/inputremap/gowl-inputremap-engine.h
+# The broadcast config test compiles the shipped C example, which
+# includes <gowl/gowl.h> the way a user's config.c does.
+$(OBJDIR)/tests/test-broadcast-config.o: data/example-broadcast.c
+$(OBJDIR)/tests/test-broadcast-config.o: TEST_CFLAGS += -I$(abspath $(BUILDDIR)/include)
+# The broadcast routing engine is pure too; its test includes it.
+$(OBJDIR)/tests/test-broadcast-engine.o: modules/broadcast/gowl-broadcast-engine.c modules/broadcast/gowl-broadcast-engine.h
 
 # Macros.  The loader test includes the loader directly and compiles
 # real macro files with crispy against this build's headers, so it
@@ -755,7 +778,7 @@ $(OBJDIR)/tests/test-input-remap-engine.o: modules/inputremap/gowl-inputremap-en
 # example tests load the real macro.so in a headless compositor.
 $(OBJDIR)/tests/test-macro-loader.o: modules/macro/gowl-macro-loader.c modules/macro/gowl-macro-loader.h
 # The filter language is pure GLib: its test includes the engine.
-$(OBJDIR)/tests/test-macro-filter.o: modules/macro/gowl-macro-filter.c modules/macro/gowl-macro-filter.h
+$(OBJDIR)/tests/test-macro-filter.o: modules/macro/gowl-macro-filter.c modules/macro/gowl-macro-filter.h src/util/gowl-filter.h
 # So are the recorder's translator and the voice matcher.
 $(OBJDIR)/tests/test-macro-record.o: modules/macro/gowl-macro-record.c modules/macro/gowl-macro-record.h
 $(OBJDIR)/tests/test-macro-voice.o: modules/macro/gowl-macro-voice.c modules/macro/gowl-macro-voice.h
@@ -804,7 +827,8 @@ $(OUTDIR)/modules/menu.so: $(wildcard modules/menu/*.c modules/menu/*.h)
 # The input remapper: its engine is a second file, and it links
 # json-glib and wayland-server, neither of which the generic rule does.
 $(OUTDIR)/modules/inputremap.so: $(wildcard modules/inputremap/*.c modules/inputremap/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modules/macro.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+$(OUTDIR)/modules/broadcast.so: $(wildcard modules/broadcast/*.c modules/broadcast/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modules/broadcast.so $(OUTDIR)/modules/macro.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

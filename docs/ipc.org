@@ -127,6 +127,14 @@ With the opt-in =inputremap= module loaded, the =inputremap-= words manage per-d
 gowl-msg inputremap-devices
 #+end_src
 
+* Input broadcasting
+
+With the opt-in =broadcast= module loaded, the =broadcast-= words drive multiboxing: =broadcast-on=, =-off=, =-toggle=, =-panic= (off, and release every key held anywhere), =-status= (JSON), =-list= (JSON), =-add-team YAML=, =-add-rule YAML=, =-remove-team NAME=, =-remove-rule NAME=, =-enable-rule NAME=, =-disable-rule NAME=, =-clear=, =-reload=, =-assign TEAM SLOT [ID]=, =-unassign TEAM SLOT=, =-focus-slot [TEAM] SLOT=, =-step-reset [RULE]=, =-strict on|off|toggle=.  Events: =EVENT broadcast on|off TEAM|panic|lock ...= and =EVENT broadcast strict on|off=.  See [[file:broadcast.org::#broadcast-ipc][broadcast.org]].
+
+#+begin_src bash
+gowl-msg broadcast-status
+#+end_src
+
 * Macros
 
 With the opt-in =macro= module loaded, the =macro-= words run and manage macros: =macro-run [--trigger=K] [--detail=D] NAME ARGS=, =-stop [NAME|ID|all]=, =-list=, =-status=, =-info NAME=, =-compile NAME=, =-dirs=, =-reload=, =-clear [NAME]=, =-define NAME command|custom|action ...=, =-undefine NAME=, =-log [LEVEL]=, =-triggers= (the triggers and their filters, as understood), =-filter-test [--event=E] FILTER= (judge a filter against the current state), =-record [toggle|start [NAME]|stop|cancel|status]= (record what you do as a macro), =-voice [toggle|start|stop|cancel|status]= (listen through =voice-command= and run what was said), =-voice-match [--dry-run] TEXT= (run the macro TEXT names).  Events: =EVENT macro started|finished|stopped NAME ID=, =EVENT macro fault NAME SIGNAL=, =EVENT macro recording|recorded|recorded-nothing|recording-cancelled ...= and =EVENT macro voice-listening|voice-stopped|voice|voice-unmatched ...=.  See [[file:macros.org::#macros-ipc][macros.org]].

@@ -121,6 +121,21 @@ void            gowl_compositor_set_ipc (GowlCompositor *self,
 GowlIpc        *gowl_compositor_get_ipc (GowlCompositor *self);
 
 /**
+ * gowl_compositor_emit_module_event:
+ * @self: a #GowlCompositor
+ * @module: the module's name
+ * @format: printf-style format for what happened
+ * @...: arguments for @format
+ *
+ * Emits #GowlCompositor::module-event and, when there is an IPC socket,
+ * pushes `EVENT MODULE TEXT' to its subscribers.
+ */
+void            gowl_compositor_emit_module_event (GowlCompositor *self,
+                                                   const gchar    *module,
+                                                   const gchar    *format,
+                                                   ...) G_GNUC_PRINTF(3, 4);
+
+/**
  * gowl_compositor_set_prefix_key_policy:
  * @self: a #GowlCompositor
  * @policy: (transfer none) (nullable): a #GowlPrefixKeyPolicy, or %NULL
@@ -1330,6 +1345,62 @@ gboolean   gowl_compositor_send_key_to_client (GowlCompositor *self,
 gint       gowl_compositor_send_text_to_client (GowlCompositor *self,
                                                 GowlClient     *client,
                                                 const gchar    *text);
+
+/**
+ * gowl_compositor_deliver_key:
+ * @self: a #GowlCompositor
+ * @client: the window; it keeps no focus afterwards
+ * @keycode: an evdev keycode
+ * @pressed: %TRUE for the press, %FALSE for the release
+ * @modifiers: #GowlKeyMod bits to hold for the key, or -1 for the real
+ *   keyboard's modifiers as they are
+ * @delivery: how to reach the window
+ *
+ * Returns: %TRUE when delivered (and, for an X11 window, processed)
+ */
+gboolean   gowl_compositor_deliver_key         (GowlCompositor  *self,
+                                                GowlClient      *client,
+                                                guint32          keycode,
+                                                gboolean         pressed,
+                                                gint             modifiers,
+                                                GowlKeyDelivery  delivery);
+
+/**
+ * gowl_compositor_deliver_button:
+ * @self: a #GowlCompositor
+ * @client: the window under which the click lands
+ * @button: a linux/input-event-codes.h button, e.g. BTN_LEFT
+ * @pressed: %TRUE for the press, %FALSE for the release
+ * @x: surface-local x of the click
+ * @y: surface-local y of the click
+ *
+ * Returns: %TRUE when delivered
+ */
+gboolean   gowl_compositor_deliver_button      (GowlCompositor  *self,
+                                                GowlClient      *client,
+                                                guint32          button,
+                                                gboolean         pressed,
+                                                gdouble          x,
+                                                gdouble          y);
+
+/**
+ * gowl_compositor_await_x11_key:
+ * @self: a #GowlCompositor
+ * @keycode: an evdev keycode just sent to an X11 window through the seat
+ * @pressed: whether it was the press or the release
+ *
+ * Returns: %TRUE once Xwayland has processed it
+ */
+gboolean   gowl_compositor_await_x11_key       (GowlCompositor  *self,
+                                                guint32          keycode,
+                                                gboolean         pressed);
+
+void       gowl_compositor_input_batch_begin   (GowlCompositor  *self);
+void       gowl_compositor_input_batch_end     (GowlCompositor  *self);
+
+void       gowl_compositor_set_delivery_timeout (GowlCompositor *self,
+                                                 guint           timeout_ms);
+guint      gowl_compositor_get_delivery_timeout (GowlCompositor *self);
 
 /**
  * gowl_compositor_move_client:

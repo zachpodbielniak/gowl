@@ -161,6 +161,23 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   motion coalescing, self-stop deadline, secret-suppression policy,
   payload shape, and the config-to-recorder wiring
 
+- `test-broadcast-engine` -- the broadcast module's routing engine and
+  its data model: key names and ranges, team/rule parsing and refusals,
+  YAML round trips, strict one-press-one-window mode, slot filling and
+  hand assignment, mirror / when / modifiers / every target kind /
+  translations / round-robin / clicks / focus keys, the runtime overlay
+- `test-broadcast-config` -- the `broadcast:` section: a bad entry
+  reported and skipped, round trip through `gowl_config_generate_yaml()`,
+  the C API, both shipped examples (the C one compiled in)
+- `test-broadcast-delivery` -- broadcasting end to end against real
+  Wayland toplevels with a keyboard and pointer plugged in through the
+  backend: toggle, mirror, translate + `local: block`, held keys released
+  on off and on panic, round-robin, focus keys, a scaled click
+- `test-broadcast-x11` -- keys into X11 windows without focus: the seat
+  route misses them (Xwayland routes by X focus), the confirmed activate
+  route reaches them, batches, macros' targeted text, and the module
+  broadcasting between three real X windows
+
 `make test` also runs every `tests/*.sh` **source guard** before the compiled
 tests. These assert invariants no unit test can reach:
 - `test-no-libregnum.sh` -- gowl links no rendering engine (see below)
@@ -213,6 +230,29 @@ tests. These assert invariants no unit test can reach:
   `compositor_handle_key()` / `compositor_handle_button()` as real input
   and never straight to the seat, key repeat is never armed for it, and
   a claimed keyboard still recognises Super+Escape
+
+- `test-input-observer-guard.sh` -- every `GowlInputObserver` hook is
+  behind `gowl_module_manager_has_input_observers()`, the filter sits
+  after the lock screen and the confinement escape and BEFORE
+  shortcuts-inhibit, the forwarded hook after the forward, and the
+  broadcast module never touches the seat or GLib's default context
+
+> **A key into a window without focus: Wayland by the seat, X11 by X
+> focus, confirmed.** `gowl_compositor_deliver_key()` is the one way in
+> (`src/core/gowl-client-input.c`; macros' targeted sends use it for X11
+> windows too).  Xwayland hands every key to the window holding X INPUT
+> focus whatever `wl_surface` was entered, so an X11 target needs X focus
+> moved, `GetInputFocus` confirming it, the key, an XI2 raw event
+> confirming it was processed, and focus back -- skip either wait and the
+> key lands in the wrong window about half the time
+> (`src/core/gowl-xwayland-sync.c`, its own xcb connection drained by a
+> `wl_event_loop` fd source).  An X server has ONE key state for all its
+> windows: a press of a key already down is dropped, a release of a key
+> already up goes nowhere, so each event is preceded by its opposite when
+> `QueryKeymap` says so and a batch puts touched keys back to their
+> pre-batch state for the window focus returns to.  A Wayland client
+> forgets held keys on leave: to it a broadcast press is a tap.  See
+> `docs/broadcast.org`.
 
 > **Per-device remapping is one press, one output, and its hooks are
 > inert without the module.** A keyboard a `GowlInputRemapper` claims is

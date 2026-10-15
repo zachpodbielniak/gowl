@@ -1134,6 +1134,22 @@ modules:
     # voice-phrases:            # "PHRASE: MACRO ARGS", checked first
     #   - "tidy up: sort-windows"
     #   - "presentation mode: presentation"
+  # Input broadcasting for multiboxing: keys (and clicks) typed in one
+  # window of a team repeated into its others, ISBoxer-style.  Opt-in,
+  # and even enabled it repeats nothing until toggled on.  Teams and
+  # rules live in the top-level `broadcast:' section; see
+  # data/example-broadcast.yaml and docs/broadcast.org -- and the rules
+  # of the game you play.
+  broadcast:
+    enabled: false
+    # toggle-key: Super+b        # on/off, with a toast either way
+    # panic-key: Super+Shift+b   # off, and release every held key
+    # start-on: false
+    # strict: false              # one key press reaches one window
+    # toast: true
+    # log: false
+    # max-targets: 16
+    # timeout-ms: 80             # per step, for X11 (Wine) windows
   # Screen recording through ffmpeg: `record-start', `record-stop'.
   recording:
     enabled: false

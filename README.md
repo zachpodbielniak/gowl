@@ -178,6 +178,7 @@ Or do not write one: **Super+Alt+r** records what you do next and writes it out 
 - [docs/bar.org](docs/bar.org) -- The status bar: widgets, dropdown panels, toasts, and writing a bar plugin.
 - [docs/macros.org](docs/macros.org) -- Macros: writing them, running them, containment, triggers, examples and use cases.
 - [docs/input-remap.org](docs/input-remap.org) -- Per-device key, button and wheel remapping.
+- [docs/broadcast.org](docs/broadcast.org) -- Input broadcasting for multiboxing: keys and clicks repeated into the other windows of a team (opt-in).
 
 ## License
 

@@ -34,6 +34,7 @@
 #include "interfaces/gowl-screenshot-provider.h"
 #include "interfaces/gowl-recording-provider.h"
 #include "interfaces/gowl-input-remapper.h"
+#include "interfaces/gowl-input-observer.h"
 #include "interfaces/gowl-scene-effect.h"
 
 /**
@@ -67,6 +68,7 @@ struct _GowlModuleManager {
 	GPtrArray *scene_effects;
 	GPtrArray *recording_providers;  /* element-type GowlRecordingProvider*  */
 	GPtrArray *input_remappers;      /* element-type GowlInputRemapper*      */
+	GPtrArray *input_observers;      /* element-type GowlInputObserver*      */
 };
 
 G_DEFINE_FINAL_TYPE(GowlModuleManager, gowl_module_manager, G_TYPE_OBJECT)
@@ -200,6 +202,7 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->screenshot_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->recording_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->input_remappers, g_ptr_array_unref);
+	g_clear_pointer(&self->input_observers, g_ptr_array_unref);
 	g_clear_pointer(&self->scene_effects, g_ptr_array_unref);
 
 	/* Unref all module instances */
@@ -308,6 +311,7 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->screenshot_providers  = g_ptr_array_new();
 	self->recording_providers   = g_ptr_array_new();
 	self->input_remappers       = g_ptr_array_new();
+	self->input_observers       = g_ptr_array_new();
 	self->scene_effects = g_ptr_array_new();
 }
 
@@ -414,6 +418,11 @@ classify_module(
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_INPUT_REMAPPER)) {
 		g_ptr_array_add(self->input_remappers, (gpointer)mod);
 		sort_dispatch_array(self->input_remappers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_INPUT_OBSERVER)) {
+		g_ptr_array_add(self->input_observers, (gpointer)mod);
+		sort_dispatch_array(self->input_observers);
 	}
 }
 
@@ -1703,6 +1712,115 @@ gowl_module_manager_get_input_remapper(GowlModuleManager *self)
 			return mod;
 	}
 	return NULL;
+}
+
+/**
+ * gowl_module_manager_has_input_observers:
+ * @self: a #GowlModuleManager
+ *
+ * The core's fast path for every #GowlInputObserver hook: with no
+ * active observer the hooks build nothing and call nothing.
+ *
+ * Returns: %TRUE when at least one active module observes input
+ */
+gboolean
+gowl_module_manager_has_input_observers(GowlModuleManager *self)
+{
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), FALSE);
+
+	for (i = 0; i < self->input_observers->len; i++)
+		if (gowl_module_get_is_active(
+			    GOWL_MODULE(g_ptr_array_index(self->input_observers, i))))
+			return TRUE;
+	return FALSE;
+}
+
+/**
+ * gowl_module_manager_filter_key:
+ * @self: a #GowlModuleManager
+ * @key: (type gpointer): a #GowlInputObserverKey
+ *
+ * Offers a key to every active input observer in priority order; the
+ * first to consume it stops the walk.
+ *
+ * Returns: %TRUE when an observer consumed the key
+ */
+gboolean
+gowl_module_manager_filter_key(
+	GowlModuleManager *self,
+	gconstpointer      key
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), FALSE);
+
+	for (i = 0; i < self->input_observers->len; i++) {
+		GowlInputObserver *obs;
+
+		obs = g_ptr_array_index(self->input_observers, i);
+		if (!gowl_module_get_is_active(GOWL_MODULE(obs)))
+			continue;
+		if (gowl_input_observer_filter_key(obs,
+			    (const GowlInputObserverKey *)key))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/**
+ * gowl_module_manager_key_forwarded:
+ * @self: a #GowlModuleManager
+ * @key: (type gpointer): a #GowlInputObserverKey
+ *
+ * Tells every active input observer about a key that reached the
+ * focused window.  Broadcast: nobody can stop the others hearing it.
+ */
+void
+gowl_module_manager_key_forwarded(
+	GowlModuleManager *self,
+	gconstpointer      key
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	for (i = 0; i < self->input_observers->len; i++) {
+		GowlInputObserver *obs;
+
+		obs = g_ptr_array_index(self->input_observers, i);
+		if (gowl_module_get_is_active(GOWL_MODULE(obs)))
+			gowl_input_observer_key_forwarded(obs,
+				(const GowlInputObserverKey *)key);
+	}
+}
+
+/**
+ * gowl_module_manager_button_forwarded:
+ * @self: a #GowlModuleManager
+ * @button: (type gpointer): a #GowlInputObserverButton
+ *
+ * Tells every active input observer about a button that reached a
+ * window.
+ */
+void
+gowl_module_manager_button_forwarded(
+	GowlModuleManager *self,
+	gconstpointer      button
+){
+	guint i;
+
+	g_return_if_fail(GOWL_IS_MODULE_MANAGER(self));
+
+	for (i = 0; i < self->input_observers->len; i++) {
+		GowlInputObserver *obs;
+
+		obs = g_ptr_array_index(self->input_observers, i);
+		if (gowl_module_get_is_active(GOWL_MODULE(obs)))
+			gowl_input_observer_button_forwarded(obs,
+				(const GowlInputObserverButton *)button);
+	}
 }
 
 gpointer

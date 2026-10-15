@@ -247,6 +247,23 @@ A =rule= object is the same schema as a YAML rule --- JSON is YAML flow syntax, 
                   "KEY_B": {"action": "focus-client", "arg": "title:World of Warcraft*"}}}}
 #+end_src
 
+
+*** Input Broadcasting
+:PROPERTIES:
+:CUSTOM_ID: broadcast-tools-mcp
+:END:
+Thin wrappers over the opt-in =broadcast= module's IPC words ([[file:broadcast.org][broadcast.org]]).  Each reports plainly when the module is not loaded.
+
+| Tool                   | Parameters                                   | Description |
+|------------------------+----------------------------------------------+-------------|
+| =broadcast_status=     | --                                           | On/off, strict, keys, counters, teams with the window in each slot, rules with their problems |
+| =broadcast_list=       | --                                           | Every team and rule in force, as YAML |
+| =broadcast_set=        | =state= (on/off/toggle/panic) or =strict=    | Switch broadcasting (a toast shows it), panic, or strict mode |
+| =broadcast_add_team=   | =team= (object) or =yaml=                    | Add or replace a team for this session |
+| =broadcast_add_rule=   | =rule= (object) or =yaml=                    | Add or replace a rule; the reply says if it cannot run |
+| =broadcast_remove=     | =kind= (team/rule), =name=                   | Remove one |
+| =broadcast_assign=     | =team=, =slot=, =client_id= (optional; 0 back to match) | Put a window in a slot by hand |
+| =broadcast_focus_slot= | =team= (optional), =slot=                    | Focus a slot's window |
 *** Macros
 :PROPERTIES:
 :CUSTOM_ID: macro-tools-mcp

@@ -162,6 +162,8 @@ Each module has a =priority= property (integer). Dispatch arrays are sorted in a
 - =module-deactivated= -- after deactivation
 - =module-error= -- on any module operation failure
 
+A module announces its own changes of state through the compositor: =gowl_compositor_emit_module_event(compositor, "broadcast", "on %s", team)= emits =GowlCompositor::module-event= (=module=, =text=) in-process and pushes =EVENT broadcast on eq= to IPC subscribers when there is a socket.  An embedder with no IPC socket --- cmacs --- hears every module through the one signal (its Lisp hook is =cmacs-gowl-module-event-functions=), so a new module needs no new plumbing to be seen.
+
 *** Module Search Paths
 :PROPERTIES:
 :CUSTOM_ID: module-search-paths

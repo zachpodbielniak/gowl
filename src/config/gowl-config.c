@@ -23,6 +23,8 @@
 #include "gowl-types.h"
 #include "boxed/gowl-input-remap-rule.h"
 #include "boxed/gowl-input-remap-rule-private.h"
+#include "boxed/gowl-broadcast.h"
+#include "boxed/gowl-broadcast-private.h"
 
 #include <glib.h>
 #include <glib-object.h>
@@ -1084,6 +1086,12 @@ struct _GowlConfig {
 	 * not loaded these are inert. */
 	GPtrArray *input_remap_rules;
 
+	/* broadcast: teams and rules - arrays of GowlBroadcastTeam* and
+	 * GowlBroadcastRule* (a ref each), in file order.  Applied by the
+	 * opt-in broadcast module; with it not loaded they are inert. */
+	GPtrArray *broadcast_teams;
+	GPtrArray *broadcast_rules;
+
 	/* Rules - array of GowlRuleEntry* (heap-allocated) */
 	GPtrArray *rules;
 
@@ -1697,6 +1705,8 @@ gowl_config_finalize(GObject *object)
 		g_array_unref(self->gestures);
 	g_clear_pointer(&self->input_configs, g_ptr_array_unref);
 	g_clear_pointer(&self->input_remap_rules, g_ptr_array_unref);
+	g_clear_pointer(&self->broadcast_teams, g_ptr_array_unref);
+	g_clear_pointer(&self->broadcast_rules, g_ptr_array_unref);
 	g_free(self->xkb_layout);
 	g_free(self->xkb_variant);
 	g_free(self->xkb_model);
@@ -2534,6 +2544,10 @@ gowl_config_init(GowlConfig *self)
 		gowl_input_config_entry_free);
 	self->input_remap_rules = g_ptr_array_new_with_free_func(
 		(GDestroyNotify)gowl_input_remap_rule_unref);
+	self->broadcast_teams = g_ptr_array_new_with_free_func(
+		(GDestroyNotify)gowl_broadcast_team_unref);
+	self->broadcast_rules = g_ptr_array_new_with_free_func(
+		(GDestroyNotify)gowl_broadcast_rule_unref);
 	gowl_config_add_default_mousebinds(self);
 
 	self->rules = g_ptr_array_new_with_free_func(gowl_rule_entry_free);
@@ -2939,7 +2953,7 @@ static const gchar *const top_level_keys[] = {
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
 	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
 	"lock-command", "lock-on-suspend", "keybinds", "modes",
-	"mousebinds", "gestures", "input", "input-remap", "rules", "dropdowns", "autostart",
+	"mousebinds", "gestures", "input", "input-remap", "broadcast", "rules", "dropdowns", "autostart",
 	"monitors", "modules", "profiles",
 	NULL
 };
@@ -5517,6 +5531,86 @@ gowl_config_apply_mapping(
 		}
 	}
 
+	/* broadcast: teams and rules for the opt-in broadcast module
+	 * (docs/broadcast.org):
+	 *
+	 *   broadcast:
+	 *     teams:
+	 *       - {name: eq, slots: [{name: main, match: 'app-id = eqgame.exe'}]}
+	 *     rules:
+	 *       - {name: follow, team: eq, targets: all-other}
+	 *
+	 * Entry by entry, like input-remap: a bad team or rule is reported
+	 * and skipped and the rest still load. */
+	if (yaml_mapping_has_member(mapping, "broadcast")) {
+		YamlMapping *bm;
+
+		bm = yaml_mapping_get_mapping_member(mapping, "broadcast");
+		if (bm == NULL) {
+			g_warning("gowl_config: `broadcast:' is a mapping of "
+			          "`teams:' and `rules:', ignoring it");
+			self->problems++;
+		} else {
+			YamlSequence *seq;
+			guint bi, bn;
+
+			for (bi = 0; bi < yaml_mapping_get_size(bm); bi++) {
+				const gchar *k = yaml_mapping_get_key(bm, bi);
+
+				if (g_strcmp0(k, "teams") != 0
+				    && g_strcmp0(k, "rules") != 0) {
+					g_warning("gowl_config: broadcast: unknown key "
+					          "`%s' (teams, rules)", k);
+					self->problems++;
+				}
+			}
+
+			seq = yaml_mapping_get_sequence_member(bm, "teams");
+			if (seq == NULL && yaml_mapping_has_member(bm, "teams")) {
+				g_warning("gowl_config: `broadcast: teams:' is a list");
+				self->problems++;
+			}
+			bn = seq != NULL ? yaml_sequence_get_length(seq) : 0;
+			for (bi = 0; bi < bn; bi++) {
+				g_autoptr(GError) berr = NULL;
+				GowlBroadcastTeam *team;
+
+				team = gowl_broadcast_team_new_from_node(
+					yaml_sequence_get_element(seq, bi), &berr);
+				if (team == NULL) {
+					g_warning("gowl_config: broadcast team %u: %s",
+					          bi + 1, berr->message);
+					self->problems++;
+					continue;
+				}
+				gowl_config_add_broadcast_team(self, team);
+				gowl_broadcast_team_unref(team);
+			}
+
+			seq = yaml_mapping_get_sequence_member(bm, "rules");
+			if (seq == NULL && yaml_mapping_has_member(bm, "rules")) {
+				g_warning("gowl_config: `broadcast: rules:' is a list");
+				self->problems++;
+			}
+			bn = seq != NULL ? yaml_sequence_get_length(seq) : 0;
+			for (bi = 0; bi < bn; bi++) {
+				g_autoptr(GError) berr = NULL;
+				GowlBroadcastRule *rule;
+
+				rule = gowl_broadcast_rule_new_from_node(
+					yaml_sequence_get_element(seq, bi), &berr);
+				if (rule == NULL) {
+					g_warning("gowl_config: broadcast rule %u: %s",
+					          bi + 1, berr->message);
+					self->problems++;
+					continue;
+				}
+				gowl_config_add_broadcast_rule(self, rule);
+				gowl_broadcast_rule_unref(rule);
+			}
+		}
+	}
+
 	/* Keybinds: mapping of
 	 *   "Mod+Key": { action: <name>, arg: "<value>", desc: "<text>" }
 	 *
@@ -6461,6 +6555,27 @@ gowl_config_generate_yaml(GowlConfig *self)
 		}
 	}
 
+	/* broadcast: teams and rules, one flow mapping each */
+	if (self->broadcast_teams->len > 0 || self->broadcast_rules->len > 0) {
+		g_string_append(yaml, "\nbroadcast:\n");
+		if (self->broadcast_teams->len > 0)
+			g_string_append(yaml, "  teams:\n");
+		for (i = 0; i < self->broadcast_teams->len; i++) {
+			g_autofree gchar *line = gowl_broadcast_team_to_yaml(
+				g_ptr_array_index(self->broadcast_teams, i));
+
+			g_string_append_printf(yaml, "    - %s\n", line);
+		}
+		if (self->broadcast_rules->len > 0)
+			g_string_append(yaml, "  rules:\n");
+		for (i = 0; i < self->broadcast_rules->len; i++) {
+			g_autofree gchar *line = gowl_broadcast_rule_to_yaml(
+				g_ptr_array_index(self->broadcast_rules, i));
+
+			g_string_append_printf(yaml, "    - %s\n", line);
+		}
+	}
+
 	/* Rules */
 	if (self->rules->len > 0) {
 		g_string_append(yaml, "\nrules:\n");
@@ -6896,6 +7011,10 @@ gowl_config_reset_values_to_defaults(GowlConfig *self)
 		g_ptr_array_set_size(self->input_configs, 0);
 	if (self->input_remap_rules != NULL)
 		g_ptr_array_set_size(self->input_remap_rules, 0);
+	if (self->broadcast_teams != NULL)
+		g_ptr_array_set_size(self->broadcast_teams, 0);
+	if (self->broadcast_rules != NULL)
+		g_ptr_array_set_size(self->broadcast_rules, 0);
 	if (self->rules != NULL)
 		g_ptr_array_set_size(self->rules, 0);
 	if (self->dropdowns != NULL)
@@ -7280,6 +7399,178 @@ gowl_config_get_input_remap_rules(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
 	return self->input_remap_rules;
+}
+
+/* --- broadcast: teams and rules --- */
+
+/* Index of the entry named @name, or -1. */
+static gint
+find_named(
+	GPtrArray     *array,
+	const gchar   *name,
+	const gchar * (*name_of)(gpointer)
+){
+	guint i;
+
+	for (i = 0; i < array->len; i++)
+		if (g_strcmp0(name_of(g_ptr_array_index(array, i)), name) == 0)
+			return (gint)i;
+	return -1;
+}
+
+/**
+ * gowl_config_add_broadcast_team:
+ * @self: a #GowlConfig
+ * @team: a team; the config takes its own reference
+ *
+ * Adds @team to `broadcast: teams:', replacing a team of the same name
+ * in place.  The broadcast module applies the list; without it loaded
+ * teams are inert.
+ */
+void
+gowl_config_add_broadcast_team(
+	GowlConfig        *self,
+	GowlBroadcastTeam *team
+){
+	gint i;
+
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_return_if_fail(team != NULL);
+
+	i = find_named(self->broadcast_teams, gowl_broadcast_team_get_name(team),
+	               (const gchar *(*)(gpointer))gowl_broadcast_team_get_name);
+	if (i >= 0) {
+		GowlBroadcastTeam *old;
+
+		old = g_ptr_array_index(self->broadcast_teams, (guint)i);
+		self->broadcast_teams->pdata[i] = gowl_broadcast_team_ref(team);
+		gowl_broadcast_team_unref(old);
+		return;
+	}
+	g_ptr_array_add(self->broadcast_teams, gowl_broadcast_team_ref(team));
+}
+
+/**
+ * gowl_config_remove_broadcast_team:
+ * @self: a #GowlConfig
+ * @name: the team's name
+ *
+ * Returns: %TRUE when a team by that name was removed
+ */
+gboolean
+gowl_config_remove_broadcast_team(
+	GowlConfig  *self,
+	const gchar *name
+){
+	gint i;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	g_return_val_if_fail(name != NULL, FALSE);
+
+	i = find_named(self->broadcast_teams, name,
+	               (const gchar *(*)(gpointer))gowl_broadcast_team_get_name);
+	if (i < 0)
+		return FALSE;
+	g_ptr_array_remove_index(self->broadcast_teams, (guint)i);
+	return TRUE;
+}
+
+/**
+ * gowl_config_get_broadcast_teams:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlBroadcastTeam): the
+ *   `broadcast: teams:', in file order
+ */
+GPtrArray *
+gowl_config_get_broadcast_teams(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->broadcast_teams;
+}
+
+/**
+ * gowl_config_add_broadcast_rule:
+ * @self: a #GowlConfig
+ * @rule: a rule; the config takes its own reference
+ *
+ * Adds @rule to `broadcast: rules:', replacing a rule of the same name
+ * in place.
+ */
+void
+gowl_config_add_broadcast_rule(
+	GowlConfig        *self,
+	GowlBroadcastRule *rule
+){
+	gint i;
+
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_return_if_fail(rule != NULL);
+
+	i = find_named(self->broadcast_rules, gowl_broadcast_rule_get_name(rule),
+	               (const gchar *(*)(gpointer))gowl_broadcast_rule_get_name);
+	if (i >= 0) {
+		GowlBroadcastRule *old;
+
+		old = g_ptr_array_index(self->broadcast_rules, (guint)i);
+		self->broadcast_rules->pdata[i] = gowl_broadcast_rule_ref(rule);
+		gowl_broadcast_rule_unref(old);
+		return;
+	}
+	g_ptr_array_add(self->broadcast_rules, gowl_broadcast_rule_ref(rule));
+}
+
+/**
+ * gowl_config_remove_broadcast_rule:
+ * @self: a #GowlConfig
+ * @name: the rule's name
+ *
+ * Returns: %TRUE when a rule by that name was removed
+ */
+gboolean
+gowl_config_remove_broadcast_rule(
+	GowlConfig  *self,
+	const gchar *name
+){
+	gint i;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	g_return_val_if_fail(name != NULL, FALSE);
+
+	i = find_named(self->broadcast_rules, name,
+	               (const gchar *(*)(gpointer))gowl_broadcast_rule_get_name);
+	if (i < 0)
+		return FALSE;
+	g_ptr_array_remove_index(self->broadcast_rules, (guint)i);
+	return TRUE;
+}
+
+/**
+ * gowl_config_get_broadcast_rules:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type GowlBroadcastRule): the
+ *   `broadcast: rules:', in file order
+ */
+GPtrArray *
+gowl_config_get_broadcast_rules(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->broadcast_rules;
+}
+
+/**
+ * gowl_config_clear_broadcast:
+ * @self: a #GowlConfig
+ *
+ * Removes every broadcast team and rule.
+ */
+void
+gowl_config_clear_broadcast(GowlConfig *self)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_ptr_array_set_size(self->broadcast_teams, 0);
+	g_ptr_array_set_size(self->broadcast_rules, 0);
 }
 
 /* --- XKB --- */

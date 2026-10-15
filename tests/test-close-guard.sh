@@ -76,9 +76,12 @@ fi
 #    the layer grab, and the session-lock surface (which outranks it).
 #    Anything else moving seat focus bypasses the grab -- that is
 #    exactly how a launcher ends up visible but deaf.
-#    Targeted key delivery (src/core/gowl-client-input.c, macros) lends
-#    focus to one surface for one key and gives it back: two more call
-#    sites, counted on their own, behind a gate that asks
+#    Targeted key delivery (src/core/gowl-client-input.c, macros and
+#    the broadcast module) lends focus to one surface for one key and
+#    gives it back: two call sites for the seat route (target_begin /
+#    target_end) and two for the X11 route (x11_deliver lending to an
+#    Xwayland surface, gowl_compositor_input_batch_end giving it back),
+#    counted on their own, every way in behind a gate that asks
 #    gowl_compositor_keyboard_is_grabbed() and the lock first.
 lend="$root/src/core/gowl-client-input.c"
 enters=0
@@ -88,10 +91,10 @@ for f in "$root"/src/*.c "$root"/src/*/*.c; do
 	enters=$((enters + n))
 done
 lends=$(count_calls wlr_seat_keyboard_notify_enter "$lend")
-if [ "$lends" -gt 2 ] ||
+if [ "$lends" -gt 4 ] ||
    ! grep -q 'self->locked || gowl_compositor_keyboard_is_grabbed(self)' "$lend"; then
 	echo "FAIL: targeted key delivery has $lends seat-focus call sites"
-	echo "      (expected 2, lend and give back) or no longer checks"
+	echo "      (expected 4: lend and give back, seat and X11 routes) or no longer checks"
 	echo "      the lock and gowl_compositor_keyboard_is_grabbed()."
 	fail=1
 fi

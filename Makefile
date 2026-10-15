@@ -765,6 +765,12 @@ $(OUTDIR)/test-input-remap-claim: $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modu
 $(OBJDIR)/tests/test-input-remap-claim.o: TEST_CFLAGS += -DGOWL_TEST_INPUTREMAP_MODULE='"$(abspath $(OUTDIR)/modules/inputremap.so)"' -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 # The engine test includes the module's pure rule engine directly.
 $(OBJDIR)/tests/test-input-remap-engine.o: modules/inputremap/gowl-inputremap-engine.c modules/inputremap/gowl-inputremap-engine.h
+# An interactive resize paced to the client: a real Wayland client that
+# can hold its acks, against a headless compositor.
+$(OUTDIR)/test-interactive-resize: $(OBJDIR)/tests/xdg-shell-protocol.o
+$(OBJDIR)/tests/test-interactive-resize.o: xdg-shell-client-protocol.h
+$(OUTDIR)/test-interactive-resize: TEST_LDFLAGS += $(OBJDIR)/tests/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
+$(OBJDIR)/tests/test-interactive-resize.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 # The floating desktop's state machine, file format, placement and app
 # catalog, compiled straight into the test the way the remap engine is:
 # no compositor, every transition driven from a plain struct.

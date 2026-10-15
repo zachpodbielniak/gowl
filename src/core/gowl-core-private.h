@@ -610,6 +610,21 @@ struct _GowlCompositor {
 	gdouble   grab_x, grab_y;
 	struct wlr_box grab_geobox;
 	guint32   resize_edges;
+	/*
+	 * Interactive resize pacing.  The pointer reports up to a thousand
+	 * times a second and a client can lay itself out perhaps sixty, so
+	 * sending a configure per motion event buries it: it falls further
+	 * behind with every event, and the resize looks laggy however fast
+	 * the compositor is.  The newest size the pointer asks for waits
+	 * here and goes out only when the client has committed the last one
+	 * (grabbed_client->resize back to 0) and at most once per output
+	 * frame -- see resize_flush().  @resize_sent_us is when the last one
+	 * went, for both limits and for giving up on a client that never
+	 * answers.
+	 */
+	struct wlr_box resize_pending;
+	gboolean       resize_has_pending;
+	gint64         resize_sent_us;
 
 	/* PIDs that should be floated + hidden on map (for embedding) */
 	GArray  *prefloat_pids;

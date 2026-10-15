@@ -978,6 +978,30 @@ the grab calls =gowl_compositor_apply_frame_geometry()= once more, after
 clearing the grab, for the single settled redraw at the final size.  A
 MOVE stays settled: the size does not change.
 
+**** An interactive resize is paced to the client
+
+A pointer reports up to a thousand motion events a second; a client
+lays itself out perhaps sixty times.  =resize_client()= used to send a
+configure for every one of those events, AND =on_client_commit()= sent
+another on every commit, because mid-drag the client's committed size
+always trails =c->geom= -- which also replaced =c->resize= before the
+commit could clear it, so the resize never once looked answered.  The
+client fell further behind with every event: the window lagged the
+pointer however fast the compositor was.
+
+Now the motion handler only records the newest size
+(=resize_pending=), and =resize_flush()= sends it when the window has
+committed the previous one (=c->resize= back to 0; an X11 window clears
+it at once) and at most once per output frame (three quarters of the
+refresh interval, so jitter cannot halve the rate).  Otherwise it asks
+the output for a frame; the frame handler and the commit handler both
+call it again.  A client that never answers is sent the next size after
+200 ms anyway, and the button release sends the final size at once.  The
+commit handler does not re-configure a window being resized.  A pointer
+MOVE sends an xdg client no configure at all (it has no position to be
+told).  =tests/test-interactive-resize.c= drives a real client that
+holds its acks: fifty motion events, one configure.
+
 **** Minimized windows
 
 =gowl_compositor_minimize_client()= puts a window on no tag (=tags = 0=),

@@ -220,6 +220,8 @@ Inside the frame, not drawn above it, so that everything reading the frame --- t
 :END:
 A bar is five scene nodes in a tree of its own: the left cap (the top-left corner and the buttons, a buffer whose size does not depend on the window's width), a solid rect stretched across the middle, the right cap (the top-right corner), a hairline rect under the bar, and the title as a buffer at its own size, centred by moving it.  A change of width moves and stretches nodes; only a change of focus, title, bar height or output scale redraws, and the title is laid out again for a new width only once a resize has ended (mid-drag a too-wide title is cropped).
 
+The bigger cost was not drawing at all: the core sent the client a configure on every pointer motion event and another on every commit, so the window's own content could never keep up.  Resizes are now paced to the client --- one size in flight, at most one per output frame --- see /An interactive resize is paced to the client/ in =architecture.org=.
+
 The first version drew the whole bar as one buffer, so every motion event of a resize was a cairo + pango render and a texture upload --- and =roundcorners= and blur's shadow did the same at window size.  That was the lag.  The core now reports every frame of an interactive resize as /unsettled/ to =client_placed= (=gowl_compositor_client_is_resizing()= for a decorator, which has no =settled= to read); providers stretch what they have, and when the grab ends the core places the frame once more, settled, for the one real redraw.  =roundcorners= stretches its frame the same way.  =tests/test-floatdesk-module.c= (=titlebar-layout-cheap-resize=), =tests/test-effects.c= and =tests/test-roundcorners.c= hold it.
 
 *** No bar for client-side decorations

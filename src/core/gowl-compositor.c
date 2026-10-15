@@ -264,6 +264,7 @@ static void on_client_maximize    (struct wl_listener *listener, void *data);
 static void on_client_request_move  (struct wl_listener *listener, void *data);
 static void on_client_request_resize(struct wl_listener *listener, void *data);
 static void on_client_set_title   (struct wl_listener *listener, void *data);
+static void resize_flush(GowlCompositor *self, gboolean force);
 static void begin_interactive(GowlCompositor *self, GowlClient *c,
                               gint mode, guint32 edges);
 
@@ -5706,10 +5707,18 @@ resize_client(
 	} else
 #endif
 	{
-		c->resize = wlr_xdg_toplevel_set_size(
-			c->xdg_toplevel,
-			c->geom.width - 2 * (gint)c->bw,
-			MAX(1, c->geom.height - 2 * (gint)c->bw - top));
+		gint cw = c->geom.width - 2 * (gint)c->bw;
+		gint ch = MAX(1, c->geom.height - 2 * (gint)c->bw - top);
+
+		/* A pointer MOVE tells an xdg client nothing -- it has no
+		 * position to be told -- so the configure with an unchanged
+		 * size it used to get on every motion event is skipped. */
+		if (!(self->cursor_mode == GOWL_CURSOR_MODE_MOVE
+		      && self->grabbed_client == c
+		      && c->xdg_toplevel->scheduled.width == cw
+		      && c->xdg_toplevel->scheduled.height == ch))
+			c->resize = wlr_xdg_toplevel_set_size(
+				c->xdg_toplevel, cw, ch);
 	}
 
 	/*
@@ -8703,6 +8712,14 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 	 * ignore any late frame event so we never commit a NULL output. */
 	if (m->scene_output == NULL)
 		return;
+
+	/* An interactive resize waiting on this output's frame: send the
+	 * newest size now, before the scene is built, so this frame shows
+	 * the frame at it. */
+	if (m->compositor->cursor_mode == GOWL_CURSOR_MODE_RESIZE
+	    && m->compositor->grabbed_client != NULL
+	    && m->compositor->grabbed_client->mon == m)
+		resize_flush(m->compositor, FALSE);
 
 	/*
 	 * Advance animations BEFORE the scene is built, so the positions
@@ -12167,7 +12184,15 @@ gowl_compositor_motionnotify(GowlCompositor *self, guint32 time_msec)
 		geo.y = top;
 		geo.width  = right - left;
 		geo.height = bottom - top;
-		resize_client(self, self->grabbed_client, geo, TRUE);
+		/* Not sent from here: queued, and paced by resize_flush().
+		 * This also runs for every motionnotify(0) an arrange or a
+		 * commit makes, and those ask for the size already sent. */
+		if (!self->resize_has_pending
+		    && wlr_box_equal(&geo, &self->grabbed_client->geom))
+			return;
+		self->resize_pending = geo;
+		self->resize_has_pending = TRUE;
+		resize_flush(self, FALSE);
 		return;
 	}
 
@@ -13713,6 +13738,12 @@ compositor_handle_button(
 			gboolean was_resize =
 				self->cursor_mode == GOWL_CURSOR_MODE_RESIZE;
 
+			/* Where the pointer let go is where the window ends,
+			 * whatever the pacing was still holding back. */
+			if (was_resize)
+				resize_flush(self, TRUE);
+			self->resize_has_pending = FALSE;
+
 			wlr_cursor_set_xcursor(self->wlr_cursor,
 			                       self->xcursor_mgr, "default");
 			self->cursor_mode = GOWL_CURSOR_MODE_NORMAL;
@@ -14103,6 +14134,8 @@ begin_interactive(GowlCompositor *self, GowlClient *c, gint mode,
 	self->grabbed_client = c;
 	self->cursor_mode    = mode;
 	self->grab_geobox    = c->geom;
+	self->resize_has_pending = FALSE;
+	self->resize_sent_us = 0;
 
 	if (mode == GOWL_CURSOR_MODE_MOVE) {
 		self->grab_x = self->wlr_cursor->x - (gdouble)c->geom.x;
@@ -14136,6 +14169,69 @@ begin_interactive(GowlCompositor *self, GowlClient *c, gint mode,
 		wlr_cursor_set_xcursor(self->wlr_cursor, self->xcursor_mgr,
 		                       shape);
 	}
+}
+
+/*
+ * GOWL_RESIZE_ACK_TIMEOUT_US:
+ *
+ * How long an interactive resize waits for a client to commit the last
+ * size it was sent before sending the next one anyway.  A client that
+ * is busy, or never acks at all, would otherwise freeze the frame in
+ * place until the button came up.
+ */
+#define GOWL_RESIZE_ACK_TIMEOUT_US (200 * 1000)
+
+/*
+ * resize_flush:
+ * @self: the compositor
+ * @force: send the pending size whatever the pacing says (the grab is
+ *   ending)
+ *
+ * Sends the size an interactive resize is waiting to send, if the
+ * window is ready for it: one configure in flight at a time (an
+ * xdg_toplevel's @resize serial is cleared when it commits the size it
+ * was sent) and at most one per frame of its output.  Otherwise asks
+ * that output for a frame, whose handler calls this again; the commit
+ * handler does too, the moment the client catches up.
+ *
+ * The frame -- borders, decoration, title bar -- moves with the size
+ * that is sent, so it always matches what the client drew within a
+ * frame or so, rather than racing ahead of content that cannot keep up.
+ */
+static void
+resize_flush(
+	GowlCompositor *self,
+	gboolean        force
+){
+	GowlClient *c = self->grabbed_client;
+	gint64      now, since, interval = 16667;
+	gboolean    waiting;
+
+	if (c == NULL || !self->resize_has_pending
+	    || self->cursor_mode != GOWL_CURSOR_MODE_RESIZE)
+		return;
+
+	now = g_get_monotonic_time();
+	since = now - self->resize_sent_us;
+	/* One output frame, from its refresh (mHz); three quarters of it,
+	 * so frame-to-frame jitter cannot make every other frame look too
+	 * early and halve the rate. */
+	if (c->mon != NULL && c->mon->wlr_output != NULL
+	    && c->mon->wlr_output->refresh > 0)
+		interval = (gint64)1000000000 / c->mon->wlr_output->refresh;
+	interval = interval * 3 / 4;
+	/* X11 windows clear @resize at once: only the frame limit holds. */
+	waiting = c->resize != 0 && since < GOWL_RESIZE_ACK_TIMEOUT_US;
+
+	if (!force && (waiting || since < interval)) {
+		if (c->mon != NULL && c->mon->wlr_output != NULL)
+			wlr_output_schedule_frame(c->mon->wlr_output);
+		return;
+	}
+
+	self->resize_has_pending = FALSE;
+	self->resize_sent_us = now;
+	resize_client(self, c, self->resize_pending, TRUE);
 }
 
 /*
@@ -14275,7 +14371,16 @@ on_client_commit(struct wl_listener *listener, void *data)
 	 * geometry is unchanged leaves the scene correct; genuine layout
 	 * changes and client-initiated floating resizes still configure
 	 * because c->geom then differs from the client's current size. */
-	if (!c->isoverlay && (c->geom.width  - 2 * (gint)c->bw
+	/*
+	 * Not while the pointer is resizing it, though.  Mid-drag the
+	 * client's committed size ALWAYS trails c->geom, so this re-sent the
+	 * newest size on every commit -- a second configure per frame on top
+	 * of the pointer's, and since it also replaced c->resize before the
+	 * line below could clear it, the resize never once looked answered.
+	 * resize_flush() paces that case; see below.
+	 */
+	if (!c->isoverlay && !gowl_compositor_client_is_resizing(self, c)
+	    && (c->geom.width  - 2 * (gint)c->bw
 	        != (gint)c->xdg_toplevel->current.width ||
 	    c->geom.height - 2 * (gint)c->bw - GOWL_CLIENT_INSET_TOP(c)
 	        != (gint)c->xdg_toplevel->current.height))
@@ -14286,6 +14391,11 @@ on_client_commit(struct wl_listener *listener, void *data)
 	if (c->resize != 0 &&
 	    c->resize <= c->xdg_toplevel->base->current.configure_serial)
 		c->resize = 0;
+
+	/* The client has caught up with an interactive resize: send it the
+	 * newest size the pointer asked for, if there is one. */
+	if (gowl_compositor_client_is_resizing(self, c))
+		resize_flush(self, FALSE);
 
 	/* Re-apply client opacity.  wlr_scene_surface's commit handler
 	 * resets the scene buffer opacity to 1.0 on every commit, so

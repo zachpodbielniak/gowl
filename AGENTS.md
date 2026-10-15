@@ -70,6 +70,12 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   kind, the default, maximize/snap memory, switching the module off giving
   every window back, the focus policy, dock settings saved, and the dock's
   visibility
+- `test-interactive-resize` -- A real Wayland client that can hold
+  its acks: while it holds, fifty resize motion events send ONE
+  configure (the old core sent fifty, plus one per commit); when it
+  answers, the newest size follows; release sends the final size at
+  once; a silent client is sent the next size after the ack timeout; a
+  pointer move sends no configure at all
 - `test-compositor-teardown` -- Starts a real compositor (headless backend, pixman renderer, a private runtime dir, systemd off) and finalizes it in a subprocess: wlroots aborts if any listener is still on a signal when its object is destroyed. Then does it again under everything cmacs --gowl loads but the bar and releases the module manager last, once with a shutdown dispatch first and once without: any GLib critical fails it, and a module that disconnects from the dead compositor in `deactivate` prints two
 - `test-gpu-reset` -- Loses a real headless compositor's renderer: the swap
   waits for the event loop, destroys the old renderer and allocator, moves

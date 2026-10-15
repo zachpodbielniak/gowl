@@ -9,7 +9,7 @@
 A tiling compositor is the wrong tool for some work: a design session with a dozen reference windows, a game launcher with its dialogs, a desktop for somebody who has never used a tiler.  The =floatdesk= module turns individual workspaces (tags) into a /floating desktop/ without giving up tiling anywhere else:
 
 - every window on that workspace floats, and new ones open centred at a sensible size, each cascading from the last one opened --- never as a tile that then shrinks;
-- floating windows get *title bars* in the session palette's colours: minimize, maximize and close on the right, double-click to maximize, drag to move;
+- floating windows get *title bars* in the session palette's colours: close, minimize and maximize on the left, the title centred, double-click to maximize, drag to move;
 - dropping a window at the left or right edge of the output snaps it to that half, at the top edge maximizes it, and a window's borders resize it;
 - *minimize* moves a window to a hidden workspace and leaves you where you were;
 - *focus follows the click* there, not the pointer;
@@ -190,13 +190,13 @@ A maximized window covers the usable area until another window opens on its work
 :PROPERTIES:
 :CUSTOM_ID: floatdesk-titlebars
 :END:
-A floating window on a floating desktop gets a title bar across the top of its frame, drawn only while it floats there.  Colours are the session palette's roles (=surface= for a focused window's bar, =mantle= otherwise, =text= / =subtext= for the title, =red= / =green= / =yellow= for close / maximize / minimize), and the bar's top corners follow a rounded frame's when =roundcorners= is loaded.
+A floating window on a floating desktop gets a title bar across the top of its frame, drawn only while it floats there.  From the left: close, minimize, maximize, one bar height each; the title is centred on the whole bar (room is kept for the buttons on both sides, so the centre is the bar's centre and the text never runs under a button), ellipsized when it does not fit.  Colours are the session palette's roles (=surface= for a focused window's bar, =mantle= otherwise, =text= / =subtext= for the title, =red= / =yellow= / =green= for close / minimize / maximize), and the bar's top corners follow a rounded frame's when =roundcorners= is loaded.
 
 | Where / what             | Does                                                     |
 |--------------------------+----------------------------------------------------------|
-| close (right)            | closes the window (=gowl_client_close()=)                |
-| maximize                 | maximize / restore                                       |
-| minimize                 | minimize (as =Super+n=)                                  |
+| close (leftmost)         | closes the window (=gowl_client_close()=)                |
+| minimize (second)        | minimize (as =Super+n=)                                  |
+| maximize (third)         | maximize / restore                                       |
 | title, press and drag    | focus and raise, then move; a maximized or snapped window comes away at its own size, under the pointer |
 | title, double-click      | maximize / restore                                       |
 | title, middle click      | send the window to the back                              |
@@ -213,6 +213,14 @@ Snapping remembers the size the window had before, the first time only: snapping
 The compositor keeps =GowlClient.deco_top= pixels at the top of the frame, inside the border, for a module's decoration (=gowl_client_set_decoration_top()=).  The content is positioned and configured below it: every place that turns a frame into a content box --- the configure size, the surface position, the clip, the X11 configure request, the commit-time size check, the animation module's ghost --- subtracts =GOWL_CLIENT_INSET_TOP(c)= (=deco_top=, or 0 while fullscreen).
 
 Inside the frame, not drawn above it, so that everything reading the frame --- the blur behind a window, its shadow, rounded corners, animations, a capture of the window --- includes the bar without knowing it exists.  The one rule is that all of those places subtract the same amount; a mismatch configures the client to one size, checks it against another, and reconfigures it on every commit.
+
+*** Resizing redraws nothing
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-cheap-resize
+:END:
+A bar is five scene nodes in a tree of its own: the left cap (the top-left corner and the buttons, a buffer whose size does not depend on the window's width), a solid rect stretched across the middle, the right cap (the top-right corner), a hairline rect under the bar, and the title as a buffer at its own size, centred by moving it.  A change of width moves and stretches nodes; only a change of focus, title, bar height or output scale redraws, and the title is laid out again for a new width only once a resize has ended (mid-drag a too-wide title is cropped).
+
+The first version drew the whole bar as one buffer, so every motion event of a resize was a cairo + pango render and a texture upload --- and =roundcorners= and blur's shadow did the same at window size.  That was the lag.  The core now reports every frame of an interactive resize as /unsettled/ to =client_placed= (=gowl_compositor_client_is_resizing()= for a decorator, which has no =settled= to read); providers stretch what they have, and when the grab ends the core places the frame once more, settled, for the one real redraw.  =roundcorners= stretches its frame the same way.  =tests/test-floatdesk-module.c= (=titlebar-layout-cheap-resize=), =tests/test-effects.c= and =tests/test-roundcorners.c= hold it.
 
 *** No bar for client-side decorations
 :PROPERTIES:

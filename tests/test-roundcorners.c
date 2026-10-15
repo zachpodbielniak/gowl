@@ -176,6 +176,54 @@ a_borderless_render_drops_the_frame(
 	g_assert_cmpuint(G_OBJECT(f->client)->ref_count, ==, 1);
 }
 
+/*
+ * Mid-resize the frame on screen is stretched, not redrawn: a redraw is
+ * a window-sized cairo image, a copy and an upload, on every motion
+ * event, which is what made dragging a border lag.  Once the resize has
+ * ended the same size is drawn for real.
+ */
+static void
+a_resize_stretches_until_it_ends(
+	Fixture       *f,
+	gconstpointer  data
+){
+	GowlCompositor          *comp;
+	struct wlr_scene_buffer *frame;
+	struct wlr_buffer       *before;
+
+	(void)data;
+	comp = gowl_compositor_new();
+	f->client->compositor = comp;
+
+	gowl_client_decorator_render_decoration(f->decorator, f->client,
+	                                        200, 100, 2, BORDER);
+	frame = frame_in(f->client->scene);
+	g_assert_nonnull(frame);
+	before = frame->buffer;
+
+	comp->grabbed_client = f->client;
+	comp->cursor_mode = GOWL_CURSOR_MODE_RESIZE;
+	gowl_client_decorator_render_decoration(f->decorator, f->client,
+	                                        300, 150, 2, BORDER);
+	g_assert_true(frame_in(f->client->scene) == frame);
+	g_assert_true(frame->buffer == before);
+	g_assert_cmpint(frame->dst_width, ==, 300);
+	g_assert_cmpint(frame->dst_height, ==, 150);
+
+	/* The grab is over: drawn at the size it came to. */
+	comp->grabbed_client = NULL;
+	comp->cursor_mode = GOWL_CURSOR_MODE_NORMAL;
+	gowl_client_decorator_render_decoration(f->decorator, f->client,
+	                                        300, 150, 2, BORDER);
+	frame = frame_in(f->client->scene);
+	g_assert_nonnull(frame);
+	g_assert_cmpint(frame->buffer->width, ==, 300);
+	g_assert_cmpint(frame->buffer->height, ==, 150);
+
+	f->client->compositor = NULL;
+	g_object_unref(comp);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -190,6 +238,10 @@ main(int argc, char **argv)
 	g_test_add("/roundcorners/a-borderless-render-drops-the-frame",
 	           Fixture, NULL, fixture_setup,
 	           a_borderless_render_drops_the_frame, fixture_teardown);
+
+	g_test_add("/roundcorners/a-resize-stretches-until-it-ends",
+	           Fixture, NULL, fixture_setup,
+	           a_resize_stretches_until_it_ends, fixture_teardown);
 
 	return g_test_run();
 }

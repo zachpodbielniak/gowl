@@ -7402,6 +7402,26 @@ gowl_compositor_client_is_grabbed(GowlCompositor *self, GowlClient *client)
 	       || self->cursor_mode == GOWL_CURSOR_MODE_RESIZE;
 }
 
+/**
+ * gowl_compositor_client_is_resizing:
+ * @self: (nullable): a #GowlCompositor
+ * @client: (nullable): a #GowlClient
+ *
+ * See the header.
+ *
+ * Returns: %TRUE while @client is being resized by the pointer
+ */
+gboolean
+gowl_compositor_client_is_resizing(
+	GowlCompositor *self,
+	GowlClient     *client
+){
+	if (self == NULL || !GOWL_IS_COMPOSITOR(self) || client == NULL)
+		return FALSE;
+	return self->grabbed_client == client
+	       && self->cursor_mode == GOWL_CURSOR_MODE_RESIZE;
+}
+
 void
 gowl_compositor_set_floating(
 	GowlCompositor *self,
@@ -13690,6 +13710,9 @@ compositor_handle_button(
 		if (!self->locked &&
 		    self->cursor_mode != GOWL_CURSOR_MODE_NORMAL &&
 		    self->cursor_mode != GOWL_CURSOR_MODE_PRESSED) {
+			gboolean was_resize =
+				self->cursor_mode == GOWL_CURSOR_MODE_RESIZE;
+
 			wlr_cursor_set_xcursor(self->wlr_cursor,
 			                       self->xcursor_mgr, "default");
 			self->cursor_mode = GOWL_CURSOR_MODE_NORMAL;
@@ -13697,13 +13720,25 @@ compositor_handle_button(
 			/* Drop the window on its new monitor */
 			if (self->grabbed_client != NULL) {
 				GowlMonitor *m;
+				GowlClient  *gc = self->grabbed_client;
+
 				m = xytomon(self, self->wlr_cursor->x,
 				            self->wlr_cursor->y);
 				self->selmon = m;
-				setmon(self, self->grabbed_client, m, 0);
-				gowl_effects_client_event(self, self->grabbed_client, GOWL_SCENE_EFFECT_RELEASE,
+				setmon(self, gc, m, 0);
+				gowl_effects_client_event(self, gc, GOWL_SCENE_EFFECT_RELEASE,
 				                       &self->grab_geobox, FALSE);
 				self->grabbed_client = NULL;
+				/* While the resize ran, every frame was reported
+				 * unsettled, so decorations stretched what they had
+				 * rather than redrawing at each motion event (a
+				 * window-sized redraw per event is a laggy resize).
+				 * Now that it has ended, draw the frame once more,
+				 * settled, at the size it came to. */
+				if (was_resize && gc->scene != NULL
+				    && gc->frame.width > 0 && gc->frame.height > 0)
+					gowl_compositor_apply_frame_geometry(self, gc,
+						gc->frame.width, gc->frame.height);
 			}
 			return;
 		}

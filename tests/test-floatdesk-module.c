@@ -33,6 +33,8 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/box.h>
+#include <wlr/types/wlr_cursor.h>
+#include <linux/input-event-codes.h>
 
 #include "gowl.h"
 #include "core/gowl-core-private.h"
@@ -783,6 +785,112 @@ test_dock_only_on_a_floating_desktop(void)
 	rig_down(&r);
 }
 
+/* The title bar's pieces: c->scene's child tree holding, bottom to top,
+ * the left cap, the middle rect, the right cap, the line and the title. */
+typedef struct {
+	struct wlr_scene_tree   *tree;
+	struct wlr_scene_buffer *left;
+	struct wlr_scene_rect   *middle;
+	struct wlr_scene_buffer *title;
+} BarNodes;
+
+static gboolean
+find_bar(GowlClient *c, BarNodes *out)
+{
+	struct wlr_scene_node *n, *k;
+	gint                   i;
+
+	memset(out, 0, sizeof(*out));
+	wl_list_for_each(n, &c->scene->children, link) {
+		if (n->type != WLR_SCENE_NODE_TREE)
+			continue;
+		i = 0;
+		wl_list_for_each(k, &wlr_scene_tree_from_node(n)->children, link) {
+			if (i == 0 && k->type == WLR_SCENE_NODE_BUFFER)
+				out->left = wlr_scene_buffer_from_node(k);
+			else if (i == 1 && k->type == WLR_SCENE_NODE_RECT)
+				out->middle = wlr_scene_rect_from_node(k);
+			else if (i == 4 && k->type == WLR_SCENE_NODE_BUFFER)
+				out->title = wlr_scene_buffer_from_node(k);
+			i++;
+		}
+		if (i == 5 && out->left != NULL && out->middle != NULL
+		    && out->title != NULL) {
+			out->tree = wlr_scene_tree_from_node(n);
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/* Every bar redraws (or not) on a focus change; this is that, without a
+ * seat. */
+static void
+sync_bars(Rig *r)
+{
+	g_signal_emit_by_name(r->compositor, "focus-changed", NULL);
+}
+
+/*
+ * Buttons on the left -- close, minimize, maximize -- and the title in
+ * the middle.  And a resize stretches the bar without drawing it again:
+ * redrawing it on every motion event was the resize lag.
+ */
+static void
+test_titlebar_layout_and_cheap_resize(void)
+{
+	Rig                 r;
+	GowlClient         *c;
+	BarNodes            bar;
+	struct wlr_buffer  *left_before, *title_before;
+	gint                width, title_x, h;
+
+	if (!rig_up(&r)) { g_test_skip("no headless compositor"); return; }
+	ASSERT_REPLY_PREFIX(&r, "floatdesk-on", "OK tag 1 floating");
+	c = add_client(&r, TAG(1));
+	gowl_client_set_title(c, "Hello");
+	arrange(&r);
+	h = c->deco_top;
+	g_assert_cmpint(h, >, 0);
+	c->geom.width = 800;
+	c->frame = c->geom;
+	sync_bars(&r);
+	g_assert_true(find_bar(c, &bar));
+
+	/* The buttons' cap at the left edge, the title centred. */
+	g_assert_cmpint(bar.left->node.x, ==, 0);
+	g_assert_cmpint(bar.left->dst_width, ==, 3 * h);
+	width = c->frame.width - 2 * (gint)c->bw;
+	title_x = bar.title->node.x;
+	g_assert_cmpint(ABS((title_x + bar.title->dst_width / 2) - width / 2),
+	                <=, 1);
+
+	/* Resized: the middle stretches, the title moves, nothing redraws. */
+	left_before = bar.left->buffer;
+	title_before = bar.title->buffer;
+	c->geom.width = 1000;
+	c->frame = c->geom;
+	sync_bars(&r);
+	g_assert_true(find_bar(c, &bar));
+	g_assert_true(bar.left->buffer == left_before);
+	g_assert_true(bar.title->buffer == title_before);
+	/* No decorator in the rig, so no right corner cap. */
+	g_assert_cmpint(bar.middle->width, ==,
+	                c->frame.width - 2 * (gint)c->bw - 3 * h);
+	g_assert_cmpint(bar.title->node.x, >, title_x);
+
+	/* The middle button minimizes: close is the first, maximize the
+	 * last.  Clicked through the module, at the pointer. */
+	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
+	wlr_cursor_warp_closest(r.compositor->wlr_cursor, NULL,
+	                        c->geom.x + c->bw + 1.5 * h,
+	                        c->geom.y + c->bw + h / 2.0);
+	g_assert_true(gowl_module_manager_dispatch_button(r.modules, BTN_LEFT,
+	                                                  1, 0));
+	g_assert_true(c->isminimized);
+	rig_down(&r);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -819,6 +927,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/floatdesk-module/focus-follows-click",
 	                test_focus_follows_click_on_a_floating_desktop);
 
+	g_test_add_func("/floatdesk-module/titlebar-layout-cheap-resize",
+	                test_titlebar_layout_and_cheap_resize);
 	g_test_add_func("/floatdesk-module/dock-only-on-floating",
 	                test_dock_only_on_a_floating_desktop);
 

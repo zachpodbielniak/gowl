@@ -964,6 +964,20 @@ and the animation module's ghost and close snapshot.  They must agree:
 configure one size and check against another and the client is
 reconfigured on every commit (the configure/ack/commit loop).
 
+**** A resize is not settled
+
+=client_placed= tells providers whether the frame has settled; an
+animation's in-between frames are not.  Neither are the frames of an
+interactive RESIZE: the next motion event brings another size, and a
+provider that redraws for a settled frame -- blur's shadow, roundcorners'
+frame, the floating desktop's title bar -- would redraw a window-sized
+picture per event, which is a visibly laggy drag.  So
+=gowl_effects_client_placed()= reports them unsettled, a decorator asks
+=gowl_compositor_client_is_resizing()=, and the button release that ends
+the grab calls =gowl_compositor_apply_frame_geometry()= once more, after
+clearing the grab, for the single settled redraw at the final size.  A
+MOVE stays settled: the size does not change.
+
 **** Minimized windows
 
 =gowl_compositor_minimize_client()= puts a window on no tag (=tags = 0=),

@@ -214,6 +214,14 @@ void           gowl_client_set_geometry       (GowlClient  *self,
                                                gint         width,
                                                gint         height);
 
+/**
+ * gowl_client_get_compositor:
+ * @self: a #GowlClient
+ *
+ * Returns: (transfer none) (nullable): the compositor managing @self
+ */
+GowlCompositor *gowl_client_get_compositor    (GowlClient  *self);
+
 /* Monitor accessor */
 gpointer       gowl_client_get_monitor        (GowlClient  *self);
 void           gowl_client_set_monitor        (GowlClient  *self,

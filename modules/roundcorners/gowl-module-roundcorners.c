@@ -299,6 +299,21 @@ rc_render_decoration(GowlClientDecorator *decorator,
 		return;
 	}
 
+	/*
+	 * Mid-resize: stretch the frame already on screen instead of
+	 * rendering a window-sized image, copying it and uploading it on
+	 * every motion event -- that is what made dragging a border lag.
+	 * The border is a pixel or two, so the stretch is not visible; the
+	 * end of the grab places the frame once more, and it is drawn at
+	 * the size the window came to.
+	 */
+	if (decor != NULL && decor->frame_buf != NULL
+	    && gowl_compositor_client_is_resizing(
+	           gowl_client_get_compositor(client), client)) {
+		wlr_scene_buffer_set_dest_size(decor->frame_buf, width, height);
+		return;
+	}
+
 	buf = render_rounded_frame(width, height, bw,
 	                           self->corner_radius, color);
 	if (buf == NULL)

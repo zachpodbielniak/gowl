@@ -21,8 +21,9 @@
  *
  * A workspace (tag) can be put in "floating desktop" mode: every window
  * on it floats, new windows open centred at a sensible size and cascade,
- * floating windows get title bars (minimize, maximize, close; drag to an
- * edge to snap), focus follows the click, and a dock along one edge of
+ * floating windows get title bars (close, minimize, maximize on the
+ * left, the title centred; drag to an edge to snap), focus follows the
+ * click, and a dock along one edge of
  * the output lists pinned and running applications.  Leaving the mode
  * tiles again exactly the windows the mode floated, and nothing else.
  *

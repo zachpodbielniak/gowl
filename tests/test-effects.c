@@ -518,6 +518,41 @@ test_client_placed_reaches_every_provider(Fixture *f, gconstpointer data)
 }
 
 /*
+ * A frame the pointer is RESIZING is not settled: the next motion event
+ * brings another size, and a provider that redraws for a settled frame
+ * (blur's shadow, the floating desktop's title bar) would redraw a
+ * window-sized picture on every event -- a laggy resize.  The end of the
+ * grab places the frame again, settled; that is the compositor's
+ * button-release path, so here only the flag is asserted.  A MOVE is
+ * still settled: nothing about the frame's size changes.
+ */
+static void
+test_a_resized_frame_is_not_settled(Fixture *f, gconstpointer data)
+{
+	(void)data;
+
+	f->compositor->grabbed_client = f->client;
+	f->compositor->cursor_mode = GOWL_CURSOR_MODE_RESIZE;
+	g_assert_true(gowl_compositor_client_is_resizing(f->compositor,
+	                                                 f->client));
+	gowl_effects_client_placed(f->compositor, f->client);
+	g_assert_false(f->first->placed_settled);
+	g_assert_false(f->second->placed_settled);
+
+	f->compositor->cursor_mode = GOWL_CURSOR_MODE_MOVE;
+	g_assert_false(gowl_compositor_client_is_resizing(f->compositor,
+	                                                  f->client));
+	gowl_effects_client_placed(f->compositor, f->client);
+	g_assert_true(f->second->placed_settled);
+
+	f->compositor->grabbed_client = NULL;
+	f->compositor->cursor_mode = GOWL_CURSOR_MODE_NORMAL;
+	gowl_effects_client_placed(f->compositor, f->client);
+	g_assert_true(f->first->placed_settled);
+	g_assert_true(f->second->placed_settled);
+}
+
+/*
  * Every frame gowl_compositor_apply_frame_geometry() draws is announced,
  * whichever way it draws it: with rect borders, and through a decorator,
  * which is how cmacs draws every frame.  A scene of its own, with the four
@@ -711,6 +746,8 @@ main(int argc, char **argv)
 	           setup, test_client_placed_reaches_every_provider, teardown);
 	g_test_add("/effects/client-placed/every-frame-drawn", Fixture, NULL,
 	           setup, test_drawing_a_frame_announces_it, teardown);
+	g_test_add("/effects/client-placed/resize-is-not-settled", Fixture,
+	           NULL, setup, test_a_resized_frame_is_not_settled, teardown);
 	g_test_add("/effects/equal-priority-registration-order", Fixture, NULL,
 	           setup, test_equal_priorities_keep_registration_order, teardown);
 	g_test_add("/effects/teardown/nothing-after-finish", Fixture, NULL,

@@ -624,6 +624,22 @@ gowl_client_is_pinned(GowlClient *self)
 }
 
 /**
+ * gowl_client_get_compositor:
+ * @self: a #GowlClient
+ *
+ * For a module handed a client and nothing else -- a decorator.
+ *
+ * Returns: (transfer none) (nullable): the compositor managing @self
+ */
+GowlCompositor *
+gowl_client_get_compositor(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), NULL);
+
+	return self->compositor;
+}
+
+/**
  * gowl_client_get_mode_floated:
  * @self: a #GowlClient
  *

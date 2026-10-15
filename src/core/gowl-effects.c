@@ -152,6 +152,14 @@ gowl_effects_client_placed (GowlCompositor *self, GowlClient *c)
 	if (c == NULL)
 		return;
 	settled = !gowl_effects_has_geometry (c);
+	/* Nor while the pointer is resizing it: the next motion event will
+	 * change the size again, so a provider that redraws for a settled
+	 * frame (blur's shadow, the floating desktop's title bar) would
+	 * redraw on every event.  The end of the grab places the frame once
+	 * more, settled (compositor_handle_button). */
+	if (self->cursor_mode == GOWL_CURSOR_MODE_RESIZE
+	    && self->grabbed_client == c)
+		settled = FALSE;
 
 	{
 		GOWL_EFFECTS_FOR_EACH (self, p) {

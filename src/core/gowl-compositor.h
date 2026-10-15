@@ -1282,9 +1282,10 @@ void gowl_compositor_set_floating (GowlCompositor *self,
  * client_placed, which runs once per POINTER MOTION EVENT during a drag;
  * a mouse reports at up to a thousand hertz and a screen shows sixty, so
  * fifteen out of every sixteen of those renders are thrown away before
- * anyone sees them.  And `settled' cannot be used to notice: nothing is
- * animating the window, the pointer is moving it directly, so it is TRUE
- * throughout.
+ * anyone sees them.  During a MOVE `settled' cannot be used to notice:
+ * nothing is animating the window, so it is TRUE throughout.  During a
+ * RESIZE it is FALSE (see gowl_compositor_client_is_resizing()), and the
+ * end of the grab places the frame once more, settled.
  *
  * The render is also not the expensive half.  An interactive RESIZE
  * changes the buffer size on every one of those events, and a changed
@@ -1301,6 +1302,24 @@ void gowl_compositor_set_floating (GowlCompositor *self,
  */
 gboolean gowl_compositor_client_is_grabbed (GowlCompositor *self,
                                             GowlClient     *client);
+
+/**
+ * gowl_compositor_client_is_resizing:
+ * @self: (nullable): a #GowlCompositor
+ * @client: (nullable): a #GowlClient
+ *
+ * Whether the pointer is resizing @client right now.  Every frame of an
+ * interactive resize is a new size and the next motion event brings
+ * another, so a decoration drawn for the frame's size should stretch
+ * what it has until the grab ends: client_placed reports these frames
+ * unsettled, and the end of the grab places the frame once more,
+ * settled, for the real redraw.  For a #GowlClientDecorator, which has
+ * no `settled' to read.
+ *
+ * Returns: %TRUE while @client is being resized by the pointer
+ */
+gboolean gowl_compositor_client_is_resizing (GowlCompositor *self,
+                                             GowlClient     *client);
 
 /**
  * gowl_compositor_reparent_client_to_client:

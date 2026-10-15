@@ -66,7 +66,7 @@
 /* How far outside the frame a press still grabs its edge. */
 #define TITLEBAR_EDGE_OUTSIDE (6)
 
-/* The three buttons, right to left. */
+/* The three buttons, left to right: close, minimize, maximize. */
 typedef enum {
 	TB_HIT_NONE = 0,
 	TB_HIT_TITLE,
@@ -75,19 +75,59 @@ typedef enum {
 	TB_HIT_CLOSE
 } TitlebarHit;
 
+/* How many bar-heights the buttons take, from the left edge. */
+#define TITLEBAR_BUTTONS (3)
+
+/*
+ * A title bar is five scene nodes in a tree of its own, so that a resize
+ * moves and stretches nodes and redraws NOTHING:
+ *
+ *   left     the buttons and the top-left corner -- a buffer whose size
+ *            does not depend on the window's width
+ *   middle   a solid rect, stretched to fill
+ *   right    the top-right corner, a buffer the corner radius wide
+ *   line     the hairline under the bar, a rect
+ *   title    the title text at its own size, centred on the bar
+ *
+ * Drawing the whole bar as one buffer meant a cairo + pango render and a
+ * texture upload on every motion event of a resize, which is what made
+ * resizing on a floating desktop lag.  Only a change of focus, title,
+ * height or scale redraws now -- and the title, when a narrower window
+ * has to ellipsize it, once the grab ends (until then it is cropped):
+ * the core places the frame once more when a resize ends, and that is
+ * the sync that lays the title out again.
+ */
 struct _FloatdeskTitlebar {
 	GowlModuleFloatdesk     *self;
 	GowlClient              *client;
-	struct wlr_scene_buffer *buffer;
+	struct wlr_scene_tree   *tree;
+	struct wlr_scene_buffer *left;
+	struct wlr_scene_rect   *middle;
+	struct wlr_scene_buffer *right;
+	struct wlr_scene_rect   *line;
+	struct wlr_scene_buffer *title;
 	struct wl_listener       node_destroy;
 
-	/* What the current buffer shows, to redraw only on a change. */
-	gint     width;
+	/* What the caps show, to redraw them only on a change. */
 	gint     height;
 	gdouble  scale;
 	gboolean focused;
-	gboolean maximized;
-	gchar   *title;
+	gint     radius;
+	gboolean caps_drawn;
+
+	/* What the title buffer shows. */
+	gchar   *title_text;
+	gboolean title_focused;
+	gint     title_height;
+	gdouble  title_scale;
+	gint     title_avail;      /* the width it was ellipsized to */
+	gint     title_w;          /* its drawn size, logical */
+	gint     title_h;
+	gboolean title_ellipsized;
+	gboolean title_drawn;
+
+	/* The bar's current width, for hit testing. */
+	gint     width;
 };
 
 /* ---------------------------------------------------------------- */
@@ -111,15 +151,15 @@ static void
 titlebar_free(FloatdeskTitlebar *tb)
 {
 	wl_list_remove(&tb->node_destroy.link);
-	g_free(tb->title);
+	g_free(tb->title_text);
 	g_free(tb);
 }
 
 /*
  * on_node_destroy:
  *
- * The bar's scene node went away with its window's scene tree (unmap):
- * forget it without touching the node again.
+ * The bar's tree went away with its window's scene tree (unmap):
+ * forget it without touching the nodes again.
  */
 static void
 on_node_destroy(
@@ -162,10 +202,10 @@ floatdesk_titlebar_drop(
 	if (tb == NULL)
 		return;
 	g_hash_table_remove(self->titlebar_nodes, c);
-	/* Taking the listener off first: destroying the node fires it. */
+	/* Taking the listener off first: destroying the tree fires it. */
 	wl_list_remove(&tb->node_destroy.link);
 	wl_list_init(&tb->node_destroy.link);
-	wlr_scene_node_destroy(&tb->buffer->node);
+	wlr_scene_node_destroy(&tb->tree->node);
 	titlebar_free(tb);
 }
 
@@ -274,91 +314,86 @@ draw_button(
 }
 
 /*
- * titlebar_render:
- * @self: the module
- * @tb: the bar
+ * background_role:
+ * @focused: the window has the keyboard
  *
- * Draws the bar at its current size into a fresh buffer.
+ * Returns: the bar's colour role
+ */
+static GowlBarColor
+background_role(gboolean focused)
+{
+	return focused ? GOWL_BAR_COLOR_SURFACE : GOWL_BAR_COLOR_MANTLE;
+}
+
+/*
+ * role_to_rect:
+ * @theme: the session theme
+ * @role: a colour role
+ * @alpha: extra opacity
+ * @out: (out): premultiplied RGBA, the way a wlr_scene_rect wants it
  */
 static void
-titlebar_render(
-	GowlModuleFloatdesk *self,
-	FloatdeskTitlebar   *tb
+role_to_rect(
+	const GowlBarTheme *theme,
+	GowlBarColor        role,
+	gdouble             alpha,
+	float               out[4]
 ){
-	cairo_surface_t      *surface;
-	cairo_t              *cr;
-	PangoLayout          *layout;
-	PangoFontDescription *font;
-	struct wlr_buffer    *buffer;
-	const GowlBarTheme   *theme = self->theme;
-	gint                  pw, ph, radius, text_w, text_h;
-	gdouble               w = tb->width, h = tb->height, r, step;
+	const gdouble *c = gowl_bar_theme_color(theme, role);
+	gdouble        a = c[3] * alpha;
 
-	if (theme == NULL || tb->width <= 0 || tb->height <= 0)
-		return;
-	pw = (gint)ceil(w * tb->scale);
-	ph = (gint)ceil(h * tb->scale);
-	surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph);
+	out[0] = (float)(c[0] * a);
+	out[1] = (float)(c[1] * a);
+	out[2] = (float)(c[2] * a);
+	out[3] = (float)a;
+}
+
+/*
+ * new_surface:
+ * @w: logical width
+ * @h: logical height
+ * @scale: the output scale
+ * @cr_out: (out): a cairo context scaled to logical units
+ *
+ * Returns: (transfer full) (nullable): the image, or %NULL if cairo could
+ *   not make one
+ */
+static cairo_surface_t *
+new_surface(
+	gint      w,
+	gint      h,
+	gdouble   scale,
+	cairo_t **cr_out
+){
+	cairo_surface_t *surface;
+
+	surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+		MAX(1, (gint)ceil(w * scale)), MAX(1, (gint)ceil(h * scale)));
 	if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
 		cairo_surface_destroy(surface);
-		return;
+		return NULL;
 	}
-	cr = cairo_create(surface);
-	cairo_scale(cr, tb->scale, tb->scale);
+	*cr_out = cairo_create(surface);
+	cairo_scale(*cr_out, scale, scale);
+	return surface;
+}
 
-	/* The background, its top corners following a rounded frame's. */
-	radius = MAX(0, corner_radius(self) - (gint)tb->client->bw);
-	cairo_new_path(cr);
-	if (radius > 0) {
-		cairo_move_to(cr, 0, h);
-		cairo_line_to(cr, 0, radius);
-		cairo_arc(cr, radius, radius, radius, G_PI, 1.5 * G_PI);
-		cairo_line_to(cr, w - radius, 0);
-		cairo_arc(cr, w - radius, radius, radius, 1.5 * G_PI, 2 * G_PI);
-		cairo_line_to(cr, w, h);
-		cairo_close_path(cr);
-	} else {
-		cairo_rectangle(cr, 0, 0, w, h);
-	}
-	gowl_bar_theme_cairo_set(theme, cr, tb->focused ? GOWL_BAR_COLOR_SURFACE
-	                                                : GOWL_BAR_COLOR_MANTLE);
-	cairo_fill(cr);
+/*
+ * push:
+ * @sb: the scene buffer
+ * @surface: (transfer full): the finished image
+ * @w: logical width
+ * @h: logical height
+ */
+static void
+push(
+	struct wlr_scene_buffer *sb,
+	cairo_surface_t         *surface,
+	gint                     w,
+	gint                     h
+){
+	struct wlr_buffer *buffer;
 
-	/* A hairline separating the bar from the content. */
-	gowl_bar_theme_cairo_set_alpha(theme, cr, GOWL_BAR_COLOR_CRUST, 0.6);
-	cairo_rectangle(cr, 0, h - 1, w, 1);
-	cairo_fill(cr);
-
-	/* Buttons: close, maximize, minimize from the right, one bar
-	 * height each. */
-	r = MAX(4.0, h * 0.22);
-	step = h;
-	draw_button(cr, theme, GOWL_BAR_COLOR_RED, w - step * 0.5, h * 0.5, r,
-	            TB_HIT_CLOSE, tb->focused);
-	draw_button(cr, theme, GOWL_BAR_COLOR_GREEN, w - step * 1.5, h * 0.5, r,
-	            TB_HIT_MAXIMIZE, tb->focused);
-	draw_button(cr, theme, GOWL_BAR_COLOR_YELLOW, w - step * 2.5, h * 0.5, r,
-	            TB_HIT_MINIMIZE, tb->focused);
-
-	/* The title, ellipsized into what the buttons leave. */
-	layout = pango_cairo_create_layout(cr);
-	font = pango_font_description_from_string(
-		gowl_bar_theme_get_font(theme) != NULL
-		? gowl_bar_theme_get_font(theme) : "sans 10");
-	pango_layout_set_font_description(layout, font);
-	pango_font_description_free(font);
-	pango_layout_set_text(layout, tb->title != NULL ? tb->title : "", -1);
-	pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-	pango_layout_set_width(layout,
-		MAX(1, (gint)((w - step * 3 - 16) * PANGO_SCALE)));
-	pango_layout_get_pixel_size(layout, &text_w, &text_h);
-	gowl_bar_theme_cairo_set(theme, cr, tb->focused ? GOWL_BAR_COLOR_TEXT
-	                                                : GOWL_BAR_COLOR_SUBTEXT);
-	cairo_move_to(cr, 12, (h - text_h) / 2.0);
-	pango_cairo_show_layout(cr, layout);
-	g_object_unref(layout);
-
-	cairo_destroy(cr);
 	cairo_surface_flush(surface);
 	buffer = gowl_raw_buffer_create(cairo_image_surface_get_data(surface),
 		cairo_image_surface_get_width(surface),
@@ -367,9 +402,187 @@ titlebar_render(
 	cairo_surface_destroy(surface);
 	if (buffer == NULL)
 		return;
-	wlr_scene_buffer_set_buffer(tb->buffer, buffer);
+	wlr_scene_buffer_set_buffer(sb, buffer);
 	wlr_buffer_drop(buffer);
-	wlr_scene_buffer_set_dest_size(tb->buffer, tb->width, tb->height);
+	wlr_scene_buffer_set_dest_size(sb, w, h);
+}
+
+/*
+ * render_caps:
+ * @self: the module
+ * @tb: the bar
+ *
+ * The left cap (top-left corner, then close, minimize, maximize, one bar
+ * height each) and the right cap (the top-right corner).  Neither depends
+ * on the window's width.
+ */
+static void
+render_caps(
+	GowlModuleFloatdesk *self,
+	FloatdeskTitlebar   *tb
+){
+	const GowlBarTheme *theme = self->theme;
+	cairo_surface_t    *surface;
+	cairo_t            *cr = NULL;
+	gdouble             h = tb->height;
+	gdouble             r = MAX(4.0, h * 0.22);
+	gint                lw = TITLEBAR_BUTTONS * tb->height;
+	gint                rad = MIN(tb->radius, tb->height);
+
+	/* Left: the corner, then the buttons. */
+	surface = new_surface(lw, tb->height, tb->scale, &cr);
+	if (surface != NULL) {
+		cairo_new_path(cr);
+		if (rad > 0) {
+			cairo_move_to(cr, 0, h);
+			cairo_line_to(cr, 0, rad);
+			cairo_arc(cr, rad, rad, rad, G_PI, 1.5 * G_PI);
+			cairo_line_to(cr, lw, 0);
+			cairo_line_to(cr, lw, h);
+			cairo_close_path(cr);
+		} else {
+			cairo_rectangle(cr, 0, 0, lw, h);
+		}
+		gowl_bar_theme_cairo_set(theme, cr, background_role(tb->focused));
+		cairo_fill(cr);
+		draw_button(cr, theme, GOWL_BAR_COLOR_RED, h * 0.5, h * 0.5, r,
+		            TB_HIT_CLOSE, tb->focused);
+		draw_button(cr, theme, GOWL_BAR_COLOR_YELLOW, h * 1.5, h * 0.5, r,
+		            TB_HIT_MINIMIZE, tb->focused);
+		draw_button(cr, theme, GOWL_BAR_COLOR_GREEN, h * 2.5, h * 0.5, r,
+		            TB_HIT_MAXIMIZE, tb->focused);
+		cairo_destroy(cr);
+		push(tb->left, surface, lw, tb->height);
+	}
+
+	/* Right: the other top corner, or nothing at all. */
+	wlr_scene_node_set_enabled(&tb->right->node, rad > 0);
+	if (rad > 0) {
+		surface = new_surface(rad, tb->height, tb->scale, &cr);
+		if (surface != NULL) {
+			cairo_new_path(cr);
+			cairo_move_to(cr, 0, 0);
+			cairo_arc(cr, 0, rad, rad, 1.5 * G_PI, 2 * G_PI);
+			cairo_line_to(cr, rad, h);
+			cairo_line_to(cr, 0, h);
+			cairo_close_path(cr);
+			gowl_bar_theme_cairo_set(theme, cr,
+			                         background_role(tb->focused));
+			cairo_fill(cr);
+			cairo_destroy(cr);
+			push(tb->right, surface, rad, tb->height);
+		}
+	}
+}
+
+/*
+ * render_title:
+ * @self: the module
+ * @tb: the bar
+ * @avail: the widest the title may be, ellipsized past it
+ *
+ * The title at its own size, so it is centred by moving the node.
+ */
+static void
+render_title(
+	GowlModuleFloatdesk *self,
+	FloatdeskTitlebar   *tb,
+	gint                 avail
+){
+	const GowlBarTheme   *theme = self->theme;
+	cairo_surface_t      *probe, *surface;
+	cairo_t              *cr = NULL;
+	PangoLayout          *layout;
+	PangoFontDescription *font;
+	const gchar          *text = tb->title_text != NULL ? tb->title_text : "";
+	gint                  tw = 0, th = 0;
+
+	tb->title_avail = avail;
+	tb->title_drawn = TRUE;
+	if (*text == '\0' || avail <= 0) {
+		tb->title_w = tb->title_h = 0;
+		tb->title_ellipsized = FALSE;
+		wlr_scene_node_set_enabled(&tb->title->node, FALSE);
+		return;
+	}
+
+	/* Measure on a scratch context first, to size the image. */
+	probe = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+	cr = cairo_create(probe);
+	layout = pango_cairo_create_layout(cr);
+	font = pango_font_description_from_string(
+		gowl_bar_theme_get_font(theme) != NULL
+		? gowl_bar_theme_get_font(theme) : "sans 10");
+	pango_layout_set_font_description(layout, font);
+	pango_font_description_free(font);
+	pango_layout_set_text(layout, text, -1);
+	pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+	pango_layout_set_width(layout, avail * PANGO_SCALE);
+	pango_layout_get_pixel_size(layout, &tw, &th);
+	tb->title_ellipsized = pango_layout_is_ellipsized(layout);
+	cairo_destroy(cr);
+	cairo_surface_destroy(probe);
+
+	tw = MAX(1, MIN(tw, avail));
+	th = MAX(1, MIN(th, tb->height));
+	surface = new_surface(tw, th, tb->title_scale, &cr);
+	if (surface == NULL) {
+		g_object_unref(layout);
+		return;
+	}
+	pango_cairo_update_layout(cr, layout);
+	gowl_bar_theme_cairo_set(theme, cr, tb->title_focused
+	                         ? GOWL_BAR_COLOR_TEXT : GOWL_BAR_COLOR_SUBTEXT);
+	cairo_move_to(cr, 0, 0);
+	pango_cairo_show_layout(cr, layout);
+	g_object_unref(layout);
+	cairo_destroy(cr);
+	tb->title_w = tw;
+	tb->title_h = th;
+	push(tb->title, surface, tw, th);
+	wlr_scene_buffer_set_source_box(tb->title, NULL);
+	wlr_scene_node_set_enabled(&tb->title->node, TRUE);
+}
+
+/*
+ * titlebar_create:
+ * @self: the module
+ * @c: the window
+ *
+ * Returns: (transfer none) (nullable): a new bar in @c's scene tree
+ */
+static FloatdeskTitlebar *
+titlebar_create(
+	GowlModuleFloatdesk *self,
+	GowlClient          *c
+){
+	FloatdeskTitlebar *tb;
+	static const float none[4] = { 0, 0, 0, 0 };
+
+	tb = g_new0(FloatdeskTitlebar, 1);
+	tb->self = self;
+	tb->client = c;
+	tb->tree = wlr_scene_tree_create(c->scene);
+	if (tb->tree == NULL) {
+		g_free(tb);
+		return NULL;
+	}
+	/* Bottom to top: the background pieces, the line, the title. */
+	tb->left = wlr_scene_buffer_create(tb->tree, NULL);
+	tb->middle = wlr_scene_rect_create(tb->tree, 0, 0, none);
+	tb->right = wlr_scene_buffer_create(tb->tree, NULL);
+	tb->line = wlr_scene_rect_create(tb->tree, 0, 1, none);
+	tb->title = wlr_scene_buffer_create(tb->tree, NULL);
+	if (tb->left == NULL || tb->middle == NULL || tb->right == NULL
+	    || tb->line == NULL || tb->title == NULL) {
+		wlr_scene_node_destroy(&tb->tree->node);
+		g_free(tb);
+		return NULL;
+	}
+	tb->node_destroy.notify = on_node_destroy;
+	wl_signal_add(&tb->tree->node.events.destroy, &tb->node_destroy);
+	g_hash_table_insert(titlebar_table(self), c, tb);
+	return tb;
 }
 
 void
@@ -378,12 +591,14 @@ floatdesk_titlebar_sync(
 	GowlClient          *c
 ){
 	FloatdeskTitlebar *tb;
-	gint               width, height;
+	gint               width, height, lw, rad, avail, tx;
 	gdouble            scale = 1.0;
-	gboolean           focused, maximized, redraw;
+	gboolean           focused, grabbed;
+	float              color[4];
 
 	if (c == NULL || c->scene == NULL || c->deco_top <= 0
-	    || c->isfullscreen || self->compositor == NULL) {
+	    || c->isfullscreen || self->compositor == NULL
+	    || self->theme == NULL) {
 		floatdesk_titlebar_drop(self, c);
 		return;
 	}
@@ -396,44 +611,88 @@ floatdesk_titlebar_sync(
 	if (c->mon != NULL && c->mon->wlr_output != NULL)
 		scale = MAX(1.0, c->mon->wlr_output->scale);
 	focused = is_focused(self, c);
-	maximized = floatdesk_is_maximized(c);
+	grabbed = gowl_compositor_client_is_grabbed(self->compositor, c);
 
 	tb = g_hash_table_lookup(titlebar_table(self), c);
 	if (tb == NULL) {
-		tb = g_new0(FloatdeskTitlebar, 1);
-		tb->self = self;
-		tb->client = c;
-		tb->buffer = wlr_scene_buffer_create(c->scene, NULL);
-		if (tb->buffer == NULL) {
-			g_free(tb);
+		tb = titlebar_create(self, c);
+		if (tb == NULL)
 			return;
-		}
-		tb->node_destroy.notify = on_node_destroy;
-		wl_signal_add(&tb->buffer->node.events.destroy,
-		              &tb->node_destroy);
-		g_hash_table_insert(titlebar_table(self), c, tb);
-		redraw = TRUE;
-	} else {
-		redraw = tb->width != width || tb->height != height
-		         || tb->scale != scale || tb->focused != focused
-		         || tb->maximized != maximized
-		         || g_strcmp0(tb->title, c->title) != 0;
+	}
+	tb->width = width;
+
+	/* The caps: only when what they show changed. */
+	rad = MAX(0, corner_radius(self) - (gint)c->bw);
+	if (!tb->caps_drawn || tb->height != height || tb->scale != scale
+	    || tb->focused != focused || tb->radius != rad) {
+		tb->height = height;
+		tb->scale = scale;
+		tb->focused = focused;
+		tb->radius = rad;
+		tb->caps_drawn = TRUE;
+		render_caps(self, tb);
+		role_to_rect(self->theme, background_role(focused), 1.0, color);
+		wlr_scene_rect_set_color(tb->middle, color);
+		role_to_rect(self->theme, GOWL_BAR_COLOR_CRUST, 0.6, color);
+		wlr_scene_rect_set_color(tb->line, color);
 	}
 
-	wlr_scene_node_set_position(&tb->buffer->node, (gint)c->bw, (gint)c->bw);
-	/* Above the content and any decorator frame drawn into the tree. */
-	wlr_scene_node_raise_to_top(&tb->buffer->node);
-	if (!redraw)
-		return;
+	/* The geometry: cheap, every time. */
+	lw = TITLEBAR_BUTTONS * height;
+	rad = MIN(tb->radius, height);
+	wlr_scene_node_set_position(&tb->tree->node, (gint)c->bw, (gint)c->bw);
+	wlr_scene_node_set_position(&tb->left->node, 0, 0);
+	wlr_scene_node_set_position(&tb->middle->node, lw, 0);
+	wlr_scene_rect_set_size(tb->middle, MAX(0, width - lw - rad), height);
+	wlr_scene_node_set_position(&tb->right->node, MAX(lw, width - rad), 0);
+	wlr_scene_node_set_position(&tb->line->node, 0, height - 1);
+	wlr_scene_rect_set_size(tb->line, width, 1);
 
-	tb->width = width;
-	tb->height = height;
-	tb->scale = scale;
-	tb->focused = focused;
-	tb->maximized = maximized;
-	g_free(tb->title);
-	tb->title = g_strdup(c->title);
-	titlebar_render(self, tb);
+	/*
+	 * The title, centred on the whole bar.  Room is kept for the
+	 * buttons on BOTH sides, so the centre stays the bar's centre and
+	 * the text never runs under a button.
+	 */
+	avail = MAX(0, width - 2 * (lw + 8));
+	if (!tb->title_drawn || g_strcmp0(tb->title_text, c->title) != 0
+	    || tb->title_focused != focused || tb->title_height != height
+	    || tb->title_scale != scale) {
+		g_free(tb->title_text);
+		tb->title_text = g_strdup(c->title);
+		tb->title_focused = focused;
+		tb->title_height = height;
+		tb->title_scale = scale;
+		render_title(self, tb, avail);
+	} else if (avail != tb->title_avail && !grabbed
+	           && (tb->title_ellipsized || avail < tb->title_w)) {
+		/* Narrower or wider than it was ellipsized for, and the drag
+		 * is over: lay it out again for the room it has. */
+		render_title(self, tb, avail);
+	}
+	if (tb->title_w > 0) {
+		gint shown = MIN(tb->title_w, avail);
+
+		/* Mid-drag and too wide: crop rather than redraw. */
+		if (shown < tb->title_w && shown > 0) {
+			struct wlr_fbox src = { 0, 0, shown * tb->title_scale,
+			                        tb->title_h * tb->title_scale };
+
+			wlr_scene_buffer_set_source_box(tb->title, &src);
+			wlr_scene_buffer_set_dest_size(tb->title, shown,
+			                               tb->title_h);
+		} else if (shown > 0) {
+			wlr_scene_buffer_set_source_box(tb->title, NULL);
+			wlr_scene_buffer_set_dest_size(tb->title, tb->title_w,
+			                               tb->title_h);
+		}
+		wlr_scene_node_set_enabled(&tb->title->node, shown > 0);
+		tx = (width - shown) / 2;
+		wlr_scene_node_set_position(&tb->title->node, MAX(lw + 8, tx),
+		                            (height - tb->title_h) / 2);
+	}
+
+	/* Above the content and any decorator frame drawn into the tree. */
+	wlr_scene_node_raise_to_top(&tb->tree->node);
 }
 
 /* ---------------------------------------------------------------- */
@@ -463,20 +722,28 @@ titlebar_at(
 	struct wlr_scene_node *node;
 	GHashTableIter         iter;
 	gpointer               value;
+	gdouble                nx, ny;
 
 	if (self->titlebar_nodes == NULL
 	    || g_hash_table_size(self->titlebar_nodes) == 0)
 		return NULL;
 	node = wlr_scene_node_at(&self->compositor->scene->tree.node, lx, ly,
-	                         local_x, local_y);
-	if (node == NULL || node->type != WLR_SCENE_NODE_BUFFER)
+	                         &nx, &ny);
+	if (node == NULL || node->parent == NULL)
 		return NULL;
 	g_hash_table_iter_init(&iter, self->titlebar_nodes);
 	while (g_hash_table_iter_next(&iter, NULL, &value)) {
 		FloatdeskTitlebar *tb = value;
+		gint               tx, ty;
 
-		if (&tb->buffer->node == node)
-			return tb;
+		if (node->parent != tb->tree)
+			continue;
+		/* Any of the bar's pieces: answer in the bar's coordinates. */
+		if (!wlr_scene_node_coords(&tb->tree->node, &tx, &ty))
+			return NULL;
+		*local_x = lx - tx;
+		*local_y = ly - ty;
+		return tb;
 	}
 	return NULL;
 }
@@ -486,7 +753,8 @@ titlebar_at(
  * @tb: a bar
  * @x: the pointer across it
  *
- * Returns: which part of the bar @x is in
+ * Returns: which part of the bar @x is in: close, minimize, maximize
+ *   from the left edge, one bar height each, then the title
  */
 static TitlebarHit
 hit_of(
@@ -495,12 +763,14 @@ hit_of(
 ){
 	gdouble step = tb->height;
 
-	if (x >= tb->width - step)
+	if (x < 0)
+		return TB_HIT_NONE;
+	if (x < step)
 		return TB_HIT_CLOSE;
-	if (x >= tb->width - 2 * step)
-		return TB_HIT_MAXIMIZE;
-	if (x >= tb->width - 3 * step)
+	if (x < 2 * step)
 		return TB_HIT_MINIMIZE;
+	if (x < 3 * step)
+		return TB_HIT_MAXIMIZE;
 	return TB_HIT_TITLE;
 }
 

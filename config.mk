@@ -296,6 +296,22 @@ endif
 YAMLGLIB_DIR ?= deps/yaml-glib
 CRISPY_DIR   ?= deps/crispy
 
+# Say so when either checkout is empty, before a compile does.  Inside
+# cmacs the nested submodules are deliberately left uninitialised (cmacs
+# passes its own copies), so a bare `make -C deps/gowl modules' there
+# used to stop on `yaml-glib.h: No such file or directory' -- which reads
+# as a missing system package, not a missing make variable.  Goals that
+# compile nothing (clean, help) are let through.
+GOWL_NO_SOURCE_GOALS := clean distclean help
+ifneq ($(filter-out $(GOWL_NO_SOURCE_GOALS),$(or $(MAKECMDGOALS),all)),)
+ifeq ($(wildcard $(YAMLGLIB_DIR)/src/yaml-glib.h),)
+$(error YAMLGLIB_DIR=$(YAMLGLIB_DIR) has no src/yaml-glib.h: run `git submodule update --init deps/yaml-glib deps/crispy', or pass YAMLGLIB_DIR=... CRISPY_DIR=... (inside cmacs: `just gowl-modules'))
+endif
+ifeq ($(wildcard $(CRISPY_DIR)/src/crispy.h),)
+$(error CRISPY_DIR=$(CRISPY_DIR) has no src/crispy.h: run `git submodule update --init deps/yaml-glib deps/crispy', or pass YAMLGLIB_DIR=... CRISPY_DIR=... (inside cmacs: `just gowl-modules'))
+endif
+endif
+
 CFLAGS_INC := -I. -Isrc -I$(YAMLGLIB_DIR)/src -I$(CRISPY_DIR)/src
 
 # Combine all CFLAGS

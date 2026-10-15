@@ -782,6 +782,47 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_MONITOR, G_TYPE_STRING);
 
 	/**
+	 * GowlCompositor::pre-arrange:
+	 * @compositor: the compositor
+	 * @monitor: the output about to be arranged
+	 *
+	 * Emitted at the start of every arrange of @monitor, before tag
+	 * visibility is applied and before its layout runs.  The one place
+	 * a module can change which windows float -- and so which ones the
+	 * layout tiles -- for the arrange that is happening, rather than
+	 * scheduling another.  A handler must not arrange (that recurses):
+	 * use gowl_compositor_float_in_place() and
+	 * gowl_compositor_place_client(), which do not.
+	 */
+	g_signal_new("pre-arrange", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 1, GOWL_TYPE_MONITOR);
+
+	/**
+	 * GowlCompositor::arranged:
+	 * @compositor: the compositor
+	 * @monitor: the output just arranged
+	 *
+	 * Emitted at the end of every arrange of @monitor: visibility,
+	 * stacking and the layout have all settled.  For a surface that
+	 * depends on what the output shows -- a dock hidden under a
+	 * fullscreen window, say.
+	 */
+	g_signal_new("arranged", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 1, GOWL_TYPE_MONITOR);
+
+	/**
+	 * GowlCompositor::client-minimized:
+	 * @compositor: the compositor
+	 * @client: the window
+	 * @minimized: %TRUE when it was just minimized, %FALSE restored
+	 *
+	 * See gowl_compositor_minimize_client().
+	 */
+	g_signal_new("client-minimized", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	             0, NULL, NULL, NULL, G_TYPE_NONE, 2, GOWL_TYPE_CLIENT,
+	             G_TYPE_BOOLEAN);
+
+	/**
 	 * GowlCompositor::output-power-changed:
 	 * @compositor: the compositor
 	 * @monitor: the output
@@ -5578,8 +5619,10 @@ gowl_compositor_clip_client_geometry(GowlCompositor *self, GowlClient *c, const 
 	wlr_scene_node_set_enabled(&c->scene->node, TRUE);
 	wlr_scene_node_set_position(&c->scene->node, visible.x, visible.y);
 	gowl_compositor_apply_frame_geometry(self, c, visible.width, visible.height);
-	content = (struct wlr_box){box->x + c->bw, box->y + c->bw,
-		box->width - 2 * (gint)c->bw, box->height - 2 * (gint)c->bw};
+	content = (struct wlr_box){box->x + c->bw,
+		box->y + c->bw + GOWL_CLIENT_INSET_TOP(c),
+		box->width - 2 * (gint)c->bw,
+		box->height - 2 * (gint)c->bw - GOWL_CLIENT_INSET_TOP(c)};
 	if (c->scene_surface == NULL)
 		return TRUE;
 	if (!wlr_box_intersection(&clip, &content, &c->mon->w)) {
@@ -5612,6 +5655,7 @@ resize_client(
 	struct wlr_box sgeom;
 	struct wlr_box clip;
 	gboolean animated;
+	gint top;
 
 	if (c->mon == NULL || (c->isoverlay && interact))
 		return;
@@ -5640,7 +5684,11 @@ resize_client(
 		wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
 		gowl_compositor_apply_frame_geometry(self, c, c->geom.width, c->geom.height);
 	}
-	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
+	/* The content sits inside the border and below any decoration a
+	 * module keeps space for at the top (GOWL_CLIENT_INSET_TOP). */
+	top = GOWL_CLIENT_INSET_TOP(c);
+	wlr_scene_node_set_position(&c->scene_surface->node, c->bw,
+	                            (gint)c->bw + top);
 
 	/* Send configure to the underlying surface */
 #ifdef GOWL_HAVE_XWAYLAND
@@ -5650,10 +5698,10 @@ resize_client(
 		 * absolutely positioned) and clear the pending resize. */
 		wlr_xwayland_surface_configure(
 			c->xwayland_surface,
-			c->geom.x + (gint16)c->bw,
-			c->geom.y + (gint16)c->bw,
-			c->geom.width  - 2 * (guint16)c->bw,
-			c->geom.height - 2 * (guint16)c->bw);
+			(gint16)(c->geom.x + (gint)c->bw),
+			(gint16)(c->geom.y + (gint)c->bw + top),
+			(guint16)MAX(1, c->geom.width  - 2 * (gint)c->bw),
+			(guint16)MAX(1, c->geom.height - 2 * (gint)c->bw - top));
 		c->resize = 0;
 	} else
 #endif
@@ -5661,7 +5709,7 @@ resize_client(
 		c->resize = wlr_xdg_toplevel_set_size(
 			c->xdg_toplevel,
 			c->geom.width - 2 * (gint)c->bw,
-			c->geom.height - 2 * (gint)c->bw);
+			MAX(1, c->geom.height - 2 * (gint)c->bw - top));
 	}
 
 	/*
@@ -5680,7 +5728,7 @@ resize_client(
 		clip.y = c->xdg_toplevel->base->geometry.y;
 	}
 	clip.width  = c->geom.width - (gint)c->bw;
-	clip.height = c->geom.height - (gint)c->bw;
+	clip.height = c->geom.height - (gint)c->bw - top;
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
 	{
 		struct wlr_box shown = animated ? gowl_effects_geometry(c) : c->geom;
@@ -6061,10 +6109,16 @@ pointerfocus(
 	/* Sloppy focus is the automatic focus change that confinement's
 	 * focus pin exists to stop: a window overlapping the confined one
 	 * must not take the keyboard just because the pointer is over it. */
+	/* A focus policy module may refuse it too: the floating desktop
+	 * makes focus follow the click on its workspaces, where windows
+	 * overlap and a pointer crossing one on the way to another would
+	 * otherwise hand it the keyboard. */
 	if (surface != self->wlr_seat->pointer_state.focused_surface &&
 	    sloppy && time_msec && c != NULL &&
 	    !gowl_client_get_embedded(c) &&
-	    !pointer_confine_pin_blocks_client(self, c))
+	    !pointer_confine_pin_blocks_client(self, c) &&
+	    (self->module_mgr == NULL
+	     || gowl_module_manager_focus_on_hover(self->module_mgr, c)))
 		gowl_compositor_focus_client(self, c, FALSE);
 
 	/* If no surface, clear pointer focus */
@@ -6184,6 +6238,10 @@ gowl_compositor_arrange(
 	if (m == NULL || m->wlr_output == NULL)
 		return;
 
+	/* Before anything is decided: a module may still change which
+	 * windows float for this arrange (the floating desktop does). */
+	g_signal_emit_by_name(self, "pre-arrange", m);
+
 	/*
 	 * Enable/disable client scene nodes based on tag visibility, in TWO
 	 * passes: settle the whole monitor first, announce afterwards.
@@ -6272,6 +6330,8 @@ gowl_compositor_arrange(
 	 * visibility changes. */
 	if (self->idle_mgr != NULL)
 		gowl_idle_manager_check_inhibitors(self->idle_mgr);
+
+	g_signal_emit_by_name(self, "arranged", m);
 }
 
 /**
@@ -6407,6 +6467,13 @@ gowl_compositor_show_client(
 	if (client == NULL)
 		return;
 
+	/* A minimized window is on no tag either; going to it means taking
+	 * it back to the tags it was minimized from. */
+	if (client->isminimized) {
+		gowl_compositor_unminimize_client(self, client, client->mon,
+		                                  client->minimized_tags);
+	}
+
 	mon = (GowlMonitor *)gowl_client_get_monitor(client);
 	tags = gowl_client_get_tags(client);
 	/* A hidden overlay is on no tag, so there is no view to switch to --
@@ -6418,6 +6485,204 @@ gowl_compositor_show_client(
 		self->selmon = mon;
 		gowl_compositor_arrange(self, mon);
 	}
+}
+
+/**
+ * gowl_compositor_minimize_client:
+ * @self: a #GowlCompositor
+ * @client: the window to minimize
+ *
+ * See the header.  The window goes onto no tag, the way a hidden
+ * overlay does (tags == 0 is already "shown by no view, counted by no
+ * layout" everywhere VISIBLEON is asked), with its tags kept for the
+ * restore.  The output it was on keeps the selection and is refocused
+ * on whatever is left there, so a window opened next lands on the
+ * workspace the user is looking at rather than wherever the minimized
+ * one lived.
+ *
+ * Returns: %TRUE if @client was minimized
+ */
+gboolean
+gowl_compositor_minimize_client(
+	GowlCompositor *self,
+	GowlClient     *client
+){
+	GowlMonitor *mon;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	g_return_val_if_fail(GOWL_IS_CLIENT(client), FALSE);
+
+	if (client->isminimized || client->isoverlay || client->isembedded
+	    || client->scene == NULL || client->mon == NULL
+	    || client->tags == 0 || client_is_unmanaged(client))
+		return FALSE;
+
+	/* A drag in progress on the window would go on moving something no
+	 * longer on screen until the button came up. */
+	if (self->grabbed_client == client) {
+		self->grabbed_client = NULL;
+		self->cursor_mode = GOWL_CURSOR_MODE_NORMAL;
+		if (self->wlr_cursor != NULL && self->xcursor_mgr != NULL)
+			wlr_cursor_set_xcursor(self->wlr_cursor,
+			                       self->xcursor_mgr, "default");
+	}
+
+	mon = client->mon;
+	client->minimized_tags = client->tags;
+	client->tags = 0;
+	client->isminimized = TRUE;
+	client->isurgent = FALSE;
+	if (client->foreign_toplevel != NULL)
+		wlr_foreign_toplevel_handle_v1_set_minimized(
+			client->foreign_toplevel, true);
+
+	self->selmon = mon;
+	gowl_compositor_arrange(self, mon);
+	gowl_compositor_focus_client(self, focustop(self, mon), TRUE);
+
+	g_signal_emit_by_name(self, "client-minimized", client, TRUE);
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT client-minimized %u",
+		                     client->id);
+	return TRUE;
+}
+
+/**
+ * gowl_compositor_unminimize_client:
+ * @self: a #GowlCompositor
+ * @client: a minimized window
+ * @monitor: (nullable): the output to restore it on
+ * @tags: the tags to put it on, 0 for what @monitor views
+ *
+ * See the header.  The flag is cleared BEFORE the window is placed, so
+ * anything that runs on the arrange this causes (the floating desktop's
+ * pre-arrange pass) already sees an ordinary window on its new tags.
+ *
+ * Returns: %TRUE if @client was restored
+ */
+gboolean
+gowl_compositor_unminimize_client(
+	GowlCompositor *self,
+	GowlClient     *client,
+	GowlMonitor    *monitor,
+	guint32         tags
+){
+	GowlMonitor *target;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	g_return_val_if_fail(GOWL_IS_CLIENT(client), FALSE);
+
+	if (!client->isminimized)
+		return FALSE;
+
+	target = monitor != NULL ? monitor : self->selmon;
+	if (target == NULL)
+		target = client->mon;
+	if (target == NULL)
+		return FALSE;
+	if (tags == 0)
+		tags = target->tagset[target->seltags];
+	if (tags == 0)
+		tags = client->minimized_tags != 0 ? client->minimized_tags : 1;
+
+	client->isminimized = FALSE;
+	client->minimized_tags = 0;
+	if (client->foreign_toplevel != NULL)
+		wlr_foreign_toplevel_handle_v1_set_minimized(
+			client->foreign_toplevel, false);
+
+	if (client->mon != target) {
+		/* setmon() re-arranges both outputs and refocuses. */
+		setmon(self, client, target, tags);
+	} else {
+		client->tags = tags;
+		gowl_compositor_arrange(self, target);
+	}
+	self->selmon = target;
+	gowl_compositor_focus_client(self, client, TRUE);
+
+	g_signal_emit_by_name(self, "client-minimized", client, FALSE);
+	if (self->ipc != NULL)
+		gowl_ipc_push_event(self->ipc, "EVENT client-restored %u",
+		                     client->id);
+	return TRUE;
+}
+
+/**
+ * gowl_compositor_begin_move:
+ * @self: a #GowlCompositor
+ * @client: the window to drag
+ *
+ * Public face of begin_interactive() for a move.
+ *
+ * Returns: %TRUE if the grab started
+ */
+gboolean
+gowl_compositor_begin_move(
+	GowlCompositor *self,
+	GowlClient     *client
+){
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	g_return_val_if_fail(GOWL_IS_CLIENT(client), FALSE);
+
+	begin_interactive(self, client, GOWL_CURSOR_MODE_MOVE, 0);
+	return self->grabbed_client == client
+	       && self->cursor_mode == GOWL_CURSOR_MODE_MOVE;
+}
+
+/**
+ * gowl_compositor_begin_resize:
+ * @self: a #GowlCompositor
+ * @client: the window to resize
+ * @edges: the `WLR_EDGE_*` bits being dragged
+ *
+ * Public face of begin_interactive() for an edge resize.
+ *
+ * Returns: %TRUE if the grab started
+ */
+gboolean
+gowl_compositor_begin_resize(
+	GowlCompositor *self,
+	GowlClient     *client,
+	guint32         edges
+){
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	g_return_val_if_fail(GOWL_IS_CLIENT(client), FALSE);
+
+	if (edges == 0)
+		return FALSE;
+	begin_interactive(self, client, GOWL_CURSOR_MODE_RESIZE, edges);
+	return self->grabbed_client == client
+	       && self->cursor_mode == GOWL_CURSOR_MODE_RESIZE;
+}
+
+/**
+ * gowl_compositor_float_in_place:
+ * @self: a #GowlCompositor
+ * @client: the window
+ * @floating: the floating state to give it
+ *
+ * setfloating() without its arrange, for callers already inside one.
+ */
+void
+gowl_compositor_float_in_place(
+	GowlCompositor *self,
+	GowlClient     *client,
+	gboolean        floating
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	g_return_if_fail(GOWL_IS_CLIENT(client));
+
+	if (client->isoverlay)
+		return;
+	client->isfloating = floating ? TRUE : FALSE;
+	if (!floating) {
+		client->isbelow = FALSE;
+		client->issticky = FALSE;
+	}
+	if (client->scene != NULL
+	    && client->scene->node.parent != self->layers[GOWL_SCENE_LAYER_FS])
+		client_restack(self, client);
 }
 
 void
@@ -13977,7 +14242,7 @@ on_client_commit(struct wl_listener *listener, void *data)
 	 * because c->geom then differs from the client's current size. */
 	if (!c->isoverlay && (c->geom.width  - 2 * (gint)c->bw
 	        != (gint)c->xdg_toplevel->current.width ||
-	    c->geom.height - 2 * (gint)c->bw
+	    c->geom.height - 2 * (gint)c->bw - GOWL_CLIENT_INSET_TOP(c)
 	        != (gint)c->xdg_toplevel->current.height))
 		resize_client(self, c, c->geom,
 		              c->isfloating && !c->isfullscreen);
@@ -14804,10 +15069,13 @@ on_xwayland_request_configure(struct wl_listener *listener, void *data)
 	if (c->isfloating && !c->isfullscreen && c != self->grabbed_client) {
 		struct wlr_box want;
 
+		/* The frame around the asked-for content: the border, plus
+		 * whatever decoration a module keeps above it. */
 		want.x      = ev->x - (gint)c->bw;
-		want.y      = ev->y - (gint)c->bw;
+		want.y      = ev->y - (gint)c->bw - GOWL_CLIENT_INSET_TOP(c);
 		want.width  = ev->width + 2 * (gint)c->bw;
-		want.height = ev->height + 2 * (gint)c->bw;
+		want.height = ev->height + 2 * (gint)c->bw
+		              + GOWL_CLIENT_INSET_TOP(c);
 		resize_client(self, c, want, FALSE);
 		return;
 	}
@@ -15782,7 +16050,11 @@ gowl_compositor_scroll_to_client(GowlCompositor *self, GowlClient *c)
  GowlLayoutProviderInterface *iface;
  if (c == NULL || c->mon == NULL) return;
  e = gowl_layout_get(self, c->mon);
- if (e == NULL || e->provider == NULL) return;
+ /* Not every entry's provider is a layout provider: one registered
+  * with an arrange function may name a module only for its active
+  * state (see gowl_layout_allows_overflow). */
+ if (e == NULL || e->provider == NULL || !GOWL_IS_LAYOUT_PROVIDER(e->provider))
+  return;
  iface = GOWL_LAYOUT_PROVIDER_GET_IFACE(e->provider);
  if (iface->focus_client != NULL) iface->focus_client(e->provider, c);
 }
@@ -15794,7 +16066,8 @@ gowl_compositor_scroll_by(GowlCompositor *self, GowlMonitor *m, gint dx)
  GowlLayoutProviderInterface *iface;
  if (m == NULL) m = self->selmon;
  e = gowl_layout_get(self, m);
- if (e == NULL || e->provider == NULL) return;
+ if (e == NULL || e->provider == NULL || !GOWL_IS_LAYOUT_PROVIDER(e->provider))
+  return;
  iface = GOWL_LAYOUT_PROVIDER_GET_IFACE(e->provider);
  if (iface->scroll != NULL) iface->scroll(e->provider, m, dx);
 }

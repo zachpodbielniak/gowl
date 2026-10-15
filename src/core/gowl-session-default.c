@@ -136,8 +136,14 @@ gowl_session_default_save_impl(GowlSessionProvider *provider,
 		g_string_append(yaml, "    title: ");
 		append_escaped_yaml_string(yaml, title != NULL ? title : "");
 		g_string_append_c(yaml, '\n');
+		/* A minimized window is on no tag only until it is restored;
+		 * saved as 0 it would come back on no tag at all -- mapped
+		 * and invisible, with nothing to show it.  Save where it
+		 * came from. */
 		g_string_append_printf(yaml, "    tags: %u\n",
-		                       gowl_client_get_tags(c));
+		                       c->isminimized
+		                       ? gowl_client_get_minimized_tags(c)
+		                       : gowl_client_get_tags(c));
 		g_string_append_printf(yaml, "    floating: %s\n",
 		                       gowl_client_get_floating(c)
 		                       ? "true" : "false");

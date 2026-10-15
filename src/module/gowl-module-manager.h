@@ -241,6 +241,19 @@ gpointer            gowl_module_manager_get_input_remapper (GowlModuleManager *s
  * Returns: %TRUE when an active module implements #GowlInputObserver
  */
 gboolean            gowl_module_manager_has_input_observers (GowlModuleManager *self);
+
+/**
+ * gowl_module_manager_focus_on_hover:
+ * @self: a #GowlModuleManager
+ * @client: the window the pointer entered
+ *
+ * Asks every active #GowlFocusPolicy whether sloppy focus may focus
+ * @client; any one of them may refuse.
+ *
+ * Returns: %TRUE if hovering @client may focus it
+ */
+gboolean            gowl_module_manager_focus_on_hover      (GowlModuleManager *self,
+                                                             gpointer           client);
 gboolean            gowl_module_manager_filter_key          (GowlModuleManager *self,
                                                              gconstpointer      key);
 void                gowl_module_manager_key_forwarded       (GowlModuleManager *self,

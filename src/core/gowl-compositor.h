@@ -1005,6 +1005,89 @@ void gowl_compositor_show_client (GowlCompositor *self,
                                   GowlClient     *client);
 
 /**
+ * gowl_compositor_minimize_client:
+ * @self: a #GowlCompositor
+ * @client: the window to minimize
+ *
+ * Takes @client off every tag -- a hidden workspace no view shows and
+ * no layout counts -- remembering the tags it was on, then focuses
+ * what is left on the output it was on, so the next window opens
+ * there.  Reported to taskbars (foreign-toplevel) and as
+ * #GowlCompositor::client-minimized.  An overlay, an embedded or
+ * unmanaged window, or one already minimized is refused.
+ *
+ * Returns: %TRUE if @client was minimized
+ */
+gboolean gowl_compositor_minimize_client (GowlCompositor *self,
+                                          GowlClient     *client);
+
+/**
+ * gowl_compositor_unminimize_client:
+ * @self: a #GowlCompositor
+ * @client: a minimized window
+ * @monitor: (nullable): the output to restore it on, %NULL for the
+ *   selected output
+ * @tags: the tags to restore it on, 0 for what @monitor is viewing
+ *
+ * Puts a minimized window back -- where the user is looking unless
+ * told otherwise -- focuses and raises it.  No animation is asked for:
+ * the window simply reappears.  Emits #GowlCompositor::client-minimized.
+ *
+ * Returns: %TRUE if @client was restored
+ */
+gboolean gowl_compositor_unminimize_client (GowlCompositor *self,
+                                            GowlClient     *client,
+                                            GowlMonitor    *monitor,
+                                            guint32         tags);
+
+/**
+ * gowl_compositor_begin_move:
+ * @self: a #GowlCompositor
+ * @client: the window to drag
+ *
+ * Starts an interactive move of @client under the pointer, exactly as
+ * the Super+Button1 bind does: the window follows the pointer until the
+ * button comes up.  A tiled window is floated first.  For a module that
+ * draws its own grab handle -- a title bar.
+ *
+ * Returns: %TRUE if the grab started
+ */
+gboolean gowl_compositor_begin_move (GowlCompositor *self,
+                                     GowlClient     *client);
+
+/**
+ * gowl_compositor_begin_resize:
+ * @self: a #GowlCompositor
+ * @client: the window to resize
+ * @edges: the `WLR_EDGE_*` bits of the edges being dragged
+ *
+ * Starts an interactive resize of @client from @edges, the opposite
+ * edges staying put.
+ *
+ * Returns: %TRUE if the grab started
+ */
+gboolean gowl_compositor_begin_resize (GowlCompositor *self,
+                                       GowlClient     *client,
+                                       guint32         edges);
+
+/**
+ * gowl_compositor_float_in_place:
+ * @self: a #GowlCompositor
+ * @client: the window
+ * @floating: %TRUE to float it, %FALSE to put it back in the layout
+ *
+ * Changes @client's floating state and moves it to the scene layer that
+ * state belongs in, WITHOUT re-arranging -- for a module that is itself
+ * running inside an arrange (a #GowlCompositor::pre-arrange handler or a
+ * layout), where gowl_compositor_set_floating() would recurse.  Leaving
+ * floating clears below and pinned, as gowl_compositor_set_floating()
+ * does.  The geometry is not touched.
+ */
+void gowl_compositor_float_in_place (GowlCompositor *self,
+                                     GowlClient     *client,
+                                     gboolean        floating);
+
+/**
  * GowlPrefloatMappedFunc:
  * @compositor: the #GowlCompositor
  * @client: the newly mapped #GowlClient that matched the hint

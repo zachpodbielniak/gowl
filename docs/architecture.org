@@ -924,6 +924,59 @@ the plugin. A change in effective layout emits monitor and compositor
 =layout-changed= signals after arrangement, which the optional
 =layout-indicator= plugin uses for its non-interactive toast.
 
+**** Arrange hooks: =pre-arrange= and =arranged=
+
+Every =gowl_compositor_arrange()= emits =pre-arrange= (monitor) first ---
+before tag visibility is applied and before the layout runs --- and
+=arranged= (monitor) last.  =pre-arrange= is the one place a module can
+change which windows float for the arrange that is happening rather
+than scheduling another; the floating desktop does all of its work
+there, because every way of a window reaching or leaving a workspace (a
+map, a tag key, =move-to-monitor=, a rule, a restore) ends in an arrange.
+A handler must not arrange: =gowl_compositor_float_in_place()= changes a
+window's floating state and scene layer without one, and
+=gowl_compositor_place_client()= places without one.  =arranged= is for a
+surface that depends on what an output now shows (the dock, hidden under
+a fullscreen window).
+
+**** A layout entry need not have a layout vtable
+
+=gowl_layout_register()= takes an arrange function OR a provider.  An
+entry with an arrange function may still name a provider purely so the
+entry follows that module's active state --- the floating desktop's
+=desktop= names the module, which is not a =GowlLayoutProvider=.  So the
+three places that call into a provider's vtable
+(=gowl_layout_allows_overflow()=, =gowl_compositor_scroll_to_client()=,
+=gowl_compositor_scroll_by()=) check =GOWL_IS_LAYOUT_PROVIDER()= first.
+Without it, focusing a window on a =desktop= view dereferenced a NULL
+interface pointer, on the compositor thread.
+
+**** Decoration space inside the frame
+
+=GowlClient.deco_top= keeps pixels at the top of the frame, inside the
+border, for a module's decoration (the floating desktop's title bar).
+Every place that turns a frame into a content box subtracts
+=GOWL_CLIENT_INSET_TOP(c)= (=deco_top=, 0 while fullscreen): the
+configure size and surface position in =resize_client()=, the clip, the
+content box in =gowl_compositor_clip_client_geometry()=, the X11
+configure request, the commit-time size check in =on_client_commit()=,
+and the animation module's ghost and close snapshot.  They must agree:
+configure one size and check against another and the client is
+reconfigured on every commit (the configure/ack/commit loop).
+
+**** Minimized windows
+
+=gowl_compositor_minimize_client()= puts a window on no tag (=tags = 0=),
+the hidden workspace hidden overlays already use --- no view shows it, no
+layout counts it, =VISIBLEON= needs no change --- with its tags kept in
+=minimized_tags=, sets the foreign-toplevel minimized state and emits
+=client-minimized=.  =gowl_compositor_unminimize_client()= clears the
+flag BEFORE placing the window, so the =pre-arrange= its arrange emits
+already sees an ordinary window.  A taskbar's minimize request and its
+activate request on a minimized window go through these;
+=gowl_compositor_show_client()= on a minimized window restores it to the
+tags it came from.
+
 *** Host close protection
 
 =gowl_client_close()= emits the compositor's =client-close-request=

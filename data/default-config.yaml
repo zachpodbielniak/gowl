@@ -567,6 +567,19 @@ keybinds:
   "Super+Ctrl+Shift+s":
     { action: ipc_command, arg: "scratchpad-remove", desc: "Scratchpad: bring the focused window back" }
 
+  # Floating desktop (the opt-in floatdesk module; see docs/floatdesk.org).
+  # Uncomment with `modules: floatdesk: enabled: true' below -- a key bound
+  # to a module that is not loaded does nothing.  The layout cycle reaches
+  # the mode too, as `desktop'.
+  # "Super+w":
+  #   { action: ipc_command, arg: "floatdesk-toggle", desc: "This workspace: floating desktop / tiling" }
+  # "Super+n":
+  #   { action: ipc_command, arg: "floatdesk-minimize", desc: "Minimize this window (floating desktop)" }
+  # "Super+Shift+n":
+  #   { action: ipc_command, arg: "floatdesk-restore", desc: "Bring back the window minimized last" }
+  # "Super+Shift+w":
+  #   { action: ipc_command, arg: "floatdesk-dock-apps", desc: "Dock: all applications" }
+
   # Multi-monitor
   "Super+comma": { action: focus_monitor, arg: "-1", desc: "Focus left monitor" }
   "Super+period": { action: focus_monitor, arg: "+1", desc: "Focus right monitor" }
@@ -1170,6 +1183,21 @@ modules:
     enabled: true
     timeout: 5000          # ms when the sender does not say; 0 never
     widget: notifications
+  # A floating desktop per workspace: windows float with title bars,
+  # minimize, snap to edges, and a dock of pinned and running apps.
+  # Opt-in; even enabled, every workspace tiles until one is switched
+  # (floatdesk-toggle).  Which workspaces float is saved in
+  # $XDG_STATE_HOME/gowl/floatdesk.yaml.  See docs/floatdesk.org.
+  floatdesk:
+    enabled: false
+    # default-floating: false   # float every workspace not set on its own
+    # width-pct: 0.6            # a new window's size, of the usable area
+    # height-pct: 0.7
+    # titlebar-height: 28
+    # dock-position: bottom     # bottom, left, right, top
+    # dock-autohide: false
+    # pins: [firefox, org.gnome.Nautilus]
+    # terminal: foot            # where TUIs from the dock run
   scratchpad:
     enabled: true
     # The panel's size, the dropdown's settings: fractions of the output's

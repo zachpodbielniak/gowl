@@ -171,6 +171,11 @@ DEPS_REQUIRED += yaml-0.1 json-glib-1.0 cairo pangocairo egl gl glesv2
 # modules already needed it; it moved here when the icon lookup did,
 # so the bar and the menu share one copy instead of carrying two.
 DEPS_REQUIRED += gdk-pixbuf-2.0
+# gio-unix for GDesktopAppInfo: the floating desktop's dock reads a
+# desktop entry's StartupWMClass and Terminal keys, which plain GAppInfo
+# does not expose.  It ships in the same package as gio itself
+# (glib2-devel, libglib2.0-dev, glib2), so this asks for nothing new.
+DEPS_REQUIRED += gio-unix-2.0
 
 # Optional XWayland dependencies
 #

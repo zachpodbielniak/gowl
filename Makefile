@@ -765,6 +765,18 @@ $(OUTDIR)/test-input-remap-claim: $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modu
 $(OBJDIR)/tests/test-input-remap-claim.o: TEST_CFLAGS += -DGOWL_TEST_INPUTREMAP_MODULE='"$(abspath $(OUTDIR)/modules/inputremap.so)"' -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 # The engine test includes the module's pure rule engine directly.
 $(OBJDIR)/tests/test-input-remap-engine.o: modules/inputremap/gowl-inputremap-engine.c modules/inputremap/gowl-inputremap-engine.h
+# The floating desktop's state machine, file format, placement and app
+# catalog, compiled straight into the test the way the remap engine is:
+# no compositor, every transition driven from a plain struct.
+$(OBJDIR)/tests/test-floatdesk-state.o: $(wildcard modules/floatdesk/gowl-floatdesk-state.* modules/floatdesk/gowl-floatdesk-apps.*)
+# The same module against a headless compositor: fabricated windows, the
+# real floatdesk.so and tile.so, the mode entered and left through the
+# commands and the layout cycle.  place_client is interposed (see the
+# file), hence --export-dynamic.
+$(OUTDIR)/test-floatdesk-module: $(OUTDIR)/modules/tile.so $(OUTDIR)/modules/floatdesk.so
+$(OUTDIR)/test-floatdesk-module: TEST_LDFLAGS += -Wl,--export-dynamic
+$(OBJDIR)/tests/test-floatdesk-module.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+$(OBJDIR)/tests/test-floatdesk-module.o: $(wildcard modules/floatdesk/gowl-floatdesk-state.*)
 # The broadcast config test compiles the shipped C example, which
 # includes <gowl/gowl.h> the way a user's config.c does.
 $(OBJDIR)/tests/test-broadcast-config.o: data/example-broadcast.c

@@ -57,8 +57,16 @@ on_ft_request_activate(struct wl_listener *listener, void *data)
 	GowlClient *c = wl_container_of(listener, c, ft_request_activate);
 	(void)data;
 
-	if (c->compositor != NULL)
-		gowl_compositor_activate_client(c->compositor, c);
+	if (c->compositor == NULL)
+		return;
+	/* A click on a minimized window's taskbar entry restores it; the
+	 * activation policy would otherwise only mark it urgent, since a
+	 * window on no tag is never visible. */
+	if (c->isminimized) {
+		gowl_compositor_unminimize_client(c->compositor, c, NULL, 0);
+		return;
+	}
+	gowl_compositor_activate_client(c->compositor, c);
 }
 
 static void
@@ -85,6 +93,26 @@ on_ft_request_fullscreen(struct wl_listener *listener, void *data)
  * gowl_foreign_toplevel_init:
  * @self: the compositor, during gowl_compositor_start()
  */
+/*
+ * A taskbar asked for the window to be minimized or restored.  Either
+ * way it is a person clicking something, so it is honoured whatever
+ * the workspace is doing; the restore brings the window to where the
+ * user is looking.
+ */
+static void
+on_ft_request_minimize(struct wl_listener *listener, void *data)
+{
+	GowlClient *c = wl_container_of(listener, c, ft_request_minimize);
+	struct wlr_foreign_toplevel_handle_v1_minimized_event *ev = data;
+
+	if (c->compositor == NULL)
+		return;
+	if (ev->minimized)
+		gowl_compositor_minimize_client(c->compositor, c);
+	else
+		gowl_compositor_unminimize_client(c->compositor, c, NULL, 0);
+}
+
 void
 gowl_foreign_toplevel_init(GowlCompositor *self)
 {
@@ -138,6 +166,10 @@ gowl_foreign_toplevel_client_map(
 	c->ft_request_fullscreen.notify = on_ft_request_fullscreen;
 	wl_signal_add(&h->events.request_fullscreen,
 	              &c->ft_request_fullscreen);
+	c->ft_request_minimize.notify = on_ft_request_minimize;
+	wl_signal_add(&h->events.request_minimize, &c->ft_request_minimize);
+	if (c->isminimized)
+		wlr_foreign_toplevel_handle_v1_set_minimized(h, true);
 }
 
 /**
@@ -155,6 +187,7 @@ gowl_foreign_toplevel_client_unmap(GowlClient *c)
 	wl_list_remove(&c->ft_request_activate.link);
 	wl_list_remove(&c->ft_request_close.link);
 	wl_list_remove(&c->ft_request_fullscreen.link);
+	wl_list_remove(&c->ft_request_minimize.link);
 	wlr_foreign_toplevel_handle_v1_destroy(c->foreign_toplevel);
 	c->foreign_toplevel = NULL;
 }

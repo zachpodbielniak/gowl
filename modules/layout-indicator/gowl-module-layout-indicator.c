@@ -44,6 +44,7 @@ static const gchar *label_for(const gchar *name)
  if (g_str_equal(name, "scrolling")) return "Scrolling";
  if (g_str_equal(name, "monocle")) return "Monocle";
  if (g_str_equal(name, "float")) return "Floating";
+ if (g_str_equal(name, "desktop")) return "Floating desktop";
  if (g_str_equal(name, "centeredmaster")) return "Centered master";
  if (g_str_equal(name, "fibonacci")) return "Fibonacci";
  return name;

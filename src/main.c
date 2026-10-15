@@ -235,6 +235,14 @@ static const GowlBuiltinModule builtin_modules[] = {
 		" *   - pertag: per-tag layout state\n"
 	},
 	{
+		"floatdesk",
+		"Floating desktop per workspace: title bars, minimize, snap, dock",
+		"  floatdesk:\n"
+		"    enabled: true\n"
+		"    dock-position: bottom\n",
+		" *   - floatdesk: floating desktop workspaces with a dock\n"
+	},
+	{
 		"scratchpad",
 		"A panel of windows that slides up from the bottom (Super+s)",
 		"  scratchpad:\n"

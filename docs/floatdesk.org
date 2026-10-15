@@ -1,0 +1,400 @@
+* Floating Desktop
+:PROPERTIES:
+:CUSTOM_ID: floatdesk
+:END:
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-overview
+:END:
+A tiling compositor is the wrong tool for some work: a design session with a dozen reference windows, a game launcher with its dialogs, a desktop for somebody who has never used a tiler.  The =floatdesk= module turns individual workspaces (tags) into a /floating desktop/ without giving up tiling anywhere else:
+
+- every window on that workspace floats, and new ones open centred at a sensible size, each cascading from the last one opened --- never as a tile that then shrinks;
+- floating windows get *title bars* in the session palette's colours: minimize, maximize and close on the right, double-click to maximize, drag to move;
+- dropping a window at the left or right edge of the output snaps it to that half, at the top edge maximizes it, and a window's borders resize it;
+- *minimize* moves a window to a hidden workspace and leaves you where you were;
+- *focus follows the click* there, not the pointer;
+- a *dock* along one edge of the output lists pinned and running applications, with an all-apps grid.
+
+Leaving the mode tiles again exactly the windows the mode floated.  A dialog, a window a rule floated, one you floated yourself and a pinned window are all floating for reasons of their own, and stay as they are.
+
+It is modelled on Omarchy's floating layout and dock (omacom/omarchy PRs #14482 and #15263), implemented against gowl's own layout, client and IPC machinery.
+
+*** Turning it on
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-enable
+:END:
+Standalone gowl loads the module only when the config asks for it:
+
+#+begin_src yaml
+modules:
+  floatdesk:
+    enabled: true
+#+end_src
+
+Loading it floats nothing.  Every workspace tiles until one is switched, so enabling the module is safe on any config.  Under =cmacs --gowl= the module is in the default set and bound to keys (see [[#floatdesk-keys][Keys]]).
+
+The mode itself is reached two ways, which are the same transition:
+
+- its own toggle, the =floatdesk-toggle= command, for the workspace in view (or =floatdesk-toggle N= for tag N, in view or not);
+- the layout cycle: the module registers a layout named =desktop= (symbol =[D]=) after every other one, so the usual previous / next layout keys reach it, and =set-layout desktop= does too.  Picking any other layout on a floating workspace leaves the mode.
+
+*** Keys
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-keys
+:END:
+Standalone gowl binds nothing for an opt-in module.  These are the binds cmacs installs; the same lines work in a standalone config:
+
+#+begin_src yaml
+keybinds:
+  - { key: "Super+w",       action: ipc_command, arg: "floatdesk-toggle" }
+  - { key: "Super+n",       action: ipc_command, arg: "floatdesk-minimize" }
+  - { key: "Super+Shift+n", action: ipc_command, arg: "floatdesk-restore" }
+  - { key: "Super+Shift+w", action: ipc_command, arg: "floatdesk-dock-apps" }
+#+end_src
+
+| Key             | Does                                                   |
+|-----------------+--------------------------------------------------------|
+| =Super+w=       | This workspace: floating desktop <-> tiling            |
+| =Super+n=       | Minimize the focused window --- on a floating desktop only |
+| =Super+Shift+n= | Bring back the window minimized last, where you are    |
+| =Super+Shift+w= | Open or close the dock's all-apps grid                 |
+| =Escape=        | Close the grid or a dock menu                          |
+| =Super+< / >=   | The layout cycle, which includes =desktop=             |
+
+=Super+n= on a tiling workspace does nothing (the command answers =ERROR=): a window disappearing from a layout for no visible reason is a puzzle, not a feature.
+
+** The mode
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-mode
+:END:
+*** Per workspace, with a default
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-per-workspace
+:END:
+Each tag has its own setting: /floating/, /tiled/, or /unset/.  An unset tag follows the global default, which is tiled unless =default-floating= (or =floatdesk-default on=) says otherwise.  An explicit setting always wins, so "float every workspace" never overrides a tag you tiled on purpose.
+
+A view of several tags is a floating desktop only when /every/ tag in it floats; a window on several tags floats only when every one of its tags does.  A floating tag viewed together with a tiled one tiles: the tiled tag's windows have to go somewhere, and floating them would be the mode reaching into a workspace it was never turned on for.
+
+The settings are global across outputs: tag 3 floats wherever it is viewed.
+
+*** Ownership: the =mode_floated= flag
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-ownership
+:END:
+Every window the mode floats is marked with =GowlClient.mode_floated= (=gowl_client_get_mode_floated()=).  On leaving the mode, only marked windows are tiled again.  The whole rule is =gowl_floatdesk_state_decide()=:
+
+| Window                                              | On a floating workspace | On a tiling workspace |
+|-----------------------------------------------------+-------------------------+-----------------------|
+| tiled, not marked                                   | float it and mark it    | nothing               |
+| floating and marked                                 | nothing                 | tile it, unmark it    |
+| marked but tiled (you tiled it by hand)             | --- (floated again)     | unmark it             |
+| floating for its own reasons (dialog, rule, pinned) | nothing, never marked   | nothing               |
+| fullscreen, not floating                            | wait: floated when it leaves fullscreen | nothing |
+| minimized, overlay, X11 popup, embedded             | nothing (a minimized window keeps its mark) | nothing |
+
+The flag lives on the client, not in a table the module keeps, because it has to follow the window everywhere a window goes --- to another tag, another output, across a config reload and a monitor unplug --- and die with it.  The compositor never reads it.
+
+When a workspace enters the mode, every window to float is marked in a first pass and only then floated, so floating one cannot change how the next is classified (a group's members were otherwise skipped as "already floating" once their leader had moved).
+
+*** Every way in and out: =pre-arrange=
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-pre-arrange
+:END:
+A window reaches or leaves a workspace in many ways: it maps, it is moved by a tag key, by =move-to-monitor=, by a rule, by a restore from minimize, by an output going away.  Rather than a hook per path, the module does all of its work in the compositor's =pre-arrange= signal, emitted at the start of every =gowl_compositor_arrange()= --- before tag visibility is applied and before the layout runs.  Every one of those paths ends in an arrange, so every one is covered, and a window floated there is floated for the arrange that is happening: the layout never sees it as a tile.
+
+A handler of =pre-arrange= must not arrange (that recurses).  The module uses =gowl_compositor_float_in_place()=, which changes a window's floating state and scene layer without arranging, and =gowl_compositor_place_client()=.
+
+*** The mode, not the layout, is the truth
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-source-of-truth
+:END:
+The layout registry remembers a layout per view, and the mode registers =desktop= there --- but the registry has no idea =desktop= is a mode.  Reading the mode back out of it would lose the previous layout, the default, and every workspace not on screen.  So the module keeps its own state and treats the layout name as a projection of it.  =sync_layout()= reconciles the two at the start of each arrange of an output, by comparing what it finds with what the previous arrange of that output found:
+
+- the layout became =desktop= on the /same/ view: you picked it (the cycle, =set-layout=), so the view enters the mode, remembering the layout it came from;
+- the layout stopped being =desktop= on the same view: you left it, so the view leaves the mode;
+- otherwise the mode decides: a switch onto a floating workspace whose remembered layout is something else (a restart, the default turned on, a tag set while not in view) gets =desktop=; one onto a tiling workspace still showing =desktop= gets its previous layout back --- or the first registered tiling layout when it has none.
+
+*** Persistence
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-persistence
+:END:
+Every change is saved at once to =$XDG_STATE_HOME/gowl/floatdesk.yaml= (=~/.local/state/gowl/floatdesk.yaml=; =$GOWL_FLOATDESK_STATE= or the =state-file= setting point it elsewhere) and read back at startup, when every output is arranged so the modes are back before the first key press.
+
+#+begin_src yaml
+# gowl floating desktop -- written by the floatdesk module; edits are
+# read back at the next start.
+version: 1
+default-floating: false
+tags:
+  - tag: 3
+    mode: floating
+    previous-layout: "tile"
+  - tag: 5
+    mode: tiled
+dock:
+  position: left
+  autohide: true
+  pins:
+    - "firefox"
+    - "org.gnome.Nautilus"
+#+end_src
+
+- Only what was set is written: an unset tag is omitted, so changing the default later still reaches it.
+- =previous-layout= is where the tag goes back to when it stops floating.
+- =dock:= holds what was changed from the dock or its commands at run time; the config's dock settings are the starting point and these win once set.
+- A file that cannot be read --- bad YAML, a =mode= that is neither =floating= nor =tiled=, a =tag= outside 1--32, a newer =version= --- is reported (a warning and a toast) and left alone: the whole load fails, the running state is unchanged, and nothing is written over the file until you change something.
+- A save that fails is reported the same way, loudly; the mode still applies for this session, and the command's reply says =(not saved)=.
+
+The config's =default-floating=, when given, outranks the saved default at every start.  Leave it out to have the run-time switch (=floatdesk-default=) persist.
+
+*** Announcements
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-announcements
+:END:
+A mode change made through the layout --- the toggle on the view, the cycle --- shows the layout indicator's toast ("Floating desktop", or the tiling layout's name).  A change to a tag not in view, or to the default, shows its own ("Tag 3: floating desktop").  There is one toast surface: a new one replaces the one on screen rather than stacking under it, so cycling through layouts quickly shows one toast, not a column of them.
+
+Nothing is announced that did not happen: when the layout cannot be set the state is put back and the command answers =ERROR=.
+
+The module also emits the compositor's =module-event= --- =EVENT floatdesk TEXT= to IPC subscribers --- for every change:
+
+| Text                    | When                              |
+|-------------------------+-----------------------------------|
+| =mode 3 floating=       | tags entered the mode             |
+| =mode 3 tiled=          | tags left it                      |
+| =default floating=      | the default changed               |
+| =dock position left=    | the dock moved                    |
+| =dock autohide on=      | auto-hide changed                 |
+
+Minimize and restore are the core's own =client-minimized= signal (and =EVENT client-minimized ID= / =EVENT client-restored ID=).
+
+** New windows
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-placement
+:END:
+A window that maps onto a floating workspace is floated in the first arrange that sees it, at:
+
+- *size:* =width-pct= x =height-pct= of the output's usable area (0.6 x 0.7 by default), held to the minimum and maximum sizes the client states;
+- *place:* centred for the first window on that output; each next one =cascade= pixels (32) further down and right from the last one opened, back to the centre once that would run off the area.  A window larger than the area is pinned to its top-left corner, so its title bar is reachable.
+
+Because it is placed in the same arrange that floats it, its first configure is already that size --- there is no frame in which it was a tile and squeezed its neighbours.
+
+A window floating for its own reasons when it maps --- a dialog (it has a parent), one a window rule floats, one with a placement hint --- is not claimed and keeps the size its rule or the client chose.  The module marks every mapping window at =client-pre-map= and decides at its first =pre-arrange=, after every rule has had its say.
+
+*** Maximize owns the workspace
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-maximize
+:END:
+A maximized window covers the usable area until another window opens on its workspace; that window's arrival restores it, so nothing opens /behind/ a window covering the whole screen.  The dock hides under a maximized window (see [[#floatdesk-dock-visibility][Visibility]]).
+
+** Title bars
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-titlebars
+:END:
+A floating window on a floating desktop gets a title bar across the top of its frame, drawn only while it floats there.  Colours are the session palette's roles (=surface= for a focused window's bar, =mantle= otherwise, =text= / =subtext= for the title, =red= / =green= / =yellow= for close / maximize / minimize), and the bar's top corners follow a rounded frame's when =roundcorners= is loaded.
+
+| Where / what             | Does                                                     |
+|--------------------------+----------------------------------------------------------|
+| close (right)            | closes the window (=gowl_client_close()=)                |
+| maximize                 | maximize / restore                                       |
+| minimize                 | minimize (as =Super+n=)                                  |
+| title, press and drag    | focus and raise, then move; a maximized or snapped window comes away at its own size, under the pointer |
+| title, double-click      | maximize / restore                                       |
+| title, middle click      | send the window to the back                              |
+| drop at the left / right edge | snap to that half                                   |
+| drop at the top edge     | maximize                                                 |
+| a border, or 6 px outside it | resize from that edge or corner                      |
+
+Snapping remembers the size the window had before, the first time only: snapping left, then right, then maximizing and restoring comes back to the original.  Moving a snapped window by hand drops the memory --- the size it has is now its own.
+
+*** The bar is part of the frame
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-deco-top
+:END:
+The compositor keeps =GowlClient.deco_top= pixels at the top of the frame, inside the border, for a module's decoration (=gowl_client_set_decoration_top()=).  The content is positioned and configured below it: every place that turns a frame into a content box --- the configure size, the surface position, the clip, the X11 configure request, the commit-time size check, the animation module's ghost --- subtracts =GOWL_CLIENT_INSET_TOP(c)= (=deco_top=, or 0 while fullscreen).
+
+Inside the frame, not drawn above it, so that everything reading the frame --- the blur behind a window, its shadow, rounded corners, animations, a capture of the window --- includes the bar without knowing it exists.  The one rule is that all of those places subtract the same amount; a mismatch configures the client to one size, checks it against another, and reconfigures it on every commit.
+
+*** No bar for client-side decorations
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-csd
+:END:
+gowl asks every client that speaks xdg-decoration for server-side decorations.  A Wayland window that never negotiated it draws its own title bar (a GTK4 or libadwaita app), and gets none from the module --- two title bars stacked is worse than one.  X11 windows always get one.
+
+** Minimize
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-minimize
+:END:
+Minimize is the core's (=gowl_compositor_minimize_client()=): the window goes onto no tag --- the hidden workspace a hidden overlay already lives on, where no view shows it and no layout counts it --- with its tags kept for the restore, and the output it was on is refocused on whatever is left there, so the next window opens on the workspace you are looking at.
+
+- The module's =floatdesk-minimize= (and =Super+n=, and the title bar button) refuses a window that is not on a floating desktop.
+- A taskbar speaking wlr-foreign-toplevel can minimize and restore any window (that is a person clicking something); the window is reported minimized to it.
+- =floatdesk-restore= brings back the window minimized last, =floatdesk-restore ID= a given one; a dock click restores an app's minimized window.  It comes back /where you are/, not where it was, focused and raised, with no animation: it simply reappears.
+- Restored onto a floating workspace, it floats there (its mark kept); onto a tiling one, it is tiled.
+- Going to a minimized window any other way (=gowl_compositor_show_client()=) restores it to the tags it came from.
+
+** The dock
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-dock
+:END:
+One dock per output, shown only while that output views a floating workspace.  It is drawn by the compositor (a scene buffer in the TOP layer; its menus and the grid in OVERLAY) rather than being a layer-shell client, because it has to know about minimized windows, workspace modes and maximize state that no protocol carries.
+
+*** Contents
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-dock-contents
+:END:
+1. *Pinned applications*, in order.  A pinned app with no window is drawn faded; one just launched pulses until its first window maps (or 15 seconds pass).
+2. *Running applications* not pinned, in the order their first window appears --- every window of every workspace, grouped by application.  A minimized window always appears, as a ring rather than a dot, whether or not it has a desktop entry.
+3. The *all-apps* button (a 3 x 3 grid of dots), after a separator.
+
+Dots under an icon count its windows (up to three), in the accent colour for the app holding the keyboard.
+
+*** Which application a window is
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-dock-identity
+:END:
+Windows are grouped through a catalog of every installed desktop entry (=g_app_info_get_all()=, so flatpak exports and =~/.local/share/applications= included), resolving a window's app_id (Wayland) or class (X11) in order:
+
+1. a =tui.= prefix (any case) names the entry after it --- see below;
+2. the entry id exactly, then ignoring case;
+3. an entry's =StartupWMClass=, ignoring case;
+4. the last dotted part of either side (=org.gnome.Nautilus= <-> =nautilus=).  Exact parts only: a substring test would let =code= claim =vscode-insiders=.
+
+A window with no entry is still its own application, keyed by its app_id.
+
+*Terminal programs.*  A TUI launched from the dock (an entry with =Terminal=true=) runs in the module's =terminal=, with its app_id set to =tui.<entry id>=: btop is btop in the dock, with btop's icon, not one more terminal window.  The flag that sets it is chosen per terminal --- =--app-id== for foot, =--class= for kitty, alacritty, ghostty and wezterm, =-c= for st and gst --- and an unknown terminal still runs the program (=-e=), grouped with the terminal.  Anything that starts a terminal with app_id =tui.NAME= gets the same identity.
+
+*** Using it
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-dock-input
+:END:
+| Where             | Action        | Does                                              |
+|-------------------+---------------+---------------------------------------------------|
+| app               | left click    | raise and focus its window, restoring it if minimized; an app with no window is launched |
+| app               | left again    | the next window: current workspace first, then minimized, then other workspaces |
+| app               | middle click  | a new window                                      |
+| app               | right click   | Keep in dock / Remove from dock, New window, Quit |
+| app               | drag          | reorder; dragging a running app pins it where it lands |
+| all apps          | left click    | open / close the grid                             |
+| all apps          | right click   | Dock position (bottom, left, right, top), Auto-hide |
+| grid cell         | left click    | launch it                                         |
+| grid cell         | drag          | pin it at the point it is dropped on the dock     |
+| grid cell         | right click   | pin it at the end                                 |
+| grid              | wheel         | scroll                                            |
+| grid, menu        | Escape, click outside | close                                     |
+
+Everything changed from the dock (pins and their order, position, auto-hide) is saved in the state file at once.
+
+*** Visibility
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-dock-visibility
+:END:
+- Only on an output viewing a floating workspace, and not while the session is locked.
+- *Hidden under a fullscreen window* on that view.
+- *Auto-hides under a maximized window* on that view, and always when =dock-autohide= is on: it slides off its edge (160 ms, eased) and slides back in when the pointer touches that edge of the output, staying while the pointer is on it or a menu, the grid or a drag is open.
+
+** Focus follows the click
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-focus
+:END:
+With =sloppyfocus= on, moving the pointer onto a window focuses it --- good among tiles, a hazard among overlapping windows, where crossing one on the way to another hands it the keyboard.  The module implements =GowlFocusPolicy= and refuses hover focus for windows on a floating desktop (=focus-follows-click: true=, the default), so there the keyboard moves on a click.  Tiled workspaces keep sloppy focus.
+
+The core asks every active focus policy through =gowl_module_manager_focus_on_hover()=; any one may refuse.
+
+** Settings
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-settings
+:END:
+All under =modules: floatdesk:=; every one optional, a bad value refused with a warning and the old one kept.
+
+| Key                   | Default  | Meaning                                                    |
+|-----------------------+----------+------------------------------------------------------------|
+| =enabled=             | ---      | Load the module (standalone)                               |
+| =default-floating=    | (state)  | Workspaces with no setting float; outranks the saved default when given |
+| =width-pct=           | =0.6=    | A new window's width, 0.1--1 of the usable area            |
+| =height-pct=          | =0.7=    | A new window's height                                      |
+| =cascade=             | =32=     | Offset of each new window from the last, 0--512 px         |
+| =focus-follows-click= | =true=   | Refuse hover focus on floating desktops                    |
+| =titlebars=           | =true=   | Draw title bars                                            |
+| =titlebar-height=     | =28=     | 16--96 px                                                  |
+| =snap-threshold=      | =6=      | How close to an edge a drop snaps, 1--64 px                |
+| =dock=                | =true=   | Show the dock                                              |
+| =dock-position=       | =bottom= | =bottom=, =left=, =right= or =top=                         |
+| =dock-autohide=       | =false=  | Slide away until the pointer touches the edge              |
+| =dock-icon-size=      | =48=     | 16--128 px                                                 |
+| =pins=                | (none)   | Desktop entry ids, a YAML list (or comma-separated)        |
+| =terminal=            | =foot=   | The terminal TUIs from the dock run in; may carry arguments |
+| =state-file=          | (XDG)    | Where the state is saved                                   |
+
+#+begin_src yaml
+modules:
+  floatdesk:
+    enabled: true
+    width-pct: 0.55
+    titlebar-height: 30
+    dock-position: bottom
+    pins:
+      - firefox
+      - org.gnome.Nautilus
+      - btop
+    terminal: foot
+#+end_src
+
+** Commands
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-commands
+:END:
+Every command is a module word, reached from a keybind (=ipc_command=), the IPC socket (=gowl-msg=), an embedder's =gowl_compositor_run_command()=, and under cmacs from Elisp, D-Bus, =emacsctl= and bacon.  Replies are one line, =OK ...= or =ERROR ...=.
+
+| Command                               | Reply / effect                                      |
+|---------------------------------------+-----------------------------------------------------|
+| =floatdesk-toggle [TAG]=              | the view (or TAG) floats / tiles: =OK tag 3 floating= |
+| =floatdesk-on [TAG]=, =-off [TAG]=    | explicitly                                          |
+| =floatdesk-default on/off/toggle=     | float every unset workspace, or stop                |
+| =floatdesk-status=                    | =OK view=1 view-floating=1 default=0 floating-tags=1,3 tiled-tags=5 minimized=12 dock=bottom autohide=0 pins=firefox state=PATH= |
+| =floatdesk-minimize [ID]=             | the focused window (or client ID)                   |
+| =floatdesk-restore [ID]=              | the window minimized last (or ID)                   |
+| =floatdesk-maximize [ID]=             | toggle                                              |
+| =floatdesk-snap left/right/max [ID]=  | snap                                                |
+| =floatdesk-dock-position POS=         | move the dock; saved                                |
+| =floatdesk-dock-autohide on/off/toggle= | saved                                             |
+| =floatdesk-dock-pin APP [INDEX]=      | pin (or move a pin to INDEX); saved                 |
+| =floatdesk-dock-unpin APP=            | saved                                               |
+| =floatdesk-dock-launch APP=           | start it as the dock would                          |
+| =floatdesk-dock-activate APP=         | what a left click does                              |
+| =floatdesk-dock-apps=                 | open / close the grid                               |
+| =floatdesk-dock-status=               | =OK position=bottom autohide=0 shown=1 items=firefox:1:2:0:0;foot:0:1:1:0= (app:pinned:windows:minimized:launching) |
+
+** Core additions
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-core
+:END:
+The module needed, and the core now offers to any module:
+
+| API                                            | What                                                        |
+|------------------------------------------------+-------------------------------------------------------------|
+| =GowlCompositor::pre-arrange= (monitor)        | start of every arrange, before visibility and the layout    |
+| =GowlCompositor::arranged= (monitor)           | end of every arrange                                        |
+| =GowlCompositor::client-minimized= (client, bool) | minimized / restored                                     |
+| =gowl_compositor_float_in_place()=             | change floating state and layer without arranging           |
+| =gowl_compositor_minimize_client()=, =_unminimize_client()= | the hidden workspace                           |
+| =gowl_compositor_begin_move()=, =_begin_resize()= | start the pointer grabs Super+Button1/3 start            |
+| =gowl_client_get/set_mode_floated()=           | the ownership flag                                          |
+| =gowl_client_get/set_decoration_top()=, =GOWL_CLIENT_INSET_TOP()= | space for a decoration inside the frame  |
+| =gowl_client_get_minimized()=, =_get_minimized_tags()= |                                                     |
+| =gowl_module_manager_focus_on_hover()=         | sloppy focus asks every =GowlFocusPolicy=                   |
+
+A layout entry registered with an arrange function may name a provider that is not a =GowlLayoutProvider= --- the module names itself, so the entry follows its active state.  The three places that call into a provider's layout vtable (overflow, scroll-to-client, scroll) check =GOWL_IS_LAYOUT_PROVIDER()= first; before that check, focusing a window on a =desktop= view dereferenced a NULL interface and took the session down.
+
+** Files and tests
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-files
+:END:
+| File                                    | What                                                  |
+|-----------------------------------------+-------------------------------------------------------|
+| =modules/floatdesk/gowl-floatdesk-state.c= | per-tag modes, the ownership rule, the state file, placement and snap arithmetic --- no compositor |
+| =modules/floatdesk/gowl-floatdesk-apps.c=  | the desktop-entry catalog, identities, terminal launch lines, click cycling |
+| =modules/floatdesk/gowl-module-floatdesk.c= | the module: =pre-arrange=, mode sync, placement, maximize/snap, minimize, commands, settings |
+| =modules/floatdesk/gowl-floatdesk-titlebar.c= | title bars: drawing, hit testing, drag, snap on drop, edge resize |
+| =modules/floatdesk/gowl-floatdesk-dock.c=  | the dock: model, drawing, auto-hide, menus, grid, drag and pin |
+| =tests/test-floatdesk-state.c=           | every decision from plain structs: enter, exit, move in/out, the flag, fullscreen, the file's round trip and its failures, cascade, snap, identity, terminal argv, cycling |
+| =tests/test-floatdesk-module.c=          | the real =floatdesk.so= and =tile.so= in a headless compositor: toggle, layout cycle, moved in/out, the flag following a window, restore at startup, new windows cascading, own-reason floats left alone, minimize/restore, the default, maximize/snap, switching the module off, command errors, dock settings saved, focus policy, the dock's visibility |

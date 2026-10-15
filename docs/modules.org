@@ -179,15 +179,17 @@ struct _GowlClientPlacerInterface {
 :PROPERTIES:
 :CUSTOM_ID: gowlfocuspolicy
 :END:
-Control focus behavior.
+Restrict automatic focus changes.
 
 #+begin_src C
 struct _GowlFocusPolicyInterface {
     GTypeInterface parent_iface;
-    gboolean (*should_focus)  (GowlFocusPolicy *self, gpointer client);
-    void     (*focus_changed) (GowlFocusPolicy *self, gpointer client);
+    gboolean (*focus_on_map)   (GowlFocusPolicy *self, gpointer client);
+    gboolean (*focus_on_hover) (GowlFocusPolicy *self, gpointer client);
 };
 #+end_src
+
+Sloppy focus asks every active policy through =gowl_module_manager_focus_on_hover()= before moving the keyboard to the window under the pointer, and ANY of them may refuse: a policy is a restriction a module adds, so the answer without one is yes and two modules can each veto without knowing of the other.  The floating desktop refuses for windows on a floating workspace, so focus follows the click there.  =focus_on_map= is not consulted yet.
 
 *** GowlMonitorConfigurator
 :PROPERTIES:
@@ -742,6 +744,7 @@ another.
 | =mcp=            | MCP server for AI control (needs an MCP=1 build)      |
 | =inputremap=     | Per-device key/button/wheel remapping (opt-in)        |
 | =macro=          | Crispy C macros run on demand, guarded (opt-in)       |
+| =floatdesk=      | Floating desktop per workspace: title bars, minimize, snap, dock (opt-in) |
 
 *** The inputremap module
 :PROPERTIES:
@@ -774,6 +777,20 @@ Input broadcasting for multiboxing: keys --- and, where a rule asks, clicks --- 
 *Settings:* =toggle-key=, =panic-key=, =start-on=, =strict=, =toast=, =log=, =max-targets=, =timeout-ms=.
 
 *Files:* =gowl-module-broadcast.c= (the GObject half: keys, delivery, IPC, config sync) and =gowl-broadcast-engine.c= (the pure routing decisions, tested directly).  The data model is =src/boxed/gowl-broadcast.c=.  Full reference, including which games allow broadcasting: [[file:broadcast.org][broadcast.org]].
+
+*** The floatdesk module
+:PROPERTIES:
+:CUSTOM_ID: floatdesk-module
+:END:
+Turns individual workspaces into a /floating desktop/: every window on one floats, new windows open centred and cascade, floating windows get title bars (minimize, maximize, close; drag to an edge to snap; borders resize), focus follows the click, minimize hides a window on no tag, and a dock of pinned and running applications sits along one edge.  Leaving the mode tiles again exactly the windows the mode floated (=GowlClient.mode_floated=).  Opt-in: it loads only with =modules: floatdesk: {enabled: true}= (cmacs loads it by default), and even loaded floats nothing until a workspace is switched.
+
+*Interfaces:* =GowlStartupHandler=, =GowlShutdownHandler=, =GowlIpcHandler=, =GowlMouseHandler=, =GowlKeybindHandler=, =GowlFocusPolicy=, =GowlSceneEffect= (=client_placed= only)
+
+*The mode* is per tag, with a global default, saved to =$XDG_STATE_HOME/gowl/floatdesk.yaml=.  It is reached by its own toggle (=floatdesk-toggle=) and by the layout cycle, where the module registers =desktop= after every other layout.  All of its work happens in the compositor's =pre-arrange= signal, which every way of a window reaching or leaving a workspace ends in.
+
+*Settings:* =default-floating=, =width-pct=, =height-pct=, =cascade=, =focus-follows-click=, =titlebars=, =titlebar-height=, =snap-threshold=, =dock=, =dock-position=, =dock-autohide=, =dock-icon-size=, =pins=, =terminal=, =state-file=.
+
+*Files:* =gowl-floatdesk-state.c= (the decisions and the state file, tested directly), =gowl-floatdesk-apps.c= (desktop entries to windows, tested directly), =gowl-module-floatdesk.c=, =gowl-floatdesk-titlebar.c=, =gowl-floatdesk-dock.c=.  Full reference: [[file:floatdesk.org][floatdesk.org]].
 
 *** The macro module
 :PROPERTIES:

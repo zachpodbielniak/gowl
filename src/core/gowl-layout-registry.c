@@ -444,7 +444,11 @@ gowl_layout_allows_overflow(GowlCompositor *self, GowlMonitor *m)
 {
  GowlLayoutEntry *e = gowl_layout_get(self, m);
  GowlLayoutProviderInterface *iface;
- if (e == NULL || e->provider == NULL) return FALSE;
+ /* An entry registered with an arrange function may name a provider
+  * that is only there to make the entry follow a module's active state
+  * (the floating desktop's `desktop'); it has no layout vtable. */
+ if (e == NULL || e->provider == NULL || !GOWL_IS_LAYOUT_PROVIDER(e->provider))
+  return FALSE;
  iface = GOWL_LAYOUT_PROVIDER_GET_IFACE(e->provider);
  return iface->allows_overflow != NULL && iface->allows_overflow(e->provider);
 }

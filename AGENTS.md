@@ -51,6 +51,25 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   every command's reply, focus elsewhere rolling it away, members that
   unmap or are destroyed, strict settings, and switching it off giving
   every window back
+- `test-floatdesk-state` -- The floating desktop's decisions from plain
+  structs, no compositor: per-tag modes against the default, a mask
+  floating only when every tag does, the ownership rule (enter floats and
+  claims tiles, exit gives back ONLY what was claimed, a dialog is never
+  claimed, moved in / moved out, fullscreen waits, minimized keeps its
+  claim), the state file's round trip and every way a bad file fails
+  without touching the running state, cascade placement, edge snapping,
+  desktop-entry identity (`tui.' prefix, StartupWMClass, dotted parts),
+  terminal launch lines and click cycling
+- `test-floatdesk-module` -- The real `floatdesk.so` and `tile.so` in a
+  headless compositor (the window-below rig: fabricated windows,
+  `gowl_compositor_place_client()` interposed): the toggle, the layout
+  cycle entering and leaving, a window moved in and out, the claim
+  following a window, a saved mode restored at startup, new windows
+  centred and cascading, a maximized window giving way, own-reason floats
+  left alone, minimize only on a floating desktop and restore onto either
+  kind, the default, maximize/snap memory, switching the module off giving
+  every window back, the focus policy, dock settings saved, and the dock's
+  visibility
 - `test-compositor-teardown` -- Starts a real compositor (headless backend, pixman renderer, a private runtime dir, systemd off) and finalizes it in a subprocess: wlroots aborts if any listener is still on a signal when its object is destroyed. Then does it again under everything cmacs --gowl loads but the bar and releases the module manager last, once with a shutdown dispatch first and once without: any GLib critical fails it, and a module that disconnects from the dead compositor in `deactivate` prints two
 - `test-gpu-reset` -- Loses a real headless compositor's renderer: the swap
   waits for the event loop, destroys the old renderer and allocator, moves
@@ -372,6 +391,24 @@ tests. These assert invariants no unit test can reach:
 > gives a compositor no window-internal knowledge) -- only the lock screen
 > and an app-id/title deny list. Say so rather than implying otherwise. See
 > `docs/input-recording.org`.
+
+> **The floating desktop works in `pre-arrange`, and its state is the
+> truth.** Every `gowl_compositor_arrange()` emits `pre-arrange` before
+> visibility and the layout; the `floatdesk` module floats and gives back
+> windows there (never arranging -- `gowl_compositor_float_in_place()` and
+> `gowl_compositor_place_client()` only), because every way a window
+> reaches or leaves a workspace ends in an arrange. Which windows it
+> floated is `GowlClient.mode_floated`, on the client so it follows the
+> window across tags, outputs and reloads; leaving the mode tiles ONLY
+> those. Which workspaces float is the module's own state (saved to
+> `$XDG_STATE_HOME/gowl/floatdesk.yaml`), never read back out of the
+> layout registry: `desktop` there is a projection. Title bars live
+> inside the frame (`deco_top`): anything new that turns a frame into a
+> content box must subtract `GOWL_CLIENT_INSET_TOP(c)` like the rest, or
+> configure and commit disagree and the client is reconfigured forever.
+> A layout entry's provider is not always a `GowlLayoutProvider` --
+> check `GOWL_IS_LAYOUT_PROVIDER()` before calling its vtable. See
+> `docs/floatdesk.org`.
 
 > **Route every client close through `gowl_client_close()`, and every focus
 > change through `gowl_compositor_focus_client()`.** An X11 client's

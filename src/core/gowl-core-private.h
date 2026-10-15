@@ -162,6 +162,20 @@
 #define GOWL_CLIENT_PINNED(C) \
 	((C)->issticky && (C)->isfloating && !(C)->isoverlay)
 
+/*
+ * GOWL_CLIENT_INSET_TOP:
+ *
+ * The decoration space at the top of @C's frame that its content starts
+ * below: c->deco_top, except none at all while fullscreen -- a
+ * fullscreen window has no frame to keep space in.  Every place that
+ * turns a frame into a content box (configure size, surface position,
+ * clip, the commit-time size check) has to subtract the SAME amount, or
+ * the client is configured to one size, checked against another, and
+ * reconfigured on every commit.
+ */
+#define GOWL_CLIENT_INSET_TOP(C) \
+	((C)->isfullscreen ? 0 : MAX(0, (C)->deco_top))
+
 #define LISTEN(E, L, H)  wl_signal_add((E), ((L)->notify = (H), (L)))
 
 /**
@@ -951,6 +965,49 @@ struct _GowlClient {
 	 */
 	gboolean isbelow;
 
+	/*
+	 * Floated BY A WORKSPACE MODE rather than for a reason of its own.
+	 *
+	 * The floating-desktop module floats every window on a workspace
+	 * put in that mode, and on leaving it has to tile those windows --
+	 * and only those.  A dialog, a window a rule floated, one the user
+	 * floated by hand and a pinned one are all floating too, for
+	 * reasons that outlive the mode, and re-tiling them would be the
+	 * mode undoing decisions it never made.  So the module marks what
+	 * it floated, here.
+	 *
+	 * On the client and not in a table the module keeps, because the
+	 * flag has to follow the window everywhere a window goes: to another
+	 * tag, to another output, across a config reload and a monitor
+	 * unplug -- and die with it, which a side table keyed by pointer
+	 * gets wrong the first time an address is reused.  The compositor
+	 * never reads it; it only carries it.
+	 */
+	gboolean mode_floated;
+
+	/*
+	 * Pixels at the top of the frame, inside the border, kept for a
+	 * decoration a module draws there -- the floating desktop's title
+	 * bar.  The window's content starts below it, and the size the
+	 * client is configured to is the frame less the border AND this.
+	 *
+	 * Part of the frame (c->geom) rather than drawn above it, so that
+	 * everything that reads the frame -- the blur behind a window, its
+	 * shadow, rounded corners, an animation, a capture of the window --
+	 * includes the title bar without having to know it exists.  Ignored
+	 * while fullscreen; read it through GOWL_CLIENT_INSET_TOP().
+	 */
+	gint     deco_top;
+
+	/*
+	 * Minimized: put on no tag (tags == 0) so no view shows it and no
+	 * layout counts it, the way a hidden overlay is, with the tags it
+	 * came from kept in @minimized_tags for the restore.  An overlay is
+	 * never minimized.  See gowl_compositor_minimize_client().
+	 */
+	gboolean isminimized;
+	guint32  minimized_tags;
+
 	/* The user took this window out of fullscreen by hand.  A client
 	 * that asks to go fullscreen again is refused until the user says
 	 * otherwise -- without this a game re-asserts fullscreen the
@@ -1009,6 +1066,7 @@ struct _GowlClient {
 	struct wl_listener ft_request_activate;
 	struct wl_listener ft_request_close;
 	struct wl_listener ft_request_fullscreen;
+	struct wl_listener ft_request_minimize;
 
 	GowlMonitor    *mon;         /* assigned monitor (unowned) */
 	GowlCompositor *compositor;  /* back-reference (unowned) */

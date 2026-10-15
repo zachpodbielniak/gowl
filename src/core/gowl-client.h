@@ -138,6 +138,61 @@ void           gowl_client_set_sticky         (GowlClient  *self,
  */
 gboolean       gowl_client_is_pinned          (GowlClient  *self);
 
+/**
+ * gowl_client_get_mode_floated:
+ * @self: a #GowlClient
+ *
+ * Returns: %TRUE if a workspace mode (the floating desktop) floated the
+ *   window, rather than it floating for a reason of its own
+ */
+gboolean       gowl_client_get_mode_floated   (GowlClient  *self);
+
+/**
+ * gowl_client_set_mode_floated:
+ * @self: a #GowlClient
+ * @mode_floated: %TRUE when a workspace mode floated @self
+ *
+ * Marks @self as floated by a workspace mode, or clears the mark.  Only
+ * the flag changes; it follows the window across tags, outputs and
+ * config reloads.
+ */
+void           gowl_client_set_mode_floated   (GowlClient  *self,
+                                               gboolean     mode_floated);
+
+/**
+ * gowl_client_get_decoration_top:
+ * @self: a #GowlClient
+ *
+ * Returns: pixels kept at the top of the frame for a decoration
+ */
+gint           gowl_client_get_decoration_top (GowlClient  *self);
+
+/**
+ * gowl_client_set_decoration_top:
+ * @self: a #GowlClient
+ * @pixels: space to keep at the top of the frame, 0 for none
+ *
+ * Stores the space only; re-place the window for the content to move.
+ */
+void           gowl_client_set_decoration_top (GowlClient  *self,
+                                               gint         pixels);
+
+/**
+ * gowl_client_get_minimized:
+ * @self: a #GowlClient
+ *
+ * Returns: %TRUE if the window is minimized
+ */
+gboolean       gowl_client_get_minimized      (GowlClient  *self);
+
+/**
+ * gowl_client_get_minimized_tags:
+ * @self: a #GowlClient
+ *
+ * Returns: the tags a minimized window came from, 0 if not minimized
+ */
+guint32        gowl_client_get_minimized_tags (GowlClient  *self);
+
 /* String accessors */
 const gchar   *gowl_client_get_title          (GowlClient  *self);
 void           gowl_client_set_title          (GowlClient  *self,

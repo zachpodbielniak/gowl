@@ -624,6 +624,112 @@ gowl_client_is_pinned(GowlClient *self)
 }
 
 /**
+ * gowl_client_get_mode_floated:
+ * @self: a #GowlClient
+ *
+ * Whether a workspace mode floated @self -- the floating desktop -- as
+ * opposed to it floating for a reason of its own (a dialog, a rule, the
+ * user).  The compositor only carries the flag; the module that set it
+ * reads it back to know which windows to tile again when the mode ends.
+ *
+ * Returns: %TRUE if a workspace mode floated the window
+ */
+gboolean
+gowl_client_get_mode_floated(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), FALSE);
+
+	return self->mode_floated;
+}
+
+/**
+ * gowl_client_set_mode_floated:
+ * @self: a #GowlClient
+ * @mode_floated: %TRUE when a workspace mode has just floated @self,
+ *   %FALSE when it gives the window back
+ *
+ * Marks or unmarks @self as floated by a workspace mode.  Only the flag
+ * changes: floating and tiling are the caller's to do.  Kept on the
+ * client so it follows the window across tags, outputs and config
+ * reloads and is gone with it.
+ */
+void
+gowl_client_set_mode_floated(
+	GowlClient *self,
+	gboolean    mode_floated
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	self->mode_floated = mode_floated ? TRUE : FALSE;
+}
+
+/**
+ * gowl_client_get_decoration_top:
+ * @self: a #GowlClient
+ *
+ * Returns: the pixels kept at the top of the frame for a module's
+ *   decoration (a title bar), 0 for none
+ */
+gint
+gowl_client_get_decoration_top(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), 0);
+
+	return self->deco_top;
+}
+
+/**
+ * gowl_client_set_decoration_top:
+ * @self: a #GowlClient
+ * @pixels: the space to keep at the top of the frame, 0 for none
+ *
+ * Keeps @pixels at the top of the frame, inside the border, for a
+ * decoration drawn there; the content is configured and placed below
+ * it.  Only the number is stored -- the frame keeps its size, so the
+ * caller re-places the window (gowl_compositor_place_client() with its
+ * current geometry) for the content to move.  Negative values are
+ * taken as 0.
+ */
+void
+gowl_client_set_decoration_top(
+	GowlClient *self,
+	gint        pixels
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	self->deco_top = MAX(0, pixels);
+}
+
+/**
+ * gowl_client_get_minimized:
+ * @self: a #GowlClient
+ *
+ * Returns: %TRUE if the window is minimized (on no tag until restored)
+ */
+gboolean
+gowl_client_get_minimized(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), FALSE);
+
+	return self->isminimized;
+}
+
+/**
+ * gowl_client_get_minimized_tags:
+ * @self: a #GowlClient
+ *
+ * Returns: the tags a minimized window was on when it was minimized, 0
+ *   for a window that is not minimized
+ */
+guint32
+gowl_client_get_minimized_tags(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), 0);
+
+	return self->isminimized ? self->minimized_tags : 0;
+}
+
+/**
  * gowl_client_get_title:
  * @self: a #GowlClient
  *

@@ -3817,6 +3817,37 @@ The scratchpad takes the dropdown's size settings --- =width-pct= and
 between the columns its windows are tiled in. A bad value is refused
 with a warning and the old one kept. See /Scratchpad/ in =modules.org=.
 
+The =floatdesk= module (opt-in) makes individual workspaces floating
+desktops --- every window floats, with title bars, minimize, edge
+snapping and a dock.  Enabled, it still floats nothing until a workspace
+is switched with =floatdesk-toggle= (or picked as =desktop= from the
+layout cycle):
+
+#+begin_src yaml
+modules:
+  floatdesk:
+    enabled: true
+    default-floating: false   # float every workspace not set on its own
+    width-pct: 0.6            # a new window: a fraction of the usable area
+    height-pct: 0.7
+    cascade: 32               # each next window this far down and right
+    focus-follows-click: true # no sloppy focus among overlapping windows
+    titlebars: true
+    titlebar-height: 28
+    snap-threshold: 6         # how close to an edge a drop snaps
+    dock: true
+    dock-position: bottom     # bottom | left | right | top
+    dock-autohide: false
+    dock-icon-size: 48
+    pins: [firefox, org.gnome.Nautilus, btop]
+    terminal: foot            # where TUIs started from the dock run
+#+end_src
+
+Which workspaces float, the dock's pins, position and auto-hide as
+changed at run time are saved in =$XDG_STATE_HOME/gowl/floatdesk.yaml=
+and win over these at the next start (a given =default-floating= still
+outranks the saved default).  See [[file:floatdesk.org][floatdesk.org]].
+
 The =macro= module (opt-in) runs crispy C macros on demand:
 
 #+begin_src yaml

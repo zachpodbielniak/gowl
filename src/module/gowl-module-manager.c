@@ -22,6 +22,7 @@
 #include "interfaces/gowl-layout-provider.h"
 #include "interfaces/gowl-keybind-handler.h"
 #include "interfaces/gowl-mouse-handler.h"
+#include "interfaces/gowl-focus-policy.h"
 #include "interfaces/gowl-gesture-handler.h"
 #include "interfaces/gowl-startup-handler.h"
 #include "interfaces/gowl-shutdown-handler.h"
@@ -69,6 +70,7 @@ struct _GowlModuleManager {
 	GPtrArray *recording_providers;  /* element-type GowlRecordingProvider*  */
 	GPtrArray *input_remappers;      /* element-type GowlInputRemapper*      */
 	GPtrArray *input_observers;      /* element-type GowlInputObserver*      */
+	GPtrArray *focus_policies;       /* element-type GowlFocusPolicy*        */
 };
 
 G_DEFINE_FINAL_TYPE(GowlModuleManager, gowl_module_manager, G_TYPE_OBJECT)
@@ -203,6 +205,7 @@ gowl_module_manager_finalize(GObject *object)
 	g_clear_pointer(&self->recording_providers, g_ptr_array_unref);
 	g_clear_pointer(&self->input_remappers, g_ptr_array_unref);
 	g_clear_pointer(&self->input_observers, g_ptr_array_unref);
+	g_clear_pointer(&self->focus_policies, g_ptr_array_unref);
 	g_clear_pointer(&self->scene_effects, g_ptr_array_unref);
 
 	/* Unref all module instances */
@@ -312,6 +315,7 @@ gowl_module_manager_init(GowlModuleManager *self)
 	self->recording_providers   = g_ptr_array_new();
 	self->input_remappers       = g_ptr_array_new();
 	self->input_observers       = g_ptr_array_new();
+	self->focus_policies        = g_ptr_array_new();
 	self->scene_effects = g_ptr_array_new();
 }
 
@@ -423,6 +427,11 @@ classify_module(
 	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_INPUT_OBSERVER)) {
 		g_ptr_array_add(self->input_observers, (gpointer)mod);
 		sort_dispatch_array(self->input_observers);
+	}
+
+	if (G_TYPE_CHECK_INSTANCE_TYPE(mod, GOWL_TYPE_FOCUS_POLICY)) {
+		g_ptr_array_add(self->focus_policies, (gpointer)mod);
+		sort_dispatch_array(self->focus_policies);
 	}
 }
 
@@ -1712,6 +1721,42 @@ gowl_module_manager_get_input_remapper(GowlModuleManager *self)
 			return mod;
 	}
 	return NULL;
+}
+
+/**
+ * gowl_module_manager_focus_on_hover:
+ * @self: a #GowlModuleManager
+ * @client: the window the pointer just entered
+ *
+ * Whether sloppy focus may move the keyboard to @client.  Every active
+ * #GowlFocusPolicy is asked and ANY of them may refuse: a policy is a
+ * restriction a module adds -- the floating desktop wants focus to
+ * follow clicks on its workspaces, not the pointer -- so the answer
+ * without one is yes, and two modules can each veto without knowing of
+ * the other.
+ *
+ * Returns: %TRUE if hovering @client may focus it
+ */
+gboolean
+gowl_module_manager_focus_on_hover(
+	GowlModuleManager *self,
+	gpointer           client
+){
+	guint i;
+
+	g_return_val_if_fail(GOWL_IS_MODULE_MANAGER(self), TRUE);
+
+	for (i = 0; i < self->focus_policies->len; i++) {
+		GowlFocusPolicy *policy;
+
+		policy = (GowlFocusPolicy *)g_ptr_array_index(
+			self->focus_policies, i);
+		if (!gowl_module_get_is_active(GOWL_MODULE(policy)))
+			continue;
+		if (!gowl_focus_policy_focus_on_hover(policy, client))
+			return FALSE;
+	}
+	return TRUE;
 }
 
 /**

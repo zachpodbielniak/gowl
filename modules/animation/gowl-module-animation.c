@@ -380,7 +380,7 @@ surface_size(GowlClient *c, gint *width, gint *height)
 	struct wlr_surface *surface = gowl_client_get_wlr_surface(c);
 
 	*width = c->geom.width - 2 * (gint)c->bw;
-	*height = c->geom.height - 2 * (gint)c->bw;
+	*height = c->geom.height - 2 * (gint)c->bw - GOWL_CLIENT_INSET_TOP(c);
 	if (c->xdg_toplevel != NULL) {
 		*width = c->xdg_toplevel->base->geometry.width;
 		*height = c->xdg_toplevel->base->geometry.height;
@@ -407,8 +407,10 @@ gowl_animation_surface_at(GowlClient *c, gdouble x, gdouble y,
 	surface_size(c, &width, &height);
 	local_x = (x - cx - c->bw) * width
 		/ MAX(1, gowl_animation_state(c)->anim_cur.width - 2 * (gint)c->bw);
-	local_y = (y - cy - c->bw) * height
-		/ MAX(1, gowl_animation_state(c)->anim_cur.height - 2 * (gint)c->bw);
+	/* The content starts below a module's title bar, if any. */
+	local_y = (y - cy - c->bw - GOWL_CLIENT_INSET_TOP(c)) * height
+		/ MAX(1, gowl_animation_state(c)->anim_cur.height - 2 * (gint)c->bw
+		         - GOWL_CLIENT_INSET_TOP(c));
 	if (c->xdg_toplevel != NULL) {
 		local_x += c->xdg_toplevel->base->geometry.x;
 		local_y += c->xdg_toplevel->base->geometry.y;
@@ -461,7 +463,7 @@ gowl_animation_close_start(GowlCompositor *self, GowlClient *c)
 	vis = gowl_animation_state(c)->anim_active ? gowl_animation_state(c)->anim_cur : c->geom;
 	a = g_new0(GowlCloseAnim, 1);
 	a->w = vis.width - 2 * (gint)c->bw;
-	a->h = vis.height - 2 * (gint)c->bw;
+	a->h = vis.height - 2 * (gint)c->bw - GOWL_CLIENT_INSET_TOP(c);
 	if (gowl_animation_state(c)->anim_ghost != NULL) {
 		/* Transfer exactly the picture currently on screen, including
 		 * a partially completed opening. No flash to a newer buffer. */
@@ -481,7 +483,7 @@ gowl_animation_close_start(GowlCompositor *self, GowlClient *c)
 	/* Convert layout coordinates to the chosen layer's coordinates. */
 	wlr_scene_node_coords(&parent->node, &width, &height);
 	a->x = x - width + (gint)c->bw;
-	a->y = y - height + (gint)c->bw;
+	a->y = y - height + (gint)c->bw + GOWL_CLIENT_INSET_TOP(c);
 	a->mon = c->mon;
 	a->start_us = g_get_monotonic_time();
 	a->dur_us = (gint64)duration * 1000;
@@ -633,7 +635,8 @@ geometry_apply(GowlCompositor *self, GowlClient *c,
 		gowl_scene_snapshot_resize(
 			gowl_animation_state(c)->anim_ghost,
 			MAX(1, box->width - 2 * (gint)c->bw),
-			MAX(1, box->height - 2 * (gint)c->bw));
+			MAX(1, box->height - 2 * (gint)c->bw
+			       - GOWL_CLIENT_INSET_TOP(c)));
 }
 
 /*
@@ -680,7 +683,8 @@ ghost_capture(GowlClient *c)
 	                                        width, height);
 	if (gowl_animation_state(c)->anim_ghost == NULL)
 		return FALSE;
-	wlr_scene_node_set_position(&gowl_animation_state(c)->anim_ghost->tree->node, c->bw, c->bw);
+	wlr_scene_node_set_position(&gowl_animation_state(c)->anim_ghost->tree->node, c->bw,
+	                            (gint)c->bw + GOWL_CLIENT_INSET_TOP(c));
 	gowl_scene_snapshot_set_opacity(gowl_animation_state(c)->anim_ghost, c->alpha * c->effect_alpha);
 	wlr_scene_node_set_enabled(&c->scene_surface->node, FALSE);
 	return TRUE;

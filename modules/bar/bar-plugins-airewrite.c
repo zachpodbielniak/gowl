@@ -199,6 +199,10 @@ typedef struct {
 static void airewrite_paste_tick (AiRewrite *self);
 static void update_label         (AiRewrite *self, GowlBarPlugin *plugin);
 static void choice_ensure        (AiRewrite *self, GowlBarPlugin *plugin);
+static gint diff_rows_paint      (AiRewrite *self, GowlBarPlugin *plugin,
+                                  cairo_t *cr, const GowlBarTheme *theme,
+                                  gint width, gboolean draw);
+static gboolean diff_inline      (GowlBarPlugin *plugin);
 
 static void
 step_free(gpointer data)
@@ -1791,13 +1795,202 @@ diff_height(AiRewrite *self, GowlBarPlugin *plugin, gint panel_width)
 
 	surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
 	cr = cairo_create(surface);
-	layout = diff_layout(self, plugin, cr, theme, panel_width - 2 * pad);
-	pango_layout_get_pixel_size(layout, NULL, &h);
-	g_object_unref(layout);
+	if (diff_inline(plugin)) {
+		layout = diff_layout(self, plugin, cr, theme,
+		                     panel_width - 2 * pad);
+		pango_layout_get_pixel_size(layout, NULL, &h);
+		g_object_unref(layout);
+	} else {
+		h = diff_rows_paint(self, plugin, cr, theme,
+		                    panel_width - 2 * pad, FALSE);
+	}
 	cairo_destroy(cr);
 	cairo_surface_destroy(surface);
 
 	return CLAMP(h + 8, 32, 2400);
+}
+
+
+/*
+ * The diff the way `git diff' (or delta) shows it: every changed line
+ * of the old text on a red row marked `-', every line of the new text
+ * on a green row marked `+', the words that actually changed inside
+ * them on a stronger tint, unchanged lines dimmed around them and long
+ * unchanged stretches folded to one `... N unchanged lines' row.
+ *
+ * One function measures and paints (@cr may be a 1x1 scratch surface
+ * when only the height is wanted, with @draw FALSE), so the canvas is
+ * always exactly as tall as what is drawn in it.
+ *
+ * Colour is not the only signal: the gutter carries the sign.
+ */
+#define DIFF_ROW_PAD_Y     3
+#define DIFF_ROW_PAD_X     8
+#define DIFF_LINE_ALPHA    0.16
+#define DIFF_WORD_ALPHA    0.42
+
+static PangoLayout *
+diff_row_layout(cairo_t *cr, const GowlBarTheme *theme, gint width)
+{
+	PangoLayout *layout;
+	PangoFontDescription *font;
+
+	layout = pango_cairo_create_layout(cr);
+	font = pango_font_description_from_string(
+		(theme != NULL && gowl_bar_theme_get_font(theme) != NULL)
+			? gowl_bar_theme_get_font(theme) : "Sans 11");
+	pango_layout_set_font_description(layout, font);
+	pango_font_description_free(font);
+	pango_layout_set_width(layout, MAX(width, 1) * PANGO_SCALE);
+	pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+	return layout;
+}
+
+static gint
+diff_rows_paint(AiRewrite *self, GowlBarPlugin *plugin, cairo_t *cr,
+                const GowlBarTheme *theme, gint width, gboolean draw)
+{
+	AirewriteStep *top = step_top(self);
+	g_autoptr(GPtrArray) rows = NULL;
+	PangoLayout *layout;
+	gdouble del[4], ins[4], fg[4], muted[4];
+	gint gutter, text_w, y, sign_w = 0, i;
+	guint context;
+
+	if (top == NULL || top->ops == NULL)
+		return 0;
+
+	context = (guint)CLAMP(gowl_bar_plugin_get_setting_int(plugin,
+	                       "diff-context", 2), 0, 50);
+	rows = bar_airewrite_diff_lines(top->ops, context);
+
+	canvas_color(plugin, theme, cr, "color-deleted", GOWL_BAR_COLOR_RED,
+	             del);
+	canvas_color(plugin, theme, cr, "color-inserted", GOWL_BAR_COLOR_GREEN,
+	             ins);
+	canvas_color(plugin, theme, cr, "color-text", GOWL_BAR_COLOR_TEXT, fg);
+	canvas_color(plugin, theme, cr, "color-context", GOWL_BAR_COLOR_MUTED,
+	             muted);
+
+	/* The gutter fits the widest sign, so rows line up. */
+	layout = diff_row_layout(cr, theme, -1);
+	pango_layout_set_width(layout, -1);
+	pango_layout_set_text(layout, "\xe2\x88\x92", -1);
+	pango_layout_get_pixel_size(layout, &sign_w, NULL);
+	g_object_unref(layout);
+	gutter = sign_w + 2 * DIFF_ROW_PAD_X;
+	text_w = MAX(width - gutter - DIFF_ROW_PAD_X, 16);
+
+	if (rows->len == 0) {
+		layout = diff_row_layout(cr, theme, text_w);
+		pango_layout_set_text(layout, "No changes: the text came back"
+		                      " as it went in.", -1);
+		if (draw) {
+			cairo_set_source_rgba(cr, muted[0], muted[1], muted[2],
+			                      muted[3]);
+			cairo_move_to(cr, gutter, DIFF_ROW_PAD_Y);
+			pango_cairo_show_layout(cr, layout);
+		}
+		pango_layout_get_pixel_size(layout, NULL, &y);
+		g_object_unref(layout);
+		return y + 2 * DIFF_ROW_PAD_Y;
+	}
+
+	y = 0;
+	for (i = 0; i < (gint)rows->len; i++) {
+		const BarAirewriteDiffLine *row = g_ptr_array_index(rows, i);
+		const gdouble *c = NULL;
+		PangoAttrList *attrs;
+		gint h, th = 0;
+		guint k;
+
+		layout = diff_row_layout(cr, theme, text_w);
+		attrs = pango_attr_list_new();
+
+		if (row->kind == BAR_AIREWRITE_LINE_GAP) {
+			g_autofree gchar *what = g_strdup_printf(
+				"\xe2\x8b\xaf %u unchanged line%s", row->skipped,
+				row->skipped == 1 ? "" : "s");
+
+			pango_layout_set_text(layout, what, -1);
+			pango_attr_list_insert(attrs,
+				pango_attr_style_new(PANGO_STYLE_ITALIC));
+		} else {
+			if (row->kind == BAR_AIREWRITE_LINE_DELETE)
+				c = del;
+			else if (row->kind == BAR_AIREWRITE_LINE_INSERT)
+				c = ins;
+			/* An empty line still takes a row: a removed blank
+			   line is a change worth seeing. */
+			pango_layout_set_text(layout,
+				row->text[0] != '\0' ? row->text : " ", -1);
+			for (k = 0; c != NULL && k + 1 < row->spans->len;
+			     k += 2) {
+				PangoAttribute *bg, *alpha;
+				guint a = g_array_index(row->spans, guint, k);
+				guint b = g_array_index(row->spans, guint, k + 1);
+
+				bg = pango_attr_background_new(
+					(guint16)(c[0] * 65535.0),
+					(guint16)(c[1] * 65535.0),
+					(guint16)(c[2] * 65535.0));
+				alpha = pango_attr_background_alpha_new(
+					(guint16)(DIFF_WORD_ALPHA * 65535.0));
+				bg->start_index = alpha->start_index = a;
+				bg->end_index = alpha->end_index = b;
+				pango_attr_list_insert(attrs, bg);
+				pango_attr_list_insert(attrs, alpha);
+			}
+		}
+		pango_layout_set_attributes(layout, attrs);
+		pango_attr_list_unref(attrs);
+		pango_layout_get_pixel_size(layout, NULL, &th);
+		h = th + 2 * DIFF_ROW_PAD_Y;
+
+		if (draw) {
+			if (c != NULL) {
+				cairo_set_source_rgba(cr, c[0], c[1], c[2],
+				                      DIFF_LINE_ALPHA * c[3]);
+				cairo_rectangle(cr, 0, y, width, h);
+				cairo_fill(cr);
+
+				/* The sign, in the gutter, full strength. */
+				{
+					PangoLayout *sign;
+
+					sign = diff_row_layout(cr, theme, -1);
+					pango_layout_set_width(sign, -1);
+					pango_layout_set_text(sign,
+						(c == del) ? "\xe2\x88\x92" : "+",
+						-1);
+					cairo_set_source_rgba(cr, c[0], c[1],
+					                      c[2], c[3]);
+					cairo_move_to(cr, DIFF_ROW_PAD_X,
+					              y + DIFF_ROW_PAD_Y);
+					pango_cairo_show_layout(cr, sign);
+					g_object_unref(sign);
+				}
+				cairo_set_source_rgba(cr, fg[0], fg[1], fg[2],
+				                      fg[3]);
+			} else {
+				cairo_set_source_rgba(cr, muted[0], muted[1],
+				                      muted[2], muted[3]);
+			}
+			cairo_move_to(cr, gutter, y + DIFF_ROW_PAD_Y);
+			pango_cairo_show_layout(cr, layout);
+		}
+		g_object_unref(layout);
+		y += h;
+	}
+	return y;
+}
+
+/* `diff-style: inline' (or `lines', the default). */
+static gboolean
+diff_inline(GowlBarPlugin *plugin)
+{
+	return g_strcmp0(setting(plugin, "diff-style", "lines"),
+	                 "inline") == 0;
 }
 
 static void
@@ -1813,6 +2006,19 @@ airewrite_panel_canvas(GowlBarPlugin *plugin, gpointer data,
 	if (self == NULL || g_strcmp0(item_id, "diff") != 0)
 		return;
 
+	if (!diff_inline(plugin)) {
+		gint total;
+
+		/* Rounded like every other well in a panel: measure, clip
+		   to exactly that, then paint. */
+		total = diff_rows_paint(self, plugin, cr, theme, width, FALSE);
+		cairo_save(cr);
+		gowl_bar_cairo_rounded_rect(cr, 0, 0, width, total, 6);
+		cairo_clip(cr);
+		(void)diff_rows_paint(self, plugin, cr, theme, width, TRUE);
+		cairo_restore(cr);
+		return;
+	}
 	canvas_color(plugin, theme, cr, "color-text", GOWL_BAR_COLOR_TEXT, fg);
 	layout = diff_layout(self, plugin, cr, theme, width);
 	cairo_set_source_rgba(cr, fg[0], fg[1], fg[2], fg[3]);
@@ -2042,11 +2248,24 @@ airewrite_panel(GowlBarPlugin *plugin, gpointer data)
 		if (top != NULL)
 			a = bar_airewrite_actions_find_id(self->actions,
 			                                  top->action_id);
-		title = (self->steps->len > 2)
-			? g_strdup_printf("%s (step %u)",
-			                  (a != NULL) ? a->label : "Result",
-			                  self->steps->len - 1)
-			: g_strdup((a != NULL) ? a->label : "Result");
+		{
+			guint nd = 0, ni = 0;
+			g_autofree gchar *base = NULL;
+
+			base = (self->steps->len > 2)
+				? g_strdup_printf("%s (step %u)",
+				                  (a != NULL) ? a->label : "Result",
+				                  self->steps->len - 1)
+				: g_strdup((a != NULL) ? a->label : "Result");
+			/* `-3 +5', the words each side changed, as a diff
+			   stat reads. */
+			if (top != NULL)
+				bar_airewrite_diff_counts(top->ops, &nd, &ni);
+			title = (nd + ni > 0)
+				? g_strdup_printf("%s   \xe2\x88\x92%u +%u", base,
+				                  nd, ni)
+				: g_steal_pointer(&base);
+		}
 		gowl_bar_panel_add_section(panel, title);
 		gowl_bar_panel_add_canvas(panel, "diff",
 		                          diff_height(self, plugin, width));

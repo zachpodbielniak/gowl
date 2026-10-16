@@ -12,7 +12,7 @@ Select text in any window --- a browser field, a mail composer, a terminal, an E
 
 - *Capture.* The text is the Wayland PRIMARY selection (what you highlighted). If nothing is highlighted the clipboard is used instead, and the panel says so. If both are empty the panel offers a text field to type or paste into; a result made from typed text goes to the clipboard only, because there is nothing to paste over.
 - *Actions.* A list of things to do, each with a one-letter key: by default Fix spelling & grammar (=f=), Improve (=i=), Shorten (=s=), Translate to English (=e=) and Custom (=c=, which asks for an instruction). Add your own in a YAML file; under cmacs the list is the right-click AI menu's.
-- *Preview.* The answer is shown as a word-level diff: deleted words struck through in red, inserted words underlined in green.
+- *Preview.* The answer is shown as a git-style diff: each changed line of your text on a red row marked =−=, the rewritten line on a green row marked =+=, and inside them the words that actually changed on a stronger tint; unchanged lines are dimmed around them and long unchanged stretches are folded. The heading counts the words each side changed (=−3 +5=).
 - *Chain.* Any action can be applied to the result, and again to that result; =Backspace= walks back one step at a time.
 - *Paste back.* =Enter= (or =v=) puts the result on the clipboard, closes the panel, puts the keyboard back on the window the text came from and types its paste chord into it --- =Ctrl+V=, or =Ctrl+Shift+V= in a terminal. Then the clipboard is restored. =y= only copies.
 
@@ -105,9 +105,12 @@ Every key is set as =ai-rewrite.<key>= (or =bottom-ai-rewrite.<key>= in the bott
 | =label=               | string    | =✎=                           | The bar glyph |
 | =show-in-bar=         | bool      | =true=                        | =false= hides the widget from the bar; the keybind still opens it |
 | =color=               | colour    | =text= (=peach= while asking) | The bar glyph's colour |
-| =color-deleted=       | colour    | =red=                         | Deleted words in the diff |
-| =color-inserted=      | colour    | =green=                       | Inserted words in the diff |
-| =color-text=          | colour    | =text=                        | Unchanged words in the diff |
+| =color-deleted=       | colour    | =red=                         | The diff's removed (=−=) rows and words |
+| =color-inserted=      | colour    | =green=                       | The diff's added (=+=) rows and words |
+| =color-text=          | colour    | =text=                        | Text on the changed rows |
+| =color-context=       | colour    | =muted=                       | Unchanged lines shown for context, and the fold rows |
+| =diff-style=          | string    | =lines=                       | =lines=: the git-style diff; =inline=: one run of text with deleted words struck through and inserted ones underlined |
+| =diff-context=        | int       | =2=                           | Unchanged lines kept around each change (0--50); longer unchanged runs fold to "⋯ N unchanged lines" |
 | =color-key=           | role      | =accent=                      | The action rows' key letter |
 | =ai-backend=          | string    | =auto=                        | Shared AI setting --- [[file:../bar.org::#plugin-ai][Asking a language model]] |
 | =ai-provider=         | string    | (default)                     | Shared AI setting |
@@ -188,9 +191,10 @@ Every field has =\=, tab, newline and carriage return escaped as =\\=, =\t=, =\n
 | Key              | Role default | Applies to |
 |------------------+--------------+------------|
 | =color=          | =text= (=peach= while the model is answering) | The bar glyph |
-| =color-deleted=  | =red=        | Deleted words: also struck through |
-| =color-inserted= | =green=      | Inserted words: also underlined |
-| =color-text=     | =text=       | Unchanged words |
+| =color-deleted=  | =red=        | Removed rows (a light tint) and the removed words in them (a stronger one), the =−= sign |
+| =color-inserted= | =green=      | Added rows and words, the =+= sign |
+| =color-text=     | =text=       | Text on the changed rows |
+| =color-context=  | =muted=      | Unchanged context lines and folds |
 | =color-key=      | =accent=     | The key letter of each action row |
 
 Each accepts a palette role name (=mauve=, =peach=, =sapphire=, ...) or a =#rrggbb= literal. A role follows the palette: switch the bar from Mocha to Latte and the diff follows. A literal stays exactly that colour. The exception is =color-key=: panel rows are drawn by the bar from a role, so a literal there falls back to =accent=; the diff and the bar glyph take either.
@@ -203,7 +207,7 @@ modules:
     ai-rewrite.color-key: mauve
 #+end_src
 
-Colour is never the only signal in the diff: deleted text is struck through and inserted text underlined, so it reads without telling red from green.
+Colour is never the only signal in the diff: every removed row carries a =−= and every added one a =+= in the gutter, and the old line always sits above the new one, so it reads without telling red from green. (With =diff-style: inline=, deleted text is struck through and inserted text underlined.)
 
 * Choosing the provider and model
 

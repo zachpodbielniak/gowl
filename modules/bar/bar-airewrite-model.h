@@ -329,6 +329,73 @@ GPtrArray *bar_airewrite_diff (const gchar *before,
  */
 gchar *bar_airewrite_diff_to_string (GPtrArray *ops);
 
+/**
+ * BarAirewriteLineKind:
+ * @BAR_AIREWRITE_LINE_CONTEXT: an unchanged line, shown for context
+ * @BAR_AIREWRITE_LINE_DELETE: a line of the old text (`-')
+ * @BAR_AIREWRITE_LINE_INSERT: a line of the new text (`+')
+ * @BAR_AIREWRITE_LINE_GAP: unchanged lines folded away; see @skipped
+ *
+ * One row of a unified, git-style diff.
+ */
+typedef enum {
+	BAR_AIREWRITE_LINE_CONTEXT = 0,
+	BAR_AIREWRITE_LINE_DELETE,
+	BAR_AIREWRITE_LINE_INSERT,
+	BAR_AIREWRITE_LINE_GAP
+} BarAirewriteLineKind;
+
+/**
+ * BarAirewriteDiffLine:
+ * @kind: what the row is
+ * @text: the line, without its newline (empty for a gap)
+ * @spans: (element-type guint): byte offsets into @text, in pairs
+ *   (start, end), of the words that changed --- what a delete or
+ *   insert row highlights more strongly than the rest of the line
+ * @skipped: for a gap, how many unchanged lines it stands for
+ */
+typedef struct {
+	BarAirewriteLineKind  kind;
+	gchar                *text;
+	GArray               *spans;
+	guint                 skipped;
+} BarAirewriteDiffLine;
+
+void bar_airewrite_diff_line_free (BarAirewriteDiffLine *line);
+
+/**
+ * bar_airewrite_diff_lines:
+ * @ops: (element-type BarAirewriteDiffOp): a word diff from
+ *   bar_airewrite_diff()
+ * @context: unchanged lines to keep around each change
+ *
+ * The word diff as a unified, line-by-line diff: the old and new texts
+ * are rebuilt from @ops, split into lines and matched line by line; an
+ * unchanged line is CONTEXT, a changed stretch is every old line as
+ * DELETE then every new line as INSERT (the way `git diff' reads), and
+ * each changed row carries the byte spans of the words that changed in
+ * it.  Unchanged runs longer than 2 * @context + 1 are folded into a
+ * GAP.  Identical texts give an empty array.
+ *
+ * Returns: (transfer full) (element-type BarAirewriteDiffLine): rows
+ */
+GPtrArray *bar_airewrite_diff_lines (GPtrArray *ops,
+                                     guint      context);
+
+/**
+ * bar_airewrite_diff_counts:
+ * @ops: (element-type BarAirewriteDiffOp): a word diff
+ * @deleted: (out): words deleted
+ * @inserted: (out): words inserted
+ *
+ * Counts the word tokens (runs of letters and digits; spacing and
+ * punctuation are not counted) each side changed, for a `-3 +5'
+ * summary.
+ */
+void bar_airewrite_diff_counts (GPtrArray *ops,
+                                guint     *deleted,
+                                guint     *inserted);
+
 /* --- Pasting -------------------------------------------------------- */
 
 /**

@@ -1473,3 +1473,305 @@ bar_airewrite_split_names(const gchar *list)
 	g_ptr_array_add(out, NULL);
 	return (gchar **)g_ptr_array_free(out, FALSE);
 }
+
+/* ----------------------------------------------------------------
+ * Unified (git-style) diff rows
+ * ---------------------------------------------------------------- */
+
+void
+bar_airewrite_diff_line_free(BarAirewriteDiffLine *line)
+{
+	if (line == NULL)
+		return;
+	g_free(line->text);
+	if (line->spans != NULL)
+		g_array_unref(line->spans);
+	g_free(line);
+}
+
+/* One side of the diff, split into lines, each with its changed spans. */
+typedef struct {
+	gchar  *text;
+	GArray *spans;     /* guint pairs, offsets into text */
+} SideLine;
+
+static void
+side_line_clear(gpointer data)
+{
+	SideLine *l = data;
+
+	g_free(l->text);
+	if (l->spans != NULL)
+		g_array_unref(l->spans);
+}
+
+/*
+ * Rebuild one side (@want = DELETE for the old text, INSERT for the
+ * new) from the ops, and cut it at newlines.  A changed op that crosses
+ * a newline is split with it, so each line knows which of ITS bytes
+ * changed.  A newline itself is never a span: there is nothing to see.
+ */
+static GArray *
+side_lines(GPtrArray *ops, BarAirewriteDiffKind want)
+{
+	GArray *lines;
+	GString *cur;
+	GArray *spans;
+	guint i;
+
+	lines = g_array_new(FALSE, TRUE, sizeof(SideLine));
+	g_array_set_clear_func(lines, side_line_clear);
+	cur = g_string_new(NULL);
+	spans = g_array_new(FALSE, FALSE, sizeof(guint));
+
+	for (i = 0; i < ops->len; i++) {
+		const BarAirewriteDiffOp *op = g_ptr_array_index(ops, i);
+		gboolean changed;
+		const gchar *p;
+
+		if (op->kind != BAR_AIREWRITE_DIFF_EQUAL && op->kind != want)
+			continue;
+		changed = (op->kind == want);
+
+		for (p = op->text; *p != '\0'; ) {
+			const gchar *nl = strchr(p, '\n');
+			gsize len = (nl != NULL) ? (gsize)(nl - p) : strlen(p);
+
+			if (len > 0) {
+				if (changed) {
+					guint a = (guint)cur->len;
+					guint b = (guint)(cur->len + len);
+
+					g_array_append_val(spans, a);
+					g_array_append_val(spans, b);
+				}
+				g_string_append_len(cur, p, (gssize)len);
+			}
+			if (nl == NULL)
+				break;
+			{
+				SideLine l;
+
+				l.text = g_string_free(cur, FALSE);
+				l.spans = spans;
+				g_array_append_val(lines, l);
+				cur = g_string_new(NULL);
+				spans = g_array_new(FALSE, FALSE, sizeof(guint));
+			}
+			p = nl + 1;
+		}
+	}
+
+	/* The last line, unless the text ended with its newline. */
+	if (cur->len > 0 || spans->len > 0 || lines->len == 0) {
+		SideLine l;
+
+		l.text = g_string_free(cur, FALSE);
+		l.spans = spans;
+		g_array_append_val(lines, l);
+	} else {
+		g_string_free(cur, TRUE);
+		g_array_unref(spans);
+	}
+	return lines;
+}
+
+static BarAirewriteDiffLine *
+row_new(BarAirewriteLineKind kind, const SideLine *from)
+{
+	BarAirewriteDiffLine *row;
+
+	row = g_new0(BarAirewriteDiffLine, 1);
+	row->kind = kind;
+	row->text = g_strdup((from != NULL) ? from->text : "");
+	row->spans = g_array_new(FALSE, FALSE, sizeof(guint));
+	if (from != NULL && from->spans != NULL && from->spans->len > 0)
+		g_array_append_vals(row->spans, from->spans->data,
+		                    from->spans->len);
+	return row;
+}
+
+/* Lines are compared whole, and a line with a changed span is never
+   "the same" as another: its words moved even if its text did not. */
+static gboolean
+side_line_same(const SideLine *a, const SideLine *b)
+{
+	return a->spans->len == 0 && b->spans->len == 0 &&
+	       strcmp(a->text, b->text) == 0;
+}
+
+GPtrArray *
+bar_airewrite_diff_lines(GPtrArray *ops, guint context)
+{
+	g_autoptr(GArray) old_l = NULL;
+	g_autoptr(GArray) new_l = NULL;
+	GPtrArray *full, *out;
+	guint n, m, i, j;
+	guint *lcs = NULL;
+	gboolean any_change = FALSE;
+	gboolean fits;
+
+	out = g_ptr_array_new_with_free_func(
+		(GDestroyNotify)bar_airewrite_diff_line_free);
+	if (ops == NULL)
+		return out;
+
+	old_l = side_lines(ops, BAR_AIREWRITE_DIFF_DELETE);
+	new_l = side_lines(ops, BAR_AIREWRITE_DIFF_INSERT);
+	n = old_l->len;
+	m = new_l->len;
+
+	/* Line LCS.  Texts are short (a selection), but a pasted document
+	   must not cost a gigabyte: past a million cells every line is
+	   simply replaced. */
+	fits = ((guint64)(n + 1) * (guint64)(m + 1) <= 1000000);
+	if (fits) {
+		lcs = g_new0(guint, (gsize)(n + 1) * (m + 1));
+		for (i = n; i-- > 0; ) {
+			for (j = m; j-- > 0; ) {
+				guint *cell = &lcs[i * (m + 1) + j];
+
+				if (side_line_same(&g_array_index(old_l, SideLine, i),
+				                   &g_array_index(new_l, SideLine, j)))
+					*cell = lcs[(i + 1) * (m + 1) + j + 1] + 1;
+				else
+					*cell = MAX(lcs[(i + 1) * (m + 1) + j],
+					            lcs[i * (m + 1) + j + 1]);
+			}
+		}
+	}
+
+	/* Walk: equal lines are context; between two of them every old
+	   line is a delete and then every new line an insert. */
+	/* Owns nothing: every row ends up in @out or is freed below. */
+	full = g_ptr_array_new();
+	i = 0;
+	j = 0;
+	while (i < n || j < m) {
+		guint di = i, dj = j;
+
+		if (fits && i < n && j < m &&
+		    side_line_same(&g_array_index(old_l, SideLine, i),
+		                   &g_array_index(new_l, SideLine, j))) {
+			g_ptr_array_add(full, row_new(BAR_AIREWRITE_LINE_CONTEXT,
+				&g_array_index(old_l, SideLine, i)));
+			i++;
+			j++;
+			continue;
+		}
+		/* Find the end of this changed block. */
+		if (fits) {
+			while (di < n || dj < m) {
+				if (di < n && dj < m &&
+				    side_line_same(&g_array_index(old_l, SideLine, di),
+				                   &g_array_index(new_l, SideLine, dj)) &&
+				    lcs[di * (m + 1) + dj] ==
+				    lcs[(di + 1) * (m + 1) + dj + 1] + 1)
+					break;
+				if (dj >= m || (di < n &&
+				    lcs[(di + 1) * (m + 1) + dj] >=
+				    lcs[di * (m + 1) + dj + 1]))
+					di++;
+				else
+					dj++;
+			}
+		} else {
+			di = n;
+			dj = m;
+		}
+		for (; i < di; i++)
+			g_ptr_array_add(full, row_new(BAR_AIREWRITE_LINE_DELETE,
+				&g_array_index(old_l, SideLine, i)));
+		for (; j < dj; j++)
+			g_ptr_array_add(full, row_new(BAR_AIREWRITE_LINE_INSERT,
+				&g_array_index(new_l, SideLine, j)));
+		any_change = TRUE;
+	}
+	g_free(lcs);
+
+	if (!any_change) {
+		g_ptr_array_set_free_func(full,
+			(GDestroyNotify)bar_airewrite_diff_line_free);
+		g_ptr_array_unref(full);
+		return out;
+	}
+
+	/* Fold long unchanged runs, keeping @context lines next to each
+	   change (none before the first, none after the last). */
+	for (i = 0; i < full->len; ) {
+		BarAirewriteDiffLine *row = g_ptr_array_index(full, i);
+		guint run_end, run_len, keep_head, keep_tail, k;
+
+		if (row->kind != BAR_AIREWRITE_LINE_CONTEXT) {
+			g_ptr_array_add(out, row);
+			i++;
+			continue;
+		}
+		for (run_end = i; run_end < full->len; run_end++) {
+			BarAirewriteDiffLine *r = g_ptr_array_index(full, run_end);
+
+			if (r->kind != BAR_AIREWRITE_LINE_CONTEXT)
+				break;
+		}
+		run_len   = run_end - i;
+		keep_head = (i == 0) ? 0 : context;
+		keep_tail = (run_end == full->len) ? 0 : context;
+		if (keep_head + keep_tail + 1 >= run_len) {
+			/* Folding would save at most one line: show them. */
+			for (k = 0; k < run_len; k++)
+				g_ptr_array_add(out,
+					g_ptr_array_index(full, i + k));
+		} else {
+			BarAirewriteDiffLine *gap;
+
+			for (k = 0; k < keep_head; k++)
+				g_ptr_array_add(out,
+					g_ptr_array_index(full, i + k));
+			gap = g_new0(BarAirewriteDiffLine, 1);
+			gap->kind    = BAR_AIREWRITE_LINE_GAP;
+			gap->text    = g_strdup("");
+			gap->spans   = g_array_new(FALSE, FALSE, sizeof(guint));
+			gap->skipped = run_len - keep_head - keep_tail;
+			g_ptr_array_add(out, gap);
+			for (k = keep_head; k < run_len - keep_tail; k++)
+				bar_airewrite_diff_line_free(
+					g_ptr_array_index(full, i + k));
+			for (k = run_len - keep_tail; k < run_len; k++)
+				g_ptr_array_add(out,
+					g_ptr_array_index(full, i + k));
+		}
+		i = run_end;
+	}
+	g_ptr_array_unref(full);
+	return out;
+}
+
+void
+bar_airewrite_diff_counts(GPtrArray *ops, guint *deleted, guint *inserted)
+{
+	guint i;
+
+	*deleted = 0;
+	*inserted = 0;
+	if (ops == NULL)
+		return;
+	for (i = 0; i < ops->len; i++) {
+		const BarAirewriteDiffOp *op = g_ptr_array_index(ops, i);
+		g_autoptr(GPtrArray) toks = NULL;
+		guint t, words = 0;
+
+		if (op->kind == BAR_AIREWRITE_DIFF_EQUAL)
+			continue;
+		toks = bar_airewrite_tokenize(op->text);
+		for (t = 0; t < toks->len; t++) {
+			const gchar *tok = g_ptr_array_index(toks, t);
+
+			if (g_unichar_isalnum(g_utf8_get_char(tok)))
+				words++;
+		}
+		if (op->kind == BAR_AIREWRITE_DIFF_DELETE)
+			*deleted += words;
+		else
+			*inserted += words;
+	}
+}

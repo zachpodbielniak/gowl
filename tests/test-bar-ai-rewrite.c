@@ -1746,8 +1746,21 @@ test_auto_paste(void)
 
 /* ── Colour ───────────────────────────────────────────────────────── */
 
+/*
+ * What a person sees: the canvas composited over an opaque dark panel,
+ * then every pixel whose red (green) clearly dominates is counted, with
+ * the first row it appears on, and the strongest red (green) seen --- a
+ * changed WORD is tinted harder than its line.
+ */
+typedef struct {
+	guint   red, green;
+	gint    red_y, green_y;     /* first row, -1 for none */
+	guint   red_max, green_max; /* strongest dominance seen */
+	guint   red_line;           /* a typical (median-ish) red */
+} Colours;
+
 static void
-count_colours(cairo_surface_t *s, guint *red, guint *green)
+count_colours(cairo_surface_t *s, Colours *c)
 {
 	guchar *data;
 	gint x, y, w, hh, stride;
@@ -1757,24 +1770,156 @@ count_colours(cairo_surface_t *s, guint *red, guint *green)
 	w = cairo_image_surface_get_width(s);
 	hh = cairo_image_surface_get_height(s);
 	stride = cairo_image_surface_get_stride(s);
-	*red = *green = 0;
+	memset(c, 0, sizeof(*c));
+	c->red_y = c->green_y = -1;
 	for (y = 0; y < hh; y++) {
 		for (x = 0; x < w; x++) {
 			guint32 px = *(guint32 *)(data + y * stride + x * 4);
-			gdouble a = (gdouble)((px >> 24) & 0xff);
-			gdouble rr, gg, bb;
+			gint rr = (gint)((px >> 16) & 0xff);
+			gint gg = (gint)((px >> 8) & 0xff);
+			gint bb = (gint)(px & 0xff);
 
-			if (a < 160)
-				continue;
-			rr = ((px >> 16) & 0xff) / a;
-			gg = ((px >> 8) & 0xff) / a;
-			bb = (px & 0xff) / a;
-			if (rr > 0.8 && gg < 0.25 && bb < 0.25)
-				(*red)++;
-			if (gg > 0.8 && rr < 0.25 && bb < 0.25)
-				(*green)++;
+			if (rr > gg + 25 && rr > bb + 25) {
+				c->red++;
+				if (c->red_y < 0)
+					c->red_y = y;
+				c->red_max = MAX(c->red_max, (guint)(rr - gg));
+				if (x == w - 4)
+					c->red_line = (guint)(rr - gg);
+			}
+			if (gg > rr + 25 && gg > bb + 25) {
+				c->green++;
+				if (c->green_y < 0)
+					c->green_y = y;
+				c->green_max = MAX(c->green_max, (guint)(gg - rr));
+			}
 		}
 	}
+}
+
+/* The canvas over an opaque panel background, like the real panel. */
+static cairo_surface_t *
+paint_diff(Rig *r, gint w, gint h)
+{
+	cairo_surface_t *s;
+	cairo_t *cr;
+
+	s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+	cr = cairo_create(s);
+	cairo_set_source_rgb(cr, 0.12, 0.12, 0.16);
+	cairo_paint(cr);
+	gowl_bar_plugin_panel_canvas(r->h.plugin, "diff", cr,
+	                             r->h.host->theme, w, h);
+	cairo_destroy(cr);
+	return s;
+}
+
+
+/* ── The unified (git-style) rows ────────────────────────────────── */
+
+typedef GPtrArray *(*LinesFn)  (GPtrArray *, guint);
+typedef void       (*CountsFn) (GPtrArray *, guint *, guint *);
+
+/* Render rows as `-text' / `+text' / ` text' / `@N', changed spans in
+   [brackets], for compact assertions. */
+static gchar *
+rows_str(GPtrArray *rows)
+{
+	GString *out = g_string_new(NULL);
+	guint i, k;
+
+	for (i = 0; i < rows->len; i++) {
+		const BarAirewriteDiffLine *row = g_ptr_array_index(rows, i);
+		const gchar *t = row->text;
+		guint pos = 0;
+
+		switch (row->kind) {
+		case BAR_AIREWRITE_LINE_DELETE:  g_string_append_c(out, '-'); break;
+		case BAR_AIREWRITE_LINE_INSERT:  g_string_append_c(out, '+'); break;
+		case BAR_AIREWRITE_LINE_CONTEXT: g_string_append_c(out, ' '); break;
+		case BAR_AIREWRITE_LINE_GAP:
+		default:
+			g_string_append_printf(out, "@%u\n", row->skipped);
+			continue;
+		}
+		for (k = 0; k + 1 < row->spans->len; k += 2) {
+			guint a = g_array_index(row->spans, guint, k);
+			guint b = g_array_index(row->spans, guint, k + 1);
+
+			g_assert_cmpuint(a, <, b);
+			g_assert_cmpuint(b, <=, (guint)strlen(t));
+			/* Spans sit on character boundaries. */
+			g_assert_true(g_utf8_validate(t + a, (gssize)(b - a), NULL));
+			g_string_append_len(out, t + pos, (gssize)(a - pos));
+			g_string_append_c(out, '[');
+			g_string_append_len(out, t + a, (gssize)(b - a));
+			g_string_append_c(out, ']');
+			pos = b;
+		}
+		g_string_append(out, t + pos);
+		g_string_append_c(out, '\n');
+	}
+	return g_string_free(out, FALSE);
+}
+
+/* Catches: the git-style view being anything but old-then-new per
+   changed line, changed words not marked, context not kept, long
+   unchanged runs not folded, and an empty diff drawing rows. */
+static void
+test_diff_rows(void)
+{
+	BarHarness h;
+	Api api;
+	LinesFn lines;
+	CountsFn counts;
+	struct { const gchar *before, *after; guint ctx; const gchar *want; } cases[] = {
+		/* One line, one word fixed. */
+		{ "Teh cat sat.", "The cat sat.", 2,
+		  "-[Teh] cat sat.\n+[The] cat sat.\n" },
+		/* Several lines; only the middle one changed; context 1. */
+		{ "one\ntwo\nthree\nfour\nfive\nsix\nseven",
+		  "one\ntwo\nthree\nfour\nfive\nSIX\nseven", 1,
+		  "@4\n five\n-[six]\n+[SIX]\n seven\n" },
+		/* A line added at the end. */
+		{ "alpha\nbeta", "alpha\nbeta\ngamma", 3,
+		  " alpha\n beta\n+[gamma]\n" },
+		/* A line removed. */
+		{ "keep\ndrop me\nkeep too", "keep\nkeep too", 3,
+		  " keep\n-[drop me]\n keep too\n" },
+		/* Unicode stays whole. */
+		{ "caf\xc3\xa9 ok", "caf\xc3\xa8 ok", 0,
+		  "-[caf\xc3\xa9] ok\n+[caf\xc3\xa8] ok\n" },
+		/* Identical: nothing to show. */
+		{ "same\ntext", "same\ntext", 2, "" },
+	};
+	guint i, nd, ni;
+
+	if (!model_up(&h, &api))
+		return;
+	lines  = bar_harness_sym(&h, "bar_airewrite_diff_lines");
+	counts = bar_harness_sym(&h, "bar_airewrite_diff_counts");
+	g_assert_nonnull(lines);
+	g_assert_nonnull(counts);
+
+	for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+		g_autoptr(GPtrArray) ops = api.diff(cases[i].before,
+		                                    cases[i].after);
+		g_autoptr(GPtrArray) rows = lines(ops, cases[i].ctx);
+		g_autofree gchar *got = rows_str(rows);
+
+		g_test_message("case %u", i);
+		g_assert_cmpstr(got, ==, cases[i].want);
+	}
+
+	/* `-2 +3' words: punctuation and spacing are not words. */
+	{
+		g_autoptr(GPtrArray) ops = api.diff("Teh quick, fox.",
+		                                    "The very quick fox!");
+		counts(ops, &nd, &ni);
+		g_assert_cmpuint(nd, ==, 1);
+		g_assert_cmpuint(ni, ==, 2);
+	}
+	bar_harness_down(&h);
 }
 
 /* Catches: the per-widget colour settings being ignored (a user's
@@ -1785,8 +1930,7 @@ test_colour_settings(void)
 {
 	Rig r;
 	cairo_surface_t *s;
-	cairo_t *cr;
-	guint red = 0, green = 0;
+	Colours col;
 	g_autoptr(GowlBarPanel) p = NULL;
 	GowlBarPanelItem *row;
 
@@ -1799,15 +1943,54 @@ test_colour_settings(void)
 	g_assert_true(key(&r, XKB_KEY_f, 0));
 	cmacs_answers(&r, "done", "HHHH MMMM");
 
-	s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 500, 120);
-	cr = cairo_create(s);
-	gowl_bar_plugin_panel_canvas(r.h.plugin, "diff", cr,
-	                             r.h.host->theme, 500, 120);
-	cairo_destroy(cr);
-	count_colours(s, &red, &green);
+	s = paint_diff(&r, 500, 120);
+	count_colours(s, &col);
 	cairo_surface_destroy(s);
-	g_assert_cmpuint(red, >, 10);
-	g_assert_cmpuint(green, >, 10);
+	/* Whole rows are tinted, not a few glyphs. */
+	g_assert_cmpuint(col.red, >, 2000);
+	g_assert_cmpuint(col.green, >, 2000);
+	/* git order: the old line (red, -) above the new one (green, +). */
+	g_assert_cmpint(col.red_y, >=, 0);
+	g_assert_cmpint(col.green_y, >, col.red_y);
+	/* The changed word is tinted harder than the rest of its line. */
+	g_assert_cmpuint(col.red_max, >, col.red_line + 20);
+
+	/* GOWL_TEST_DUMP_DIFF=dir writes what a realistic rewrite looks
+	   like, for a person to check by eye. */
+	if (g_getenv("GOWL_TEST_DUMP_DIFF") != NULL) {
+		g_autofree gchar *png = g_build_filename(
+			g_getenv("GOWL_TEST_DUMP_DIFF"), "ai-rewrite-diff.png", NULL);
+
+		gowl_bar_plugin_set_setting(r.h.plugin, "color-deleted", NULL);
+		gowl_bar_plugin_set_setting(r.h.plugin, "color-inserted", NULL);
+		open_with(&r, "Hi team,\n\nI think we shoud of shipped teh"
+		          " release yesterday, but their was a bug in the"
+		          " installer.\nIts fixed now.\n\nThanks,\nZach");
+		g_assert_true(key(&r, XKB_KEY_f, 0));
+		cmacs_answers(&r, "done", "Hi team,\n\nI think we should have"
+		              " shipped the release yesterday, but there was a"
+		              " bug in the installer.\nIt's fixed now.\n\n"
+		              "Thanks,\nZach");
+		s = paint_diff(&r, 560, 260);
+		cairo_surface_write_to_png(s, png);
+		cairo_surface_destroy(s);
+		gowl_bar_plugin_set_setting(r.h.plugin, "color-deleted",
+		                            "#ff0000");
+		gowl_bar_plugin_set_setting(r.h.plugin, "color-inserted",
+		                            "#00ff00");
+		open_with(&r, "WWWW MMMM");
+		g_assert_true(key(&r, XKB_KEY_f, 0));
+		cmacs_answers(&r, "done", "HHHH MMMM");
+	}
+
+	/* `diff-style: inline' keeps the old one-run rendering. */
+	gowl_bar_plugin_set_setting(r.h.plugin, "diff-style", "inline");
+	s = paint_diff(&r, 500, 120);
+	count_colours(s, &col);
+	cairo_surface_destroy(s);
+	g_assert_cmpuint(col.red, >, 10);
+	g_assert_cmpuint(col.red, <, 2000);
+	gowl_bar_plugin_set_setting(r.h.plugin, "diff-style", "lines");
 
 	p = panel(&r);
 	row = gowl_bar_panel_find(p, "act:proofread");
@@ -1865,6 +2048,7 @@ main(int argc, char *argv[])
 	g_test_add_func("/bar-ai-rewrite/tokenize", test_tokenize);
 	g_test_add_func("/bar-ai-rewrite/diff-golden", test_diff_golden);
 	g_test_add_func("/bar-ai-rewrite/diff-large", test_diff_large_falls_back);
+	g_test_add_func("/bar-ai-rewrite/diff-rows", test_diff_rows);
 	g_test_add_func("/bar-ai-rewrite/paste-keys", test_paste_keys);
 	g_test_add_func("/bar-ai-rewrite/paste-machine", test_paste_machine);
 	g_test_add_func("/bar-ai-rewrite/capture-primary", test_capture_primary);

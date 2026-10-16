@@ -62,6 +62,27 @@ void bar_sysinfo_tick (BarSysinfo *self);
 gint    bar_sysinfo_cpu_percent   (BarSysinfo *self);
 gint    bar_sysinfo_cpu_cores     (BarSysinfo *self);
 gdouble bar_sysinfo_load1         (BarSysinfo *self);
+
+/**
+ * bar_sysinfo_set_cpu_period:
+ * @self: the reader
+ * @seconds: seconds between CPU samples
+ *
+ * How often /proc/stat is re-read; 2 unless the cpu widget's
+ * `sampling' setting asks otherwise.  Shared, because the reading is.
+ */
+void bar_sysinfo_set_cpu_period (BarSysinfo *self, gint seconds);
+
+/**
+ * bar_sysinfo_core_percents:
+ * @self: the reader
+ * @n_cores: (out): the number of entries
+ *
+ * Returns: (array length=n_cores) (transfer none) (nullable): per-core
+ *   utilisation, 0--100, indexed by core number
+ */
+const gint *bar_sysinfo_core_percents (BarSysinfo *self, guint *n_cores);
+
 gdouble bar_sysinfo_load5         (BarSysinfo *self);
 gdouble bar_sysinfo_load15        (BarSysinfo *self);
 

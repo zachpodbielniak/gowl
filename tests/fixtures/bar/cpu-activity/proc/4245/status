@@ -1,0 +1,9 @@
+Name:	bad
+Umask:	0022
+State:	S (sleeping)
+Tgid:	1
+Pid:	1
+PPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+Threads:	1

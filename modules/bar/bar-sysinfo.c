@@ -21,6 +21,7 @@
 
 #define _GNU_SOURCE
 #include "bar-sysinfo.h"
+#include "bar-activity-model.h"
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -57,6 +58,13 @@ struct _BarSysinfo {
 	gint    cpu_percent;
 	gint    cpu_cores;
 	time_t  cpu_time;
+	gint    cpu_period;     /* seconds between samples; see set_cpu_period */
+
+	/* Per logical core, from the same /proc/stat read: the previous
+	   counters (BarActivityCpuTimes) and the last utilisation (gint),
+	   both indexed by core number. */
+	GArray *prev_cores;
+	GArray *core_percent;
 
 	/* Load */
 	gdouble load1, load5, load15;
@@ -174,6 +182,10 @@ bar_sysinfo_new(void)
 	self->hostname        = g_strdup(g_get_host_name());
 	self->username        = g_strdup(g_get_user_name());
 	self->cpu_cores       = (gint)g_get_num_processors();
+	self->cpu_period      = 2;
+	self->prev_cores      = g_array_new(FALSE, TRUE,
+	                                    sizeof(BarActivityCpuTimes));
+	self->core_percent    = g_array_new(FALSE, TRUE, sizeof(gint));
 	return self;
 }
 
@@ -192,6 +204,8 @@ bar_sysinfo_free(BarSysinfo *self)
 	g_free(self->wifi_iface);
 	g_free(self->hostname);
 	g_free(self->username);
+	g_array_unref(self->prev_cores);
+	g_array_unref(self->core_percent);
 	g_free(self);
 }
 
@@ -199,31 +213,32 @@ bar_sysinfo_free(BarSysinfo *self)
  * Readers
  * ---------------------------------------------------------------- */
 
+/*
+ * The whole of /proc/stat in one read: the aggregate line drives the
+ * utilisation every system widget shows, and the per-core lines feed
+ * the cpu widget's die map.  One read for both, so the die and the
+ * headline figure always describe the same window.
+ */
 static void
 read_cpu(BarSysinfo *self, time_t now)
 {
-	FILE *f;
-	glong user, nice, sys, idle, iowait, irq, softirq, steal;
-	glong total, diff_idle, diff_total;
+	g_autofree gchar *text = NULL;
+	g_autoptr(GArray) cores = NULL;
+	BarActivityCpuTimes agg;
+	glong idle, total, diff_idle, diff_total;
+	guint i;
 
-	if (now - self->cpu_time < 2)
+	if (now - self->cpu_time < self->cpu_period)
 		return;
 	self->cpu_time = now;
 
-	f = fopen("/proc/stat", "r");
-	if (f == NULL)
+	if (!g_file_get_contents("/proc/stat", &text, NULL, NULL))
+		return;
+	if (!bar_activity_parse_proc_stat(text, &agg, &cores))
 		return;
 
-	if (fscanf(f, "cpu %ld %ld %ld %ld %ld %ld %ld %ld",
-	           &user, &nice, &sys, &idle, &iowait, &irq, &softirq,
-	           &steal) != 8) {
-		fclose(f);
-		return;
-	}
-	fclose(f);
-
-	idle  += iowait;
-	total  = user + nice + sys + idle + irq + softirq + steal;
+	idle  = (glong)agg.idle;
+	total = (glong)agg.total;
 
 	if (self->prev_cpu_total > 0) {
 		diff_idle  = idle - self->prev_cpu_idle;
@@ -242,6 +257,27 @@ read_cpu(BarSysinfo *self, time_t now)
 
 	self->prev_cpu_idle  = idle;
 	self->prev_cpu_total = total;
+
+	/* Per core.  A core that went offline keeps its zeroed counters
+	   and reads 0; one that comes back reads -1 from the delta (its
+	   counters restarted) and keeps its old figure for one sample. */
+	g_array_set_size(self->core_percent, cores->len);
+	for (i = 0; i < cores->len; i++) {
+		BarActivityCpuTimes *now_t;
+		gint pct;
+
+		now_t = &g_array_index(cores, BarActivityCpuTimes, i);
+		if (i < self->prev_cores->len) {
+			pct = bar_activity_cpu_percent(
+				&g_array_index(self->prev_cores,
+				               BarActivityCpuTimes, i), now_t);
+			if (pct >= 0)
+				g_array_index(self->core_percent, gint, i) =
+					CLAMP(pct, 0, 100);
+		}
+	}
+	g_array_set_size(self->prev_cores, 0);
+	g_array_append_vals(self->prev_cores, cores->data, cores->len);
 }
 
 static void
@@ -923,6 +959,40 @@ bar_sysinfo_cpu_cores(BarSysinfo *self)
 {
 	g_return_val_if_fail(self != NULL, 1);
 	return self->cpu_cores;
+}
+
+/**
+ * bar_sysinfo_set_cpu_period:
+ * @self: the reader
+ * @seconds: seconds between CPU samples, clamped to 1..60
+ */
+void
+bar_sysinfo_set_cpu_period(BarSysinfo *self, gint seconds)
+{
+	g_return_if_fail(self != NULL);
+	self->cpu_period = CLAMP(seconds, 1, 60);
+}
+
+/**
+ * bar_sysinfo_core_percents:
+ * @self: the reader
+ * @n_cores: (out): how many entries the array has
+ *
+ * Returns: (array length=n_cores) (transfer none) (nullable): each
+ *   logical core's utilisation, 0--100, indexed by core number; valid
+ *   until the next tick
+ */
+const gint *
+bar_sysinfo_core_percents(BarSysinfo *self, guint *n_cores)
+{
+	g_return_val_if_fail(self != NULL, NULL);
+	g_return_val_if_fail(n_cores != NULL, NULL);
+
+	read_cpu(self, time(NULL));
+	*n_cores = self->core_percent->len;
+	if (self->core_percent->len == 0)
+		return NULL;
+	return (const gint *)self->core_percent->data;
 }
 
 /**

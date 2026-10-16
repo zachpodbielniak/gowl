@@ -1,0 +1,248 @@
+#+title: AI assistant
+#+description: The ai-assistant bar widget: chat with any provider, manage local ollama models, and see what the machine has left
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+
+=ai-assistant= (aliases =assistant= and =nova=) is a small activity indicator in the bar and a three-tab dropdown:
+
+- *Chat* --- pick a provider and a model, type a question in a multi-line field, read the conversation. It reaches *any* provider: under =cmacs --gowl= every provider configured in cmacs-ai (Claude, OpenAI, Gemini, Grok, ollama, the CLI agents, named OpenAI-compatible endpoints); standalone, every provider ai-glib's =ai= command knows. A conversation started here can be continued in a full cmacs-ai chat buffer with one button.
+- *Models* --- the local ollama server: what is installed and loaded, how big each model is, its family, parameter count and quantisation, and a *fit* badge saying whether it fits this machine. Load, unload, delete and pull (download), every download, delete and load behind an approval card.
+- *Machine* --- CPU, memory, GPU and VRAM, the model disk, network throughput, the largest processes, the loaded models and the memory they hold, and *Free model memory*.
+
+The bar indicator is a little pixel wave whose bars follow recent activity --- streaming throughput while an answer arrives, CPU/GPU load at rest --- coloured by state: idle, thinking, streaming, error.
+
+It is a generic port inspired by the Omarchy "local AI hub" plugin, generalised from one local runtime to any provider.
+
+What it deliberately does *not* do:
+
+- *Install ollama.* ollama is not in Fedora's repositories. On Immutablue it runs as a podman quadlet container that you manage (an example is under [[*Dependencies][Dependencies]]); the widget talks to it over HTTP and tells you, when it cannot reach it, which URL it tried.
+- *Update itself, ollama, or the models' runtime.* Out of scope: updates belong to the image build and to podman.
+- *Keep a provider-side session.* Every question carries the conversation with it (see [[*Internals][Internals]]), which is what lets you switch provider in the middle of a conversation.
+- *Render Markdown or markup.* Answers are shown as plain text, exactly as the model wrote them: =<b>= and =&amp;= appear literally. That is a safety property, not a missing feature --- see [[*Security and privacy][Security and privacy]].
+
+* Quick start --- standalone gowl
+
+#+begin_src yaml
+# ~/.config/gowl/config.yaml
+modules:
+  bar:
+    widgets-right-add: "ai-assistant"
+    ai-assistant.ai-provider: ollama
+    ai-assistant.ai-model: "qwen3:8b"
+    ai-assistant.ollama-url: "http://127.0.0.1:11434"
+keybinds:
+  "Super+Shift+a": { action: ipc_command, arg: "bar-panel ai-assistant", desc: "AI assistant" }
+#+end_src
+
+From a shell:
+
+#+begin_src sh
+gowl bar-panel ai-assistant     # open the dropdown
+gowl bar-panel                  # close it
+#+end_src
+
+Standalone, chat uses ai-glib's =ai= command (=ai-backend: auto= picks it when it is on =PATH=). Providers, models and API keys come from =~/.config/ai-glib/config.yaml=; the provider list in the panel comes from =ai --list-providers=. Without =ai=, the Chat tab says how to get a backend and the Models and Machine tabs still work.
+
+* Quick start --- cmacs --gowl
+
+#+begin_src emacs-lisp
+;; init.el / Doom config.el
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-add" . "ai-assistant")
+   ("ai-assistant.ollama-url" . "http://127.0.0.1:11434")
+   ("ai-assistant.machine-context" . "true")))
+(gowl-add-keybind "Super+Shift+a" 'ipc-command "bar-panel ai-assistant" "AI assistant")
+#+end_src
+
+*Under =cmacs --gowl= the widget is on by default*, in the top bar. cmacs calls =cmacs-gowl-bar-assistant-push= at startup, which tells the widget:
+
+- =ai-backend= = =cmacs=: chat goes through cmacs-ai (=cmacs-gowl-bar-ai-run=), so every provider configured there is available and nothing is configured twice;
+- =ai-providers= and =ai-default-provider= (cmacs-ai's provider list and default);
+- =ai-default-model= (the default provider's default model);
+- a little later, from an idle timer, =models.<provider>= comma lists for the providers whose model list is cheap to ask for --- the CLI providers by default (=cmacs-gowl-bar-assistant-model-list-providers=). cmacs-ai can only list models synchronously, and for an HTTP provider that is a network round trip on the editor's (and under =--gowl= the compositor's) thread, so those are left to free text. ollama's models come from ollama directly.
+
+Run =M-x cmacs-gowl-bar-assistant-push= again after changing the cmacs-ai provider configuration.
+
+To take it off the bar:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top '(("widgets-right-remove" . "ai-assistant")))
+#+end_src
+
+The cmacs-side options (=M-x customize-group RET cmacs-gowl-bar=):
+
+| Option                                           | Default                       | Meaning                                                                 |
+|--------------------------------------------------+-------------------------------+-------------------------------------------------------------------------|
+| =cmacs-gowl-bar-assistant-widget=                | ="ai-assistant"=              | The widget id the settings are pushed to                                 |
+| =cmacs-gowl-bar-assistant-model-list-providers=  | the seven CLI providers       | Whose model lists are pushed; see above before adding an HTTP one        |
+| =cmacs-gowl-bar-assistant-model-list-delay=      | =3=                           | Idle seconds before the lists are pushed                                 |
+| =cmacs-gowl-bar-assistant-seed-header=           | "Continuing a conversation…"  | Text put before the transcript in a chat opened with *In cmacs*          |
+| =cmacs-gowl-bar-assistant-send-on-open=          | =nil=                         | Send the transcript as soon as that chat opens, instead of composing it  |
+| =cmacs-gowl-bar-ai-provider= / =-model=          | =nil=                         | The bar's default provider and model (shared by every AI widget)         |
+
+* Settings
+
+Every key is set as =ai-assistant.<key>= in the bar's configuration (or pushed from cmacs).
+
+| Key                    | Type          | Default                         | Meaning                                                                                                   |
+|------------------------+---------------+---------------------------------+-----------------------------------------------------------------------------------------------------------|
+| =ai-backend=           | string        | =auto=                          | =cmacs=, =ai=, =none= or =auto=; see [[file:../bar.org::#plugin-ai][Asking a language model]]                |
+| =ai-provider=          | string        | (backend default)               | The provider questions go to. The panel's chooser sets it for the session                                |
+| =ai-model=             | string        | (provider default)              | The model. Choosing a provider clears it: a model belongs to its provider                                 |
+| =ai-command=           | command       | =ai=                            | ai-glib's CLI, for the =ai= backend and for =--list-providers=                                            |
+| =emacsctl=             | command       | =emacsctl=                      | cmacs's control CLI, for the =cmacs= backend and *In cmacs*                                               |
+| =ai-timeout=           | seconds       | =300=                           | How long an =ai= request may run                                                                          |
+| =ai-providers=         | comma list    | (pushed by cmacs)               | Providers offered by the chooser; standalone, =ai --list-providers= is used when unset                   |
+| =ai-default-provider=  | string        | (pushed by cmacs)               | Shown as the provider when =ai-provider= is unset                                                        |
+| =ai-default-model=     | string        | (pushed by cmacs)               | Shown as the model while the provider is the default one                                                  |
+| =models.<provider>=    | comma list    | (pushed by cmacs)               | The model chooser's list for a provider other than ollama                                                 |
+| =system=               | string        | a short plain-text instruction  | The system prompt                                                                                         |
+| =machine-context=      | bool          | =false=                         | Prepend a live machine summary (CPU, memory, GPU, disk, top processes, loaded models) to the system prompt |
+| =history-turns=        | int, 2--200   | =12=                            | Messages kept in memory and sent with each question (a question and its answer are two)                  |
+| =refresh=              | seconds, 5--60 | =10=                           | Poll interval while idle; it is 1 s while anything is in flight                                           |
+| =reduced-motion=       | bool          | =false=                         | Draw a static glyph instead of the moving wave                                                            |
+| =show-label=           | bool          | =false=                         | Show =provider/model= after the wave                                                                      |
+| =bars=                 | int, 3--12    | =5=                             | Bars in the wave                                                                                          |
+| =width=                | px, 320--900  | =420=                           | Panel width                                                                                               |
+| =ollama-url=           | URL           | =http://127.0.0.1:11434=        | Where ollama listens; =http://= or =https://= only                                                       |
+| =curl=                 | command       | =curl=                          | The curl used to talk to ollama                                                                           |
+| =keep-alive=           | duration      | =30m=                           | How long *Load* keeps a model: =30m=, =2h=, seconds, or =-1= for until unloaded                         |
+| =models-dir=           | path          | =$OLLAMA_MODELS= or =~/.ollama/models= | Where models are stored, for the disk figures                                                       |
+| =nvidia-smi=           | command       | =nvidia-smi=                    | Read for NVIDIA VRAM when installed                                                                       |
+| =copy-command=         | command       | =wl-copy=                       | What *Copy* pipes the last answer into                                                                    |
+| =proc-root=, =sys-root= | path         | =/proc=, =/sys=                 | For tests only: the trees the machine reading is taken from                                              |
+
+* Theming
+
+| Key               | Default role | Colours                                                    |
+|-------------------+--------------+------------------------------------------------------------|
+| =color-idle=      | =subtext=    | The wave at rest                                           |
+| =color-thinking=  | =yellow=     | Asked and waiting; a model being loaded or pulled          |
+| =color-streaming= | =accent=     | An answer arriving                                         |
+| =color-error=     | =red=        | The last request, pull or model operation failed           |
+| =color-user=      | =blue=       | Your messages in the transcript                            |
+| =color-assistant= | =text=       | The model's messages                                       |
+
+Each takes a palette role name (follows the palette when it changes) or, for the four wave colours, a =#rrggbb= literal (exactly that colour, always). The two transcript colours are panel text, which the panel draws in roles only: a literal there falls back to the default role.
+
+#+begin_src yaml
+modules:
+  bar:
+    ai-assistant.color-streaming: mauve
+    ai-assistant.color-thinking: "#f9e2af"
+    ai-assistant.color-user: sapphire
+#+end_src
+
+* The panel
+
+The header names the backend and provider. Under it, three tabs.
+
+** Chat
+
+- *Provider* and *Model* rows open their lists in place. Providers come from =ai-providers= (cmacs) or =ai --list-providers= (standalone); *Default* leaves the choice to the backend. Models are ollama's installed models when the provider is =ollama=, the pushed =models.<provider>= list otherwise, and an *Other model* field takes any id (Return sets it; it is validated). Choosing a provider resets the model.
+- The question field. =Return= is a newline; =Ctrl+Return= sends. The keyboard is in it when the panel opens.
+- *Send*, *Stop* (abandons the request, keeping what had arrived marked =[stopped]=), *Clear* (two clicks within five seconds), *Copy* (the last answer, through =wl-copy= on stdin), and under cmacs *In cmacs* (opens a cmacs-ai chat buffer with the conversation in its compose area).
+- The conversation, *newest first*, so the answer you are waiting for is right under the field. Long conversations scroll inside the panel.
+
+** Models
+
+- An approval card when something is waiting for one: what, the size, and the disk space after. *Approve* runs it; *Cancel* or a minute passing forgets it. A card that has expired cannot be approved.
+- A pull in progress: a progress bar with ollama's status, and *Cancel the pull*.
+- VRAM free, RAM free, and disk free for models.
+- *Loaded*: models in memory with how much is in VRAM; clicking one unloads it (no card: unloading deletes nothing).
+- *Installed*: each model's size, family, parameters and quantisation, and a badge --- =comfortable=, =tight=, =too big= or =loaded=. Click a model for *Load* (card), *Unload*, *Delete* (card) and *Chat with it* (switches the chat to ollama and that model).
+- *Add model*: a =name:tag= field; Return arms a download card.
+
+The fit badge: a model needs its size plus about a fifth again for its context. With a GPU (at least 2 GiB of VRAM; smaller is an integrated GPU's carve-out and ignored) it is *comfortable* when that fits in free VRAM, *tight* when the model fits in free VRAM plus available RAM (ollama spills layers to the CPU: it runs, slowly), and *too big* otherwise. Without a GPU, the same against available RAM.
+
+** Machine
+
+CPU (busy percentage when the bar's shared reader has it, threads, load averages), memory, GPU and VRAM (NVIDIA through =nvidia-smi=, AMD through =/sys/class/drm/card*/device/mem_info_vram_*=), the model disk, network throughput, the largest processes by memory, the loaded models, and *Free model memory* (unload them all, behind a card).
+
+* Dependencies
+
+Fedora package names, for layering into the image:
+
+| Package        | For                                         | Without it                                                                 |
+|----------------+---------------------------------------------+----------------------------------------------------------------------------|
+| =curl=         | Every ollama request                        | Models and Machine say so: "curl is not installed (Fedora package: curl)" |
+| =wl-clipboard= | *Copy*                                      | The chat says so and names the package                                     |
+| =podman=       | Running ollama (it is not packaged)         | Models explains, with the URL it tried                                     |
+
+Optional: ai-glib's =ai= command (standalone chat; built from ai-glib, not a Fedora package), and =nvidia-smi= (NVIDIA VRAM; it comes with the NVIDIA driver from RPM Fusion, e.g. =xorg-x11-drv-nvidia-cuda=). Without it VRAM is read from AMD's sysfs or not at all, and fit is judged against RAM.
+
+ollama as a user quadlet:
+
+#+begin_src conf
+# ~/.config/containers/systemd/ollama.container
+[Unit]
+Description=ollama
+
+[Container]
+Image=docker.io/ollama/ollama:latest
+ContainerName=ollama
+PublishPort=127.0.0.1:11434:11434
+Volume=%h/.ollama:/root/.ollama:Z
+# AMD GPU: use the :rocm image and pass the devices
+#   Image=docker.io/ollama/ollama:rocm
+#   AddDevice=/dev/kfd
+#   AddDevice=/dev/dri
+# NVIDIA GPU (nvidia-container-toolkit CDI):
+#   AddDevice=nvidia.com/gpu=all
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+#+end_src
+
+#+begin_src sh
+systemctl --user daemon-reload
+systemctl --user start ollama
+#+end_src
+
+Mounting =~/.ollama= keeps the models where the widget's default =models-dir= looks for disk space.
+
+* Security and privacy
+
+- *Model output is never markup.* Every message is a panel label drawn with pango's plain-text call; a model answering =<span foreground="red">= cannot restyle the panel, and =&amp;= stays as typed. Answers are made valid UTF-8 and size-capped before they are stored.
+- *Questions never travel in argv.* On the =ai= route the conversation goes on stdin; on the cmacs route it goes inside an Elisp string literal, escaped (=bar_elisp_quote=), through =emacsctl eval=. Neither shows up in =ps=.
+- *Nothing reaches a shell unquoted.* curl, nvidia-smi, =ai= and wl-copy are run as argv. *In cmacs* builds one command line: each Elisp string escaped, then the form and the emacsctl path each passed through =g_shell_quote=. A conversation longer than 64 KiB keeps its end.
+- *Model names are validated and escaped.* Letters, digits and =. _ - : / @ += only, no leading =-=, =/= or =.=, no =..=; the JSON bodies are built with an escaper as well. The ollama URL must be =http(s)://= and is passed with =--url=.
+- *Every download, delete and load needs an approval card*, which expires after a minute. Nothing destructive happens on a single click or on Return.
+- *machine-context* sends a summary of your machine (process names included) to whichever provider you are talking to. It is off by default; turn it on knowing that a cloud provider will see it.
+- The widget keeps the conversation in memory only (=history-turns= messages); nothing is written to disk.
+
+* Troubleshooting
+
+| Symptom                                               | Cause and fix                                                                                                                         |
+|-------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------|
+| "No AI backend"                                       | Standalone without =ai= on =PATH=. Install ai-glib, or set =ai-backend: cmacs= under cmacs                                            |
+| "could not reach cmacs"                               | =emacsctl= is not on =PATH=, or cmacs is not running. Set =ai-assistant.emacsctl= to its full path                                    |
+| "Could not reach ollama at …"                         | ollama is not running there. =systemctl --user status ollama=; check =ollama-url= and the quadlet's =PublishPort=                    |
+| The provider list is empty (standalone)               | =ai --list-providers= printed nothing usable; run it by hand. Set =ai-providers= to override                                         |
+| Model list for a provider is empty                    | Only ollama and the providers cmacs pushes =models.<provider>= for have one. Type the id in *Other model*                           |
+| A model shows "too big" but you know it runs          | The badge is about fitting *comfortably* with context. A model ollama splits across GPU and CPU reads as =tight= at best              |
+| VRAM reads "no GPU" on an APU                         | VRAM under 2 GiB is treated as a carve-out; fit is judged against RAM, which is what ollama uses there                                |
+| The wave never moves                                  | =reduced-motion= is on, or nothing is happening. At rest it follows CPU/GPU load from the bar's shared reader                         |
+| *Copy* says "wl-copy is not installed"                | Layer =wl-clipboard=                                                                                                                  |
+
+* Internals
+
+Files: =modules/bar/bar-plugins-assistant.c= (the widget), =modules/bar/bar-assistant-model.c/.h= (the pure half: transcript, ollama JSON, curl argv, fit, machine reading, approval card, wave, the cmacs command line), =modules/bar/bar-ai.c= (the shared model route). cmacs side: =lisp/cmacs/cmacs-gowl-bar-assistant.el= and =lisp/cmacs/cmacs-gowl-bar-ai.el=.
+
+Threads. Everything the bar calls --- poll, draw, measure, signature, panel, actions, text fields --- runs on the compositor thread (under cmacs, Emacs's) and never blocks. curl, nvidia-smi, =ai --list-providers= and wl-copy run on bar workers (=poll_async= or =gowl_bar_plugin_queue_work=); their results are built into locals and swapped into the plugin data under its mutex, which the panel builder takes for the few microseconds it reads. A pull runs on one worker for as long as it downloads, reading curl's =-N= output line by line and polling with a half-second timeout so *Cancel* (a generation bump plus =SIGTERM= to the curl it started, by PID) is noticed promptly; its child is reaped on that worker, never through a GLib child watch. There is no GLib timer anywhere: the bar's interval drives the poll, 1 s while busy and =refresh= otherwise, and expiries (the approval card, the Clear arming) are monotonic timestamps compared when the panel is built or clicked.
+
+The conversation. Neither backend keeps a session between bar requests, so each question is sent as one document --- =User: …=, =Assistant: …=, =User: <the new question>= --- capped at 192 KiB by dropping the oldest messages first; the new question is never dropped. The transcript keeps =history-turns= messages and never starts with an answer whose question was dropped. bar-ai holds one request at a time and generation-checks every write, so a late answer to a question you have moved past (or stopped) is never painted in.
+
+ollama. =/api/tags= and =/api/ps= with =curl -fsS --max-time 5=; load and unload are =/api/generate= with an empty prompt and =keep_alive= (the given duration, or =0=); delete is =DELETE /api/delete=; pull is a streamed =POST /api/pull=. Load, unload and delete add =--write-out '%{http_code}'= because a successful delete has an empty body. The JSON reader reads fields at the top level of each model object only, so a =name= or =size= nested in =details= (or anywhere else) is never taken for the model's; strings are unescaped, made valid UTF-8 and capped at 4 KiB, and at most 256 models are read.
+
+The indicator. Each poll adds an activity sample: characters per second against 400 while streaming, a steady 0.4 while thinking, the busier of CPU and GPU at rest. =bar_assistant_wave()= maps the newest samples onto the bars (right-aligned, never below 15% height) and, while busy, adds a travelling ripple. The state and the quantised heights go into the plugin's =signature=, which is what makes the bar repaint a wave that is neither label nor icon.
+
+Tests: =tests/test-bar-ai-assistant.c= (=make build/release/test-bar-ai-assistant=), entirely offline --- a fake curl serving the fixtures in =tests/fixtures/bar/ai-assistant/= by URL (real =/api/tags= output, =/api/ps=, pull progress and a pull error, hostile and malformed replies), a fake =ai= (the real =ai --list-providers= output captured to a fixture), a fake =emacsctl= with cmacs's pushes simulated, and fixture =/proc= and =/sys= trees. It covers JSON parsing good, empty, malformed, hostile and huge; exact curl argv for every operation and refused injection attempts; fit thresholds; the approval card's arm, expiry, approve and cancel, and that nothing destructive runs without it; transcript flattening and the history cap; the provider list; state colours and their overrides; reduced motion; the machine summary text; model output shown literally; stop and cancel. The cmacs half is =test/cmacs/cmacs-gowl-bar-assistant-tests.el=.

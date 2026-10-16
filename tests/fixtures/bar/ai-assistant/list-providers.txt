@@ -1,0 +1,14 @@
+Providers:
+  claude         HTTP
+  openai         HTTP
+  gemini         HTTP
+  grok           HTTP
+  ollama         HTTP
+  claude-code    CLI   (model "ollama/<name>" => ollama launch claude)
+  claude-tmux    CLI   (model "ollama/<name>" => ollama launch claude)
+  opencode       CLI 
+  grok-build     CLI 
+  antigravity    CLI 
+  cursor         CLI 
+  codex-cli      CLI 
+  openai-compatible HTTP

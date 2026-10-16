@@ -1,0 +1,1 @@
+{"models":[{"details":{"name":"WRONG","size":1,"family":"llama","parameter_size":"8.0B","quantization_level":"Q4_0"},"name":"<b>bold</b> & \"quoted\" \ud800 x","size":4661224676},{"name":"bad-ÿþ-utf8","size":-5},{"model":"only-model-key:1b","size":1.5e9},{"size":99},{"name":"trunc:1b","size":12

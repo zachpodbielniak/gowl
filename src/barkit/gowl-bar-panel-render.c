@@ -483,6 +483,82 @@ pass_draw_track(PanelPass *p, gint x, gint center_y, gint w,
 }
 
 /* ----------------------------------------------------------------
+ * Entry geometry
+ * ---------------------------------------------------------------- */
+
+static gboolean
+pass_prop_true(GowlBarPanelItem *item, const gchar *key)
+{
+	const gchar *v;
+
+	v = gowl_bar_panel_item_get_prop(item, key);
+	return v != NULL && (g_ascii_strcasecmp(v, "true") == 0 ||
+	                     g_strcmp0(v, "1") == 0 ||
+	                     g_ascii_strcasecmp(v, "yes") == 0);
+}
+
+/* The small caption above a field, or nothing when there is no title. */
+static gint
+pass_entry_label_height(PanelPass *p, GowlBarPanelItem *item)
+{
+	const gchar *title;
+
+	title = gowl_bar_panel_item_get_title(item);
+	if (title == NULL || title[0] == '\0')
+		return 0;
+	return (gint)((gdouble)p->row_h * 0.62);
+}
+
+static gint
+pass_entry_box_height(PanelPass *p, GowlBarPanelItem *item)
+{
+	gint override;
+
+	override = gowl_bar_panel_item_get_height(item);
+	if (pass_prop_true(item, GOWL_BAR_ENTRY_PROP_MULTILINE)) {
+		if (override > 0)
+			return override;
+		return p->row_h * 3;
+	}
+	return p->row_h;
+}
+
+/*
+ * What an entry shows: the text, or a bullet per character for a
+ * secret one.  @cursor is translated into the shown string's byte
+ * offsets, since a bullet is three bytes and the character it hides
+ * may be one.
+ */
+static gchar *
+pass_entry_display(GowlBarPanelItem *item, const gchar *text, gint cursor,
+                   gint *out_cursor)
+{
+	GString *shown;
+	const gchar *c;
+	gint shown_cursor;
+
+	if (!pass_prop_true(item, GOWL_BAR_ENTRY_PROP_SECRET)) {
+		if (out_cursor != NULL)
+			*out_cursor = cursor;
+		return g_strdup(text);
+	}
+
+	shown = g_string_new(NULL);
+	shown_cursor = -1;
+	for (c = text; *c != '\0'; c = g_utf8_next_char(c)) {
+		if (cursor >= 0 && shown_cursor < 0 &&
+		    (gint)(c - text) >= cursor)
+			shown_cursor = (gint)shown->len;
+		g_string_append(shown, "\xe2\x80\xa2"); /* bullet */
+	}
+	if (cursor >= 0 && shown_cursor < 0)
+		shown_cursor = (gint)shown->len;
+	if (out_cursor != NULL)
+		*out_cursor = shown_cursor;
+	return g_string_free(shown, FALSE);
+}
+
+/* ----------------------------------------------------------------
  * Per-kind height
  * ---------------------------------------------------------------- */
 
@@ -492,6 +568,15 @@ pass_item_height(PanelPass *p, GowlBarPanelItem *item)
 	gint override;
 
 	override = gowl_bar_panel_item_get_height(item);
+
+	/* An entry's override is the height of its FIELD, not of the
+	   item: the label above it is the renderer's business, and a
+	   plugin asking for "four lines of input" should not have to
+	   know how tall the label is. */
+	if (gowl_bar_panel_item_get_kind(item) == GOWL_BAR_ITEM_ENTRY)
+		return pass_entry_label_height(p, item) +
+		       pass_entry_box_height(p, item);
+
 	if (override > 0)
 		return override;
 
@@ -541,6 +626,10 @@ pass_item_height(PanelPass *p, GowlBarPanelItem *item)
 		return (gint)((gdouble)p->row_h * 0.72) * 7;
 	case GOWL_BAR_ITEM_SPACER:
 		return p->gap;
+	case GOWL_BAR_ITEM_CANVAS:
+		/* A canvas with no height asked for gets a square-ish
+		   default rather than a sliver nobody can click. */
+		return p->row_h * 4;
 	default:
 		return p->row_h;
 	}
@@ -1248,6 +1337,213 @@ pass_draw_calendar(PanelPass *p, GowlBarPanelItem *item, gint index,
 	}
 }
 
+/*
+ * A text field.
+ *
+ * Single-line text scrolls sideways so the cursor is always in view
+ * (the tail of a long line is what someone typing is looking at);
+ * multiline text wraps and scrolls down for the same reason.  The text
+ * is whatever the host has put in the item's value --- the host owns an
+ * entry's text while the panel is open --- and the cursor is drawn only
+ * in the entry the keyboard is on.
+ */
+static void
+pass_draw_entry(PanelPass *p, GowlBarPanelItem *item, gint index,
+                gint y, gint h, gboolean hovered)
+{
+	const gchar *title, *text, *placeholder;
+	gboolean focused, multiline, empty;
+	g_autofree gchar *shown = NULL;
+	gint label_h, box_x, box_y, box_w, box_h, inner_x, inner_w;
+	gint shown_cursor;
+	PangoRectangle logical, cpos;
+	gint shift_x, shift_y;
+
+	(void)h;
+
+	title       = gowl_bar_panel_item_get_title(item);
+	text        = gowl_bar_panel_item_get_value(item);
+	placeholder = gowl_bar_panel_item_get_subtitle(item);
+	if (text == NULL)
+		text = "";
+	empty     = (text[0] == '\0');
+	multiline = pass_prop_true(item, GOWL_BAR_ENTRY_PROP_MULTILINE);
+	focused   = (p->ctx->focus_item == index && p->ctx->focus_child < 0);
+
+	label_h = pass_entry_label_height(p, item);
+	box_h   = pass_entry_box_height(p, item);
+	box_x   = p->pad_x;
+	box_y   = y + label_h;
+	box_w   = p->inner_w;
+	inner_x = box_x + p->gap;
+	inner_w = box_w - 2 * p->gap;
+	if (inner_w < 8)
+		inner_w = 8;
+
+	/* Disabled entries take no focus and no clicks. */
+	if (!gowl_bar_panel_item_get_disabled(item)) {
+		pass_emit_hit(p, index, -1, GOWL_BAR_ITEM_ENTRY,
+		              gowl_bar_panel_item_get_id(item),
+		              box_x, box_y, box_w, box_h);
+	}
+
+	if (p->cr == NULL)
+		return;
+
+	if (label_h > 0) {
+		g_autofree gchar *upper = NULL;
+
+		upper = g_utf8_strup(title, -1);
+		pass_set_font(p, SECTION_SCALE, FALSE, FALSE);
+		pass_draw_tracked(p, upper, p->pad_x, y + label_h / 2,
+		                  GOWL_BAR_COLOR_MUTED, 1.0, SECTION_TRACKING,
+		                  p->inner_w);
+	}
+
+	/* The well. */
+	gowl_bar_cairo_rounded_rect(p->cr, box_x, box_y, box_w, box_h,
+	                            p->radius);
+	gowl_bar_theme_cairo_set_alpha(p->theme, p->cr,
+		GOWL_BAR_COLOR_CRUST, (hovered || focused) ? 0.95 : 0.75);
+	cairo_fill_preserve(p->cr);
+	cairo_set_line_width(p->cr, focused ? 1.5 : 1.0);
+	gowl_bar_theme_cairo_set_alpha(p->theme, p->cr,
+		focused ? GOWL_BAR_COLOR_ACCENT : GOWL_BAR_COLOR_OVERLAY,
+		focused ? 1.0 : 0.45);
+	cairo_stroke(p->cr);
+
+	cairo_save(p->cr);
+	cairo_rectangle(p->cr, box_x + 1, box_y + 1, box_w - 2, box_h - 2);
+	cairo_clip(p->cr);
+
+	pass_set_font(p, 1.0, FALSE, FALSE);
+	pango_layout_set_attributes(p->layout, NULL);
+	pango_layout_set_alignment(p->layout, PANGO_ALIGN_LEFT);
+	pango_layout_set_ellipsize(p->layout, PANGO_ELLIPSIZE_NONE);
+
+	if (empty) {
+		/* The placeholder sits where the text will; the cursor
+		   still blinks at its start so an empty focused field
+		   reads as ready rather than as a label. */
+		shown = g_strdup((placeholder != NULL) ? placeholder : "");
+		shown_cursor = focused ? 0 : -1;
+	} else {
+		shown = pass_entry_display(item, text,
+		                           focused ? p->ctx->entry_cursor : -1,
+		                           &shown_cursor);
+	}
+
+	if (multiline) {
+		pango_layout_set_width(p->layout, inner_w * PANGO_SCALE);
+		pango_layout_set_wrap(p->layout, PANGO_WRAP_WORD_CHAR);
+	} else {
+		pango_layout_set_width(p->layout, -1);
+	}
+	pango_layout_set_text(p->layout, shown, -1);
+	pango_layout_get_pixel_extents(p->layout, NULL, &logical);
+
+	memset(&cpos, 0, sizeof(cpos));
+	if (shown_cursor >= 0) {
+		if (shown_cursor > (gint)strlen(shown) || empty)
+			shown_cursor = empty ? 0 : (gint)strlen(shown);
+		pango_layout_index_to_pos(p->layout, shown_cursor, &cpos);
+	}
+
+	/* Scroll so the cursor is inside the well. */
+	shift_x = 0;
+	shift_y = 0;
+	if (!multiline) {
+		gint cx = PANGO_PIXELS(cpos.x);
+
+		if (cx > inner_w - 2)
+			shift_x = cx - (inner_w - 2);
+	} else {
+		gint cy = PANGO_PIXELS(cpos.y + cpos.height);
+		gint room = box_h - 2 * (p->gap / 2);
+
+		if (cy > room)
+			shift_y = cy - room;
+	}
+
+	{
+		gint text_y;
+
+		text_y = multiline
+			? box_y + p->gap / 2 - shift_y
+			: box_y + (box_h - logical.height) / 2;
+
+		gowl_bar_theme_cairo_set_alpha(p->theme, p->cr,
+			empty ? GOWL_BAR_COLOR_MUTED : GOWL_BAR_COLOR_TEXT,
+			gowl_bar_panel_item_get_disabled(item) ? 0.45 : 1.0);
+		cairo_move_to(p->cr, inner_x - shift_x, text_y);
+		pango_cairo_show_layout(p->cr, p->layout);
+
+		if (focused && shown_cursor >= 0) {
+			gowl_bar_theme_cairo_set(p->theme, p->cr,
+			                         GOWL_BAR_COLOR_ACCENT);
+			cairo_rectangle(p->cr,
+				inner_x - shift_x + PANGO_PIXELS(cpos.x),
+				text_y + PANGO_PIXELS(cpos.y),
+				1.5,
+				MAX(PANGO_PIXELS(cpos.height), logical.height > 0
+				    && !multiline ? logical.height : 12));
+			cairo_fill(p->cr);
+		}
+	}
+
+	pango_layout_set_wrap(p->layout, PANGO_WRAP_WORD);
+	pango_layout_set_width(p->layout, -1);
+	cairo_restore(p->cr);
+}
+
+/*
+ * A plugin-painted rectangle.  The renderer draws the well and the
+ * focus ring and hands the inside to whoever the host says owns it.
+ */
+static void
+pass_draw_canvas(PanelPass *p, GowlBarPanelItem *item, gint index,
+                 gint y, gint h)
+{
+	gboolean focused;
+
+	focused = (p->ctx->focus_item == index && p->ctx->focus_child < 0);
+
+	pass_emit_hit(p, index, -1, GOWL_BAR_ITEM_CANVAS,
+	              gowl_bar_panel_item_get_id(item),
+	              p->pad_x, y, p->inner_w, h);
+
+	if (p->cr == NULL)
+		return;
+
+	if (p->ctx->canvas_draw != NULL) {
+		cairo_save(p->cr);
+		cairo_rectangle(p->cr, p->pad_x, y, p->inner_w, h);
+		cairo_clip(p->cr);
+		cairo_translate(p->cr, p->pad_x, y);
+		p->ctx->canvas_draw(p->ctx->canvas_data, index, item, p->cr,
+		                    p->inner_w, h);
+		cairo_restore(p->cr);
+		/* The plugin may have left any font on the shared layout. */
+		pass_set_font(p, 1.0, FALSE, FALSE);
+	} else {
+		gowl_bar_cairo_rounded_rect(p->cr, p->pad_x, y, p->inner_w, h,
+		                            p->radius);
+		gowl_bar_theme_cairo_set_alpha(p->theme, p->cr,
+		                               GOWL_BAR_COLOR_CRUST, 0.6);
+		cairo_fill(p->cr);
+	}
+
+	if (focused) {
+		gowl_bar_cairo_rounded_rect(p->cr, p->pad_x + 0.75, y + 0.75,
+		                            p->inner_w - 1.5, h - 1.5,
+		                            p->radius);
+		cairo_set_line_width(p->cr, 1.5);
+		gowl_bar_theme_cairo_set(p->theme, p->cr,
+		                         GOWL_BAR_COLOR_ACCENT);
+		cairo_stroke(p->cr);
+	}
+}
+
 /* ----------------------------------------------------------------
  * The walk
  * ---------------------------------------------------------------- */
@@ -1361,6 +1657,12 @@ normal:
 		case GOWL_BAR_ITEM_CALENDAR:
 			pass_draw_calendar(p, item, (gint)i, y, h, hover_child);
 			break;
+		case GOWL_BAR_ITEM_ENTRY:
+			pass_draw_entry(p, item, (gint)i, y, h, hovered);
+			break;
+		case GOWL_BAR_ITEM_CANVAS:
+			pass_draw_canvas(p, item, (gint)i, y, h);
+			break;
 		case GOWL_BAR_ITEM_SPACER:
 		default:
 			break;
@@ -1458,6 +1760,7 @@ gowl_bar_panel_render_ctx_init(GowlBarPanelRenderCtx *ctx, gint width)
 	ctx->hover_child = -1;
 	ctx->focus_item  = -1;
 	ctx->focus_child = -1;
+	ctx->entry_cursor = -1;
 }
 
 /**

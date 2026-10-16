@@ -799,7 +799,8 @@ static const GowlBarPluginVTable network_vtable = {
 	net_panel, net_panel_action,
 	net_panel_opened, net_panel_closed,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -854,7 +855,8 @@ static const GowlBarPluginVTable rate_vtable = {
 	net_panel, net_panel_action,
 	net_panel_opened, net_panel_closed,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -913,7 +915,8 @@ static const GowlBarPluginVTable ip_vtable = {
 	net_panel, net_panel_action,
 	net_panel_opened, net_panel_closed,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 static void
@@ -956,7 +959,8 @@ static const GowlBarPluginVTable wifi_vtable = {
 	net_panel, net_panel_action,
 	net_panel_opened, net_panel_closed,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1065,7 +1069,8 @@ static const GowlBarPluginVTable vpn_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1886,7 +1891,8 @@ static const GowlBarPluginVTable tailscale_vtable = {
 	ts_panel, ts_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -2375,7 +2381,8 @@ static const GowlBarPluginVTable bluetooth_vtable = {
 	bt_panel, bt_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 

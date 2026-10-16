@@ -247,7 +247,8 @@ static const GowlBarPluginVTable probe_vtable = {
 	probe_panel, probe_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* A vtable that claims to be shorter than it is, standing in for a
@@ -262,7 +263,8 @@ static const GowlBarPluginVTable short_vtable = {
 	probe_panel, probe_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 static void
@@ -392,7 +394,8 @@ static const GowlBarPluginVTable pre_signature_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	probe_signature
+	probe_signature,
+	NULL, NULL
 };
 
 static const GowlBarPluginVTable signature_vtable = {
@@ -405,7 +408,8 @@ static const GowlBarPluginVTable signature_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	probe_signature
+	probe_signature,
+	NULL, NULL
 };
 
 /*

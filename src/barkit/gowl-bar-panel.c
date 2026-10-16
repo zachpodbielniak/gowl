@@ -643,6 +643,7 @@ struct _GowlBarPanel {
 	GPtrArray *items;      /* GowlBarPanelItem*, owned */
 	gint       width;      /* 0 = the theme's default */
 	gint       max_height; /* 0 = no cap beyond the monitor */
+	gboolean   centered;   /* open in the middle of the output */
 };
 
 G_DEFINE_FINAL_TYPE(GowlBarPanel, gowl_bar_panel, G_TYPE_OBJECT)
@@ -731,6 +732,31 @@ gowl_bar_panel_get_max_height(GowlBarPanel *self)
 {
 	g_return_val_if_fail(GOWL_IS_BAR_PANEL(self), 0);
 	return self->max_height;
+}
+
+/**
+ * gowl_bar_panel_set_centered:
+ * @self: a panel
+ * @centered: whether to open centred on the output
+ */
+void
+gowl_bar_panel_set_centered(GowlBarPanel *self, gboolean centered)
+{
+	g_return_if_fail(GOWL_IS_BAR_PANEL(self));
+	self->centered = centered ? TRUE : FALSE;
+}
+
+/**
+ * gowl_bar_panel_get_centered:
+ * @self: a panel
+ *
+ * Returns: whether the panel opens centred on its output
+ */
+gboolean
+gowl_bar_panel_get_centered(GowlBarPanel *self)
+{
+	g_return_val_if_fail(GOWL_IS_BAR_PANEL(self), FALSE);
+	return self->centered;
 }
 
 /**
@@ -1088,4 +1114,48 @@ gowl_bar_panel_add_button(GowlBarPanelItem *row, const gchar *label,
 	gowl_bar_panel_item_set_active(button, active);
 	gowl_bar_panel_item_add_child(row, button);
 	return button;
+}
+
+/**
+ * gowl_bar_panel_add_entry:
+ * @self: a panel
+ * @id: the entry's id
+ * @placeholder: (nullable): text shown while empty
+ * @text: (nullable): the initial text
+ *
+ * The placeholder lives in the subtitle and the text in the value, so
+ * the label above the field can use the title like every other kind.
+ *
+ * Returns: (transfer none): the new item
+ */
+GowlBarPanelItem *
+gowl_bar_panel_add_entry(GowlBarPanel *self, const gchar *id,
+                         const gchar *placeholder, const gchar *text)
+{
+	GowlBarPanelItem *item;
+
+	item = gowl_bar_panel_item_new(GOWL_BAR_ITEM_ENTRY);
+	gowl_bar_panel_item_set_id(item, id);
+	gowl_bar_panel_item_set_subtitle(item, placeholder);
+	gowl_bar_panel_item_set_value(item, (text != NULL) ? text : "");
+	return gowl_bar_panel_add(self, item);
+}
+
+/**
+ * gowl_bar_panel_add_canvas:
+ * @self: a panel
+ * @id: the canvas id
+ * @height: its height in pixels
+ *
+ * Returns: (transfer none): the new item
+ */
+GowlBarPanelItem *
+gowl_bar_panel_add_canvas(GowlBarPanel *self, const gchar *id, gint height)
+{
+	GowlBarPanelItem *item;
+
+	item = gowl_bar_panel_item_new(GOWL_BAR_ITEM_CANVAS);
+	gowl_bar_panel_item_set_id(item, id);
+	gowl_bar_panel_item_set_height(item, (height > 0) ? height : 0);
+	return gowl_bar_panel_add(self, item);
 }

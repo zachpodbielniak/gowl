@@ -579,7 +579,8 @@ static const GowlBarPluginVTable tray_vtable = {
 	tray_panel, tray_action,
 	NULL, tray_panel_closed,
 	NULL,
-	tray_signature
+	tray_signature,
+	NULL, NULL
 };
 
 void

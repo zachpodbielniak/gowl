@@ -82,6 +82,9 @@ G_DECLARE_DERIVABLE_TYPE(GowlBarPlugin, gowl_bar_plugin,
  * @panel_key: a key the panel's own navigation declined
  * @signature: append whatever else decides how the plugin LOOKS; see
  *   gowl_bar_plugin_signature()
+ * @panel_text: a panel text field changed or was submitted; see
+ *   gowl_bar_plugin_panel_text()
+ * @panel_canvas: paint a panel canvas; see gowl_bar_plugin_panel_canvas()
  * @padding: reserved for ABI-compatible expansion
  *
  * The contract a bar plugin implements.
@@ -135,9 +138,21 @@ struct _GowlBarPluginClass {
 
 	void          (*signature)    (GowlBarPlugin *self, GString *out);
 
-	/* One slot spent on @signature, so the class stays the size it
-	   was and an already-built subclass keeps working. */
-	gpointer padding[7];
+	void          (*panel_text)   (GowlBarPlugin *self,
+	                               const gchar   *item_id,
+	                               const gchar   *text,
+	                               gboolean       submitted);
+	void          (*panel_canvas) (GowlBarPlugin    *self,
+	                               const gchar      *item_id,
+	                               cairo_t          *cr,
+	                               const GowlBarTheme *theme,
+	                               gint              width,
+	                               gint              height);
+
+	/* Slots spent on @signature, @panel_text and @panel_canvas, so the
+	   class stays the size it was and an already-built subclass keeps
+	   working. */
+	gpointer padding[5];
 };
 
 /* --- Identity ----------------------------------------------------- */
@@ -498,6 +513,43 @@ gboolean      gowl_bar_plugin_panel_key (GowlBarPlugin *self,
                                           guint          keysym,
                                           guint          modifiers,
                                           gint           focused_item);
+
+/**
+ * gowl_bar_plugin_panel_text:
+ * @self: a #GowlBarPlugin
+ * @item_id: the %GOWL_BAR_ITEM_ENTRY item's id
+ * @text: the entry's whole text
+ * @submitted: %TRUE for Return (Ctrl+Return in a multiline entry),
+ *   %FALSE for an ordinary edit
+ *
+ * Reports a panel text field.  The host calls this after every edit,
+ * so a search filter can narrow as the user types, and once more on
+ * submit.  The panel is rebuilt afterwards, as after an action.
+ */
+void          gowl_bar_plugin_panel_text (GowlBarPlugin *self,
+                                           const gchar   *item_id,
+                                           const gchar   *text,
+                                           gboolean       submitted);
+
+/**
+ * gowl_bar_plugin_panel_canvas:
+ * @self: a #GowlBarPlugin
+ * @item_id: the %GOWL_BAR_ITEM_CANVAS item's id
+ * @cr: a context with its origin at the canvas's top-left, clipped to it
+ * @theme: the active theme, for role colours and fonts
+ * @width: the canvas width in pixels
+ * @height: the canvas height in pixels
+ *
+ * Paints one panel canvas.  Runs on the compositor thread inside a
+ * render, so it must not block --- draw from state the plugin already
+ * has.
+ */
+void          gowl_bar_plugin_panel_canvas (GowlBarPlugin      *self,
+                                             const gchar        *item_id,
+                                             cairo_t            *cr,
+                                             const GowlBarTheme *theme,
+                                             gint                width,
+                                             gint                height);
 
 /* --- Helpers for subclasses --------------------------------------- */
 

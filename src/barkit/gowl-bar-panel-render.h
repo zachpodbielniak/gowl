@@ -79,6 +79,25 @@ typedef struct {
 void gowl_bar_hit_rect_clear (gpointer rect);
 
 /**
+ * GowlBarCanvasDrawFunc:
+ * @user_data: the context's @canvas_data
+ * @item_index: the canvas item's index in the panel
+ * @item: the %GOWL_BAR_ITEM_CANVAS item
+ * @cr: a context translated to the canvas origin and clipped to it
+ * @width: the canvas width in pixels
+ * @height: the canvas height in pixels
+ *
+ * Paints one canvas.  The renderer knows nothing about plugins, so the
+ * host supplies this and routes it to whichever plugin owns the panel.
+ */
+typedef void (*GowlBarCanvasDrawFunc) (gpointer          user_data,
+                                       gint              item_index,
+                                       GowlBarPanelItem *item,
+                                       cairo_t          *cr,
+                                       gint              width,
+                                       gint              height);
+
+/**
  * GowlBarPanelRenderCtx:
  * @width: the panel's content width in pixels
  * @max_height: the tallest the panel may draw, or 0 for unlimited
@@ -90,6 +109,12 @@ void gowl_bar_hit_rect_clear (gpointer rect);
  * @hits: (element-type GowlBarHitRect) (nullable): filled with the
  *   interactive regions when non-%NULL
  * @content_height: (out): the height the content wanted, before the cap
+ * @entry_cursor: byte offset of the text cursor in the focused
+ *   %GOWL_BAR_ITEM_ENTRY, or -1 for none.  Only the entry at
+ *   @focus_item draws a cursor.
+ * @canvas_draw: (nullable): paints %GOWL_BAR_ITEM_CANVAS items; a
+ *   canvas with no painter is drawn as an empty well
+ * @canvas_data: handed to @canvas_draw
  *
  * Everything a render pass needs beyond the panel and the theme.
  * Zero-initialise it and set what you need; -1 is the "nothing" value
@@ -105,6 +130,12 @@ typedef struct {
 	gint     focus_child;
 	GArray  *hits;
 	gint     content_height;
+
+	/* Appended: the context is filled by the host, never by plugins,
+	   but keep new fields at the end anyway. */
+	gint                   entry_cursor;
+	GowlBarCanvasDrawFunc  canvas_draw;
+	gpointer               canvas_data;
 } GowlBarPanelRenderCtx;
 
 /**

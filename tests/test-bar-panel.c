@@ -26,6 +26,7 @@
  * panel long enough to notice.
  */
 
+#include <string.h>
 #include <cairo.h>
 #include <pango/pangocairo.h>
 
@@ -673,6 +674,289 @@ test_an_image_reserves_a_column_for_glyph_rows(void)
 	fixture_clear(&f);
 }
 
+/* ---- Entries and canvases ---- */
+
+/* Find the hit a render emitted for item @index, or NULL. */
+static GowlBarHitRect *
+hit_for_item(GArray *hits, gint index)
+{
+	guint i;
+
+	for (i = 0; i < hits->len; i++) {
+		GowlBarHitRect *r = &g_array_index(hits, GowlBarHitRect, i);
+
+		if (r->item_index == index)
+			return r;
+	}
+	return NULL;
+}
+
+static GArray *
+new_hits(void)
+{
+	GArray *hits;
+
+	hits = g_array_new(FALSE, FALSE, sizeof(GowlBarHitRect));
+	g_array_set_clear_func(hits, gowl_bar_hit_rect_clear);
+	return hits;
+}
+
+static void
+test_an_entry_is_a_focusable_field(void)
+{
+	Fixture f;
+	GowlBarPanel *panel;
+	GowlBarPanelItem *entry, *off;
+	GowlBarPanelRenderCtx ctx;
+	GowlBarHitRect *hit;
+	g_autoptr(GArray) hits = new_hits();
+	gint measured;
+
+	fixture_init(&f);
+	panel = gowl_bar_panel_new();
+	gowl_bar_panel_add_label(panel, "Translate");
+	entry = gowl_bar_panel_add_entry(panel, "source", "Type here", "hola");
+	g_assert_cmpint(gowl_bar_panel_item_get_kind(entry), ==,
+	                GOWL_BAR_ITEM_ENTRY);
+	g_assert_cmpstr(gowl_bar_panel_item_get_subtitle(entry), ==,
+	                "Type here");
+	g_assert_cmpstr(gowl_bar_panel_item_get_value(entry), ==, "hola");
+	off = gowl_bar_panel_add_entry(panel, "off", NULL, NULL);
+	gowl_bar_panel_item_set_disabled(off, TRUE);
+	/* NULL text is an empty field, never a NULL the renderer trips on. */
+	g_assert_cmpstr(gowl_bar_panel_item_get_value(off), ==, "");
+
+	measured = gowl_bar_panel_measure(panel, f.layout, f.theme, PANEL_W);
+
+	gowl_bar_panel_render_ctx_init(&ctx, PANEL_W);
+	g_assert_cmpint(ctx.entry_cursor, ==, -1);
+	ctx.hits = hits;
+	ctx.focus_item = 1;
+	ctx.entry_cursor = 2;
+	gowl_bar_panel_render(panel, f.cr, f.layout, f.theme, &ctx);
+
+	/* Measure and render agree with a focused, cursor-carrying entry
+	   in the walk, the same as for every other kind. */
+	g_assert_cmpint(ctx.content_height, ==, measured);
+
+	hit = hit_for_item(hits, 1);
+	g_assert_nonnull(hit);
+	g_assert_cmpint(hit->kind, ==, GOWL_BAR_ITEM_ENTRY);
+	g_assert_cmpstr(hit->id, ==, "source");
+	g_assert_cmpint(hit->height, >, 0);
+
+	/* A disabled entry takes neither clicks nor the keyboard. */
+	g_assert_null(hit_for_item(hits, 2));
+
+	/* The render must not have put the cursor into the model. */
+	g_assert_cmpstr(gowl_bar_panel_item_get_value(entry), ==, "hola");
+
+	g_object_unref(panel);
+	fixture_clear(&f);
+}
+
+static void
+test_entry_height_follows_its_kind(void)
+{
+	Fixture f;
+	GowlBarPanel *one, *labelled, *multi;
+	GowlBarPanelItem *item;
+	gint h_one, h_labelled, h_multi, h_multi_tall;
+
+	fixture_init(&f);
+
+	one = gowl_bar_panel_new();
+	gowl_bar_panel_add_entry(one, "a", NULL, NULL);
+	h_one = gowl_bar_panel_measure(one, f.layout, f.theme, PANEL_W);
+
+	/* A title is a caption ABOVE the field: it adds height. */
+	labelled = gowl_bar_panel_new();
+	item = gowl_bar_panel_add_entry(labelled, "a", NULL, NULL);
+	gowl_bar_panel_item_set_title(item, "Source");
+	h_labelled = gowl_bar_panel_measure(labelled, f.layout, f.theme,
+	                                    PANEL_W);
+	g_assert_cmpint(h_labelled, >, h_one);
+
+	/* Multiline is taller by default, and its height override is
+	   the FIELD's height --- the caption is still added on top. */
+	multi = gowl_bar_panel_new();
+	item = gowl_bar_panel_add_entry(multi, "a", NULL, NULL);
+	gowl_bar_panel_item_set_prop(item, GOWL_BAR_ENTRY_PROP_MULTILINE,
+	                             "true");
+	h_multi = gowl_bar_panel_measure(multi, f.layout, f.theme, PANEL_W);
+	g_assert_cmpint(h_multi, >, h_one);
+	gowl_bar_panel_item_set_height(item, 300);
+	h_multi_tall = gowl_bar_panel_measure(multi, f.layout, f.theme,
+	                                      PANEL_W);
+	g_assert_cmpint(h_multi_tall - h_multi, >, 0);
+	gowl_bar_panel_item_set_title(item, "Notes");
+	g_assert_cmpint(gowl_bar_panel_measure(multi, f.layout, f.theme,
+	                                       PANEL_W), >, h_multi_tall);
+
+	g_object_unref(one);
+	g_object_unref(labelled);
+	g_object_unref(multi);
+	fixture_clear(&f);
+}
+
+static void
+test_a_secret_entry_renders(void)
+{
+	Fixture f;
+	GowlBarPanel *panel;
+	GowlBarPanelItem *item;
+	GowlBarPanelRenderCtx ctx;
+
+	/* Bullets are three bytes each, so a cursor inside a multi-byte
+	   secret is translated rather than reused: exercise both ends
+	   and the middle under a real render. */
+	fixture_init(&f);
+	panel = gowl_bar_panel_new();
+	item = gowl_bar_panel_add_entry(panel, "pw", NULL,
+	                                "p\xc3\xa4ss");
+	gowl_bar_panel_item_set_prop(item, GOWL_BAR_ENTRY_PROP_SECRET, "true");
+
+	gowl_bar_panel_render_ctx_init(&ctx, PANEL_W);
+	ctx.focus_item = 0;
+	ctx.entry_cursor = 0;
+	gowl_bar_panel_render(panel, f.cr, f.layout, f.theme, &ctx);
+	ctx.entry_cursor = 3;
+	gowl_bar_panel_render(panel, f.cr, f.layout, f.theme, &ctx);
+	ctx.entry_cursor = 5;
+	gowl_bar_panel_render(panel, f.cr, f.layout, f.theme, &ctx);
+
+	g_assert_cmpint(cairo_status(f.cr), ==, CAIRO_STATUS_SUCCESS);
+	g_assert_cmpstr(gowl_bar_panel_item_get_value(item), ==,
+	                "p\xc3\xa4ss");
+
+	g_object_unref(panel);
+	fixture_clear(&f);
+}
+
+typedef struct {
+	guint  calls;
+	gint   width;
+	gint   height;
+	gint   index;
+	gchar *id;
+	gdouble origin_x;
+	gdouble origin_y;
+} CanvasProbe;
+
+static void
+canvas_probe(gpointer user_data, gint item_index, GowlBarPanelItem *item,
+             cairo_t *cr, gint width, gint height)
+{
+	CanvasProbe *probe = user_data;
+	gdouble x = 0.0, y = 0.0;
+
+	probe->calls++;
+	probe->width  = width;
+	probe->height = height;
+	probe->index  = item_index;
+	g_free(probe->id);
+	probe->id = g_strdup(gowl_bar_panel_item_get_id(item));
+
+	/* Where (0, 0) of the canvas lands on the surface. */
+	cairo_user_to_device(cr, &x, &y);
+	probe->origin_x = x;
+	probe->origin_y = y;
+
+	/* Paint past the edges: the clip has to hold. */
+	cairo_set_source_rgb(cr, 1.0, 0.0, 0.0);
+	cairo_rectangle(cr, -50, -50, width + 100, height + 100);
+	cairo_fill(cr);
+}
+
+static void
+test_a_canvas_is_painted_by_its_owner(void)
+{
+	Fixture f;
+	GowlBarPanel *panel;
+	GowlBarPanelRenderCtx ctx;
+	GowlBarHitRect *hit;
+	CanvasProbe probe = { 0 };
+	g_autoptr(GArray) hits = new_hits();
+	guchar *data;
+	gint stride;
+
+	fixture_init(&f);
+	cairo_set_source_rgba(f.cr, 0, 0, 0, 0);
+	cairo_set_operator(f.cr, CAIRO_OPERATOR_SOURCE);
+	cairo_paint(f.cr);
+	cairo_set_operator(f.cr, CAIRO_OPERATOR_OVER);
+
+	panel = gowl_bar_panel_new();
+	gowl_bar_panel_add_canvas(panel, "wheel", 120);
+
+	gowl_bar_panel_render_ctx_init(&ctx, PANEL_W);
+	ctx.hits        = hits;
+	ctx.canvas_draw = canvas_probe;
+	ctx.canvas_data = &probe;
+	gowl_bar_panel_render(panel, f.cr, f.layout, f.theme, &ctx);
+
+	g_assert_cmpuint(probe.calls, ==, 1);
+	g_assert_cmpint(probe.height, ==, 120);
+	g_assert_cmpint(probe.index, ==, 0);
+	g_assert_cmpstr(probe.id, ==, "wheel");
+	g_assert_cmpint(probe.width, >, 0);
+	g_assert_cmpint(probe.width, <, PANEL_W);
+
+	/* The canvas is hit-testable, at exactly where it was drawn. */
+	hit = hit_for_item(hits, 0);
+	g_assert_nonnull(hit);
+	g_assert_cmpint(hit->kind, ==, GOWL_BAR_ITEM_CANVAS);
+	g_assert_cmpint(hit->width, ==, probe.width);
+	g_assert_cmpint(hit->height, ==, 120);
+	g_assert_cmpfloat(probe.origin_x, ==, (gdouble)hit->x);
+	g_assert_cmpfloat(probe.origin_y, ==, (gdouble)hit->y);
+
+	/* The clip held: nothing red to the left of the canvas. */
+	cairo_surface_flush(f.surface);
+	data = cairo_image_surface_get_data(f.surface);
+	stride = cairo_image_surface_get_stride(f.surface);
+	{
+		guint32 px;
+
+		memcpy(&px, data + (hit->y + 10) * stride + 0, 4);
+		g_assert_cmphex(px & 0x00ff0000, !=, 0x00ff0000);
+		memcpy(&px, data + (hit->y + 10) * stride +
+		       (hit->x + 5) * 4, 4);
+		g_assert_cmphex(px & 0x00ff0000, ==, 0x00ff0000);
+	}
+
+	/* No painter: an empty well, and still no crash. */
+	gowl_bar_panel_render_ctx_init(&ctx, PANEL_W);
+	gowl_bar_panel_render(panel, f.cr, f.layout, f.theme, &ctx);
+	g_assert_cmpuint(probe.calls, ==, 1);
+
+	/* A canvas with no height asked for still gets a usable one. */
+	{
+		GowlBarPanel *bare = gowl_bar_panel_new();
+
+		gowl_bar_panel_add_canvas(bare, "c", 0);
+		g_assert_cmpint(gowl_bar_panel_measure(bare, f.layout,
+		                f.theme, PANEL_W), >, 60);
+		g_object_unref(bare);
+	}
+
+	g_free(probe.id);
+	g_object_unref(panel);
+	fixture_clear(&f);
+}
+
+static void
+test_the_centered_flag(void)
+{
+	GowlBarPanel *panel;
+
+	panel = gowl_bar_panel_new();
+	g_assert_false(gowl_bar_panel_get_centered(panel));
+	gowl_bar_panel_set_centered(panel, TRUE);
+	g_assert_true(gowl_bar_panel_get_centered(panel));
+	g_object_unref(panel);
+}
+
 
 int
 main(int argc, char *argv[])
@@ -706,6 +990,15 @@ main(int argc, char *argv[])
 	                test_an_image_survives_a_copy);
 	g_test_add_func("/bar-panel/an-image-reserves-a-column",
 	                test_an_image_reserves_a_column_for_glyph_rows);
+	g_test_add_func("/bar-panel/entry-is-a-field",
+	                test_an_entry_is_a_focusable_field);
+	g_test_add_func("/bar-panel/entry-height",
+	                test_entry_height_follows_its_kind);
+	g_test_add_func("/bar-panel/entry-secret",
+	                test_a_secret_entry_renders);
+	g_test_add_func("/bar-panel/canvas-painted-by-owner",
+	                test_a_canvas_is_painted_by_its_owner);
+	g_test_add_func("/bar-panel/centered", test_the_centered_flag);
 
 	return g_test_run();
 }

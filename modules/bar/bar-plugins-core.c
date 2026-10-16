@@ -335,7 +335,8 @@ static const GowlBarPluginVTable tags_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	tags_signature
+	tags_signature,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -559,7 +560,8 @@ static const GowlBarPluginVTable title_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -659,7 +661,8 @@ static const GowlBarPluginVTable layout_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	layout_signature
+	layout_signature,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -920,7 +923,8 @@ static const GowlBarPluginVTable clock_vtable = {
 	clock_panel, clock_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -970,7 +974,8 @@ static const GowlBarPluginVTable spacer_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1045,7 +1050,8 @@ static const GowlBarPluginVTable button_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1207,7 +1213,8 @@ static const GowlBarPluginVTable toggle_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1293,7 +1300,8 @@ static const GowlBarPluginVTable cmd_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1327,7 +1335,8 @@ static const GowlBarPluginVTable label_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------

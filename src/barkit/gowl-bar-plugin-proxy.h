@@ -48,6 +48,8 @@ G_BEGIN_DECLS
  * @panel_closed: (nullable): the dropdown was dismissed
  * @panel_key: (nullable): a key the panel's navigation declined
  * @signature: (nullable): append per-output state the bar must repaint on
+ * @panel_text: (nullable): a panel text field was edited or submitted
+ * @panel_canvas: (nullable): paint a panel canvas
  *
  * A plugin written as plain C function pointers rather than a GObject
  * subclass.
@@ -128,6 +130,23 @@ struct _GowlBarPluginVTable {
 	 */
 	void     (*signature)    (GowlBarPlugin *plugin, gpointer data,
 	                          GString *out);
+
+	/*
+	 * A panel text field (%GOWL_BAR_ITEM_ENTRY) was edited, or
+	 * submitted with Return.  The panel is rebuilt afterwards.
+	 */
+	void     (*panel_text)   (GowlBarPlugin *plugin, gpointer data,
+	                          const gchar *item_id, const gchar *text,
+	                          gboolean submitted);
+
+	/*
+	 * Paint a panel canvas (%GOWL_BAR_ITEM_CANVAS).  @cr has its
+	 * origin at the canvas's top-left and is clipped to it.
+	 */
+	void     (*panel_canvas) (GowlBarPlugin *plugin, gpointer data,
+	                          const gchar *item_id, cairo_t *cr,
+	                          const GowlBarTheme *theme,
+	                          gint width, gint height);
 };
 
 /**

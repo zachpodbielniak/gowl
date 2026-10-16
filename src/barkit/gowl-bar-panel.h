@@ -45,6 +45,11 @@ G_BEGIN_DECLS
  * @GOWL_BAR_ITEM_GRAPH: a sparkline over a sample window.
  * @GOWL_BAR_ITEM_CALENDAR: a month grid.
  * @GOWL_BAR_ITEM_SPACER: vertical whitespace.
+ * @GOWL_BAR_ITEM_ENTRY: a one- or multi-line text field the host
+ *   edits; see gowl_bar_panel_add_entry().  Appended after the first
+ *   release, so the numbering of every older kind is unchanged.
+ * @GOWL_BAR_ITEM_CANVAS: a rectangle the plugin draws itself through
+ *   its panel_canvas hook; see gowl_bar_panel_add_canvas().
  * @GOWL_BAR_ITEM_COUNT: sentinel; number of kinds.
  *
  * The vocabulary a panel is described in.  A plugin never draws its own
@@ -68,6 +73,8 @@ typedef enum {
 	GOWL_BAR_ITEM_GRAPH,
 	GOWL_BAR_ITEM_CALENDAR,
 	GOWL_BAR_ITEM_SPACER,
+	GOWL_BAR_ITEM_ENTRY,
+	GOWL_BAR_ITEM_CANVAS,
 	GOWL_BAR_ITEM_COUNT
 } GowlBarItemKind;
 
@@ -267,6 +274,20 @@ void         gowl_bar_panel_set_max_height (GowlBarPanel *self, gint height);
 gint         gowl_bar_panel_get_max_height (GowlBarPanel *self);
 
 /**
+ * gowl_bar_panel_set_centered:
+ * @self: a #GowlBarPanel
+ * @centered: %TRUE to open in the middle of the output
+ *
+ * A dropdown normally hangs from its widget.  A panel that is really an
+ * overlay --- a translator, a keybinding wheel --- reads better in the
+ * middle of the screen, and is usually opened from a keybind rather
+ * than from the widget at all, so where the widget sits says nothing.
+ */
+void         gowl_bar_panel_set_centered   (GowlBarPanel *self,
+                                             gboolean      centered);
+gboolean     gowl_bar_panel_get_centered   (GowlBarPanel *self);
+
+/**
  * gowl_bar_panel_add:
  * @self: a #GowlBarPanel
  * @item: (transfer full): the item to append
@@ -363,6 +384,92 @@ GowlBarPanelItem *gowl_bar_panel_add_buttons (GowlBarPanel *self,
 GowlBarPanelItem *gowl_bar_panel_add_button (GowlBarPanelItem *row,
                                               const gchar      *label,
                                               gboolean          active);
+
+/**
+ * GOWL_BAR_ENTRY_PROP_MULTILINE:
+ *
+ * Item property: "true" lets Return insert a newline, so Ctrl+Return
+ * submits instead.
+ */
+#define GOWL_BAR_ENTRY_PROP_MULTILINE "multiline"
+
+/**
+ * GOWL_BAR_ENTRY_PROP_SECRET:
+ *
+ * Item property: "true" draws the text as bullets.  The text itself is
+ * unchanged --- the plugin still receives what was typed.
+ */
+#define GOWL_BAR_ENTRY_PROP_SECRET    "secret"
+
+/**
+ * GOWL_BAR_ENTRY_PROP_AUTOFOCUS:
+ *
+ * Item property: "true" puts the keyboard cursor on this entry when the
+ * panel opens, so a panel that is mostly a text field can be typed
+ * into straight away.  The first such entry wins.
+ */
+#define GOWL_BAR_ENTRY_PROP_AUTOFOCUS "autofocus"
+
+/**
+ * GOWL_BAR_ENTRY_PROP_REVISION:
+ *
+ * Item property: a number the plugin bumps when it wants its own text
+ * to replace what the user has typed so far.
+ *
+ * While a panel is open the HOST owns an entry's text: the plugin's
+ * panel is rebuilt after every keystroke, and if the text it returned
+ * won the user would never see their own typing.  So the host keeps the
+ * text by item id, and only takes the plugin's value again when this
+ * revision changes --- after a translation swaps its panes, say, or a
+ * chat clears its input on send.
+ */
+#define GOWL_BAR_ENTRY_PROP_REVISION  "revision"
+
+/**
+ * gowl_bar_panel_add_entry:
+ * @self: a #GowlBarPanel
+ * @id: the id reported to the plugin's panel_text hook
+ * @placeholder: (nullable): dim text shown while the entry is empty
+ * @text: (nullable): the initial text
+ *
+ * Adds a text field.
+ *
+ * The host edits it: printable keys, Backspace, Delete, the arrows,
+ * Home/End, Ctrl+A/E/U/W and Ctrl+V (paste) all go to the focused
+ * entry.  Every edit reaches the plugin as a panel_text call with
+ * @submitted %FALSE, Return as one with @submitted %TRUE.  Tab and
+ * Shift+Tab leave the entry; Escape still closes the panel.
+ *
+ * The title, if set, is drawn as a small label above the field.  A
+ * multiline entry takes its height from gowl_bar_panel_item_set_height().
+ *
+ * Returns: (transfer none): the new item
+ */
+GowlBarPanelItem *gowl_bar_panel_add_entry (GowlBarPanel *self,
+                                             const gchar  *id,
+                                             const gchar  *placeholder,
+                                             const gchar  *text);
+
+/**
+ * gowl_bar_panel_add_canvas:
+ * @self: a #GowlBarPanel
+ * @id: the id reported with clicks and passed to the panel_canvas hook
+ * @height: the canvas height in pixels
+ *
+ * Adds a rectangle the plugin paints itself.  The width is the panel's
+ * content width.  A click reaches the plugin's action hook with @index
+ * set to the canvas x and @value to the canvas y, both in pixels; Return
+ * on a focused canvas sends -1 for both.
+ *
+ * The host still owns everything around it --- frame, scroll, focus ---
+ * so a plugin that needs a picture (a remote control, a radial wheel, a
+ * map of CPU cores) does not have to give up the panel to get one.
+ *
+ * Returns: (transfer none): the new item
+ */
+GowlBarPanelItem *gowl_bar_panel_add_canvas (GowlBarPanel *self,
+                                              const gchar  *id,
+                                              gint          height);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GowlBarPanelItem, gowl_bar_panel_item_free)
 

@@ -26,6 +26,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #include <linux/input-event-codes.h>
 
@@ -46,9 +49,11 @@
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"
 #include "core/gowl-monitor.h"
+#include "core/gowl-seat.h"
 #include "core/gowl-bar.h"
 #include "config/gowl-config.h"
 
+#include "barkit/gowl-bar-entry.h"
 #include "barkit/gowl-bar-guard.h"
 #include "barkit/gowl-bar-host.h"
 #include "barkit/gowl-bar-layout.h"
@@ -216,6 +221,43 @@ typedef struct {
 	GHashTable     *surfaces;   /* monitor name -> BarSurface* */
 } GowlBarInstance;
 
+/*
+ * One panel text field's live state.  The host owns an entry's text for
+ * as long as the panel is open (see GOWL_BAR_ENTRY_PROP_REVISION), so
+ * it lives here, keyed by the entry's id, and survives every rebuild.
+ */
+typedef struct {
+	GowlBarEntry *entry;
+	gchar        *revision;   /* the plugin's last revision prop */
+} BarEntrySlot;
+
+static void
+bar_entry_slot_free(gpointer data)
+{
+	BarEntrySlot *slot = data;
+
+	if (slot == NULL)
+		return;
+	gowl_bar_entry_free(slot->entry);
+	g_free(slot->revision);
+	g_free(slot);
+}
+
+/*
+ * A paste in flight.  The clipboard's owner writes into a pipe, and it
+ * can only do that while the compositor thread is free -- so the read
+ * is an fd source on the compositor's own wl_event_loop, never a
+ * blocking read and never a GLib watch (which, under cmacs, would fire
+ * on Emacs's thread).
+ */
+typedef struct {
+	struct wl_event_source *source;
+	gint                    fd;
+	GString                *data;
+	gchar                  *entry_id;
+	gpointer                panel_item;  /* BarItem*, identity only */
+} BarPaste;
+
 /* The one open dropdown. */
 typedef struct {
 	GowlBarInstance *bar;
@@ -239,6 +281,11 @@ typedef struct {
 	gchar   *drag_id;
 	gint     drag_x, drag_w;
 	gchar   *dirty_signature;
+
+	GHashTable *entries;           /* entry id -> BarEntrySlot*, owned */
+	BarPaste   *paste;             /* in flight, or NULL */
+	gchar      *canvas_fault;      /* plugin name that faulted painting
+	                                  a canvas, handled after the render */
 } BarPanelState;
 
 /*
@@ -1486,9 +1533,32 @@ bar_tip_track(GowlModuleBar *self, gint bar_index, GowlBarInstance *bar,
  * Panel
  * ---------------------------------------------------------------- */
 
+/* Drop a paste that has not finished.  Safe from inside its own fd
+   callback: wl_event_source_remove() defers the free. */
+static void
+bar_paste_cancel(GowlModuleBar *self)
+{
+	BarPaste *paste = self->panel.paste;
+
+	if (paste == NULL)
+		return;
+	self->panel.paste = NULL;
+	if (paste->source != NULL)
+		wl_event_source_remove(paste->source);
+	if (paste->fd >= 0)
+		close(paste->fd);
+	g_string_free(paste->data, TRUE);
+	g_free(paste->entry_id);
+	g_free(paste);
+}
+
 static void
 bar_panel_clear_state(GowlModuleBar *self)
 {
+	bar_paste_cancel(self);
+	if (self->panel.entries != NULL)
+		g_hash_table_remove_all(self->panel.entries);
+	g_clear_pointer(&self->panel.canvas_fault, g_free);
 	if (self->panel.scene_buf != NULL) {
 		wlr_scene_node_destroy(&self->panel.scene_buf->node);
 		self->panel.scene_buf = NULL;
@@ -1579,6 +1649,368 @@ bar_build_panel_guarded(GowlModuleBar *self, BarItem *item, gpointer monitor)
 	return ctx.result;
 }
 
+/* ----------------------------------------------------------------
+ * Panel text fields
+ * ---------------------------------------------------------------- */
+
+static gboolean
+bar_item_prop_true(GowlBarPanelItem *item, const gchar *key)
+{
+	const gchar *v;
+
+	v = gowl_bar_panel_item_get_prop(item, key);
+	return v != NULL && (g_ascii_strcasecmp(v, "true") == 0 ||
+	                     g_strcmp0(v, "1") == 0 ||
+	                     g_ascii_strcasecmp(v, "yes") == 0);
+}
+
+/*
+ * Reconcile the freshly built panel's entries with the live text.
+ *
+ * The host's text wins -- the plugin's panel is rebuilt after every
+ * keystroke and would otherwise undo the typing -- unless the plugin
+ * bumped the entry's revision, which is how it says "replace it".  The
+ * winning text is then written back into the item, which is what the
+ * renderer draws.
+ */
+static void
+bar_panel_sync_entries(GowlModuleBar *self)
+{
+	guint i, n;
+
+	if (self->panel.panel == NULL)
+		return;
+	if (self->panel.entries == NULL)
+		self->panel.entries = g_hash_table_new_full(g_str_hash,
+			g_str_equal, g_free, bar_entry_slot_free);
+
+	n = gowl_bar_panel_n_items(self->panel.panel);
+	for (i = 0; i < n; i++) {
+		GowlBarPanelItem *item;
+		BarEntrySlot *slot;
+		const gchar *id, *rev;
+
+		item = gowl_bar_panel_get_item(self->panel.panel, i);
+		if (item == NULL ||
+		    gowl_bar_panel_item_get_kind(item) != GOWL_BAR_ITEM_ENTRY)
+			continue;
+		id = gowl_bar_panel_item_get_id(item);
+		if (id == NULL)
+			continue;
+		rev = gowl_bar_panel_item_get_prop(item,
+		                                   GOWL_BAR_ENTRY_PROP_REVISION);
+
+		slot = g_hash_table_lookup(self->panel.entries, id);
+		if (slot == NULL) {
+			slot = g_new0(BarEntrySlot, 1);
+			slot->entry = gowl_bar_entry_new(
+				gowl_bar_panel_item_get_value(item));
+			slot->revision = g_strdup(rev);
+			g_hash_table_insert(self->panel.entries, g_strdup(id),
+			                    slot);
+		} else if (g_strcmp0(slot->revision, rev) != 0) {
+			gowl_bar_entry_set_text(slot->entry,
+				gowl_bar_panel_item_get_value(item));
+			g_free(slot->revision);
+			slot->revision = g_strdup(rev);
+		}
+		gowl_bar_panel_item_set_value(item,
+			gowl_bar_entry_get_text(slot->entry));
+	}
+}
+
+/* The entry the keyboard is on, or NULL when it is on something else. */
+static BarEntrySlot *
+bar_panel_focused_entry(GowlModuleBar *self, GowlBarPanelItem **out_item)
+{
+	GowlBarPanelItem *item;
+	const gchar *id;
+
+	if (self->panel.panel == NULL || self->panel.entries == NULL)
+		return NULL;
+	if (self->panel.focus_item < 0 || self->panel.focus_child >= 0)
+		return NULL;
+	if ((guint)self->panel.focus_item >=
+	    gowl_bar_panel_n_items(self->panel.panel))
+		return NULL;
+	item = gowl_bar_panel_get_item(self->panel.panel,
+	                               (guint)self->panel.focus_item);
+	if (item == NULL ||
+	    gowl_bar_panel_item_get_kind(item) != GOWL_BAR_ITEM_ENTRY)
+		return NULL;
+	id = gowl_bar_panel_item_get_id(item);
+	if (id == NULL)
+		return NULL;
+	if (out_item != NULL)
+		*out_item = item;
+	return g_hash_table_lookup(self->panel.entries, id);
+}
+
+typedef struct {
+	GowlBarPlugin *plugin;
+	const gchar   *item_id;
+	const gchar   *text;
+	gboolean       submitted;
+} TextCtx;
+
+static void
+bar_panel_text_body(gpointer data)
+{
+	TextCtx *ctx = data;
+
+	gowl_bar_plugin_panel_text(ctx->plugin, ctx->item_id, ctx->text,
+	                           ctx->submitted);
+}
+
+/*
+ * Tell the plugin what an entry now says, under the fault guard, then
+ * rebuild -- the same shape as an action, because to the plugin it is
+ * one.
+ */
+static void
+bar_panel_deliver_text(GowlModuleBar *self, const gchar *entry_id,
+                       gboolean submitted)
+{
+	BarEntrySlot *slot;
+	BarItem *item;
+	TextCtx ctx;
+	g_autofree gchar *owned_id = NULL;
+	g_autofree gchar *owned_text = NULL;
+	gpointer previous;
+	gboolean ok;
+	gint signo = 0;
+
+	item = self->panel.item;
+	if (item == NULL || entry_id == NULL || self->panel.entries == NULL)
+		return;
+	slot = g_hash_table_lookup(self->panel.entries, entry_id);
+	if (slot == NULL)
+		return;
+
+	/* Copies: the rebuild that follows may drop the slot's owner. */
+	owned_id   = g_strdup(entry_id);
+	owned_text = g_strdup(gowl_bar_entry_get_text(slot->entry));
+
+	ctx.plugin    = item->plugin;
+	ctx.item_id   = owned_id;
+	ctx.text      = owned_text;
+	ctx.submitted = submitted;
+
+	previous = bar_plugin_serve(item->plugin, self->panel.monitor);
+	ok = gowl_bar_guard_call(bar_panel_text_body, &ctx, &signo,
+	                         gowl_bar_plugin_get_id(item->plugin));
+	gowl_bar_plugin_set_monitor(item->plugin, previous);
+
+	if (!ok) {
+		const gchar *name;
+
+		name = gowl_bar_plugin_get_setting(item->plugin, "name");
+		gowl_bar_registry_quarantine(self->registry,
+			(name != NULL) ? name
+			               : gowl_bar_plugin_get_id(item->plugin),
+			"it faulted handling panel text");
+		bar_panel_close(self);
+		return;
+	}
+
+	bar_panel_rebuild(self);
+	bar_redraw_all(self);
+}
+
+/* Put the clipboard's text into the entry it was asked for. */
+static void
+bar_paste_finish(GowlModuleBar *self)
+{
+	BarPaste *paste = self->panel.paste;
+	g_autofree gchar *id = NULL;
+	g_autofree gchar *text = NULL;
+	gboolean same_panel;
+	BarEntrySlot *slot;
+	GowlBarPanelItem *item;
+
+	if (paste == NULL)
+		return;
+
+	id = g_strdup(paste->entry_id);
+	text = g_strdup(paste->data->str);
+	same_panel = (paste->panel_item == (gpointer)self->panel.item);
+	bar_paste_cancel(self);
+
+	if (!same_panel || self->panel.entries == NULL ||
+	    self->panel.panel == NULL)
+		return;
+	slot = g_hash_table_lookup(self->panel.entries, id);
+	item = gowl_bar_panel_find(self->panel.panel, id);
+	if (slot == NULL || item == NULL)
+		return;
+
+	if (gowl_bar_entry_insert(slot->entry, text,
+	        bar_item_prop_true(item, GOWL_BAR_ENTRY_PROP_MULTILINE)))
+		bar_panel_deliver_text(self, id, FALSE);
+}
+
+/* Paste text is capped: a clipboard holding a video file's worth of
+   "text" would otherwise be laid out by pango on every keystroke. */
+#define BAR_PASTE_MAX (1024 * 1024)
+
+static int
+bar_paste_readable(int fd, uint32_t mask, void *data)
+{
+	GowlModuleBar *self = data;
+	BarPaste *paste = self->panel.paste;
+	gchar buf[4096];
+	gssize n;
+
+	if (paste == NULL)
+		return 0;
+
+	if (mask & WL_EVENT_READABLE) {
+		n = read(fd, buf, sizeof(buf));
+		if (n > 0) {
+			if (paste->data->len + (gsize)n <= BAR_PASTE_MAX)
+				g_string_append_len(paste->data, buf, n);
+			return 0;
+		}
+		if (n < 0 && (errno == EAGAIN || errno == EINTR))
+			return 0;
+	}
+
+	/* End of stream, an error, or the writer hung up: done. */
+	bar_paste_finish(self);
+	return 0;
+}
+
+/*
+ * Ask the clipboard for its text and wait for it on the compositor's
+ * own loop.  The owner can only answer while this thread is free, so
+ * blocking here would wait forever.
+ */
+static void
+bar_paste_begin(GowlModuleBar *self, const gchar *entry_id)
+{
+	GowlCompositor *comp;
+	GowlSeat *seat;
+	struct wl_event_loop *loop;
+	BarPaste *paste;
+	gint fd, flags;
+
+	if (self->compositor == NULL || entry_id == NULL)
+		return;
+	comp = GOWL_COMPOSITOR(self->compositor);
+	seat = gowl_compositor_get_seat(comp);
+	if (seat == NULL)
+		return;
+
+	bar_paste_cancel(self);
+
+	fd = gowl_seat_open_clipboard(seat);
+	if (fd < 0)
+		return;
+	flags = fcntl(fd, F_GETFL);
+	if (flags >= 0)
+		fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+	loop = wl_display_get_event_loop(gowl_compositor_get_wl_display(comp));
+
+	paste = g_new0(BarPaste, 1);
+	paste->fd         = fd;
+	paste->data       = g_string_new(NULL);
+	paste->entry_id   = g_strdup(entry_id);
+	paste->panel_item = self->panel.item;
+	paste->source     = wl_event_loop_add_fd(loop, fd, WL_EVENT_READABLE,
+	                                         bar_paste_readable, self);
+	self->panel.paste = paste;
+	if (paste->source == NULL)
+		bar_paste_cancel(self);
+}
+
+/* Put the keyboard on the first entry that asked for it. */
+static gboolean
+bar_panel_autofocus(GowlModuleBar *self)
+{
+	guint i, n;
+
+	if (self->panel.panel == NULL || self->panel.focus_item >= 0)
+		return FALSE;
+
+	n = gowl_bar_panel_n_items(self->panel.panel);
+	for (i = 0; i < n; i++) {
+		GowlBarPanelItem *item;
+
+		item = gowl_bar_panel_get_item(self->panel.panel, i);
+		if (item == NULL ||
+		    gowl_bar_panel_item_get_kind(item) != GOWL_BAR_ITEM_ENTRY ||
+		    gowl_bar_panel_item_get_disabled(item) ||
+		    !bar_item_prop_true(item, GOWL_BAR_ENTRY_PROP_AUTOFOCUS))
+			continue;
+		self->panel.focus_item  = (gint)i;
+		self->panel.focus_child = -1;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+/* ----------------------------------------------------------------
+ * Panel canvases
+ * ---------------------------------------------------------------- */
+
+typedef struct {
+	GowlBarPlugin      *plugin;
+	const gchar        *item_id;
+	cairo_t            *cr;
+	const GowlBarTheme *theme;
+	gint                width;
+	gint                height;
+} CanvasCtx;
+
+static void
+bar_panel_canvas_body(gpointer data)
+{
+	CanvasCtx *ctx = data;
+
+	gowl_bar_plugin_panel_canvas(ctx->plugin, ctx->item_id, ctx->cr,
+	                             ctx->theme, ctx->width, ctx->height);
+}
+
+/*
+ * The renderer's canvas callback.  Runs inside a render, so a fault is
+ * only RECORDED here: quarantining and closing the panel mid-render
+ * would free the panel the renderer is still walking.
+ */
+static void
+bar_panel_canvas_draw(gpointer user_data, gint item_index,
+                      GowlBarPanelItem *item, cairo_t *cr, gint width,
+                      gint height)
+{
+	GowlModuleBar *self = GOWL_MODULE_BAR(user_data);
+	CanvasCtx ctx;
+	gpointer previous;
+	gint signo = 0;
+
+	(void)item_index;
+
+	if (self->panel.item == NULL || self->panel.canvas_fault != NULL)
+		return;
+
+	ctx.plugin  = self->panel.item->plugin;
+	ctx.item_id = gowl_bar_panel_item_get_id(item);
+	ctx.cr      = cr;
+	ctx.theme   = self->panel.bar->theme;
+	ctx.width   = width;
+	ctx.height  = height;
+
+	previous = bar_plugin_serve(ctx.plugin, self->panel.monitor);
+	if (!gowl_bar_guard_call(bar_panel_canvas_body, &ctx, &signo,
+	                         gowl_bar_plugin_get_id(ctx.plugin))) {
+		const gchar *name;
+
+		name = gowl_bar_plugin_get_setting(ctx.plugin, "name");
+		self->panel.canvas_fault = g_strdup((name != NULL) ? name
+			: gowl_bar_plugin_get_id(ctx.plugin));
+	}
+	gowl_bar_plugin_set_monitor(ctx.plugin, previous);
+}
+
 static void
 bar_panel_open(GowlModuleBar *self, GowlBarInstance *bar, BarItem *item,
                gpointer monitor)
@@ -1625,6 +2057,8 @@ bar_panel_open(GowlModuleBar *self, GowlBarInstance *bar, BarItem *item,
 		gowl_bar_plugin_panel_opened(item->plugin);
 		gowl_bar_plugin_set_monitor(item->plugin, previous);
 	}
+	bar_panel_sync_entries(self);
+	bar_panel_autofocus(self);
 	bar_panel_render(self);
 	bar_redraw_all(self);
 }
@@ -1655,6 +2089,7 @@ bar_panel_rebuild(GowlModuleBar *self)
 
 	g_clear_object(&self->panel.panel);
 	self->panel.panel = panel;
+	bar_panel_sync_entries(self);
 	bar_panel_render(self);
 }
 
@@ -1671,6 +2106,17 @@ bar_panel_place(GowlModuleBar *self, gint mon_w, gint mon_h, gint panel_w,
 	offset = gowl_bar_theme_metric(bar->theme,
 	                               GOWL_BAR_METRIC_PANEL_OFFSET);
 	margin = gowl_bar_theme_metric(bar->theme, GOWL_BAR_METRIC_PAD_X);
+
+	/* An overlay-style panel sits a little above the middle of the
+	   output, where a dialog would, whatever widget owns it. */
+	if (self->panel.panel != NULL &&
+	    gowl_bar_panel_get_centered(self->panel.panel)) {
+		x = (mon_w - panel_w) / 2;
+		y = (mon_h - panel_h) * 2 / 5;
+		*out_x = (x < margin) ? margin : x;
+		*out_y = (y < margin) ? margin : y;
+		return;
+	}
 
 	/* Centre the panel on its widget: aligning an edge looks wrong
 	   for a widget near the middle of the bar, and clamping below
@@ -1813,6 +2259,16 @@ bar_panel_render(GowlModuleBar *self)
 		ctx.focus_item  = self->panel.focus_item;
 		ctx.focus_child = self->panel.focus_child;
 		ctx.hits        = self->panel.hits;
+		ctx.canvas_draw = bar_panel_canvas_draw;
+		ctx.canvas_data = self;
+		{
+			BarEntrySlot *slot;
+
+			slot = bar_panel_focused_entry(self, NULL);
+			if (slot != NULL)
+				ctx.entry_cursor = (gint)
+					gowl_bar_entry_get_cursor(slot->entry);
+		}
 
 		gowl_bar_panel_render(self->panel.panel, cr, draw_layout,
 		                      bar->theme, &ctx);
@@ -1865,6 +2321,17 @@ bar_panel_render(GowlModuleBar *self)
 	                            mon_y + self->panel.surf_y);
 	wlr_scene_node_raise_to_top(&self->panel.scene_buf->node);
 	wlr_buffer_drop(&buf->base);
+
+	/* A canvas that faulted during that render: now that the render
+	   is over it is safe to take the panel away. */
+	if (self->panel.canvas_fault != NULL) {
+		g_autofree gchar *name = g_steal_pointer(
+			&self->panel.canvas_fault);
+
+		gowl_bar_registry_quarantine(self->registry, name,
+			"it faulted drawing a panel canvas");
+		bar_panel_close(self);
+	}
 }
 
 /* Translate a monitor-local point into the panel's content
@@ -3721,6 +4188,28 @@ bar_handle_button(GowlBarProvider *provider, gpointer monitor, gint x, gint y,
 					bar_panel_drag_to(self, px);
 					return TRUE;
 				}
+				if (rect->kind == GOWL_BAR_ITEM_ENTRY) {
+					/* A click puts the keyboard in the
+					   field; the text is not an action. */
+					self->panel.focus_item  =
+						rect->item_index;
+					self->panel.focus_child = -1;
+					bar_panel_render(self);
+					return TRUE;
+				}
+				if (rect->kind == GOWL_BAR_ITEM_CANVAS) {
+					/* Canvas-local coordinates travel
+					   in the index and the value. */
+					gint cx = px - rect->x;
+					gint cy = py - rect->y;
+
+					self->panel.focus_item  =
+						rect->item_index;
+					self->panel.focus_child = -1;
+					bar_panel_deliver(self, rect->id, cx,
+					                  (gdouble)cy, button);
+					return TRUE;
+				}
 				bar_panel_deliver(self, rect->id,
 				                  rect->child_index,
 				                  bar_panel_hit_value(self, rect),
@@ -4014,6 +4503,11 @@ bar_panel_activate_focus(GowlModuleBar *self)
 		r = &g_array_index(self->panel.hits, GowlBarHitRect, i);
 		if (r->item_index == self->panel.focus_item &&
 		    r->child_index == self->panel.focus_child) {
+			if (r->kind == GOWL_BAR_ITEM_CANVAS) {
+				bar_panel_deliver(self, r->id, -1, -1.0,
+				                  BTN_LEFT);
+				return;
+			}
 			bar_panel_deliver(self, r->id, r->child_index, 0.0,
 			                  BTN_LEFT);
 			return;
@@ -4027,10 +4521,67 @@ bar_handle_key(GowlKeybindHandler *handler, guint modifiers, guint keysym,
 {
 	GowlModuleBar *self = GOWL_MODULE_BAR(handler);
 
-	(void)modifiers;
-
 	if (self->panel.item == NULL)
 		return FALSE;
+
+	/*
+	 * A focused text field gets every key first.  j, k and space are
+	 * letters there, not navigation; Tab and Shift+Tab still move on,
+	 * Escape still closes, and window-manager chords (Alt, Super)
+	 * still pass through to whatever wants them.
+	 */
+	if (keysym != XKB_KEY_Escape) {
+		BarEntrySlot *slot;
+		GowlBarPanelItem *eitem = NULL;
+
+		slot = bar_panel_focused_entry(self, &eitem);
+		if (slot != NULL) {
+			gboolean multiline;
+			GowlBarEntryResult r;
+			g_autofree gchar *eid = NULL;
+
+			if (!pressed)
+				return (modifiers & (GOWL_KEY_MOD_ALT |
+				                     GOWL_KEY_MOD_LOGO)) == 0;
+
+			multiline = bar_item_prop_true(eitem,
+				GOWL_BAR_ENTRY_PROP_MULTILINE);
+			eid = g_strdup(gowl_bar_panel_item_get_id(eitem));
+			r = gowl_bar_entry_handle_key(slot->entry, keysym,
+			                              modifiers, multiline);
+			switch (r) {
+			case GOWL_BAR_ENTRY_EDITED:
+				bar_panel_deliver_text(self, eid, FALSE);
+				return TRUE;
+			case GOWL_BAR_ENTRY_SUBMIT:
+				bar_panel_deliver_text(self, eid, TRUE);
+				return TRUE;
+			case GOWL_BAR_ENTRY_MOVED:
+				bar_panel_render(self);
+				return TRUE;
+			case GOWL_BAR_ENTRY_PASTE:
+				bar_paste_begin(self, eid);
+				return TRUE;
+			case GOWL_BAR_ENTRY_LEAVE_NEXT:
+				bar_panel_focus_step(self, 1);
+				return TRUE;
+			case GOWL_BAR_ENTRY_LEAVE_PREV:
+				bar_panel_focus_step(self, -1);
+				return TRUE;
+			case GOWL_BAR_ENTRY_IGNORED:
+			default:
+				break;
+			}
+			if (!multiline && (keysym == XKB_KEY_Up ||
+			                   keysym == XKB_KEY_Down)) {
+				bar_panel_focus_step(self,
+					keysym == XKB_KEY_Down ? 1 : -1);
+				return TRUE;
+			}
+			/* Not text: the plugin's to claim (Ctrl+S, ...). */
+			goto offer_plugin;
+		}
+	}
 
 	switch (keysym) {
 	case XKB_KEY_Escape:
@@ -4068,6 +4619,7 @@ bar_handle_key(GowlKeybindHandler *handler, guint modifiers, guint keysym,
 	 * Guarded like every other entry into a plugin: a panel key
 	 * handler that faults costs the panel, not the session.
 	 */
+offer_plugin:
 	if (pressed && self->panel.item != NULL) {
 		BarItem *item = self->panel.item;
 		gboolean claimed = FALSE;
@@ -4768,6 +5320,7 @@ gowl_module_bar_finalize(GObject *object)
 	bar_teardown(self);
 
 	bar_panel_clear_state(self);
+	g_clear_pointer(&self->panel.entries, g_hash_table_unref);
 	bar_toast_destroy_surface(self);
 	g_clear_pointer(&self->toast_layer.hits, g_array_unref);
 

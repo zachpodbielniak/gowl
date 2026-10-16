@@ -86,6 +86,7 @@ LIB_SRCS := \
 	src/barkit/gowl-bar-json.c \
 	src/barkit/gowl-bar-panel.c \
 	src/barkit/gowl-bar-panel-render.c \
+	src/barkit/gowl-bar-entry.c \
 	src/barkit/gowl-bar-toast.c \
 	src/barkit/gowl-bar-layout.c \
 	src/barkit/gowl-bar-guard.c \
@@ -198,6 +199,7 @@ LIB_HDRS := \
 	src/barkit/gowl-bar-json.h \
 	src/barkit/gowl-bar-panel.h \
 	src/barkit/gowl-bar-panel-render.h \
+	src/barkit/gowl-bar-entry.h \
 	src/barkit/gowl-bar-toast.h \
 	src/barkit/gowl-bar-layout.h \
 	src/barkit/gowl-bar-guard.h \
@@ -920,6 +922,8 @@ $(OUTDIR)/test-hints: $(OUTDIR)/modules/hints.so
 $(OBJDIR)/tests/test-hints.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 $(OUTDIR)/test-bar-monitor: $(OUTDIR)/modules/bar.so
+$(OUTDIR)/test-bar-entry-panel: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-entry-panel.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 $(OBJDIR)/tests/test-bar-monitor.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 # The wallpaper against the real .so in a headless compositor, with

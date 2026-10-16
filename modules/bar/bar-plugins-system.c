@@ -436,7 +436,8 @@ static const GowlBarPluginVTable cpu_vtable = {
 	cpu_panel, sys_panel_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -484,7 +485,8 @@ static const GowlBarPluginVTable memory_vtable = {
 	memory_panel, sys_panel_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 static void
@@ -532,7 +534,8 @@ static const GowlBarPluginVTable swap_vtable = {
 	swap_panel, sys_panel_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -597,7 +600,8 @@ static const GowlBarPluginVTable disk_vtable = {
 	disk_panel, sys_panel_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -640,7 +644,8 @@ static const GowlBarPluginVTable load_vtable = {
 	load_panel, sys_panel_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 static void
@@ -683,7 +688,8 @@ static const GowlBarPluginVTable temp_vtable = {
 	temp_panel, sys_panel_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 static void
@@ -722,7 +728,8 @@ static const GowlBarPluginVTable gpu_vtable = {
 	gpu_panel, sys_panel_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 static void
@@ -759,7 +766,8 @@ static const GowlBarPluginVTable io_vtable = {
 	io_panel, sys_panel_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 static void
@@ -793,7 +801,8 @@ static const GowlBarPluginVTable uptime_vtable = {
 	uptime_panel, sys_panel_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 static void
@@ -816,7 +825,8 @@ static const GowlBarPluginVTable host_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 static void
@@ -839,7 +849,8 @@ static const GowlBarPluginVTable user_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1224,7 +1235,8 @@ static const GowlBarPluginVTable battery_vtable = {
 	power_panel, power_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* A power widget with no battery still wants its panel: the session
@@ -1257,7 +1269,8 @@ static const GowlBarPluginVTable power_vtable = {
 	power_panel, power_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------

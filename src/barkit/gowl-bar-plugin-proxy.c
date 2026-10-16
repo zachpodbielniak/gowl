@@ -258,6 +258,29 @@ proxy_signature(GowlBarPlugin *plugin, GString *out)
 }
 
 static void
+proxy_panel_text(GowlBarPlugin *plugin, const gchar *item_id,
+                 const gchar *text, gboolean submitted)
+{
+	GowlBarPluginProxy *self = GOWL_BAR_PLUGIN_PROXY(plugin);
+
+	if (GOWL_BAR_PLUGIN_VTABLE_HAS(self->vt, panel_text))
+		self->vt->panel_text(plugin, self->data, item_id, text,
+		                     submitted);
+}
+
+static void
+proxy_panel_canvas(GowlBarPlugin *plugin, const gchar *item_id,
+                   cairo_t *cr, const GowlBarTheme *theme,
+                   gint width, gint height)
+{
+	GowlBarPluginProxy *self = GOWL_BAR_PLUGIN_PROXY(plugin);
+
+	if (GOWL_BAR_PLUGIN_VTABLE_HAS(self->vt, panel_canvas))
+		self->vt->panel_canvas(plugin, self->data, item_id, cr,
+		                       theme, width, height);
+}
+
+static void
 gowl_bar_plugin_proxy_finalize(GObject *object)
 {
 	GowlBarPluginProxy *self = GOWL_BAR_PLUGIN_PROXY(object);
@@ -307,6 +330,8 @@ gowl_bar_plugin_proxy_class_init(GowlBarPluginProxyClass *klass)
 	   instance and the class is not, so the emptiness of the slot is
 	   checked in the forwarder rather than here. */
 	plugin_class->signature       = proxy_signature;
+	plugin_class->panel_text      = proxy_panel_text;
+	plugin_class->panel_canvas    = proxy_panel_canvas;
 }
 
 static void

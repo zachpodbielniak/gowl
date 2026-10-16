@@ -287,6 +287,8 @@ gowl_bar_plugin_class_init(GowlBarPluginClass *klass)
 	klass->panel_opened    = NULL;
 	klass->panel_closed    = NULL;
 	klass->panel_key       = NULL;
+	klass->panel_text      = NULL;
+	klass->panel_canvas    = NULL;
 
 	/**
 	 * GowlBarPlugin:id:
@@ -1558,6 +1560,50 @@ gowl_bar_plugin_panel_closed(GowlBarPlugin *self)
 	klass = GOWL_BAR_PLUGIN_GET_CLASS(self);
 	if (klass->panel_closed != NULL)
 		klass->panel_closed(self);
+}
+
+/**
+ * gowl_bar_plugin_panel_text:
+ * @self: a plugin
+ * @item_id: the entry's id
+ * @text: its text
+ * @submitted: whether this is a submit
+ */
+void
+gowl_bar_plugin_panel_text(GowlBarPlugin *self, const gchar *item_id,
+                           const gchar *text, gboolean submitted)
+{
+	GowlBarPluginClass *klass;
+
+	g_return_if_fail(GOWL_IS_BAR_PLUGIN(self));
+
+	klass = GOWL_BAR_PLUGIN_GET_CLASS(self);
+	if (klass->panel_text != NULL)
+		klass->panel_text(self, item_id, (text != NULL) ? text : "",
+		                  submitted);
+}
+
+/**
+ * gowl_bar_plugin_panel_canvas:
+ * @self: a plugin
+ * @item_id: the canvas id
+ * @cr: the target
+ * @theme: the theme
+ * @width: canvas width
+ * @height: canvas height
+ */
+void
+gowl_bar_plugin_panel_canvas(GowlBarPlugin *self, const gchar *item_id,
+                             cairo_t *cr, const GowlBarTheme *theme,
+                             gint width, gint height)
+{
+	GowlBarPluginClass *klass;
+
+	g_return_if_fail(GOWL_IS_BAR_PLUGIN(self));
+
+	klass = GOWL_BAR_PLUGIN_GET_CLASS(self);
+	if (klass->panel_canvas != NULL)
+		klass->panel_canvas(self, item_id, cr, theme, width, height);
 }
 
 /* ----------------------------------------------------------------

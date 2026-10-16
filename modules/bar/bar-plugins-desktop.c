@@ -537,7 +537,8 @@ static const GowlBarPluginVTable audio_vtable = {
 	audio_panel, audio_action,
 	audio_panel_opened, audio_panel_closed,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -798,7 +799,8 @@ static const GowlBarPluginVTable media_vtable = {
 	media_panel, media_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1083,7 +1085,8 @@ static const GowlBarPluginVTable podman_vtable = {
 	podman_panel, podman_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1416,7 +1419,8 @@ static const GowlBarPluginVTable weather_vtable = {
 	weather_panel, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1587,7 +1591,8 @@ static const GowlBarPluginVTable git_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1706,7 +1711,8 @@ static const GowlBarPluginVTable keymap_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -1802,7 +1808,8 @@ static const GowlBarPluginVTable confine_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 /* ----------------------------------------------------------------
@@ -2563,7 +2570,8 @@ static const GowlBarPluginVTable display_vtable = {
 	display_panel, display_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 
@@ -3107,7 +3115,8 @@ static const GowlBarPluginVTable recorder_vtable = {
 	recorder_panel, recorder_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 
@@ -3779,7 +3788,8 @@ static const GowlBarPluginVTable screenshot_vtable = {
 	shot_panel, shot_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 
@@ -3975,7 +3985,8 @@ static const GowlBarPluginVTable notifications_vtable = {
 	notif_panel, notif_action,
 	NULL, NULL,
 	NULL,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 
@@ -4360,7 +4371,8 @@ static const GowlBarPluginVTable clipboard_vtable = {
 	clipw_panel, clipw_action,
 	NULL, NULL,
 	clipw_panel_key,
-	NULL
+	NULL,
+	NULL, NULL
 };
 
 

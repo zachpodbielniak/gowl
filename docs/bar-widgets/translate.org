@@ -192,7 +192,7 @@ The *picker* replaces the two panes while it is open: a filter field, then the m
 | =Ctrl+L=       | Pick the source language                               |
 | =Ctrl+Shift+L= | Pick the target language                               |
 | =Ctrl+Shift+C= | Copy the translation                                   |
-| =Ctrl+Shift+V= | Translate the clipboard (see the note below)           |
+| =Ctrl+Shift+V= | Translate the clipboard (=Ctrl+V= alone pastes into the field) |
 | =Ctrl+Shift+X= | Clear both panes                                       |
 | =Ctrl+P=       | Translate while typing on / off                        |
 | =F1=           | Show / hide the key list                               |
@@ -201,7 +201,6 @@ The *picker* replaces the two panes while it is open: a filter field, then the m
 
 Notes, all consequences of the shared text field (the host owns these keys, not the widget):
 
-- In a text field, =Ctrl+Shift+V= is the field's own paste (it pastes into the field without translating). Use the =Clipboard= button, or press it with the keyboard on a chip or button.
 - =Ctrl+Return= outside a text field activates the focused control, like =Return=.
 
 ** Translate while typing
@@ -264,7 +263,6 @@ Other guarantees:
 - *"Google: rate limited".* The keyless endpoint throttles; use another engine.
 - *"Could not resolve host" / "timed out".* Network, DNS or a server that is down; =timeout= raises the patience.
 - *The answer starts with "Sure! Here is..."* A chatty model under the =ai= engine. The prompt asks for the translation only; a smaller instruction-tuned model, or a different =ai-model=, behaves better.
-- *Ctrl+Shift+V pasted instead of translating.* The keyboard was in a text field; see [[#the-panel][The panel]].
 - *The pair in my config is ignored.* Once you pick a pair in the panel it is remembered and wins over =source=/=target=. Delete =translate.state= (below) to follow the config again.
 
 * Internals

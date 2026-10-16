@@ -1380,7 +1380,7 @@ tr_panel_help(GowlBarPanel *panel, GowlBarColor muted)
 		"Ctrl+L        pick the source language",
 		"Ctrl+Shift+L  pick the target language",
 		"Ctrl+Shift+C  copy the translation",
-		"Ctrl+Shift+V  translate the clipboard (outside a text field)",
+		"Ctrl+Shift+V  translate the clipboard",
 		"Ctrl+Shift+X  clear both panes",
 		"Ctrl+P        translate while typing on / off",
 		"Tab           next pane;  F1  this help;  Escape  close"

@@ -1,0 +1,237 @@
+#+title: Key wheel
+#+description: A radial cheat sheet of every keybinding, as a centred overlay that can run what it shows
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+
+=keywheel= puts a keyboard glyph in the bar. Its panel is a centred overlay: a wheel drawing every keybinding the compositor has, one spoke per key and one ring per modifier set, with the binding's description underneath. Type a key and the wheel jumps to it; press Enter (or click the selected cell again) and the binding runs, exactly as if you had pressed the chord.
+
+It is a generic port inspired by Omarchy's key wheel overlay. The data is gowl's own: the keybinds in the compositor's live config, read when the panel opens. Under =cmacs --gowl= that config also holds every =gowl-add-keybind=, so cmacs's bindings are on the wheel with no extra setup, and cmacs can add a fifth face listing notable *Emacs* bindings.
+
+The rings, outermost first:
+
+| Ring          | Chord                  | Default colour |
+|---------------+------------------------+----------------|
+| Rim           | =Super+key=            | blue           |
+| Second        | =Super+Shift+key=      | mauve          |
+| Third         | =Super+Ctrl+key=       | peach          |
+| Hub           | =Super+Shift+Ctrl+key= | red            |
+
+*Alt* is not a ring: the whole wheel flips to the same four rings with Alt added (=Super+Alt+key=, =Super+Shift+Alt+key=, ...), drawn in teal. Toggle it with the =Alt= pill in the header, the centre of the wheel, or by tapping Alt.
+
+The faces (the dots under the wheel):
+
+| Face             | Shows                                                                                                                                             |
+|------------------+---------------------------------------------------------------------------------------------------------------------------------------------------|
+| Core             | Twelve keys a newcomer reaches for first: =Return=, =q=, =c=, =space=, =j=, =k=, =h=, =l=, =1-9= (one spoke for all nine tags), =Tab=, =f=, =p=. |
+| Letters          | =a= to =z=, bound or not --- a cheat sheet that hides free keys cannot answer "what is free?".                                                     |
+| Keys & symbols   | Every other key bound with Super: digits, named keys, punctuation, F-keys, media keys. At most 40 spokes; the rest are reachable through search.  |
+| Beyond Super     | A list of bindings without Super: media keys, =Print=, Alt chords.                                                                               |
+| Emacs (cmacs)    | A list of Emacs bindings cmacs pushed. Only present when there are some.                                                                         |
+
+Core only shows keys that are bound in some ring. When fewer than twelve of the first choices are bound, the next most likely keys fill in (=m t w s v r d i n e b g , . / Escape 0=), so a config that moved things still gets a full Core face.
+
+What it deliberately does *not* do:
+
+- It does not show bindings that belong to a key *mode* (=resize=, ...). Those only exist while the mode is entered, so showing them would claim a chord does something it does not, and Enter could not run them.
+- It does not edit bindings. It is a map, with a "go" button.
+- It does not read the keyboard layout. Shifted symbols are mapped back to their keys with a US table (=?= → =/=, =!= → =1=); on another layout a symbol key may need a click or an arrow key instead.
+
+* Quick start --- standalone gowl
+
+=~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "keywheel"
+    keywheel.size: "640x560"
+
+keybinds:
+  "Super+Alt+k": { action: ipc_command, arg: "bar-panel keywheel", desc: "Key wheel" }
+#+end_src
+
+The widget has to be in a widget list for the keybind to find it; it opens centred on the focused output no matter where the glyph sits. From a shell:
+
+#+begin_src sh
+gowl bar-panel keywheel     # open (or close) the wheel
+gowl bar-panel              # close whatever is open
+#+end_src
+
+=Super+Alt+k= is free in both gowl's shipped config and cmacs's default binds (=Super+/= is cmacs's keybinding describer, =Super+Shift+/= gowl's keybinds menu, =Super+r= is resize mode).
+
+* Quick start --- cmacs --gowl
+
+In =init.el= (or Doom's =config.el=):
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-add" . "keywheel")
+   ("keywheel.size" . "640x560")))
+(gowl-add-keybind "Super+Alt+k" 'ipc-command "bar-panel keywheel" "Key wheel")
+
+;; Optional: the Emacs face.  Pushes once Emacs is idle.
+(require 'cmacs-gowl-bar-keywheel)
+(cmacs-gowl-bar-keywheel-setup)
+#+end_src
+
+=cmacs --gowl= does not turn the widget on by default: it is off in standalone gowl and under cmacs. Your =gowl-add-keybind= bindings appear on the wheel automatically --- they are in the same config the wheel reads.
+
+** The Emacs face
+
+=cmacs-gowl-bar-keywheel-push= (also =M-x=) walks =cmacs-gowl-bar-keywheel-sources= and sends up to 300 bindings to the widget. By default that is everything under =C-c= in =global-map=, through nested prefix maps --- where your own bindings and the AI menu (=C-c a=) live. Walking all of =global-map= would push a thousand built-ins nobody needs a cheat sheet for.
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-bar-keywheel-sources
+      '((global-map . "C-c")          ; C-c ... from the global map
+        (doom-leader-map . "SPC")))   ; the Doom leader, shown as SPC ...
+(cmacs-gowl-bar-keywheel-push)
+#+end_src
+
+Each source is =(KEYMAP-VARIABLE . PREFIX)=. When =PREFIX= is a prefix keymap inside the keymap, that sub-map is walked; when it is not, the keymap itself is walked and =PREFIX= is only how its keys are shown. A nil prefix walks the whole keymap.
+
+Rows on the Emacs face are runnable. Clicking one closes the wheel and runs =emacsctl eval '(cmacs-gowl-bar-keywheel-run "COMMAND")'=; cmacs runs the command only if it is in the list it last pushed, from a timer (outside the RPC, so the command may prompt), after focusing the selected frame.
+
+| Variable                                | Default                  | Meaning                                                    |
+|-----------------------------------------+--------------------------+------------------------------------------------------------|
+| =cmacs-gowl-bar-keywheel-sources=       | =((global-map . "C-c"))= | Which keymaps to list, see above                           |
+| =cmacs-gowl-bar-keywheel-max=           | =300=                    | Most bindings pushed (the bar reads no more than 300)      |
+| =cmacs-gowl-bar-keywheel-depth=         | =4=                      | Nested prefix maps followed below a source's prefix        |
+| =cmacs-gowl-bar-keywheel-doc-length=    | =120=                    | Characters of the first doc line sent                      |
+| =cmacs-gowl-bar-keywheel-raise-frame=   | =t=                      | Focus the selected frame before running a command          |
+
+* Settings
+
+All under =keywheel.= (or =bottom-keywheel.= in the bottom bar).
+
+| Key               | Type          | Default     | Meaning                                                                                            |
+|-------------------+---------------+-------------+----------------------------------------------------------------------------------------------------|
+| =size=            | =WxH=         | =640x560=   | The wheel canvas, in pixels. Clamped to 360x320 .. 1600x1400; garbage is the default.               |
+| =icon=            | text          | =⌨=         | The bar glyph.                                                                                     |
+| =color=           | role or hex   | =text=      | The bar glyph's colour.                                                                            |
+| =color-ring-super= | role or hex  | =blue=      | Bound cells on the rim (=Super+key=).                                                              |
+| =color-ring-shift= | role or hex  | =mauve=     | Bound cells on the second ring (=Super+Shift+key=).                                                |
+| =color-ring-ctrl=  | role or hex  | =peach=     | Bound cells on the third ring (=Super+Ctrl+key=).                                                  |
+| =color-ring-hub=   | role or hex  | =red=       | Bound cells on the hub ring (=Super+Shift+Ctrl+key=).                                              |
+| =color-ring-alt=   | role or hex  | =teal=      | Every bound cell while the Alt flip is on (inner rings slightly fainter), the Alt pill and centre. |
+| =color-selected=  | role or hex   | =accent=    | The selected cell's outline and the current face's dot.                                            |
+| =color-text=      | role or hex   | =text=      | Titles and the details box.                                                                        |
+| =color-muted=     | role or hex   | =muted=     | Labels of free cells, the legend, other faces' dots.                                               |
+| =color-bg=        | role or hex   | =mantle=    | The canvas background, and the text on bound cells.                                                |
+| =color-unbound=   | role or hex   | =surface=   | Free cells and the details box.                                                                    |
+| =emacsctl=        | path          | =emacsctl=  | The cmacs control CLI, for running Emacs-face rows. A program path, not a command line.            |
+| =emacs.count=     | integer       | (pushed)    | Set by cmacs. How many =emacs.<n>= entries there are; at most 300 are read.                        |
+| =emacs.<n>=       | text          | (pushed)    | Set by cmacs. =KEY<TAB>COMMAND<TAB>DOC=, each field escaped (=\\=, =\t=, =\n=).                     |
+
+* Theming
+
+The wheel is themed by the session palette out of the box: every colour above is a *role*, so switching =palette: latte= (or cmacs pushing its theme to gowl) recolours the wheel with everything else. On top of that, each part can be set on its own, with either a role name --- which keeps following the palette --- or a =#rrggbb= / =#rrggbbaa= literal, which is exactly that colour. Anything else (a typo, an empty value) falls back to the part's default role rather than painting black.
+
+Roles: =base=, =mantle=, =crust=, =surface=, =surface-alt=, =overlay=, =text=, =subtext=, =muted=, =accent=, =red=, =green=, =yellow=, =blue=, =mauve=, =teal=, =peach=, =pink=, =sapphire=, =sky=, =lavender=, =flamingo=, =rosewater=, =maroon=.
+
+A full per-ring override, mixing both forms:
+
+#+begin_src yaml
+modules:
+  bar:
+    keywheel.color-ring-super: sapphire     # follows the palette
+    keywheel.color-ring-shift: lavender
+    keywheel.color-ring-ctrl:  "#f9e2af"    # exactly this yellow
+    keywheel.color-ring-hub:   "#eba0ac"
+    keywheel.color-ring-alt:   green
+    keywheel.color-selected:   yellow
+    keywheel.color-bg:         crust
+    keywheel.color-unbound:    "#31324480"  # translucent free cells
+#+end_src
+
+The same from cmacs:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("keywheel.color-ring-super" . "sapphire")
+   ("keywheel.color-ring-shift" . "lavender")
+   ("keywheel.color-ring-ctrl"  . "#f9e2af")
+   ("keywheel.color-ring-hub"   . "#eba0ac")
+   ("keywheel.color-ring-alt"   . "green")))
+#+end_src
+
+The font is the bar's =theme-font=; cell labels, the header and the details box are drawn at fixed fractions of it, so =theme-font: "Sans 12"= scales the whole wheel's text.
+
+* The panel
+
+From the top:
+
+1. *The wheel* (a canvas). Header: binding count, face title, the =Alt= pill. Then the wheel, the face dots, and a details box with the selected chord (spelled the way a config spells it, so it can be pasted back), its description --- or the action and argument when it has none --- and a legend of ring colours. On the two list faces only the header and the dots are drawn.
+2. *Search* --- a text field. Every whitespace-separated word must appear in the description, the action, its argument or the chord (=volume up=, =tag_view=, =super+shift+return=). Results replace the list below; Return runs the first one.
+3. *The list*: search results, or the Beyond Super / Emacs rows on those faces. Clicking a row runs it.
+4. *◀ Face · Run · Face ▶* --- turn the face, or run the selection.
+
+Mouse: click a cell to select it, click it again to run it (a panel has no double-click). Click a dot to turn to that face; click the centre or the pill to flip Alt. The wheel does not turn with the scroll wheel --- over a panel, the host scrolls the panel and does not pass scroll events to the widget.
+
+Keyboard, while the panel is open:
+
+| Key                          | Does                                                                                                  |
+|------------------------------+-------------------------------------------------------------------------------------------------------|
+| a letter, digit or key       | Jump to its spoke: the current face first, then Core, Letters, Keys; else its row on Beyond Super.    |
+| =Shift= / =Ctrl= + a key     | The same, on the ring those modifiers name: =Shift+q= lands on =q= in the =Super+Shift= ring.        |
+| =Alt= + a key                | The same, with the wheel flipped to its Alt rings.                                                    |
+| =Shift=, =Ctrl= alone        | Preview that ring (both: the hub).                                                                    |
+| =Alt= alone                  | Flip the Alt rings on or off.                                                                         |
+| =←= / =→=                    | Around the ring (on a list face: the previous / next face).                                           |
+| =Home= / =End=               | One ring out, towards the rim / one ring in, towards the hub.                                         |
+| =Page Up= / =Page Down=      | Previous / next face.                                                                                 |
+| =/=                          | Put the keyboard in the search field.                                                                 |
+| =Return=                     | Run the selection --- once the keyboard is on the wheel (see below).                                  |
+| =Escape=                     | Close.                                                                                                |
+| any =Super= chord            | Not taken: it closes the wheel and reaches the window manager.                                        |
+
+Keys the bar's panel navigation keeps for itself, in every panel, and which therefore never reach the wheel: =Return=, =space=, =Tab=, =j=, =k=, =Up=, =Down=. In practice:
+
+- =j= and =k= cannot be jumped to by typing them; type =Shift+J= (it lands on =j= in the Shift ring) and press =Home=, or click.
+- =Up= / =Down= / =Tab= move the keyboard between the panel's items, and the wheel is the first of them: when the panel opens nothing is focused yet, so the first =Down= (or =Tab=) puts the keyboard on the wheel. From then on =Return= runs the selection. Clicking the wheel focuses it too. (Typing letters works with or without that focus.)
+
+* Dependencies
+
+None beyond gowl's own build. Fedora packages, for completeness: =cairo-devel=, =pango-devel=, =libxkbcommon-devel=, =glib2-devel= --- all already required by gowl. The Emacs face needs a cmacs build (=emacsctl= on =PATH=); without it the wheel works and simply has four faces.
+
+* Security and privacy
+
+- The wheel reads nothing outside the compositor's in-memory config and the settings pushed to it. Text from the config and from cmacs is made valid UTF-8 and bounded (256 bytes per field, 300 Emacs entries) before it is drawn.
+- Running a binding goes through the compositor's own keybind dispatch: the wheel can only run what a key press could already run.
+- Running an Emacs row spawns =emacsctl eval= with the program and the whole form shell-quoted and the command name Elisp-quoted, so a hostile command name stays one string. cmacs then runs it only if it is in the list cmacs itself last pushed.
+
+* Troubleshooting
+
+| Symptom                                                   | Cause and fix                                                                                                                                                       |
+|-----------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =gowl bar-panel keywheel= does nothing                     | The widget is not in a widget list. Add it to =widgets-right-add= (or any region).                                                                                 |
+| "No keybinds available"                                    | The bar is not running inside gowl, or the config has no keybinds.                                                                                                 |
+| A binding I just added is missing                          | The config is read when the wheel opens. Close it and open it again.                                                                                               |
+| A mode binding (=resize=) is missing                        | Deliberate: mode binds only exist inside their mode.                                                                                                               |
+| =Return= does nothing                                       | The keyboard is not on the wheel yet. Press =Down= once (or click the wheel), or use the =Run= button.                                                             |
+| Typing =j= / =k= moves the panel focus                      | Those keys belong to the panel's navigation. Use =Shift+J= / =Shift+K= then =Home=, or click.                                                                       |
+| A symbol key (=Shift+;=) lands on the wrong spoke           | A non-US layout: the symbol-to-key table is US. Use the arrows, or click.                                                                                          |
+| "Key wheel: nothing ran"                                    | A key mode is active (the default-mode bind does not apply), or the config changed since the wheel opened.                                                        |
+| The Emacs face is missing                                   | Nothing has been pushed: call =(cmacs-gowl-bar-keywheel-setup)= in init, or =M-x cmacs-gowl-bar-keywheel-push=.                                                  |
+| An Emacs row does not run                                   | =emacsctl= is not on =PATH= (set =keywheel.emacsctl=), or the command is not in the last push (=*Messages*= says so). Push again after changing keymaps.           |
+| A colour setting has no effect                              | It is neither a role name nor =#rrggbb= / =#rrggbbaa=, so the default was used. Check the spelling against the role list above.                                     |
+
+* Internals
+
+Files:
+
+- =modules/bar/bar-keywheel-model.c= / =.h= --- everything that is not painting, threads or the compositor: classification of a chord into ring and Alt flip, the faces (Core selection, the Keys face's ordering and cap, the Beyond list), geometry (one layout function the painter and the hit test share, so a cell is clickable exactly where it is drawn), the key map, the run decision, search, the Emacs wire format, and the colour rule. Pure, and compiled straight into the test.
+- =modules/bar/bar-plugins-keywheel.c= --- the widget: the config snapshot, the panel, painting, clicks, keys, running.
+- =lisp/cmacs/cmacs-gowl-bar-keywheel.el= (cmacs) --- the Emacs face.
+
+Threads: there is no worker. Everything --- reading the config, laying out the model, painting, handling keys --- is bounded in-memory work on the compositor thread. The snapshot copies every bind (action name, argument, description, the exact configured modifiers and keysym) into a =BarKeywheelModel=, so no pointer into a config that a reload may replace is kept. The plugin's mutex is never held across a call back into the host or the compositor: closing the panel calls =panel_closed=, and a dispatched bind can reconfigure the bar, and both take it.
+
+Running: =gowl_compositor_dispatch_keybind()= with the bind's *configured* modifiers and keysym (the compositor matches its configured keysym exactly; a config saying =Super+Shift+Q= stores =Q=, which the wheel's normalised =q= would not match). A bind marked =release= goes through =gowl_compositor_dispatch_key()= with =pressed= false. The panel is closed first, so the bind acts on the desktop.
+
+=/= cannot move the host's keyboard focus into the search field (there is no call for it), so it closes the panel and opens it again with the field marked =AUTOFOCUS=, which the host honours on open; a flag keeps that close from resetting the wheel.
+
+Tests: =tests/test-bar-keywheel.c= (=make build/release/test-bar-keywheel=). The model half runs against gowl's own keybind parser and the shipped =data/default-config.yaml= binds captured in =tests/fixtures/bar/keywheel/default-keybinds.tsv=: ring and face assignment for many chords, the Core face for the shipped config, overflow, geometry at several sizes (every cell hit at its centre, rings disjoint, everything inside the canvas), the key map, the run decision, search, colours (including a drift check of the role table against barkit's) and the Emacs wire format. The widget half drives =bar.so= through the stub host, with no compositor and with a fixture model installed through =bar_keywheel_widget_install()= --- the same call the config snapshot uses: keys, clicks, Enter, search, =/=, the Emacs face (including a hostile command name) and colour overrides read back from painted pixels. cmacs: =test/cmacs/cmacs-gowl-bar-keywheel-tests.el=.

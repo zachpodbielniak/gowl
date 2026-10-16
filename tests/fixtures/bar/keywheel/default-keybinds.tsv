@@ -1,0 +1,108 @@
+# Captured from data/default-config.yaml (keybinds:), 2026-10-16.
+# One bind per line: combo<TAB>action<TAB>arg<TAB>desc<TAB>release
+Super+Return	spawn	gst	Terminal	false
+Super+p	spawn	wofi --show drun	App launcher	false
+Super+Shift+p	spawn	wofi --show run	Run command	false
+Super+Shift+c	kill_client		Close window	false
+Super+Shift+Return	zoom		Promote to master	false
+Super+j	focus_stack	+1	Focus next window	false
+Super+k	focus_stack	-1	Focus previous window	false
+Super+h	set_mfact	-0.05	Shrink master area	false
+Super+l	set_mfact	+0.05	Grow master area	false
+Super+i	inc_nmaster	+1	More master windows	false
+Super+d	inc_nmaster	-1	Fewer master windows	false
+Super+t	set_layout	tile	Tile layout	false
+Super+f	toggle_fullscreen		Fullscreen this window	false
+Super+Shift+f	toggle_float		Float / unfloat this window	false
+Super+Alt+b	toggle_below		This floating window behind the tiling	false
+Super+Ctrl+Alt+b	toggle_below_all		All floating windows behind the tiling	false
+Super+g	toggle_pointer_confine		Keep the pointer in this window	false
+Super+m	set_layout	monocle	Monocle layout	false
+Super+Shift+m	set_layout	tabbed	Tabbed layout	false
+Super+Shift+h	toggle_hdr		HDR on this output	false
+Super+Tab	cycle_layout		Next layout	false
+Super+Shift+Tab	cycle_layout	-1	Previous layout	false
+Super+v	set_split	vsplit	Vertical split	false
+Super+Shift+v	set_split	normal	Horizontal split	false
+Super+s	ipc_command	scratchpad-toggle	Scratchpad: show / hide	false
+Super+Alt+s	ipc_command	scratchpad-add	Scratchpad: send the focused window	false
+Super+Ctrl+s	ipc_command	scratchpad-remove	Scratchpad: bring the focused window back	false
+Super+Ctrl+Shift+s	ipc_command	scratchpad-remove	Scratchpad: bring the focused window back	false
+Super+comma	focus_monitor	-1	Focus left monitor	false
+Super+period	focus_monitor	+1	Focus right monitor	false
+Super+Shift+comma	move_to_monitor	-1	Move to left monitor	false
+Super+Shift+period	move_to_monitor	+1	Move to right monitor	false
+Super+0	tag_view	0		false
+Super+Shift+0	tag_set	0		false
+Super+1	tag_view	1		false
+Super+2	tag_view	2		false
+Super+3	tag_view	4		false
+Super+4	tag_view	8		false
+Super+5	tag_view	16		false
+Super+6	tag_view	32		false
+Super+7	tag_view	64		false
+Super+8	tag_view	128		false
+Super+9	tag_view	256		false
+Super+Shift+1	tag_set	1		false
+Super+Shift+2	tag_set	2		false
+Super+Shift+3	tag_set	4		false
+Super+Shift+4	tag_set	8		false
+Super+Shift+5	tag_set	16		false
+Super+Shift+6	tag_set	32		false
+Super+Shift+7	tag_set	64		false
+Super+Shift+8	tag_set	128		false
+Super+Shift+9	tag_set	256		false
+Super+Ctrl+1	tag_toggle_view	1		false
+Super+Ctrl+2	tag_toggle_view	2		false
+Super+Ctrl+3	tag_toggle_view	4		false
+Super+Ctrl+4	tag_toggle_view	8		false
+Super+Ctrl+5	tag_toggle_view	16		false
+Super+Ctrl+6	tag_toggle_view	32		false
+Super+Ctrl+7	tag_toggle_view	64		false
+Super+Ctrl+8	tag_toggle_view	128		false
+Super+Ctrl+9	tag_toggle_view	256		false
+Super+Shift+Ctrl+1	tag_toggle	1		false
+Super+Shift+Ctrl+2	tag_toggle	2		false
+Super+Shift+Ctrl+3	tag_toggle	4		false
+Super+Shift+Ctrl+4	tag_toggle	8		false
+Super+Shift+Ctrl+5	tag_toggle	16		false
+Super+Shift+Ctrl+6	tag_toggle	32		false
+Super+Shift+Ctrl+7	tag_toggle	64		false
+Super+Shift+Ctrl+8	tag_toggle	128		false
+Super+Shift+Ctrl+9	tag_toggle	256		false
+Super+space	ipc_command	menu	Menu	false
+Super+Shift+space	ipc_command	menu-path	Menu, with programs on $PATH	false
+Super+Alt+space	ipc_command	menu-open apps	Menu: applications	false
+Super+Shift+slash	ipc_command	menu-open keybinds	Menu: every keybinding	false
+Super+Ctrl+Escape	ipc_command	menu-open system	Menu: system	false
+Super+Shift+s	ipc_command	screenshot-area	Screenshot: select a region	false
+Super+Print	ipc_command	screenshot-window	Screenshot: focused window	false
+Print	ipc_command	screenshot-screen	Screenshot: whole screen	false
+Super+Alt+Shift+s	ipc_command	screenshot-ocr	Copy text from a region (OCR)	false
+Super+Alt+c	ipc_command	screenshot-color	Pick a colour	false
+Super+Alt+r	ipc_command	macro-record	Macro: record / stop recording	false
+Super+Alt+Shift+r	ipc_command	macro-run last-recording	Macro: replay the last recording	false
+Super+Alt+m	ipc_command	macro-voice	Macro: say one	false
+Super+Alt+v	ipc_command	menu-open clipboard	Menu: clipboard history	false
+Super+Shift+q	quit		Quit gowl	false
+Super+Ctrl+h	focus_dir	left	Focus left	false
+Super+Ctrl+j	focus_dir	down	Focus down	false
+Super+Ctrl+k	focus_dir	up	Focus up	false
+Super+Ctrl+l	focus_dir	right	Focus right	false
+Super+Ctrl+u	focus_urgent		Focus the urgent window	false
+Super+Ctrl+Tab	focus_last		Focus the previous window	false
+Super+Shift+t	toggle_sticky		Pin / unpin window	false
+Super+r	mode	resize	Resize mode	false
+Super+Ctrl+o	output_power	off	Screens off	false
+Super+Shift+r	reload_config		Reload config	false
+Super+Shift+l	lock		Lock the session	false
+XF86AudioRaiseVolume	spawn	wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+	Volume up	false
+XF86AudioLowerVolume	spawn	wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-	Volume down	false
+XF86AudioMute	spawn	wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle	Mute output	false
+XF86AudioMicMute	spawn	wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle	Mute microphone	false
+XF86MonBrightnessUp	spawn	brightnessctl set 5%+	Brightness up	false
+XF86MonBrightnessDown	spawn	brightnessctl set 5%-	Brightness down	false
+XF86AudioPlay	spawn	playerctl play-pause	Play / pause	false
+XF86AudioNext	spawn	playerctl next	Next track	false
+XF86AudioPrev	spawn	playerctl previous	Previous track	false
+XF86AudioStop	spawn	playerctl stop	Stop playback	false

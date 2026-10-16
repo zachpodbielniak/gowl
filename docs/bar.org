@@ -614,7 +614,7 @@ Shipped in =bar.so= but *off* unless you add them to a widget list. Each has its
 | =cpu= (activity) | The CPU widget's activity mode: a load creature, process list, kill    | yes (=cpu.style: creature=)        | [[file:bar-widgets/cpu-activity.org]]       |
 | =ai-assistant=  | Chat with any provider, manage local ollama models, see the machine    | yes                                | [[file:bar-widgets/ai-assistant.org]]       |
 | =meeting-notes= | Record outputs and mics, transcribe, summarise, file the result        | yes                                | [[file:bar-widgets/meeting-notes.org]]      |
-| =ai-rewrite=    | Rewrite the selected text: fix, improve, shorten, translate, custom    | no                                 | [[file:bar-widgets/ai-rewrite.org]]         |
+| =ai-rewrite=    | Rewrite the selected text: fix, improve, shorten, translate, custom    | yes (Super+e; right-click: provider) | [[file:bar-widgets/ai-rewrite.org]]         |
 | =translate=     | A two-pane translator overlay                                          | no                                 | [[file:bar-widgets/translate.org]]          |
 | =keywheel=      | A radial cheat sheet of every keybinding                               | no                                 | [[file:bar-widgets/keywheel.org]]           |
 | =webmail=       | A themed web mail window with an unread count                          | no                                 | [[file:bar-widgets/webmail.org]]            |

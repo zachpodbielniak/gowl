@@ -1,0 +1,268 @@
+#+title: Web mail
+#+description: A themed web mail window behind a bar icon, with an unread count
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+
+=webmail= (aliases =outlook= and =mail-web=) puts a mail glyph in the bar that owns one web mail window. Click it and the window opens; click it again while it is in front and it hides; click it once more and it comes back where you are. While the window runs, the glyph shows the unread count.
+
+The window is a gsurf kiosk --- no tabs, no address bar --- running a configuration the widget generates, so it gets three things an ordinary browser tab does not:
+
+- *Its own profile.* Cookies live in =$XDG_DATA_HOME/gowl-webmail=, apart from the browser you browse with, so signing in to mail there does not sign anything else in, and the sign-in survives restarts.
+- *Your theme.* A stylesheet made from the bar's palette is injected into the mail page: Fluent UI's colour tokens for Outlook, a small generic set for anything else. Switch the palette and the stylesheet is rewritten. Any part can be overridden one colour at a time, or the palette ignored entirely.
+- *An unread count.* A userscript writes the unread count into the page title as =(N) …=; the bar reads it back off the window. Gmail and Proton already put the count in their titles and are read as they are.
+
+It is a generic port inspired by Omarchy's Outlook-in-its-own-window plugin. The default URL is Outlook on the web because that is what the original did, but *Outlook is a proprietary Microsoft service*; nothing here depends on it. Any web mail works, and the free ones come first in this list: Roundcube, SnappyMail, SOGo, Proton Mail, Fastmail, Gmail, Outlook.
+
+What it deliberately does *not* do:
+
+- It is not a mail client. It does not speak IMAP, does not read your mail, and never sees a password: the sign-in happens in the page, and the session lives in the browser's cookie jar.
+- It does not modify the mail site beyond colours and the page title.
+- It does not close the window when the bar reloads. A bar reload, a plugin reload and a theme change keep your mail open; quitting is explicit (the panel's *Quit*, or the window's own =Ctrl+q=).
+
+* Quick start --- standalone gowl
+
+In =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "webmail"
+    # Your account; the default is work/school Outlook.
+    webmail.url: "https://outlook.live.com/mail/"
+    # Keep a hidden window running so the unread count is always live.
+    webmail.autostart: true
+    webmail.run-in-background: true
+keybinds:
+  "Super+Shift+m": { action: ipc_command, arg: "bar-panel webmail", desc: "Web mail panel" }
+#+end_src
+
+For a self-hosted Roundcube:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "webmail"
+    webmail.url: "https://mail.example.org/"
+    webmail.compose-url: "https://mail.example.org/?_task=mail&_action=compose"
+#+end_src
+
+Open the panel from a shell:
+
+#+begin_src sh
+gowl bar-panel webmail
+#+end_src
+
+* Quick start --- cmacs --gowl
+
+In =init.el= (or Doom's =config.el=):
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-add" . "webmail")
+   ("webmail.url" . "https://outlook.live.com/mail/")
+   ("webmail.autostart" . "true")
+   ("webmail.run-in-background" . "true")))
+(gowl-add-keybind "Super+Shift+m" 'ipc-command "bar-panel webmail" "Web mail panel")
+#+end_src
+
+The widget is *off by default* under =cmacs --gowl=, as it is standalone. It needs no Elisp of its own: it themes itself from the bar's palette, which cmacs already feeds from its theme, so a theme change in cmacs re-themes the mail window too (see [[*Theming][Theming]]).
+
+* Clicks
+
+| Input                       | Does                                                                                       |
+|-----------------------------+--------------------------------------------------------------------------------------------|
+| Left click                  | Not running: start it. In front: hide it. Hidden or behind: show it and focus it.          |
+| Right click                 | Show and focus it (never hides). Starts it when it is not running.                        |
+| Middle click                | Compose: open a second window on the provider's compose page                              |
+| =Shift= / =Ctrl= + left click | Open the panel                                                                           |
+
+A left click on a window that is still starting does nothing --- a second launch would be a second window. A left click that could only fail (the browser is not installed, or the window has not been recognised 20 seconds after starting) opens the panel instead, so the reason is on screen.
+
+/Hidden/ means minimized, through the compositor's own minimize: the window leaves every tag (it is on no workspace and counts in no layout), taskbars see it as minimized, and focus moves to what is left. /Show/ restores it on the output whose bar you clicked, on the tag that output is viewing. A window that is open on another workspace is brought to you (=show-on: here=, the default) or you are taken to it (=show-on: jump=).
+
+* Settings
+
+Every key is set as =webmail.<key>= in the bar's configuration (or pushed from cmacs the same way).
+
+| Key                   | Type            | Default                                            | Meaning                                                                                                                       |
+|-----------------------+-----------------+----------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------|
+| =url=                 | URL             | =https://outlook.cloud.microsoft/mail/=            | The mail page. Must be =https://= (or =http://= for a LAN server). Personal Outlook: =https://outlook.live.com/mail/=           |
+| =compose-url=         | URL             | derived per provider                               | The page that opens a blank message; see [[*Compose][Compose]]                                                                                    |
+| =browser-command=     | command         | =gsurf --kiosk --no-c-config -c {config} {url}=    | The browser. ={config}= is the generated configuration, ={url}= the page; the URL is appended when there is no ={url}=        |
+| =app-id=              | string          | =gsurf=                                            | The window's Wayland app-id, used to adopt a window the widget did not start; see [[*Finding the window][Finding the window]]                                       |
+| =title-match=         | regex           | (none)                                             | A window title to adopt a window by, with =app-id=                                                                            |
+| =show-on=             | =here= / =jump= | =here=                                             | A window on another workspace: bring it here, or go there                                                                    |
+| =click=               | =toggle= / =panel= | =toggle=                                        | What a plain left click does                                                                                                  |
+| =show-count=          | bool            | =true=                                             | Show the number; =false= shows only a dot                                                                                     |
+| =autostart=           | bool            | =false=                                            | Start the window, hidden, when the bar starts                                                                                 |
+| =run-in-background=   | bool            | =false=                                            | When the window is closed (=Ctrl+q=, the close button), start a hidden one again, so the count keeps updating                |
+| =live-reload=         | bool            | =true=                                             | Restart a /hidden/ window as soon as the palette changes; see [[*Theming][Theming]]                                                                 |
+| =follow-theme=        | bool            | =true=                                             | Theme the page from the bar's palette; =false= applies only the =color-*= overrides and =extra-css=                           |
+| =color-background=    | colour          | role =base=                                        | Page ground                                                                                                                   |
+| =color-surface=       | colour          | role =surface=                                     | Raised, hovered and selected rows                                                                                             |
+| =color-text=          | colour          | role =text=                                        | Primary text                                                                                                                  |
+| =color-subtext=       | colour          | role =subtext=                                     | Secondary text                                                                                                                |
+| =color-accent=        | colour          | role =accent=                                      | Buttons, links, selection, the brand colour                                                                                   |
+| =color-border=        | colour          | role =overlay=                                     | Hairlines, dividers, scrollbar thumbs                                                                                         |
+| =extra-css=           | path            | (none)                                             | Your own CSS, appended after the generated rules (so it wins). Up to 256 KiB                                                  |
+| =color-off=           | colour          | role =muted=                                       | The bar glyph when nothing is running                                                                                         |
+| =color-on=            | colour          | role =text=                                        | The bar glyph when running with nothing unread                                                                                |
+| =color-unread=        | colour          | role =accent=                                      | The bar glyph and count when there is unread mail                                                                             |
+| =third-party-cookies= | bool            | =true=                                             | Let sign-in frames keep cookies (see [[*Security and privacy][Security and privacy]])                                                                   |
+| =download-dir=        | path            | =~/Downloads=                                      | Where attachments are saved                                                                                                   |
+| =profile-dir=         | path            | =$XDG_DATA_HOME/gowl-webmail=                      | The profile: cookie jar (and the cache, beside it, when set)                                                                  |
+| =runtime-dir=         | path            | =$XDG_RUNTIME_DIR/gowl-webmail=                    | The generated configuration, stylesheet, userscript and PID file                                                              |
+| =interval=            | seconds         | =2=                                                | How often the window is looked at (1 while one is starting)                                                                   |
+
+A /colour/ is a palette role name (=accent=, =peach=, =surface-alt=, …) or a literal =#rrggbb= --- the same three-way rule as every other widget colour: a role follows the palette, a literal stays exactly that colour, and anything else is ignored in favour of the default.
+
+* Theming
+
+** How the page follows the palette
+
+The page is themed from six parts, each defaulting to a palette role:
+
+| Part         | Role      | Used for                                                    |
+|--------------+-----------+-------------------------------------------------------------|
+| =background= | =base=    | The page, list and reading pane grounds (and darker steps)  |
+| =surface=    | =surface= | Hovered, pressed and selected rows; raised panes            |
+| =text=       | =text=    | Primary text                                                |
+| =subtext=    | =subtext= | Secondary text, placeholders                                |
+| =accent=     | =accent=  | Brand buttons, links, the focus ring, selection             |
+| =border=     | =overlay= | Strokes, dividers, scrollbars                               |
+
+Every other colour in the stylesheet is one of these or a blend of two. For Outlook that means the full set of Fluent UI v9 tokens (=--colorNeutralBackground1= to =6=, =--colorNeutralForeground1= to =4=, =--colorBrandBackground=, =--colorBrandForeground1=, =--colorCompoundBrandBackground=, =--colorNeutralStroke1= to =3= and their hover/pressed/selected states) plus the older Fabric slots (=--themePrimary=, =--neutralPrimary=, =--neutralLighter=, …) that parts of Outlook still read. They are set with =!important= on =:root=, =body= and Fluent's provider class (matched by prefix, since its hash suffix changes between builds). For any other site a short generic block themes =html=, =body=, links, form controls, the selection and the scrollbars.
+
+Whether the theme is light or dark is judged from the background's luminance, not the palette's name, and written as =color-scheme=, which also flips form controls and any site that honours =prefers-color-scheme= --- often the cleanest result on a site with a dark mode of its own.
+
+The stylesheet is scoped to the mail host(s) only (for Outlook, every host it is served from). Sign-in pages on other hosts keep their own colours rather than getting half a theme.
+
+** Overriding one part
+
+#+begin_src yaml
+modules:
+  bar:
+    webmail.color-accent: peach        # a role: follows the palette
+    webmail.color-background: "#11111b" # a literal: exactly this
+#+end_src
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("webmail.color-accent" . "peach")
+   ("webmail.color-background" . "#11111b")))
+#+end_src
+
+** Not following the palette
+
+=webmail.follow-theme: false= writes only what you override. With no overrides the stylesheet is empty and the site looks as its own theme says. Add =extra-css= for anything the six parts cannot express:
+
+#+begin_src yaml
+modules:
+  bar:
+    webmail.follow-theme: false
+    webmail.extra-css: "~/.config/gowl/webmail.css"
+#+end_src
+
+** When the palette changes
+
+The widget notices on its next poll (a signature of the resolved colours, the URL and the extra stylesheet's path) and rewrites the files at once, so the next window has the new theme. gsurf reads its stylesheets when a page view is created, so the *open* window keeps the old one until it is restarted:
+
+- a /hidden/ window is restarted straight away (=live-reload=, the default) --- nobody is looking at it, and the session survives in the cookie jar;
+- a /visible/ one is not restarted under you: the panel shows *Restart to apply the theme*, and the next time you hide it, it is restarted then.
+
+*Reload theme* in the panel rewrites the files and restarts the window now, whatever its state. Edits to the /contents/ of the =extra-css= file are not watched: use *Reload theme* after changing it (changing the =extra-css= setting itself is noticed).
+
+** The bar glyph
+
+=color-off= (=muted=) when nothing runs, =color-on= (=text=) when it runs, =color-unread= (=accent=) for the glyph and the dot-and-count when there is unread mail. Each accepts a role or a =#rrggbb=.
+
+* The panel
+
+Open it with =Shift=+click, =Ctrl=+click, =click: panel=, or =gowl bar-panel webmail=.
+
+- *Header* --- the window's title (for Outlook, the account) and its state: /Not running/, /Starting…/, /In front/, /On screen/, /On another workspace/, /Hidden/. Accent-coloured when there is unread mail.
+- *Unread* and *Service* --- the count (/unknown/ while the page has not said) and which provider the URL is.
+- *Address* --- the mail host.
+- *Restart to apply the theme* --- appears when the palette changed under an open window; click to restart it.
+- *Problem* --- the last error (a bad URL, an unwritable directory, a =title-match= that does not compile, an =extra-css= that is not a file); click to dismiss.
+- *Open* / *Hide* --- show or hide the window, as the left click would.
+- *Compose* --- a new message (see below).
+- *Reload theme* --- rewrite the stylesheet and restart the window with it.
+- *Quit* --- two-step: the first click turns it into *Click again to quit* for five seconds. Quitting closes the window through the compositor (as its close button would, so gsurf exits cleanly and flushes its cookies) and does not trigger =run-in-background=.
+
+The panel's own keys ([[file:../bar.org::#panels][Panels]]) work as everywhere: =j=/=k=, =Tab=, =Return=, =Escape=.
+
+* Compose
+
+The middle click and the *Compose* button open a second kiosk window on the compose page. It shares the profile, so it is signed in. gsurf has no remote-control command that a bar widget could use to point the running window at another page (its MCP module can navigate, but it is a separate build flag, off by default, and would mean exposing the mail session to an MCP socket), so a second window is the honest option; it is not tracked and closes like any window.
+
+| Provider | Derived compose page                                     |
+|----------+----------------------------------------------------------|
+| Outlook  | =https://<host>/mail/deeplink/compose=                   |
+| Gmail    | =https://mail.google.com/mail/?view=cm&fs=1=             |
+| Fastmail | =https://<host>/action/compose/=                         |
+| Proton   | =https://<host>/inbox#mailto==                           |
+| other    | none --- set =compose-url=, or a toast says to           |
+
+* Finding the window
+
+Every gsurf window has the app-id =gsurf=, including the ones you browse with, so the widget never adopts a window by that alone. It finds its window by *PID*: the browser it started, or a process descended from it (so =env X=1 gsurf …= and =flatpak run …= wrappers still work). The PID is kept in =$XDG_RUNTIME_DIR/gowl-webmail/pid=, so a reloaded bar finds the window the previous one started; the PID is trusted only if that process's arguments include the generated configuration's path, since PIDs are reused.
+
+With a different =browser-command= whose window cannot be traced to the PID, tell the widget what to look for:
+
+- =app-id= set to something other than =gsurf= adopts a window with that app-id;
+- =title-match= adopts a window whose title matches the regex (and the app-id, when set).
+
+* Notifications
+
+The generated configuration allows web notifications for the mail site. WebKitGTK sends them to whatever owns =org.freedesktop.Notifications= on the session bus; nothing in this widget is involved in delivering them. In a standalone gowl session that is the =notifyd= module, which turns each one into a bar toast and a count on the bar's =notifications= widget; under =cmacs --gowl= it is cmacs's own daemon (=cmacs-notify-daemon=), which does the same for the bar and keeps the history in an Org buffer. Under GNOME, GNOME Shell shows them.
+
+* Dependencies
+
+| Package                     | Why                                                                                                              |
+|-----------------------------+------------------------------------------------------------------------------------------------------------------|
+| gsurf                       | The browser. Your own GObject port of surf: built by cmacs from =deps/gsurf= and shipped in the Immutablue / Hyacinth Macaw images. Not in Fedora. |
+| =webkit2gtk4.1=             | gsurf's runtime with its default GTK 3 backend (what =/usr/sbin/gsurf= links today)                              |
+| =webkitgtk6.0=              | gsurf's runtime instead, when built with =GTK_BACKEND=gtk4=                                                       |
+
+To build gsurf itself (from its =config.mk=): =gcc make pkgconf-pkg-config glib2-devel libyaml-devel json-glib-devel= plus =gtk3-devel webkit2gtk4.1-devel= for the default backend or =gtk4-devel webkitgtk6.0-devel= for =GTK_BACKEND=gtk4=. The bar side needs nothing beyond what gowl already builds with.
+
+When the browser command is not on =PATH= the glyph stays dimmed, the tooltip says so, and a click opens the panel, which names the command and the packages above. Pointing =browser-command= at another browser works, with the caveat that the generated =-c= configuration (theme, userscript, profile) is gsurf's; another browser gets only the URL.
+
+* Security and privacy
+
+- *Outlook is proprietary.* Using it through this widget does not change what Microsoft sees; the widget only colours the page and reads the title.
+- *Separate profile.* The cookie jar, and therefore your mail session, lives in =profile-dir= (mode 0700), apart from your other browsing. Delete that directory to sign out everywhere.
+- *Generated files are private.* =runtime-dir= is 0700 and every file in it 0600.
+- *No history.* gsurf's history, session, bookmark and tab modules are disabled in the mail window, so subject lines (which are page titles) are not logged to disk.
+- *No bare-letter browser keys.* gsurf's =modal=, =find_bar= and =toggles= modules are off and the key table holds only modified keys, so mail shortcuts (=j=, =k=, =/=, =Ctrl+Shift+…=) reach the mail app.
+- *Third-party cookies* are allowed in this profile by default (=third-party-cookies: true=): Microsoft and Google renew a session from a hidden frame on their login host, and blocking it means signing in again every day or so. The profile visits nothing but mail. Set it to =false= to block them.
+- *The URL is never a shell string.* =browser-command= is split into arguments first and ={url}=/={config}= are substituted inside the pieces, so a URL with =&=, =;= or spaces stays one argument; a URL must be =http(s)://= and may not start with =-=. The URL is quoted into the generated YAML, so it cannot add configuration keys.
+- *Only our process is ever signalled,* and only after its arguments prove it is the browser this widget started.
+
+* Troubleshooting
+
+| Symptom                                                    | Cause and fix                                                                                                                                          |
+|------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Glyph stays dimmed; tooltip says not installed             | =gsurf= is not on =PATH=. Install it (see [[*Dependencies][Dependencies]]) or set =browser-command=.                                                                         |
+| Click does nothing, panel says the window was not recognised | A custom =browser-command= whose window is not a child of the process. Set =app-id= or =title-match=.                                                |
+| No unread count on Outlook                                 | Outlook's folder pane is collapsed or the Inbox is not in it, or Outlook changed its markup. The userscript looks for =data-folder-name="inbox"=, then a tree item labelled Inbox; the count is read from its accessible label ("Inbox, 3 unread") or its badge. |
+| New theme not applied                                      | The window is visible; the panel offers *Restart to apply the theme*, or hide it and it restarts.                                                    |
+| Theme looks half-applied                                   | A part of the site that does not use Fluent tokens. Use =extra-css= for it; or =follow-theme: false= and let =color-scheme= drive the site's own dark mode. |
+| Signed out every day                                       | =third-party-cookies: false=. Turn it back on for Microsoft/Google accounts.                                                                          |
+| The window keeps coming back after closing                 | =run-in-background: true= --- that is what it does. *Quit* in the panel stops it for good.                                                           |
+| "The mail window keeps exiting"                            | With =run-in-background= the browser exited within 15 s of starting three times in a row and the widget stopped relaunching it. Run the =browser-command= by hand to see why. |
+
+* Internals
+
+- *Files.* =modules/bar/bar-plugins-webmail.c= is the widget; =modules/bar/bar-webmail-model.c= is everything pure --- title parsing, provider detection, compose links, argv building, the CSS and YAML generators, the userscript source, the click decision table --- with no plugin, theme or compositor in it.
+- *Threads.* The poll, clicks and panel run on the compositor thread holding the gowl lock: they walk the client list, read a few hundred bytes from =/proc=, and call the compositor's own =gowl_compositor_minimize_client()=, =unminimize_client()= and =show_client()= (so focus goes through the focus rules). Writing the generated files and starting the browser are /launch jobs/ on a worker (=gowl_bar_plugin_queue_work()=); the async poll only checks, once a minute, that the browser is installed. Fields the worker writes are behind a mutex.
+- *Process.* The browser is started with =g_spawn_async()= so the widget has its PID; GLib double-forks, so the PID is the browser's own and it is reaped by init (or the session's subreaper), never waited for here. It is started in its own session (=setsid=), so a bar reload or a terminal signal to gowl's process group never reaches it. =gowl_bar_plugin_spawn()= is not used because it does not return a PID.
+- *State paths.* =$XDG_RUNTIME_DIR/gowl-webmail/= holds =gsurf.yaml=, =theme.css=, =unread.js= and =pid=. =$XDG_DATA_HOME/gowl-webmail/= holds =cookies.sqlite=; =$XDG_CACHE_HOME/gowl-webmail/= the HTTP cache.
+- *Profile caveat.* gsurf honours =storage.cookie_jar= but, at the time of writing, not =storage.data_dir= for WebKit's site data (local storage, IndexedDB), which stays in WebKit's default location shared with other gsurf windows. The cookie jar is what carries a sign-in; the generated configuration already sets =data_dir= so a gsurf that honours it isolates the rest too.
+- *Tests.* =tests/test-bar-webmail.c= (=make build/release/test-bar-webmail=): title parsing for every provider's format, unicode, capped and hostile titles; provider and compose-link detection; argv tokenisation with =&=, spaces and option-looking URLs; =/proc= parsing; light/dark judgement; the Outlook (Mocha) and generic (Latte) stylesheets and the gsurf configuration against golden files in =tests/fixtures/bar/webmail/=; override precedence and =follow-theme=; the click decision table; and, in the bar-widget harness with a stand-in browser script, launch (files, modes, argv), two-step quit, the missing-browser panel, URL refusal, label colours, the =run-in-background= brake, PID adoption after a reload (and refusal of a recycled PID), and compose. Regenerate goldens with =GOWL_WEBMAIL_REGOLD=1= and read the diff.

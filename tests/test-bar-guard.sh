@@ -20,10 +20,12 @@ fail() {
 # 1. Every plugin entry point the bar calls runs under the fault guard.
 #
 # Bar plugins are in-process, so an unguarded call into one is a
-# potential logout.  These are the five surfaces a plugin exposes; each
-# must have a guarded call site in the module.
+# potential logout.  These are the surfaces a plugin exposes; each must
+# have a guarded call site in the module.  The panel text and canvas
+# hooks joined them with the ENTRY and CANVAS panel items.
 for what in bar_poll_body bar_work_body bar_click_body \
-            bar_build_panel_body bar_panel_action_body; do
+            bar_build_panel_body bar_panel_action_body \
+            bar_panel_text_body bar_panel_canvas_body; do
 	grep -q "gowl_bar_guard_call($what" modules/bar/gowl-module-bar.c ||
 		fail "the bar module no longer runs $what under the fault guard"
 done

@@ -296,6 +296,8 @@ typedef struct {
 	BarPaste   *paste;             /* in flight, or NULL */
 	gchar      *canvas_fault;      /* plugin name that faulted painting
 	                                  a canvas, handled after the render */
+	gchar      *focus_token;       /* last GOWL_BAR_PANEL_PROP_FOCUS
+	                                  obeyed, see bar_panel_apply_focus */
 } BarPanelState;
 
 /*
@@ -1569,6 +1571,7 @@ bar_panel_clear_state(GowlModuleBar *self)
 	if (self->panel.entries != NULL)
 		g_hash_table_remove_all(self->panel.entries);
 	g_clear_pointer(&self->panel.canvas_fault, g_free);
+	g_clear_pointer(&self->panel.focus_token, g_free);
 	if (self->panel.scene_buf != NULL) {
 		wlr_scene_node_destroy(&self->panel.scene_buf->node);
 		self->panel.scene_buf = NULL;
@@ -1934,6 +1937,42 @@ bar_paste_begin(GowlModuleBar *self, const gchar *entry_id)
 		bar_paste_cancel(self);
 }
 
+/*
+ * Obey a plugin's request to move the keyboard (GOWL_BAR_PANEL_PROP_FOCUS).
+ * Only a token different from the last one obeyed moves it, so a
+ * request left in place does not pull focus back on every rebuild.
+ */
+static gboolean
+bar_panel_apply_focus(GowlModuleBar *self)
+{
+	guint i, n;
+
+	if (self->panel.panel == NULL)
+		return FALSE;
+
+	n = gowl_bar_panel_n_items(self->panel.panel);
+	for (i = 0; i < n; i++) {
+		GowlBarPanelItem *item;
+		const gchar *token;
+
+		item = gowl_bar_panel_get_item(self->panel.panel, i);
+		token = (item != NULL)
+			? gowl_bar_panel_item_get_prop(item,
+			                               GOWL_BAR_PANEL_PROP_FOCUS)
+			: NULL;
+		if (token == NULL || gowl_bar_panel_item_get_disabled(item))
+			continue;
+		if (g_strcmp0(token, self->panel.focus_token) == 0)
+			continue;
+		g_free(self->panel.focus_token);
+		self->panel.focus_token = g_strdup(token);
+		self->panel.focus_item  = (gint)i;
+		self->panel.focus_child = -1;
+		return TRUE;
+	}
+	return FALSE;
+}
+
 /* Put the keyboard on the first entry that asked for it. */
 static gboolean
 bar_panel_autofocus(GowlModuleBar *self)
@@ -2069,6 +2108,7 @@ bar_panel_open(GowlModuleBar *self, GowlBarInstance *bar, BarItem *item,
 	}
 	bar_panel_sync_entries(self);
 	bar_panel_autofocus(self);
+	bar_panel_apply_focus(self);
 	bar_panel_render(self);
 	bar_redraw_all(self);
 }
@@ -2100,6 +2140,7 @@ bar_panel_rebuild(GowlModuleBar *self)
 	g_clear_object(&self->panel.panel);
 	self->panel.panel = panel;
 	bar_panel_sync_entries(self);
+	bar_panel_apply_focus(self);
 	bar_panel_render(self);
 }
 

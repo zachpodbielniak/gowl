@@ -67,7 +67,7 @@ static const gchar *probe_source =
 	"#include <xkbcommon/xkbcommon-keysyms.h>\n"
 	"#include <stdio.h>\n"
 	"\n"
-	"typedef struct { gint rev; } Probe;\n"
+	"typedef struct { gint rev; gint focus; } Probe;\n"
 	"\n"
 	"static void\n"
 	"note(const gchar *line)\n"
@@ -120,6 +120,10 @@ static const gchar *probe_source =
 	"\te = gowl_bar_panel_add_entry(panel, \"pw\", NULL, NULL);\n"
 	"\tgowl_bar_panel_item_set_prop(e, GOWL_BAR_ENTRY_PROP_SECRET,\n"
 	"\t                             \"true\");\n"
+	"\tif (p->focus > 0) {\n"
+	"\t\tg_snprintf(rev, sizeof(rev), \"%d\", p->focus);\n"
+	"\t\tgowl_bar_panel_item_set_prop(e, GOWL_BAR_PANEL_PROP_FOCUS, rev);\n"
+	"\t}\n"
 	"\tgowl_bar_panel_add_canvas(panel, \"c\", 80);\n"
 	"\treturn panel;\n"
 	"}\n"
@@ -138,6 +142,8 @@ static const gchar *probe_source =
 	"\tg_free(line);\n"
 	"\tif (submitted && g_strcmp0(text, \"clear\") == 0)\n"
 	"\t\tp->rev++;\n"
+	"\tif (submitted && g_strcmp0(text, \"go\") == 0)\n"
+	"\t\tp->focus++;\n"
 	"}\n"
 	"\n"
 	"static void\n"
@@ -542,6 +548,39 @@ test_paste_arrives_through_the_loop(void)
 	rig_down(&r);
 }
 
+/*
+ * A plugin moves the keyboard by changing an item's focus token, and a
+ * token left in place does not pull it back on every rebuild.
+ */
+static void
+test_the_plugin_can_move_focus(void)
+{
+	Rig r;
+
+	if (!rig_up(&r))
+		return;
+
+	open_panel(&r);
+	key(&r, 0, XKB_KEY_g);
+	key(&r, 0, XKB_KEY_o);
+	key(&r, 0, XKB_KEY_Return);   /* the probe now asks for "pw" */
+
+	clear_log(&r);
+	key(&r, 0, XKB_KEY_a);
+	g_assert_true(log_has(&r, "text pw 0 [a]"));
+
+	/* Back to q by hand; the unchanged token must not steal the
+	   keyboard again as each keystroke rebuilds the panel. */
+	key(&r, GOWL_KEY_MOD_SHIFT, XKB_KEY_ISO_Left_Tab);
+	clear_log(&r);
+	key(&r, 0, XKB_KEY_b);
+	key(&r, 0, XKB_KEY_c);
+	g_assert_true(log_has(&r, "text q 0 [gob]"));
+	g_assert_true(log_has(&r, "text q 0 [gobc]"));
+
+	rig_down(&r);
+}
+
 static void
 test_a_canvas_is_painted(void)
 {
@@ -570,6 +609,8 @@ main(int argc, char *argv[])
 	                test_tab_leaves_and_escape_closes);
 	g_test_add_func("/bar-entry-panel/wm-chords-not-eaten",
 	                test_window_manager_chords_are_not_eaten);
+	g_test_add_func("/bar-entry-panel/plugin-moves-focus",
+	                test_the_plugin_can_move_focus);
 	g_test_add_func("/bar-entry-panel/paste",
 	                test_paste_arrives_through_the_loop);
 	g_test_add_func("/bar-entry-panel/canvas-painted",

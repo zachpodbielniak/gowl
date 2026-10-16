@@ -426,6 +426,21 @@ GowlBarPanelItem *gowl_bar_panel_add_button (GowlBarPanelItem *row,
 #define GOWL_BAR_ENTRY_PROP_REVISION  "revision"
 
 /**
+ * GOWL_BAR_PANEL_PROP_FOCUS:
+ *
+ * Item property, on any focusable item: a token the plugin CHANGES when
+ * it wants the keyboard moved to this item --- Ctrl+2 jumping to the
+ * second pane, a picker opening with its filter focused.
+ *
+ * A token rather than a flag because the panel is rebuilt after every
+ * edit: a flag left set would drag the keyboard back to the item on
+ * every keystroke.  The host remembers the last token it obeyed and
+ * moves focus only when it sees a different one; any token present when
+ * the panel opens is obeyed too.
+ */
+#define GOWL_BAR_PANEL_PROP_FOCUS     "focus"
+
+/**
  * gowl_bar_panel_add_entry:
  * @self: a #GowlBarPanel
  * @id: the id reported to the plugin's panel_text hook

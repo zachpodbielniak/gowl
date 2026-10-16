@@ -355,6 +355,12 @@ gowl_bar_entry_handle_key(GowlBarEntry *self, guint keysym, guint modifiers,
 				? GOWL_BAR_ENTRY_EDITED : GOWL_BAR_ENTRY_MOVED;
 		case XKB_KEY_v:
 		case XKB_KEY_V:
+			/* Ctrl+Shift+V is left to the widget: the
+			   translator uses it for "translate the
+			   clipboard", and a field that took it would
+			   hide that from the one place it is pressed. */
+			if (modifiers & GOWL_KEY_MOD_SHIFT)
+				return GOWL_BAR_ENTRY_IGNORED;
 			return GOWL_BAR_ENTRY_PASTE;
 		default:
 			/* Any other Ctrl chord is the plugin's (Ctrl+S to

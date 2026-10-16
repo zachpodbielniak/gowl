@@ -129,6 +129,11 @@ test_editing_chords(void)
 	g_assert_cmpint(gowl_bar_entry_handle_key(e, XKB_KEY_Insert,
 	                GOWL_KEY_MOD_SHIFT, FALSE), ==, GOWL_BAR_ENTRY_PASTE);
 
+	/* Ctrl+Shift+V is the widget's (translate the clipboard). */
+	g_assert_cmpint(gowl_bar_entry_handle_key(e, XKB_KEY_V,
+	                GOWL_KEY_MOD_CTRL | GOWL_KEY_MOD_SHIFT, FALSE),
+	                ==, GOWL_BAR_ENTRY_IGNORED);
+
 	/* Any other Ctrl chord is left for the plugin. */
 	g_assert_cmpint(gowl_bar_entry_handle_key(e, XKB_KEY_s,
 	                GOWL_KEY_MOD_CTRL, FALSE), ==, GOWL_BAR_ENTRY_IGNORED);

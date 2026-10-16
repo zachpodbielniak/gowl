@@ -654,7 +654,7 @@ When the keyboard is on a *text field*, the field gets the keys first: =j=, =k= 
 | =BackSpace= / =Delete=       | Delete before / after the cursor                |
 | =Ctrl+W= / =Ctrl+BackSpace=  | Delete the previous word                        |
 | =Ctrl+U=                     | Delete everything before the cursor             |
-| =Ctrl+V= / =Shift+Insert=    | Paste the clipboard                             |
+| =Ctrl+V= / =Shift+Insert=    | Paste the clipboard (=Ctrl+Shift+V= is the widget's) |
 | =Escape=                     | Close the panel                                 |
 
 Any other =Ctrl= chord is the widget's (the translator's =Ctrl+S= swaps languages). =Alt= and =Super= chords are never taken by a field: they belong to the window manager, and a text field that swallowed them would trap you in it.

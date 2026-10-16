@@ -110,7 +110,9 @@ gboolean      gowl_bar_entry_kill_line  (GowlBarEntry *self);
  * @multiline: whether Return inserts a newline (then Ctrl+Return
  *   submits)
  *
- * Applies one key press.  Alt and Super chords are always
+ * Applies one key press.  Ctrl+Shift+V is not a paste (it is left for
+ * the widget, as every other unclaimed Ctrl chord is).  Alt and Super
+ * chords are always
  * %GOWL_BAR_ENTRY_IGNORED: they belong to the window manager, and a
  * text field that swallowed them would trap the user in a panel.
  *

@@ -1872,9 +1872,10 @@ airewrite_panel_text(GowlBarPlugin *plugin, gpointer data,
 }
 
 /*
- * Keys the panel's navigation did not take.  j, k, Tab, Return, Space
- * and Escape are the host's (and in the text views every printable key
- * goes to the field); everything else lands here.
+ * Keys the panel's navigation did not take.  j, k, Tab, Space and
+ * Escape are the host's, and Return is too once a row has the keyboard
+ * (in the text views every printable key goes to the field); everything
+ * else lands here.
  *
  * Every letter is claimed in the list and result views, bound or not:
  * an unclaimed key closes the panel, and a typo should not throw away
@@ -1903,6 +1904,19 @@ airewrite_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
 	}
 	if (keysym == XKB_KEY_BackSpace) {
 		go_back(self);
+		return TRUE;
+	}
+
+	/* Return on a result pastes it.  The host offers Return here when
+	   nothing in the panel has the keyboard yet (and first when the
+	   diff canvas has it), so Enter alone works the moment the answer
+	   is in -- no Tab to reach a button first. */
+	if ((keysym == XKB_KEY_Return || keysym == XKB_KEY_KP_Enter) &&
+	    self->view == VIEW_RESULT &&
+	    (modifiers & (GOWL_KEY_MOD_CTRL | GOWL_KEY_MOD_ALT |
+	                  GOWL_KEY_MOD_LOGO)) == 0) {
+		paste_result(self, plugin, TRUE);
+		handle_paste_due(self, plugin);
 		return TRUE;
 	}
 

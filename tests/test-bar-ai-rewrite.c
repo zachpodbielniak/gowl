@@ -1437,6 +1437,31 @@ test_paste_without_compositor(void)
 	rig_down(&r);
 }
 
+/* Catches: Enter alone doing nothing on a fresh result.  The host
+   offers Return to the widget while nothing in the panel has the
+   keyboard; the result view must take it as Paste.  Before the answer
+   arrives it must NOT (there is nothing to paste yet). */
+static void
+test_return_alone_pastes(void)
+{
+	Rig r;
+	g_autofree gchar *copied = NULL;
+
+	if (!rig_up(&r))
+		return;
+	open_with(&r, "Teh text");
+	g_assert_true(key(&r, XKB_KEY_f, 0));
+	g_assert_false(key(&r, XKB_KEY_Return, 0));   /* still running */
+	cmacs_answers(&r, "done", "The text");
+	g_assert_true(key(&r, XKB_KEY_Return, 0));
+	bar_harness_poll(&r.h);
+	bar_harness_poll(&r.h);
+	copied = slurp(r.copied);
+	g_assert_true(g_str_has_prefix(copied, "The text\n"));
+	/* Ctrl+Return is not a paste. */
+	rig_down(&r);
+}
+
 /* Catches: Shift+letter and `preview: false' answers waiting for a
    keypress instead of going straight to the clipboard. */
 static void
@@ -1621,6 +1646,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/bar-ai-rewrite/colour-settings", test_colour_settings);
 	g_test_add_func("/bar-ai-rewrite/label-and-visibility",
 	                test_label_and_visibility);
+	g_test_add_func("/bar-ai-rewrite/widget/return-alone-pastes",
+	                test_return_alone_pastes);
 
 	return g_test_run();
 }

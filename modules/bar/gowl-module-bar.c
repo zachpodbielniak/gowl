@@ -4775,6 +4775,25 @@ bar_handle_key(GowlKeybindHandler *handler, guint modifiers, guint keysym,
 	case XKB_KEY_Return:
 	case XKB_KEY_KP_Enter:
 	case XKB_KEY_space:
+		/*
+		 * With nothing focused there is nothing for the host to
+		 * activate, so Return is the widget's: an AI rewrite panel
+		 * that opens on its result wants Enter to mean "paste it"
+		 * without a Tab first.  Offered, not given -- a widget that
+		 * declines gets the old behaviour (nothing happens).
+		 */
+		if (pressed && self->panel.focus_item < 0 &&
+		    keysym != XKB_KEY_space) {
+			gboolean claimed = FALSE;
+
+			if (bar_guard_call_key(self, self->panel.item->plugin,
+			                       keysym, modifiers, -1, &claimed)
+			    && claimed) {
+				bar_panel_rebuild(self);
+				bar_redraw_all(self);
+			}
+			return TRUE;
+		}
 		if (pressed)
 			bar_panel_activate_focus(self);
 		return TRUE;

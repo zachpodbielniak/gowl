@@ -610,6 +610,51 @@ test_a_widget_with_nothing_to_show_is_marked_off(void)
 
 	g_object_unref(module);
 }
+/*
+ * A `<widget>.<key>' setting sent before its widget is on the bar is
+ * remembered and applied when the widget arrives.  It used to reach
+ * nothing and be lost: cmacs pointing every AI widget at cmacs-ai only
+ * worked for the widgets that were already placed, and a YAML file
+ * that happened to list the setting first silently lost it.
+ */
+static void
+test_widget_settings_wait_for_their_widget(void)
+{
+	GowlModule *module;
+	g_autoptr(GHashTable) early = NULL;
+	g_autoptr(GHashTable) place = NULL;
+	g_autoptr(GHashTable) later = NULL;
+	g_autofree gchar *listing = NULL;
+	g_autofree gchar *again = NULL;
+
+	module = load_bar_module();
+	if (module == NULL)
+		return;
+
+	/* Nothing named `label' is on the bar yet. */
+	early = settings_new("label.text", "sent-early", NULL);
+	gowl_module_configure(module, early);
+
+	place = settings_new("widgets-right-add", "label", NULL);
+	gowl_module_configure(module, place);
+	listing = layout_of(module);
+	g_assert_nonnull(strstr(listing, "sent-early"));
+
+	/* A later setting still wins over the remembered one, and is
+	   itself remembered for a widget re-added afterwards. */
+	later = settings_new("label.text", "sent-later",
+	                     "widgets-right-remove", "label", NULL);
+	gowl_module_configure(module, later);
+	g_clear_pointer(&place, g_hash_table_unref);
+	place = settings_new("widgets-right-add", "label", NULL);
+	gowl_module_configure(module, place);
+	again = layout_of(module);
+	g_assert_nonnull(strstr(again, "sent-later"));
+	g_assert_null(strstr(again, "sent-early"));
+
+	g_object_unref(module);
+}
+
 
 int
 main(int argc, char *argv[])
@@ -639,6 +684,8 @@ main(int argc, char *argv[])
 	                test_unknown_widgets_are_skipped_not_fatal);
 	g_test_add_func("/bar-module/aliases-and-specs",
 	                test_aliases_and_specs);
+	g_test_add_func("/bar-module/settings-wait-for-their-widget",
+	                test_widget_settings_wait_for_their_widget);
 	g_test_add_func("/bar-module/nothing-to-show-is-off",
 	                test_a_widget_with_nothing_to_show_is_marked_off);
 

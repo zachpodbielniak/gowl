@@ -219,6 +219,16 @@ typedef struct {
 	gchar          *anchor_id;  /* what the config asked for */
 
 	GHashTable     *surfaces;   /* monitor name -> BarSurface* */
+
+	/*
+	 * Every `<widget>.<key>' setting this bar has been given, by
+	 * widget, so a widget added LATER still gets it.  Without this a
+	 * setting sent before its widget was on the bar reached nothing
+	 * and was lost: cmacs pointing every AI widget at cmacs-ai worked
+	 * only for the ones already placed.
+	 * target -> (key -> value), all owned.
+	 */
+	GHashTable     *widget_settings;
 } GowlBarInstance;
 
 /*
@@ -3325,6 +3335,57 @@ bar_parse_bool(const gchar *value, gboolean fallback)
 	return fallback;
 }
 
+/* Remember a `<widget>.<key>' setting for widgets added later. */
+static void
+bar_remember_widget_setting(GowlBarInstance *bar, const gchar *target,
+                            const gchar *key, const gchar *value)
+{
+	GHashTable *keys;
+
+	if (bar->widget_settings == NULL || target == NULL || key == NULL)
+		return;
+	keys = g_hash_table_lookup(bar->widget_settings, target);
+	if (keys == NULL) {
+		keys = g_hash_table_new_full(g_str_hash, g_str_equal,
+		                             g_free, g_free);
+		g_hash_table_insert(bar->widget_settings, g_strdup(target),
+		                    keys);
+	}
+	g_hash_table_insert(keys, g_strdup(key),
+	                    g_strdup((value != NULL) ? value : ""));
+}
+
+/* Hand a new widget whatever was remembered for its name, then for its
+   whole spec, so `disk:/var.color' beats `disk.color'. */
+static void
+bar_apply_remembered_settings(GowlBarInstance *bar, GowlBarPlugin *plugin,
+                              const gchar *spec)
+{
+	const gchar *targets[2];
+	guint t;
+
+	if (bar->widget_settings == NULL)
+		return;
+	targets[0] = gowl_bar_plugin_get_setting(plugin, "name");
+	targets[1] = spec;
+	for (t = 0; t < G_N_ELEMENTS(targets); t++) {
+		GHashTable *keys;
+		GHashTableIter iter;
+		gpointer k, v;
+
+		if (targets[t] == NULL ||
+		    (t == 1 && g_strcmp0(targets[0], targets[1]) == 0))
+			continue;
+		keys = g_hash_table_lookup(bar->widget_settings, targets[t]);
+		if (keys == NULL)
+			continue;
+		g_hash_table_iter_init(&iter, keys);
+		while (g_hash_table_iter_next(&iter, &k, &v))
+			gowl_bar_plugin_set_setting(plugin, (const gchar *)k,
+			                            (const gchar *)v);
+	}
+}
+
 /* Instantiate one widget spec into @bar's item list. */
 static void
 bar_add_item(GowlModuleBar *self, GowlBarInstance *bar, const gchar *spec,
@@ -3345,6 +3406,7 @@ bar_add_item(GowlModuleBar *self, GowlBarInstance *bar, const gchar *spec,
 	}
 
 	gowl_bar_plugin_set_host(plugin, GOWL_BAR_HOST(self));
+	bar_apply_remembered_settings(bar, plugin, spec);
 	gowl_bar_plugin_configure(plugin, NULL);
 
 	if (!gowl_bar_plugin_activate(plugin, &error)) {
@@ -3808,6 +3870,8 @@ bar_configure_slot(GowlModuleBar *self, GowlBarInstance *bar,
 			g_autofree gchar *target = NULL;
 
 			target = g_strndup(key, (gsize)(dot - key));
+			bar_remember_widget_setting(bar, target, dot + 1,
+			                            (const gchar *)v);
 			if (bar_forward_setting(self, bar, target, dot + 1,
 			                        (const gchar *)v) == 0) {
 				const gchar *first = strchr(key, '.');
@@ -5329,6 +5393,7 @@ gowl_module_bar_finalize(GObject *object)
 
 		g_clear_pointer(&bar->items, g_ptr_array_unref);
 		g_clear_pointer(&bar->surfaces, g_hash_table_unref);
+		g_clear_pointer(&bar->widget_settings, g_hash_table_unref);
 		g_clear_pointer(&bar->theme, gowl_bar_theme_free);
 		g_free(bar->anchor_id);
 	}
@@ -5390,6 +5455,8 @@ bar_instance_init(GowlBarInstance *bar, GowlBarPosition position)
 	bar->items      = g_ptr_array_new_with_free_func(bar_item_free);
 	bar->surfaces   = g_hash_table_new_full(g_str_hash, g_str_equal,
 	                                        g_free, bar_surface_free);
+	bar->widget_settings = g_hash_table_new_full(g_str_hash, g_str_equal,
+		g_free, (GDestroyNotify)g_hash_table_unref);
 
 	/* Slightly translucent by default: the bar sits over the
 	   wallpaper and reads better as a layer than as a slab. */

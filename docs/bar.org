@@ -148,6 +148,8 @@ modules:
 
 A colour is a palette role (=green=, =mauve=, =text= ...) or a =#rrggbb= literal. A role follows the palette when it changes; a literal is exactly that colour and stays so, which is the point of writing one. Every shipped widget accepts both, through the same code, so there is no widget where a literal quietly does nothing. For the readings that carry pressure --- processor, memory, disk, temperature, battery --- the setting is the *calm* colour; see [[#system-colour][the note under System]].
 
+A =<widget>.<key>= setting does not need its widget to be on the bar yet. Each bar remembers every one it is given and hands them to a widget when it is added --- by name (=translate.engine=) and then by whole spec (=disk:/var.color= beats =disk.color=). So the order of keys in a file never matters, and cmacs can point every AI widget at cmacs-ai once, at startup, whether or not the user has placed them. A later setting replaces a remembered one. A bare =<widget>-color= key is the exception: it only reaches widgets already on the bar.
+
 *** The bottom bar
 :PROPERTIES:
 :CUSTOM_ID: the-bottom-bar

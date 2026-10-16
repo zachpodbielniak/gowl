@@ -1599,7 +1599,9 @@ airewrite_panel(GowlBarPlugin *plugin, gpointer data)
 
 	switch (self->view) {
 	case VIEW_CAPTURING:
-		item = gowl_bar_panel_add_row(panel, "capturing", NULL,
+		/* No id: a status row, not a control.  An id would make
+		   it hover and click and do nothing. */
+		item = gowl_bar_panel_add_row(panel, NULL, NULL,
 		                              "Reading the selection\xe2\x80\xa6",
 		                              NULL);
 		gowl_bar_panel_item_set_busy(item, TRUE);

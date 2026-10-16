@@ -24,6 +24,8 @@
 #include "bar-airewrite-model.h"
 
 #include <string.h>
+#include <errno.h>
+#include <glib/gstdio.h>
 
 #include "yaml-glib.h"
 
@@ -1330,4 +1332,144 @@ bar_airewrite_paste_wake_ms(const BarAirewritePaste *paste, gint64 now)
 	default:
 		return -1;
 	}
+}
+
+/* ----------------------------------------------------------------
+ * The provider / model choice
+ * ---------------------------------------------------------------- */
+
+#define CHOICE_GROUP "choice"
+
+gboolean
+bar_airewrite_choice_name_ok(const gchar *name)
+{
+	const gchar *c;
+
+	if (name == NULL || name[0] == '\0' || strlen(name) > 128 ||
+	    !g_utf8_validate(name, -1, NULL))
+		return FALSE;
+	for (c = name; *c != '\0'; c++) {
+		if (g_ascii_isalnum(*c) || strchr("._-:/@+", *c) != NULL)
+			continue;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+void
+bar_airewrite_choice_load(const gchar *path, gchar **provider, gchar **model)
+{
+	g_autoptr(GKeyFile) kf = NULL;
+	g_autofree gchar *p = NULL;
+	g_autofree gchar *m = NULL;
+
+	if (provider != NULL)
+		*provider = NULL;
+	if (model != NULL)
+		*model = NULL;
+	if (path == NULL)
+		return;
+
+	kf = g_key_file_new();
+	if (!g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL))
+		return;
+	p = g_key_file_get_string(kf, CHOICE_GROUP, "provider", NULL);
+	m = g_key_file_get_string(kf, CHOICE_GROUP, "model", NULL);
+	if (provider != NULL && bar_airewrite_choice_name_ok(p))
+		*provider = g_steal_pointer(&p);
+	if (model != NULL && bar_airewrite_choice_name_ok(m))
+		*model = g_steal_pointer(&m);
+}
+
+gboolean
+bar_airewrite_choice_save(const gchar *path, const gchar *provider,
+                          const gchar *model, GError **error)
+{
+	g_autoptr(GKeyFile) kf = NULL;
+	g_autofree gchar *dir = NULL;
+	g_autofree gchar *data = NULL;
+	gsize len = 0;
+
+	g_return_val_if_fail(path != NULL, FALSE);
+
+	kf = g_key_file_new();
+	g_key_file_set_comment(kf, NULL, NULL,
+		" The provider and model picked in gowl's ai-rewrite panel.",
+		NULL);
+	g_key_file_set_string(kf, CHOICE_GROUP, "provider",
+	                      bar_airewrite_choice_name_ok(provider)
+	                      ? provider : "");
+	g_key_file_set_string(kf, CHOICE_GROUP, "model",
+	                      bar_airewrite_choice_name_ok(model)
+	                      ? model : "");
+	data = g_key_file_to_data(kf, &len, NULL);
+
+	dir = g_path_get_dirname(path);
+	if (g_mkdir_with_parents(dir, 0700) != 0) {
+		g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno),
+		            "cannot create %s", dir);
+		return FALSE;
+	}
+	/* g_file_set_contents_full keeps an existing file's mode rather
+	   than the one asked for, so the mode is set again after. */
+	if (!g_file_set_contents_full(path, data, (gssize)len,
+	                              G_FILE_SET_CONTENTS_CONSISTENT, 0600,
+	                              error))
+		return FALSE;
+	(void)g_chmod(path, 0600);
+	return TRUE;
+}
+
+void
+bar_airewrite_effective_model(const gchar *action_provider,
+                              const gchar *action_model,
+                              const gchar *choice_provider,
+                              const gchar *choice_model,
+                              const gchar **provider, const gchar **model)
+{
+	gboolean act_p, act_m;
+
+	act_p = (action_provider != NULL && action_provider[0] != '\0');
+	act_m = (action_model != NULL && action_model[0] != '\0');
+
+	if (act_p) {
+		*provider = action_provider;
+		*model = act_m ? action_model : NULL;
+		return;
+	}
+	*provider = (choice_provider != NULL && choice_provider[0] != '\0')
+		? choice_provider : NULL;
+	if (act_m)
+		*model = action_model;
+	else
+		*model = (choice_model != NULL && choice_model[0] != '\0')
+			? choice_model : NULL;
+}
+
+gchar **
+bar_airewrite_split_names(const gchar *list)
+{
+	GPtrArray *out;
+	g_auto(GStrv) parts = NULL;
+	guint i;
+
+	out = g_ptr_array_new();
+	if (list != NULL) {
+		parts = g_strsplit(list, ",", -1);
+		for (i = 0; parts[i] != NULL; i++) {
+			gchar *name = g_strstrip(parts[i]);
+			guint j;
+			gboolean seen = FALSE;
+
+			if (!bar_airewrite_choice_name_ok(name))
+				continue;
+			for (j = 0; j < out->len; j++)
+				if (strcmp(g_ptr_array_index(out, j), name) == 0)
+					seen = TRUE;
+			if (!seen)
+				g_ptr_array_add(out, g_strdup(name));
+		}
+	}
+	g_ptr_array_add(out, NULL);
+	return (gchar **)g_ptr_array_free(out, FALSE);
 }

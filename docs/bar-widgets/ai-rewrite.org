@@ -51,21 +51,20 @@ The widget is an alias target too: =ai-edit= and =rewrite= name the same widget.
 
 * Quick start --- cmacs --gowl
 
-#+begin_src emacs-lisp
-(cmacs-gowl-bar-configure-top
- '(("widgets-right-add" . "ai-rewrite")
-   ("ai-rewrite.show-in-bar" . "false")))
-(gowl-add-keybind "Super+e" 'ipc-command "bar-panel ai-rewrite"
-                  "AI rewrite the selection")
-;; Only needed when the widget is added AFTER cmacs started:
-(cmacs-gowl-bar-rewrite-push)
-#+end_src
+Nothing to do: under =cmacs --gowl= the widget is *on by default*.
 
 What =cmacs --gowl= does for this widget:
 
-- It is *off by default*: nothing adds it to a bar, and no key is bound.
-- At startup cmacs pushes its own action list, =ai-backend=cmacs= and the provider names to it (=cmacs-gowl-bar-rewrite-push=, =lisp/cmacs/cmacs-gowl-bar-rewrite.el=). So adding the widget is the one line above, and every provider configured in cmacs-ai --- API, CLI and named OpenAI-compatible endpoints --- is available with nothing configured twice.
-- A setting pushed to a widget that is not in the bar is dropped, so a widget added after startup needs the push again: call =(cmacs-gowl-bar-rewrite-push)= (or =M-x cmacs-gowl-bar-rewrite-push=) after adding it. Customising =cmacs-gowl-bar-rewrite-actions= through =customize= pushes by itself.
+- It puts it in the top bar (=cmacs-gowl-bar-default-widgets=, =top-right=) and binds =Super+e= to open it (=cmacs-gowl-bar-rewrite-keybind=; nil binds nothing).
+- At startup it pushes its own action list, =ai-backend=cmacs=, the provider names and --- for the providers that can list them cheaply (the CLI ones) --- their models (=cmacs-gowl-bar-rewrite-push=, =lisp/cmacs/cmacs-gowl-bar-rewrite.el=). Every provider configured in cmacs-ai --- API, CLI and named OpenAI-compatible endpoints --- is in the provider choice with nothing configured twice.
+- Customising =cmacs-gowl-bar-rewrite-actions= through =customize= pushes by itself.
+
+To take it off the bar again, keeping the key:
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-bar-default-widgets
+      (assoc-delete-all "ai-rewrite" cmacs-gowl-bar-default-widgets))
+#+end_src
 
 The cmacs list is everything the right-click AI menu does to plain text, with the menu's own system prompts --- customise =cmacs-ai-proofread-system-prompt= and the bar's Fix spelling & grammar changes with it:
 
@@ -206,6 +205,16 @@ modules:
 
 Colour is never the only signal in the diff: deleted text is struck through and inserted text underlined, so it reads without telling red from green.
 
+* Choosing the provider and model
+
+*Right-click the bar icon*, or click the =⚙= row at the bottom of the panel, to choose which provider and model rewrite your text:
+
+- *Provider*: /Default/ (what the widget's =ai-provider= setting says, else --- under cmacs --- the AI menu's provider, named in brackets), then every provider offered. Under cmacs the list is cmacs-ai's (pushed); standalone it is ai-glib's, from =ai --list-providers= (asked once, on a worker).
+- *Model*: /The provider's default/, the models cmacs pushed for the chosen provider (=models.<provider>=), and a text field for any model id (=Return= takes it).
+- *Done* (or =Backspace=) goes back to the text.
+
+The choice is saved in the bar's state directory (=$XDG_STATE_HOME/gowl/ai-rewrite.choice=, mode 0600) and survives restarts. Switching provider drops the model, since a model id belongs to its provider. It sits between the action and the settings: an action that names its own =provider= still uses it (with its own model, or that provider's default); otherwise the choice applies; with no choice, =ai-rewrite.ai-provider= / =ai-model=, then the backend's default. The footer row shows what the next request will ask.
+
 * The panel
 
 The panel opens in the middle of the screen.
@@ -217,6 +226,7 @@ The panel opens in the middle of the screen.
 - *Running*: a busy row naming the provider when one is known, the tail of the answer as it streams, and Cancel.
 - *Result*: the diff, then *Paste* (*Copy* for typed text), *Copy*, *Again* (re-run the same action on the same input), *Back*, and the action list again under /Then/ for chaining.
 - *Error*: why, with *Again* and *Back*.
+- Every view but /Running/ ends with the =⚙= row naming the provider and model the next request uses; click it to change them (see [[*Choosing the provider and model][Choosing the provider and model]]).
 
 Keys:
 

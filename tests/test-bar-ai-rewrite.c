@@ -49,6 +49,7 @@
  */
 
 #include <glib.h>
+#include <linux/input-event-codes.h>
 #include <glib/gstdio.h>
 #include <string.h>
 #include <cairo.h>
@@ -1437,6 +1438,249 @@ test_paste_without_compositor(void)
 	rig_down(&r);
 }
 
+
+/* ── The provider / model choice ──────────────────────────────────── */
+
+typedef void     (*EffectiveFn) (const gchar *, const gchar *, const gchar *,
+                                 const gchar *, const gchar **,
+                                 const gchar **);
+typedef gboolean (*SaveFn)      (const gchar *, const gchar *, const gchar *,
+                                 GError **);
+typedef void     (*LoadFn)      (const gchar *, gchar **, gchar **);
+typedef gchar  **(*SplitFn)     (const gchar *);
+
+/* Catches: the panel's model being sent to an action's OWN provider
+   (a model id means nothing to another provider), or an action's
+   provider being overridden by the panel. */
+static void
+test_choice_precedence(void)
+{
+	BarHarness h;
+	EffectiveFn eff;
+	const gchar *p, *m;
+
+	if (!bar_harness_up(&h, NULL, NULL))
+		return;
+	eff = bar_harness_sym(&h, "bar_airewrite_effective_model");
+	g_assert_nonnull(eff);
+
+	/* Nothing anywhere: the widget's settings decide (NULL, NULL). */
+	eff(NULL, NULL, NULL, NULL, &p, &m);
+	g_assert_null(p);
+	g_assert_null(m);
+	/* The panel's pick. */
+	eff(NULL, NULL, "ollama", "qwen3", &p, &m);
+	g_assert_cmpstr(p, ==, "ollama");
+	g_assert_cmpstr(m, ==, "qwen3");
+	/* An action's provider wins, with its own model or none. */
+	eff("claude", NULL, "ollama", "qwen3", &p, &m);
+	g_assert_cmpstr(p, ==, "claude");
+	g_assert_null(m);
+	eff("claude", "haiku", "ollama", "qwen3", &p, &m);
+	g_assert_cmpstr(m, ==, "haiku");
+	/* An action naming only a model pairs it with the panel's pick. */
+	eff(NULL, "small", "ollama", "qwen3", &p, &m);
+	g_assert_cmpstr(p, ==, "ollama");
+	g_assert_cmpstr(m, ==, "small");
+	/* Empty strings are "nothing". */
+	eff("", "", "", "", &p, &m);
+	g_assert_null(p);
+	g_assert_null(m);
+	bar_harness_down(&h);
+}
+
+/* Catches: the choice file left world-readable over an old 0644 one
+   (g_file_set_contents_full keeps the old mode), a hostile name being
+   saved or loaded, and a missing file being an error. */
+static void
+test_choice_file(void)
+{
+	BarHarness h;
+	SaveFn save;
+	LoadFn load;
+	SplitFn split;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *prov = NULL;
+	g_autofree gchar *model = NULL;
+	g_auto(GStrv) names = NULL;
+	GStatBuf st;
+
+	if (!bar_harness_up(&h, NULL, NULL))
+		return;
+	save  = bar_harness_sym(&h, "bar_airewrite_choice_save");
+	load  = bar_harness_sym(&h, "bar_airewrite_choice_load");
+	split = bar_harness_sym(&h, "bar_airewrite_split_names");
+	g_assert_nonnull(save);
+	g_assert_nonnull(load);
+	g_assert_nonnull(split);
+
+	path = bar_harness_path(&h, "sub/dir/ai-rewrite.choice");
+	load(path, &prov, &model);              /* missing: nothing */
+	g_assert_null(prov);
+	g_assert_null(model);
+
+	g_assert_true(save(path, "ollama", "ollama/qwen3.5:9b", NULL));
+	g_assert_cmpint(g_chmod(path, 0644), ==, 0);
+	g_assert_true(save(path, "ollama", "ollama/qwen3.5:9b", NULL));
+	g_assert_cmpint(g_stat(path, &st), ==, 0);
+	g_assert_cmpint(st.st_mode & 0777, ==, 0600);
+	load(path, &prov, &model);
+	g_assert_cmpstr(prov, ==, "ollama");
+	g_assert_cmpstr(model, ==, "ollama/qwen3.5:9b");
+	g_clear_pointer(&prov, g_free);
+	g_clear_pointer(&model, g_free);
+
+	/* A file edited by hand into nonsense loads as nothing. */
+	g_assert_true(g_file_set_contents(path,
+		"[choice]\nprovider=rm -rf /\nmodel=a\"b\n", -1, NULL));
+	load(path, &prov, &model);
+	g_assert_null(prov);
+	g_assert_null(model);
+
+	/* Pushed lists: trimmed, deduplicated, unusable names dropped. */
+	names = split(" claude, ollama ,,claude,bad name, my-vllm ");
+	g_assert_cmpuint(g_strv_length(names), ==, 3);
+	g_assert_cmpstr(names[0], ==, "claude");
+	g_assert_cmpstr(names[1], ==, "ollama");
+	g_assert_cmpstr(names[2], ==, "my-vllm");
+	bar_harness_down(&h);
+}
+
+/* Catches: right-click on the icon not opening the choice, the choice
+   not reaching the next request, a switch of provider keeping the old
+   provider's model, and the pick not surviving a restart. */
+static void
+test_choice_in_the_panel(void)
+{
+	Rig r;
+	g_autofree gchar *form = NULL;
+	g_autofree gchar *saved = NULL;
+	g_autofree gchar *path = NULL;
+
+	if (!rig_up(&r))
+		return;
+	gowl_bar_plugin_set_setting(r.h.plugin, "ai-providers",
+	                            "claude,ollama,claude-code");
+	gowl_bar_plugin_set_setting(r.h.plugin, "ai-default-provider",
+	                            "claude-code");
+	gowl_bar_plugin_set_setting(r.h.plugin, "models.ollama",
+	                            "qwen3,llama3.3");
+
+	/* Right-click: claimed, opens the panel, and it opens on the
+	   choice. */
+	g_assert_true(gowl_bar_plugin_on_click(r.h.plugin, BTN_RIGHT, 1, 1, 0));
+	g_assert_cmpuint(r.h.host->opened, ==, 1);
+	open_with(&r, "Teh text");
+	g_assert_true(panel_has(&r, "provider:ollama"));
+	g_assert_true(panel_says(&r, "Default (claude-code)"));
+	g_assert_false(panel_has(&r, "act:proofread"));
+	/* A left click is the panel's ordinary toggle. */
+	g_assert_false(gowl_bar_plugin_on_click(r.h.plugin, BTN_LEFT, 1, 1, 0));
+
+	/* Pick ollama and one of its pushed models. */
+	gowl_bar_plugin_panel_action(r.h.plugin, "provider:ollama", -1, 0.0, 1);
+	g_assert_true(panel_has(&r, "model:qwen3"));
+	gowl_bar_plugin_panel_action(r.h.plugin, "model:qwen3", -1, 0.0, 1);
+	/* Back to the actions: the footer says what will be asked. */
+	gowl_bar_plugin_panel_action(r.h.plugin, "settings-close", 0, 0.0, 1);
+	g_assert_true(panel_has(&r, "act:proofread"));
+	g_assert_true(panel_says(&r, "ollama \xc2\xb7 qwen3"));
+
+	/* The next request goes to ollama / qwen3. */
+	g_assert_true(key(&r, XKB_KEY_f, 0));
+	form = slurp(r.form);
+	g_assert_nonnull(strstr(form, "\"ollama\" \"qwen3\")"));
+	cmacs_answers(&r, "done", "The text");
+
+	/* Saved, 0600, where the host keeps state. */
+	path = g_build_filename(r.h.host->state_dir, "ai-rewrite.choice", NULL);
+	saved = slurp(path);
+	g_assert_nonnull(strstr(saved, "provider=ollama"));
+	g_assert_nonnull(strstr(saved, "model=qwen3"));
+
+	/* Switching provider drops the model; Default clears both. */
+	gowl_bar_plugin_panel_action(r.h.plugin, "settings", -1, 0.0, 1);
+	gowl_bar_plugin_panel_action(r.h.plugin, "provider:claude", -1, 0.0, 1);
+	g_assert_true(panel_says(&r, "The provider's default"));
+	g_assert_false(panel_has(&r, "model:qwen3"));
+	/* A typed model id is taken; a hostile one is not. */
+	gowl_bar_plugin_panel_text(r.h.plugin, "model", "claude-haiku-4-5", TRUE);
+	gowl_bar_plugin_panel_text(r.h.plugin, "model", "x; rm -rf ~", TRUE);
+	gowl_bar_plugin_panel_action(r.h.plugin, "settings-close", 0, 0.0, 1);
+	g_assert_true(panel_says(&r, "claude \xc2\xb7 claude-haiku-4-5"));
+	gowl_bar_plugin_panel_action(r.h.plugin, "settings", -1, 0.0, 1);
+	/* BackSpace leaves the choice; plain letters do not run actions. */
+	g_assert_true(key(&r, XKB_KEY_f, 0));
+	g_assert_true(panel_has(&r, "provider:claude"));
+	g_assert_true(key(&r, XKB_KEY_BackSpace, 0));
+	g_assert_true(panel_has(&r, "act:proofread"));
+	rig_down(&r);
+}
+
+/* Standalone (ai-backend: ai, nothing pushed by cmacs): the providers
+   come from `ai --list-providers', asked once, on a worker.  Catches
+   an empty chooser on standalone gowl. */
+static void
+test_choice_lists_providers_standalone(void)
+{
+	Rig r;
+	g_autofree gchar *listing = NULL;
+	g_autofree gchar *body = NULL;
+	g_autofree gchar *ai = NULL;
+	g_autofree gchar *calls = NULL;
+
+	if (!rig_up(&r))
+		return;
+	listing = g_build_filename(GOWL_TEST_FIXTURES, "ai-assistant",
+	                           "list-providers.txt", NULL);
+	calls = bar_harness_path(&r.h, "ai-calls");
+	body = g_strdup_printf("echo \"$*\" >> '%s'\n"
+	                       "[ \"$1\" = --list-providers ] && cat '%s'\n",
+	                       calls, listing);
+	ai = bar_harness_script(&r.h, "fake-ai", body);
+	gowl_bar_plugin_set_setting(r.h.plugin, "ai-backend", "ai");
+	gowl_bar_plugin_set_setting(r.h.plugin, "ai-command", ai);
+
+	g_assert_true(gowl_bar_plugin_on_click(r.h.plugin, BTN_RIGHT, 1, 1, 0));
+	open_with(&r, "x");
+	/* The stub runs the listing inline while the panel is built; the
+	   next build shows it. */
+	(void)panel_has(&r, "provider:");
+	g_assert_true(panel_has(&r, "provider:ollama"));
+	g_assert_true(panel_has(&r, "provider:claude-code"));
+	/* Asked once, not on every rebuild. */
+	(void)panel_has(&r, "provider:");
+	{
+		g_autofree gchar *log = slurp(calls);
+
+		g_assert_cmpuint(count(log, "--list-providers"), ==, 1);
+	}
+	rig_down(&r);
+}
+
+/* Catches: an action that names its own provider being redirected to
+   the panel's pick. */
+static void
+test_choice_spares_an_actions_own_provider(void)
+{
+	Rig r;
+	g_autofree gchar *form = NULL;
+
+	if (!rig_up(&r))
+		return;
+	bar_harness_set(&r.h, "actions",
+	                "#ai-rewrite-actions 1\n"
+	                "z\tzz\tZed\tp\t\tclaude\topus\tsys\tdo it\n");
+	open_with(&r, "Some text");
+	gowl_bar_plugin_panel_action(r.h.plugin, "settings", -1, 0.0, 1);
+	gowl_bar_plugin_panel_action(r.h.plugin, "provider:ollama", -1, 0.0, 1);
+	gowl_bar_plugin_panel_action(r.h.plugin, "settings-close", 0, 0.0, 1);
+	g_assert_true(key(&r, XKB_KEY_z, 0));
+	form = slurp(r.form);
+	g_assert_nonnull(strstr(form, "\"claude\" \"opus\")"));
+	rig_down(&r);
+}
+
 /* Catches: Enter alone doing nothing on a fresh result.  The host
    offers Return to the widget while nothing in the panel has the
    keyboard; the result view must take it as Paste.  Before the answer
@@ -1648,6 +1892,15 @@ main(int argc, char *argv[])
 	                test_label_and_visibility);
 	g_test_add_func("/bar-ai-rewrite/widget/return-alone-pastes",
 	                test_return_alone_pastes);
+	g_test_add_func("/bar-ai-rewrite/choice/precedence",
+	                test_choice_precedence);
+	g_test_add_func("/bar-ai-rewrite/choice/file", test_choice_file);
+	g_test_add_func("/bar-ai-rewrite/choice/panel",
+	                test_choice_in_the_panel);
+	g_test_add_func("/bar-ai-rewrite/choice/standalone-listing",
+	                test_choice_lists_providers_standalone);
+	g_test_add_func("/bar-ai-rewrite/choice/actions-own-provider",
+	                test_choice_spares_an_actions_own_provider);
 
 	return g_test_run();
 }

@@ -460,6 +460,87 @@ BarAirewritePasteStep bar_airewrite_paste_step (BarAirewritePaste *paste,
 gint bar_airewrite_paste_wake_ms (const BarAirewritePaste *paste,
                                   gint64                   now);
 
+/* --- The provider / model choice ---------------------------------- */
+
+/**
+ * bar_airewrite_choice_load:
+ * @path: the choice file
+ * @provider: (out) (transfer full) (nullable): the chosen provider, or
+ *   %NULL for "the widget's default"
+ * @model: (out) (transfer full) (nullable): the chosen model, or %NULL
+ *
+ * Reads the provider and model picked in the panel.  A missing,
+ * unreadable or malformed file is "nothing chosen", never an error:
+ * the widget then uses its settings, as it did before there was a
+ * picker.  A name that is not a plausible provider or model (see
+ * bar_airewrite_choice_name_ok()) is dropped.
+ */
+void      bar_airewrite_choice_load (const gchar  *path,
+                                     gchar       **provider,
+                                     gchar       **model);
+
+/**
+ * bar_airewrite_choice_save:
+ * @path: the choice file
+ * @provider: (nullable): the provider, or %NULL / "" for none
+ * @model: (nullable): the model, or %NULL / "" for none
+ * @error: (out) (optional): why it was not written
+ *
+ * Writes the choice atomically, mode 0600, creating the directory.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean  bar_airewrite_choice_save (const gchar  *path,
+                                     const gchar  *provider,
+                                     const gchar  *model,
+                                     GError      **error);
+
+/**
+ * bar_airewrite_choice_name_ok:
+ * @name: (nullable): a provider or model name
+ *
+ * Whether @name can be a provider or model: non-empty, at most 128
+ * bytes, valid UTF-8, and only letters, digits and `. _ - : / @ +'.
+ * Model ids like `ollama/qwen3.5:9b' pass; anything with a space, a
+ * quote or a control character does not.
+ *
+ * Returns: %TRUE when usable
+ */
+gboolean  bar_airewrite_choice_name_ok (const gchar *name);
+
+/**
+ * bar_airewrite_effective_model:
+ * @action_provider: (nullable): the action's own provider
+ * @action_model: (nullable): the action's own model
+ * @choice_provider: (nullable): the provider picked in the panel
+ * @choice_model: (nullable): the model picked in the panel
+ * @provider: (out) (transfer none) (nullable): what to ask
+ * @model: (out) (transfer none) (nullable): with which model
+ *
+ * Which provider and model a request uses.  An action that names a
+ * provider keeps it, with its own model (or that provider's default):
+ * the panel's model belongs to the panel's provider and means nothing
+ * to another.  Otherwise the panel's choice applies, an action's own
+ * model still winning over the panel's.  %NULL in either out means
+ * "the widget's setting", which bar-ai resolves.
+ */
+void      bar_airewrite_effective_model (const gchar  *action_provider,
+                                         const gchar  *action_model,
+                                         const gchar  *choice_provider,
+                                         const gchar  *choice_model,
+                                         const gchar **provider,
+                                         const gchar **model);
+
+/**
+ * bar_airewrite_split_names:
+ * @list: (nullable): a comma-separated list, as cmacs pushes
+ *   `ai-providers' and `models.<provider>'
+ *
+ * Returns: (transfer full): the names, trimmed, unusable ones and
+ *   repeats dropped, in order (empty for %NULL)
+ */
+gchar   **bar_airewrite_split_names (const gchar *list);
+
 G_END_DECLS
 
 #endif /* BAR_AIREWRITE_MODEL_H */

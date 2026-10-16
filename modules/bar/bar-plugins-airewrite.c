@@ -61,6 +61,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <wayland-server-core.h>
@@ -76,6 +77,7 @@
 #include "bar-internal.h"
 #include "bar-ai.h"
 #include "bar-airewrite-model.h"
+#include "bar-assistant-model.h"
 
 /* The model spells modifiers itself so it needs no compositor header;
    these are what make handing them straight to the compositor right. */
@@ -96,6 +98,7 @@ G_STATIC_ASSERT(BAR_AIREWRITE_MOD_LOGO  == GOWL_KEY_MOD_LOGO);
 #define AIREWRITE_PREVIEW_LINES   6
 #define AIREWRITE_MAX_STEPS       32
 #define AIREWRITE_PACKAGE         "wl-clipboard"
+#define AIREWRITE_CHOICE_FILE     "ai-rewrite.choice"
 
 /* ----------------------------------------------------------------
  * State
@@ -172,6 +175,20 @@ typedef struct {
 	guint          paste_gen;
 	gchar         *paste_previous;  /* the clipboard before; secret-ish */
 
+	/* --- The provider and model picked in the panel ----------------
+	 * Compositor thread, except where marked.  Saved to the host's
+	 * state directory, so the pick survives a restart; NULL means "the
+	 * widget's ai-provider / ai-model settings" (under cmacs, the
+	 * cmacs-ai default). */
+	gboolean       settings_open;    /* the choice is on show */
+	gboolean       settings_on_open; /* right-click: open on it */
+	gboolean       choice_loaded;
+	gchar         *choice_provider;
+	gchar         *choice_model;
+	guint          model_rev;        /* the model field's revision */
+	gchar        **cli_providers;    /* lock: from `ai --list-providers' */
+	gboolean       cli_listed;       /* lock: asked once this session */
+
 	/* --- The paste chord, fixed when the paste starts -------------- */
 	gchar         *paste_keys;
 	gchar         *paste_app_id;
@@ -180,6 +197,8 @@ typedef struct {
 } AiRewrite;
 
 static void airewrite_paste_tick (AiRewrite *self);
+static void update_label         (AiRewrite *self, GowlBarPlugin *plugin);
+static void choice_ensure        (AiRewrite *self, GowlBarPlugin *plugin);
 
 static void
 step_free(gpointer data)
@@ -801,6 +820,8 @@ run_action(AiRewrite *self, GowlBarPlugin *plugin, const gchar *action_id,
 	AirewriteStep *top;
 	g_autofree gchar *prompt = NULL;
 	g_autoptr(GError) error = NULL;
+	const gchar *provider = NULL;
+	const gchar *model = NULL;
 
 	actions_refresh(self, plugin);
 	a = bar_airewrite_actions_find_id(self->actions, action_id);
@@ -821,8 +842,12 @@ run_action(AiRewrite *self, GowlBarPlugin *plugin, const gchar *action_id,
 	set_str(&self->run_input, input);
 
 	prompt = bar_airewrite_compose_prompt(a, input, top->text);
+	choice_ensure(self, plugin);
+	bar_airewrite_effective_model(a->provider, a->model,
+	                              self->choice_provider,
+	                              self->choice_model, &provider, &model);
 	if (!bar_ai_start_full(self->ai, plugin, a->system, prompt,
-	                       a->provider, a->model, &error)) {
+	                       provider, model, &error)) {
 		set_view_error(self, (error != NULL) ? error->message
 		                                     : "the model could not be asked");
 		return;
@@ -1303,6 +1328,308 @@ session_reset(AiRewrite *self)
 	self->view = VIEW_CAPTURING;
 }
 
+/* ----------------------------------------------------------------
+ * The provider / model choice
+ * ---------------------------------------------------------------- */
+
+/* Where the choice is kept, or NULL with no host state directory. */
+static gchar *
+choice_path(GowlBarPlugin *plugin)
+{
+	GowlBarHost *host;
+	const gchar *dir;
+
+	host = gowl_bar_plugin_get_host(plugin);
+	dir = (host != NULL) ? gowl_bar_host_get_state_dir(host) : NULL;
+	if (dir == NULL || dir[0] == '\0')
+		return NULL;
+	return g_build_filename(dir, AIREWRITE_CHOICE_FILE, NULL);
+}
+
+/* Read the saved choice the first time it is needed.  A few bytes of
+   key file, so the compositor thread can afford it once. */
+static void
+choice_ensure(AiRewrite *self, GowlBarPlugin *plugin)
+{
+	g_autofree gchar *path = NULL;
+
+	if (self->choice_loaded)
+		return;
+	path = choice_path(plugin);
+	if (path == NULL)
+		return;   /* no host yet: try again next time */
+	self->choice_loaded = TRUE;
+	g_clear_pointer(&self->choice_provider, g_free);
+	g_clear_pointer(&self->choice_model, g_free);
+	bar_airewrite_choice_load(path, &self->choice_provider,
+	                          &self->choice_model);
+}
+
+typedef struct {
+	gchar *path;
+	gchar *provider;
+	gchar *model;
+} ChoiceSaveJob;
+
+static void
+choice_save_job_free(gpointer data)
+{
+	ChoiceSaveJob *job = data;
+
+	g_free(job->path);
+	g_free(job->provider);
+	g_free(job->model);
+	g_free(job);
+}
+
+static void
+choice_save_work(GowlBarPlugin *plugin, gpointer user_data)
+{
+	ChoiceSaveJob *job = user_data;
+	g_autoptr(GError) error = NULL;
+
+	(void)plugin;
+	if (!bar_airewrite_choice_save(job->path, job->provider, job->model,
+	                               &error))
+		g_warning("ai-rewrite: could not save the provider choice: %s",
+		          error->message);
+}
+
+/* Save the choice on a worker: a write is a write, and the compositor
+   thread does none. */
+static void
+choice_save(AiRewrite *self, GowlBarPlugin *plugin)
+{
+	ChoiceSaveJob *job;
+	gchar *path;
+
+	path = choice_path(plugin);
+	if (path == NULL)
+		return;
+	job = g_new0(ChoiceSaveJob, 1);
+	job->path     = path;
+	job->provider = g_strdup(self->choice_provider);
+	job->model    = g_strdup(self->choice_model);
+	gowl_bar_plugin_queue_work(plugin, choice_save_work, job,
+	                           choice_save_job_free);
+}
+
+/* The provider a request will reach when the panel picked none: the
+   widget's setting, else the default cmacs said it uses. */
+static const gchar *
+default_provider(GowlBarPlugin *plugin)
+{
+	return setting(plugin, "ai-provider",
+	               setting(plugin, "ai-default-provider", NULL));
+}
+
+/* What the next request asks, for the panel to say. */
+static const gchar *
+shown_provider(AiRewrite *self, GowlBarPlugin *plugin)
+{
+	return (self->choice_provider != NULL) ? self->choice_provider
+	                                        : default_provider(plugin);
+}
+
+typedef struct {
+	AiRewrite *self;
+	gchar     *command;
+} ListJob;
+
+static void
+list_job_free(gpointer data)
+{
+	ListJob *job = data;
+
+	g_free(job->command);
+	g_free(job);
+}
+
+/* Standalone, no provider list was pushed: ask ai-glib's own CLI. */
+static void
+list_providers_work(GowlBarPlugin *plugin, gpointer user_data)
+{
+	ListJob *job = user_data;
+	const gchar *argv[3];
+	g_autofree gchar *out = NULL;
+	gchar **names = NULL;
+
+	argv[0] = job->command;
+	argv[1] = "--list-providers";
+	argv[2] = NULL;
+	out = bar_run_argv(argv);
+	if (out != NULL)
+		names = bar_assistant_parse_provider_listing(out);
+
+	g_mutex_lock(&job->self->lock);
+	g_strfreev(job->self->cli_providers);
+	job->self->cli_providers = names;
+	g_mutex_unlock(&job->self->lock);
+	gowl_bar_plugin_request_panel_refresh(plugin);
+}
+
+/* The providers to offer: cmacs's pushed list, or the `ai' listing. */
+static gchar **
+provider_names(AiRewrite *self, GowlBarPlugin *plugin)
+{
+	const gchar *pushed;
+	gchar **names;
+
+	pushed = setting(plugin, "ai-providers", NULL);
+	if (pushed != NULL && pushed[0] != '\0')
+		return bar_airewrite_split_names(pushed);
+
+	g_mutex_lock(&self->lock);
+	names = g_strdupv(self->cli_providers);
+	if (!self->cli_listed &&
+	    bar_ai_backend_for(plugin) == BAR_AI_BACKEND_CLI) {
+		ListJob *job;
+
+		self->cli_listed = TRUE;
+		g_mutex_unlock(&self->lock);
+		job = g_new0(ListJob, 1);
+		job->self    = self;
+		job->command = g_strdup(setting(plugin, "ai-command", "ai"));
+		gowl_bar_plugin_queue_work(plugin, list_providers_work, job,
+		                           list_job_free);
+	} else {
+		g_mutex_unlock(&self->lock);
+	}
+	return (names != NULL) ? names : g_new0(gchar *, 1);
+}
+
+/* The footer every working view carries: what the next request asks,
+   and the way to change it. */
+static void
+add_choice_row(GowlBarPanel *panel, GowlBarPlugin *plugin, AiRewrite *self)
+{
+	const gchar *prov = shown_provider(self, plugin);
+	g_autofree gchar *title = NULL;
+	GowlBarPanelItem *item;
+
+	title = g_strdup_printf("%s%s%s",
+		(prov != NULL) ? prov : "default provider",
+		(self->choice_model != NULL) ? " \xc2\xb7 " : "",
+		(self->choice_model != NULL) ? self->choice_model : "");
+	item = gowl_bar_panel_add_row(panel, "settings", "\xe2\x9a\x99",
+		title, "Change the provider or model");
+	gowl_bar_panel_item_set_value(item, "\xe2\x80\xba");
+}
+
+/* The provider / model view. */
+static void
+build_settings(GowlBarPanel *panel, GowlBarPlugin *plugin, AiRewrite *self)
+{
+	g_auto(GStrv) names = NULL;
+	g_auto(GStrv) models = NULL;
+	g_autofree gchar *models_key = NULL;
+	g_autofree gchar *default_title = NULL;
+	GowlBarPanelItem *item;
+	const gchar *def;
+	const gchar *prov;
+	gchar rev[16];
+	guint i;
+
+	def = default_provider(plugin);
+	gowl_bar_panel_add_section(panel, "Provider");
+	default_title = (def != NULL)
+		? g_strdup_printf("Default (%s)", def)
+		: g_strdup("Default");
+	item = gowl_bar_panel_add_row(panel, "provider:", NULL, default_title,
+		(bar_ai_backend_for(plugin) == BAR_AI_BACKEND_CMACS)
+		? "Whatever cmacs-ai uses for the AI menu"
+		: "ai-glib's saved default, or ai-provider");
+	gowl_bar_panel_item_set_selected(item, self->choice_provider == NULL);
+
+	names = provider_names(self, plugin);
+	for (i = 0; names[i] != NULL; i++) {
+		g_autofree gchar *id = g_strconcat("provider:", names[i], NULL);
+
+		item = gowl_bar_panel_add_row(panel, id, NULL, names[i], NULL);
+		gowl_bar_panel_item_set_selected(item,
+			g_strcmp0(self->choice_provider, names[i]) == 0);
+	}
+	if (names[0] == NULL)
+		gowl_bar_panel_add_label(panel,
+			"No provider list yet.  Under cmacs it is pushed at"
+			" startup; standalone it comes from `ai"
+			" --list-providers'.");
+
+	/* Models: what cmacs pushed for this provider, plus free text,
+	   which always works. */
+	prov = shown_provider(self, plugin);
+	gowl_bar_panel_add_section(panel, "Model");
+	item = gowl_bar_panel_add_row(panel, "model-default", NULL,
+		"The provider's default", NULL);
+	gowl_bar_panel_item_set_selected(item, self->choice_model == NULL);
+	if (prov != NULL) {
+		models_key = g_strconcat("models.", prov, NULL);
+		models = bar_airewrite_split_names(setting(plugin, models_key,
+		                                           NULL));
+		for (i = 0; models[i] != NULL; i++) {
+			g_autofree gchar *id = g_strconcat("model:", models[i],
+			                                   NULL);
+
+			item = gowl_bar_panel_add_row(panel, id, NULL, models[i],
+			                              NULL);
+			gowl_bar_panel_item_set_selected(item,
+				g_strcmp0(self->choice_model, models[i]) == 0);
+		}
+	}
+	item = gowl_bar_panel_add_entry(panel, "model",
+		"Or type a model id, then Return", "");
+	g_snprintf(rev, sizeof(rev), "%u", self->model_rev);
+	gowl_bar_panel_item_set_prop(item, GOWL_BAR_ENTRY_PROP_REVISION, rev);
+
+	gowl_bar_panel_add_label(panel,
+		"Saved for next time.  An action that names its own provider"
+		" still uses it.");
+	item = gowl_bar_panel_add_buttons(panel, "settings-close");
+	gowl_bar_panel_add_button(item, "Done", TRUE);
+}
+
+/* Act on a click in the provider / model view.  Returns TRUE when it
+   was one of its controls. */
+static gboolean
+settings_action(AiRewrite *self, GowlBarPlugin *plugin, const gchar *item_id)
+{
+	if (g_str_has_prefix(item_id, "provider:")) {
+		const gchar *name = item_id + strlen("provider:");
+		gchar *next = (name[0] != '\0' &&
+		               bar_airewrite_choice_name_ok(name))
+			? g_strdup(name) : NULL;
+
+		/* A model belongs to its provider: switching drops it. */
+		if (g_strcmp0(next, self->choice_provider) != 0)
+			g_clear_pointer(&self->choice_model, g_free);
+		g_free(self->choice_provider);
+		self->choice_provider = next;
+		choice_save(self, plugin);
+		update_label(self, plugin);
+		return TRUE;
+	}
+	if (g_str_has_prefix(item_id, "model:")) {
+		const gchar *name = item_id + strlen("model:");
+
+		if (bar_airewrite_choice_name_ok(name)) {
+			set_str(&self->choice_model, name);
+			choice_save(self, plugin);
+		}
+		return TRUE;
+	}
+	if (strcmp(item_id, "model-default") == 0) {
+		g_clear_pointer(&self->choice_model, g_free);
+		self->model_rev++;
+		choice_save(self, plugin);
+		return TRUE;
+	}
+	if (strcmp(item_id, "settings-close") == 0) {
+		self->settings_open = FALSE;
+		return TRUE;
+	}
+	return FALSE;
+}
+
 static void
 airewrite_panel_opened(GowlBarPlugin *plugin, gpointer data)
 {
@@ -1314,6 +1641,12 @@ airewrite_panel_opened(GowlBarPlugin *plugin, gpointer data)
 	if (self == NULL)
 		return;
 	session_reset(self);
+	choice_ensure(self, plugin);
+	/* A right-click on the icon opens straight on the provider
+	   choice; the selection is still read underneath it, so Done
+	   lands on the actions as usual. */
+	self->settings_open = self->settings_on_open;
+	self->settings_on_open = FALSE;
 
 	/* The window to paste back into is the one focused NOW, before
 	   anything the panel does can move focus. */
@@ -1351,6 +1684,8 @@ airewrite_panel_closed(GowlBarPlugin *plugin, gpointer data)
 	(void)plugin;
 	if (self == NULL)
 		return;
+
+	self->settings_open = FALSE;
 
 	/* A capture still running belongs to a panel nobody is looking
 	   at; a model still answering, likewise.  A paste in flight is
@@ -1582,6 +1917,14 @@ airewrite_panel(GowlBarPlugin *plugin, gpointer data)
 	capture_absorb(self);
 	actions_refresh(self, plugin);
 	ai_absorb(self);
+	choice_ensure(self, plugin);
+
+	if (self->settings_open) {
+		gowl_bar_panel_add_hero(panel, "\xe2\x9a\x99", "AI rewrite",
+		                        "Which model rewrites your text");
+		build_settings(panel, plugin, self);
+		return panel;
+	}
 
 	g_mutex_lock(&self->lock);
 	backend_none = self->backend_none;
@@ -1624,6 +1967,7 @@ airewrite_panel(GowlBarPlugin *plugin, gpointer data)
 			gowl_bar_panel_add_label(panel,
 				"The result can only be shown here until"
 				" wl-clipboard is installed.");
+		add_choice_row(panel, plugin, self);
 		break;
 
 	case VIEW_ACTIONS:
@@ -1632,6 +1976,7 @@ airewrite_panel(GowlBarPlugin *plugin, gpointer data)
 		add_action_rows(panel, plugin, self);
 		if (self->status != NULL)
 			gowl_bar_panel_add_label(panel, self->status);
+		add_choice_row(panel, plugin, self);
 		add_hints(panel, self);
 		break;
 
@@ -1665,8 +2010,7 @@ airewrite_panel(GowlBarPlugin *plugin, gpointer data)
 
 		/* Name the provider when one is known: the widget's own
 		   setting, else the default cmacs says it will use. */
-		provider = setting(plugin, "ai-provider",
-			setting(plugin, "ai-default-provider", NULL));
+		provider = shown_provider(self, plugin);
 		waiting = (provider != NULL)
 			? g_strdup_printf("Waiting for %s\xe2\x80\xa6", provider)
 			: g_strdup("Waiting for the model\xe2\x80\xa6");
@@ -1718,6 +2062,7 @@ airewrite_panel(GowlBarPlugin *plugin, gpointer data)
 		gowl_bar_panel_add_button(item, "Back \xe2\x8c\xab", FALSE);
 		gowl_bar_panel_add_section(panel, "Then");
 		add_action_rows(panel, plugin, self);
+		add_choice_row(panel, plugin, self);
 		add_hints(panel, self);
 		break;
 	}
@@ -1730,6 +2075,8 @@ airewrite_panel(GowlBarPlugin *plugin, gpointer data)
 		item = gowl_bar_panel_add_buttons(panel, "error");
 		gowl_bar_panel_add_button(item, "Again", TRUE);
 		gowl_bar_panel_add_button(item, "Back", FALSE);
+		/* A wrong provider is the usual reason; offer the fix. */
+		add_choice_row(panel, plugin, self);
 		break;
 	}
 	return panel;
@@ -1800,6 +2147,13 @@ airewrite_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	capture_absorb(self);
 	ai_absorb(self);
 
+	if (strcmp(item_id, "settings") == 0) {
+		self->settings_open = TRUE;
+		return;
+	}
+	if (settings_action(self, plugin, item_id))
+		return;
+
 	if (g_str_has_prefix(item_id, "act:")) {
 		if (self->view == VIEW_ACTIONS || self->view == VIEW_RESULT ||
 		    self->view == VIEW_ERROR)
@@ -1842,6 +2196,18 @@ airewrite_panel_text(GowlBarPlugin *plugin, gpointer data,
 	trimmed = g_strstrip(g_strdup(text));
 	if (trimmed[0] == '\0')
 		return;
+
+	if (g_strcmp0(item_id, "model") == 0 && self->settings_open) {
+		if (bar_airewrite_choice_name_ok(trimmed)) {
+			set_str(&self->choice_model, trimmed);
+			choice_save(self, plugin);
+		} else {
+			set_str(&self->note, "That is not a model id.");
+		}
+		/* Clear the field: the pick shows in the rows above. */
+		self->model_rev++;
+		return;
+	}
 
 	if (g_strcmp0(item_id, "text") == 0 && self->view == VIEW_ENTER_TEXT) {
 		AirewriteStep *step;
@@ -1897,6 +2263,19 @@ airewrite_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
 	   answer: bring the state up to date before deciding anything. */
 	capture_absorb(self);
 	ai_absorb(self);
+
+	/* The provider choice is a list to click, not a place for action
+	   letters: BackSpace returns, other plain keys are kept from
+	   closing the panel, and everything else is the host's. */
+	if (self->settings_open) {
+		if (keysym == XKB_KEY_BackSpace) {
+			self->settings_open = FALSE;
+			return TRUE;
+		}
+		return (modifiers & (GOWL_KEY_MOD_CTRL | GOWL_KEY_MOD_ALT |
+		                     GOWL_KEY_MOD_LOGO)) == 0 &&
+		       xkb_keysym_to_utf32(keysym) >= 0x20;
+	}
 
 	if (keysym == XKB_KEY_question) {
 		self->hints = !self->hints;
@@ -2014,7 +2393,8 @@ update_label(AiRewrite *self, GowlBarPlugin *plugin)
 	gowl_bar_plugin_set_tooltip(plugin, busy
 		? "AI rewrite: the model is answering"
 		: "AI rewrite: select text anywhere, then open this"
-		  " (gowl bar-panel ai-rewrite)");
+		  " (gowl bar-panel ai-rewrite).  Right-click to pick the"
+		  " provider and model.");
 }
 
 static void
@@ -2098,6 +2478,9 @@ airewrite_destroy(GowlBarPlugin *plugin, gpointer data)
 		g_free(self->paste_previous);
 	}
 	g_free(self->actions_key);
+	g_free(self->choice_provider);
+	g_free(self->choice_model);
+	g_strfreev(self->cli_providers);
 	g_free(self->note);
 	g_free(self->status);
 	g_free(self->error);
@@ -2114,13 +2497,37 @@ airewrite_destroy(GowlBarPlugin *plugin, gpointer data)
 	g_free(self);
 }
 
+/*
+ * Right-click on the icon opens straight on the provider and model
+ * choice; a left click opens the panel as usual (on the selection).
+ */
+static gboolean
+airewrite_click(GowlBarPlugin *plugin, gpointer data, guint button, gint x,
+                gint y, guint modifiers)
+{
+	AiRewrite *self = data;
+	GowlBarHost *host;
+
+	(void)x;
+	(void)y;
+	(void)modifiers;
+	if (self == NULL || button != BTN_RIGHT)
+		return FALSE;
+	host = gowl_bar_plugin_get_host(plugin);
+	if (host == NULL)
+		return FALSE;
+	self->settings_on_open = TRUE;
+	gowl_bar_host_open_panel(host, gowl_bar_plugin_get_id(plugin));
+	return TRUE;
+}
+
 static const GowlBarPluginVTable airewrite_vtable = {
 	sizeof(GowlBarPluginVTable),
 	airewrite_create, airewrite_destroy,
 	NULL, NULL, airewrite_configure,
 	airewrite_interval, airewrite_poll, NULL,
 	NULL, NULL,
-	NULL, NULL,
+	airewrite_click, NULL,
 	airewrite_panel, airewrite_action,
 	airewrite_panel_opened, airewrite_panel_closed,
 	airewrite_panel_key,

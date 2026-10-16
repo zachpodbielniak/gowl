@@ -1,0 +1,2 @@
+#ai-rewrite-actions 1
+t	tone	Tone "down"	p	How?			Line 1\nLine\t2 \\ back	Rewrite: {input}\n\n“日本語”

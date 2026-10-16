@@ -1,0 +1,31 @@
+# A hand-written ~/.config/gowl/ai-rewrite.yaml, the shape the docs show.
+replace-builtins: false
+actions:
+  - key: t
+    id: friendlier
+    label: Make it friendlier
+    system: |
+      You rewrite text in a warmer, friendlier tone.
+      Keep every fact.  Output ONLY the rewritten text.
+    instruction: "Make the following friendlier:"
+    provider: ollama
+    model: "qwen3.5:9b"
+  - key: s
+    id: summarize
+    label: Summarize
+    instruction: "Summarize the following in one sentence."
+    preview: false
+    diff: false
+  - key: q
+    id: question
+    label: Ask a question
+    input: "What do you want to know?"
+    instruction: "Answer this question about the text: {input}"
+    diff: false
+  # No id: skipped, not fatal.
+  - key: z
+    label: Broken entry
+  # The same id twice: the second is skipped.
+  - key: w
+    id: friendlier
+    label: Duplicate

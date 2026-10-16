@@ -1,0 +1,26 @@
+# identical
+same text	same text	same text
+# one word fixed (proofread)
+Teh cat sat.	The cat sat.	[-Teh-]{+The+} cat sat.
+# insertion only
+the cat	the black cat	the {+black +}cat
+# deletion only
+the black cat	the cat	the [-black -]cat
+# two adjacent words replaced: one replacement, not two
+the cat sat	a dog sat	[-the cat-]{+a dog+} sat
+# punctuation is its own token
+Hello world	Hello, world!	Hello{+,+} world{+!+}
+# whitespace change
+a  b	a b	a[-  -]{+ +}b
+# newline preserved as equal
+line one\nline two	line one\nline 2	line one\nline [-two-]{+2+}
+# unicode words
+Naïve cafe	Naïve café	Naïve [-cafe-]{+café+}
+# CJK and emoji are characters, not one long word
+日本語 👍	日本語 👎	日本語 [-👍-]{+👎+}
+# everything replaced
+abc	xyz	[-abc-]{+xyz+}
+# from nothing
+	new	{+new+}
+# to nothing
+old		[-old-]

@@ -1,0 +1,6 @@
+replace-builtins: true
+actions:
+  - key: x
+    id: only
+    label: The only action
+    instruction: "Do it."

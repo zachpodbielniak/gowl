@@ -492,6 +492,12 @@ keybinds:
   "Super+Return": { action: spawn, arg: "gst", desc: "Terminal" }
   "Super+p": { action: spawn, arg: "wofi --show drun", desc: "App launcher" }
   "Super+Shift+p": { action: spawn, arg: "wofi --show run", desc: "Run command" }
+  # The extended bar widgets' panels (add the widget to the bar first):
+  # "Super+e":     { action: ipc_command, arg: "bar-panel ai-rewrite", desc: "AI rewrite the selection" }
+  # "Super+Alt+t": { action: ipc_command, arg: "bar-panel translate", desc: "Translate" }
+  # "Super+Alt+k": { action: ipc_command, arg: "bar-panel keywheel", desc: "Keybinding wheel" }
+  # "Super+Alt+o": { action: ipc_command, arg: "bar-panel tvremote", desc: "TV remote" }
+  # "Super+Alt+equal": { action: ipc_command, arg: "bar-widget-action tvremote key:vol_up", desc: "TV volume up" }
 
   # Client management
   "Super+Shift+c": { action: kill_client, desc: "Close window" }
@@ -1044,6 +1050,23 @@ modules:
     # weather.param: "Muskegon"
     # network.ping-host: "1.1.1.1"
     # title.max-width: "480"
+    #
+    # The extended widget set ships in bar.so and is OFF until listed.
+    # Each has a page in docs/bar-widgets/ with every setting.  Add the
+    # ones you want; the panels with a keybind are opened with
+    # `ipc_command: bar-panel <widget>' (see the keybinds block).
+    # widgets-right-add: "ai-assistant meeting-notes wow-gold"
+    #
+    # cpu.style: creature            # the cpu widget's activity style
+    # ai-assistant.ai-provider: ollama   # AI widgets use ai-glib's `ai'
+    # ai-rewrite.ai-model: qwen3.5:9b    #   command (ai-backend: ai)
+    # translate.libretranslate-url: "http://127.0.0.1:5000"
+    # meeting-notes.whisper-model: "~/.local/share/whisper/ggml-small.bin"
+    # meeting-notes.output-dir: "~/Documents/notes/00_inbox"
+    # keywheel.color-ring-super: blue
+    # webmail.url: "https://app.fastmail.com/mail/"
+    # wow-gold.host: local
+    # devservices.mode: auto
     #
     # The panel and toast styling, on top of the palette:
     # theme-accent: mauve

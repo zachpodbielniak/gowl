@@ -148,6 +148,24 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   holds a picture of the desktop *with* its windows)
 - `test-inject-routing.sh` -- injected input goes through the compositor's
   own decision, not straight to the seat
+- `test-bar-entry` / `test-bar-entry-panel` -- panel text fields: the
+  pure editing rules (the cursor never lands inside a UTF-8 character,
+  Alt/Super chords pass through), then a headless compositor with a
+  crispy-compiled probe: j/k/space type in a focused field, Return
+  submits, the host keeps the text across rebuilds until the plugin
+  bumps the revision, paste arrives through the compositor's own loop,
+  a focus token moves the keyboard, a focused canvas hears keys first
+- `test-bar-ai` -- the shared AI backend both ways: the prompt never in
+  argv, the Elisp form unbreakable, a late answer dropped, failures
+  and timeouts named
+- `test-bar-<widget>` -- one per extended widget (cpu-activity,
+  ai-assistant, ai-rewrite, meeting-notes, translate, keywheel,
+  webmail, devservices, netshares, tvremote, wow-gold), each through
+  `tests/bar-widget-harness.h` (bar.so, a stub host that runs queued
+  work inline) with fake CLIs and fixtures in `tests/fixtures/bar/`;
+  no network, no devices
+- `test-bar-actions.sh` -- every panel control has a handler and every
+  handler a control
 - `test-bar-wifi-scan` -- nmcli output to a network list: one entry per
   NETWORK (nmcli emits one row per BSS, so a dual-band router or a mesh
   repeats an SSID), ranked before truncation, escaped colons, hidden

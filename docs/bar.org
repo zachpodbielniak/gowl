@@ -1218,3 +1218,7 @@ Clear a quarantine with =gowl bar-plugin-clear <name>= once you have fixed the p
 8. No float is printf'd into a =wpctl=, =gammastep=, =brightnessctl= or =playerctl= command line, where a decimal-comma locale would break it.
 9. Colour settings are interpreted in one place, =bar_plugin_apply_color()=, so a hex literal works everywhere.
 10. Every setting a plugin writes is read somewhere, every tooltip is drawn, the toggle sets one, and the compositor's own recorder stays reachable.
+11. Reading a selection never blocks the compositor (the clipboard module reads from the main loop, with a deadline).
+12. A secret never goes into an argv: the network-shares widget builds every argv with =g_ptr_array_add(argv, ...)=, and no such line may name a password or secret --- an argv is readable by every user in =/proc/<pid>/cmdline=.
+
+=tests/test-bar-actions.sh= checks that every panel control a widget emits has a handler and every handler answers a control that is emitted. It reads each file flattened (so a call whose arguments wrap still counts), knows the ENTRY and CANVAS builders, follows local =#define NAME(id_, ...)= wrappers, and recognises =g_strcmp0=, =strcmp=, =g_str_has_prefix= and =*id_arg= helpers as handlers. A status row --- "Reading the selection..." --- should carry no id at all: an id makes it hover and click.

@@ -1,0 +1,6 @@
+- STREAM_MUSIC:
+   Muted: false
+   Min: 0
+   Max: 15
+   Current: 2 (speaker): 11, 400 (hdmi): 6, 40000000 (default): 15
+   Devices: hdmi

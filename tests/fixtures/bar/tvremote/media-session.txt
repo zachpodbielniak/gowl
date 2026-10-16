@@ -1,0 +1,7 @@
+    Sessions Stack - have 2 sessions:
+      com.netflix.ninja/NetflixMediaSession (userId=0)
+        active=true
+        state=PlaybackState {state=3, position=1234, buffered position=0, speed=1.0}
+        metadata: size=4, description=Stranger Things, Season 1, null
+      com.amazon.tv.launcher/LauncherSession (userId=0)
+        metadata: size=0, description=null, null, null

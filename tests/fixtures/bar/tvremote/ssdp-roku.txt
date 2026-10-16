@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Cache-Control: max-age=3600
+ST: roku:ecp
+Location: http://192.168.1.134:8060/
+USN: uuid:roku:ecp:P0A070000007
+

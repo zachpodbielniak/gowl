@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+CACHE-CONTROL: max-age = 1800
+LOCATION: http://[fe80::1]:7678/nservice/
+SERVER: SHP, UPnP/1.0, Samsung UPnP SDK/1.0
+ST: urn:samsung.com:device:RemoteControlReceiver:1
+

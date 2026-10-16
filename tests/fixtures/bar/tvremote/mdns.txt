@@ -1,0 +1,4 @@
+List of discovered mdns services
+adb-G070VM1234567890	_adb._tcp.	192.168.1.44:5555
+adb-ABCDEF-xyz	_adb-tls-connect._tcp.	192.168.1.45:37123
+bogus	_adb._tcp.	-evil:5555

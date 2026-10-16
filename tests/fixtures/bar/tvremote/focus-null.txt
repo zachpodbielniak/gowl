@@ -1,0 +1,2 @@
+  mCurrentFocus=null
+  mFocusedApp=null

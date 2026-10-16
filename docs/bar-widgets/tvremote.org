@@ -1,0 +1,269 @@
+#+title: TV remote
+#+description: A bar widget that drives Fire TV, Android TV, Roku, Samsung and LG televisions (and, optionally, Chromecast and Apple TV)
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+
+=tvremote= (alias =tv=) is a remote control for the television across the room. The bar shows what the default TV is playing and its volume (=Netflix · 47=); the wheel over it changes the TV's volume, right-click is play/pause, middle-click is mute, and a left-click opens the panel: a drawn remote (D-pad ring, back / home / menu, transport, volume, power), a text field that types on the TV, the TV's apps, and the add / pair / scan flow.
+
+It is a generic, C-native port inspired by the Omarchy "Universal TV Remote" plugin. There is no Python: every protocol is spoken from the bar module itself, or through a small command-line tool the system already has.
+
+| Kind         | Protocol                                                   | Pairing                                   | Status it can show       |
+|--------------+------------------------------------------------------------+-------------------------------------------+--------------------------|
+| =firetv=     | =adb= over TCP 5555 (first-class, best tested)             | "Allow USB debugging?" on the TV          | app, title, volume       |
+| =androidtv=  | =adb= over TCP 5555                                        | same                                      | app, title, volume       |
+| =roku=       | ECP: HTTP on 8060, through =curl=                          | none                                      | app (no volume readback) |
+| =samsung=    | Tizen websocket API, =wss://HOST:8002= (or =ws= on 8001)   | "Allow" prompt; token saved               | online / offline only    |
+| =lg=         | webOS SSAP websocket, =wss://HOST:3001= (or =ws= on 3000)  | prompt; client key saved                  | app, volume              |
+| =cast=       | the =catt= CLI, only when installed                        | none                                      | title, volume            |
+| =appletv=    | pyatv's =atvremote= CLI, only when installed               | once, in a terminal                       | app, title, volume       |
+
+What it deliberately does not do:
+
+- Android TV's "Remote v2" protocol (the one the Google TV phone app uses, PIN pairing over TLS on 6466) is *not* implemented; Android TV goes through adb like the Fire TV.
+- Samsung sets older than 2016 (the encrypted PIN protocol on port 8000) are not supported.
+- Powering a Samsung or LG *on* needs Wake-on-LAN, which is not sent; power works as off / sleep.
+- Apple TV pairing is not done from the panel (it needs a PIN typed back into =atvremote=).
+
+* Quick start --- standalone gowl
+
+Add the widget to a bar region in =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "tvremote"
+    tvremote.refresh: 15
+    tvremote.scan-subnet: auto
+keybinds:
+  "Super+Alt+t": { action: ipc_command, arg: "bar-panel tvremote", desc: "TV remote" }
+#+end_src
+
+Then click the TV glyph, type the TV's address under *Add a TV*, pick its kind, and press *Add and pair*. From a shell:
+
+#+begin_src sh
+gowl bar-panel tvremote     # open the remote
+#+end_src
+
+The devices themselves live in =~/.config/gowl/tvremote.yaml= (see [[*The device list][The device list]]), not in =config.yaml=, because pairing writes secrets into it.
+
+* Quick start --- cmacs --gowl
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-add" . "tvremote")
+   ("tvremote.refresh" . "15")))
+(gowl-add-keybind "Super+Alt+t" 'ipc-command "bar-panel tvremote" "TV remote")
+#+end_src
+
+Under =cmacs --gowl= the widget is *off by default*; nothing in cmacs configures it. Everything above is optional beyond adding it to a widget list.
+
+There is no IPC today to press a single remote key from a keybind (for example a media key bound to the TV's volume): =gowl bar-panel tvremote= opens the panel, and the remote's keys work from there. See [[*Known limitations][Known limitations]].
+
+* Fire TV setup
+
+The Fire TV is controlled over adb, which is off until you turn it on. Once per device:
+
+1. On the Fire TV: *Settings → My Fire TV → About*. Select the device's name (e.g. "Fire TV Stick 4K") *seven times*, until a message says you are a developer. (On older Fire OS, *Developer options* is already in the *My Fire TV* menu.)
+2. Back in *My Fire TV*, open *Developer options* and turn *ADB debugging* ON. Leave "Apps from Unknown Sources" alone; it is not needed.
+3. Find the address: *Settings → My Fire TV → About → Network*, the *IP Address* line. Giving the TV a fixed address in your router's DHCP settings saves doing this again.
+4. In the bar, open the remote, type the address under *Add a TV*, leave the kind on *Fire TV*, and press *Add and pair* (or Return in the field). Or press *Scan network*: a Fire TV with ADB debugging on answers on port 5555 and appears in the list; clicking it fills the form.
+5. The TV shows *"Allow USB debugging?"* with this computer's key fingerprint. Tick *Always allow from this computer* and choose *OK*. The widget turns yellow and says "Accept the prompt on your TV" until you do, polling once a second, and goes green the moment it is accepted.
+
+Without "Always allow", the prompt comes back after every reboot of the TV. The authorisation belongs to adb's key in =~/.android/adbkey=, not to gowl: another computer has to be allowed separately.
+
+Android TV / Google TV is the same, with the switches under *Settings → Device Preferences → About* (select *Build* seven times) and then *Developer options → USB debugging* (and, on Google TV, *Network debugging* where offered).
+
+* Settings
+
+| Key             | Type   | Default                         | Meaning                                                                 |
+|-----------------+--------+---------------------------------+-------------------------------------------------------------------------|
+| =config=        | path   | =~/.config/gowl/tvremote.yaml=  | The device list. =~= is expanded. Must be mode 0600.                     |
+| =refresh=       | int    | =15=                            | Seconds between status polls (minimum 2). 3 s while the panel is open, 1 s while a TV waits for its pairing prompt. |
+| =adb=           | string | =adb=                           | The adb command, a name on =PATH= or a full path                        |
+| =curl=          | string | =curl=                          | The curl command (Roku)                                                 |
+| =catt=          | string | =catt=                          | The catt command; the Chromecast kind is offered only when it resolves |
+| =atvremote=     | string | =atvremote=                     | pyatv's CLI; the Apple TV kind is offered only when it resolves         |
+| =scan-subnet=   | string | =auto=                          | The network *Scan network* probes: =auto= (the default route's interface), or a CIDR =/24= or narrower. A wider network is refused. |
+| =color-online=  | colour | =green=                         | The bar label while the default TV is reachable                          |
+| =color-offline= | colour | =subtext=                       | Offline, unconfigured, or the tool is missing                           |
+| =color-pairing= | colour | =yellow=                        | Waiting for a prompt on the TV to be accepted                           |
+| =color-accent=  | colour | =accent=                        | The remote's OK button and the flash of the last-pressed button         |
+
+** The device list
+
+=~/.config/gowl/tvremote.yaml= is written by the panel, but is ordinary YAML you may edit (the widget notices the change on its next poll):
+
+#+begin_src yaml
+default: living-room
+devices:
+  - id: living-room
+    name: "Living room"
+    kind: firetv            # firetv | androidtv | roku | samsung | lg | cast | appletv
+    host: 192.168.1.20
+    volume-via: soundbar    # volume keys go to this device instead
+  - id: soundbar
+    kind: roku
+    host: 192.168.1.134
+  - id: bedroom
+    kind: samsung
+    host: 192.168.1.30
+    port: 8002
+    token: "12345678"       # written by pairing
+  - id: office
+    kind: lg
+    host: 192.168.1.77
+    client-key: "a1b2c3..."  # written by pairing
+#+end_src
+
+| Field        | Meaning                                                                                  |
+|--------------+------------------------------------------------------------------------------------------|
+| =id=         | Unique short name; made from kind and host when missing                                   |
+| =name=       | What the panel shows                                                                      |
+| =kind=       | The protocol (aliases accepted: =fire-tv=, =googletv=, =tizen=, =webos=, =chromecast=, =atv=) |
+| =host=       | Address or host name. =HOST:PORT= is accepted in the panel's field                         |
+| =port=       | Defaults: 5555 (adb), 8060 (Roku), 8002 (Samsung, TLS), 3001 (LG, TLS). 8001 / 3000 use plain ws |
+| =token=      | Samsung's pairing token (secret)                                                           |
+| =client-key= | LG's pairing key (secret)                                                                  |
+| =volume-via= | "Sound goes through": the =id= of the device that should receive this one's volume keys     |
+
+An entry with an unknown kind or no usable host is skipped (and logged); a duplicate =id= keeps the first. =volume-via= is followed through a chain (TV → Fire TV Cube → receiver), at most eight hops; a loop is a misconfiguration and the keys stay on the device they were pressed for.
+
+* Theming
+
+Every colour is a palette *role*, so the widget follows the session palette (Mocha, Latte, a generated one) with no settings at all. Each =color-*= key accepts a role name (=green=, =peach=, =accent=, ...) or a literal =#rrggbb=:
+
+#+begin_src yaml
+modules:
+  bar:
+    tvremote.color-online: teal
+    tvremote.color-pairing: "#f9e2af"
+    tvremote.color-accent: mauve
+#+end_src
+
+The three label colours go through the bar's one colour interpreter, so a literal works exactly as it does for every other widget. =color-accent= is painted by the remote canvas itself and accepts either form. The panel's hero line takes the same role as the label; a literal there falls back to the role default, because panel items take roles only.
+
+* The panel
+
+From the top:
+
+- *Hero* --- the selected TV's name and what it is doing (=Netflix · Stranger Things · volume 47=), or what is in the way ("Accept the prompt on your TV", "Nothing answered on 192.168.1.20:5555. Turn on ADB debugging…"), coloured like the bar label. Errors from the last action show under it in red for 30 s.
+- *Devices* --- one row per TV (kind, address, state; the default is badged). Clicking a row makes it the panel's TV without changing the default. Under them: *Make default* and *Forget*. Forget is two-step: the first click turns it into "Click again to forget" for five seconds.
+- *The remote* --- a drawn remote laid out for the TV's kind. Fire TV / Android TV / Roku / Samsung / LG / Apple TV: power (and search / input / settings where the kind has them) on top, the D-pad ring with OK in the middle, then back / home / menu, rewind / play-pause / forward, volume down / mute / volume up. Chromecast: transport, volume, stop. Buttons a kind cannot press are left out. The button just pressed flashes in the accent colour.
+- *Type text on the TV* --- Return sends what is in the field to the TV's focused text box, then clears it. Fire TV and Android TV accept ASCII only (Android's =input text= types through a key map with no keys for anything else); characters it could not type are counted and reported. Samsung, LG and Apple TV take any UTF-8; Roku types character by character.
+- *Apps* --- *Show apps* fetches the launchable list (Fire TV: the user-installed packages plus known system apps such as Prime Video, by friendly name; unknown packages show their id); click one to launch it.
+- *Add a TV* --- the address field, the kind buttons (Chromecast and Apple TV appear only when =catt= / =atvremote= are installed), *Add and pair*, and a hint when the kind's tool is missing. For Fire TV the setup steps are shown inline.
+- *Scan network* --- see [[*Discovery][Discovery]]; each result row fills the Add form.
+
+** Keys
+
+With the keyboard on the remote canvas (Tab to it):
+
+| Key                     | Does                     |
+|-------------------------+--------------------------|
+| =←= =→=, =a= =d=        | Left / right             |
+| =w= =s=                 | Up / down                |
+| =Return=, =Space=       | OK                       |
+| =L=                     | Long-press OK            |
+| =BackSpace=             | Back                     |
+| =h=                     | Home                     |
+| =m=                     | Menu                     |
+| =p=                     | Play / pause             |
+| =r= / =f=               | Rewind / fast forward    |
+| =+= =-= (and keypad)    | Volume up / down         |
+| =0=                     | Mute                     |
+
+=↑= and =↓= move between panel rows, as in every panel, and do not reach the canvas; hence =w= / =s=. There is no key-repeat or key-release signal to a panel, so "hold" is its own key (=L=) rather than a long press of Return.
+
+* Discovery
+
+*Scan network* runs on a worker and takes a few seconds:
+
+1. *SSDP*: one multicast M-SEARCH each for Roku (=roku:ecp=), Samsung and LG; they answer and name themselves.
+2. *mDNS*: =adb mdns services=, for Android TVs advertising adb.
+3. *A TCP probe* of ports 5555, 8060, 8002, 8001, 3001 and 3000 on every address of =scan-subnet= --- the only way to find a Fire TV, which advertises nothing. Bounded: a =/24= at most, 64 connection attempts in flight, 400 ms each. =auto= reads the default route's interface from =/proc/net/route= and its address from =getifaddrs()=; a network wider than =/24= is narrowed to the =/24= the machine is in.
+
+A host found by an earlier source keeps that source's (more specific) kind. A device on port 5555 is offered as Fire TV; change the kind button before adding an Android TV.
+
+* Dependencies
+
+Fedora packages:
+
+| Package          | For                                   | When missing                                                        |
+|------------------+---------------------------------------+---------------------------------------------------------------------|
+| =android-tools=  | =adb=: Fire TV and Android TV          | The panel and tooltip say "adb is not installed: install the android-tools package"; other kinds still work |
+| =curl=           | Roku                                  | Same, naming =curl=                                                  |
+| =glib-networking= | TLS for Samsung (8002) and LG (3001)  | Those connections fail with GIO's "TLS support is not available"; the plain ports still work |
+
+Optional, not packaged for Fedora (=pip install --user=):
+
+| Tool                         | For        | When missing                           |
+|------------------------------+------------+----------------------------------------|
+| =catt=                       | Chromecast | The kind is not offered                 |
+| =pyatv= (=atvremote=)        | Apple TV   | The kind is not offered                 |
+
+No new link dependency: the module uses GLib / GIO (already linked), JSON-GLib and yaml-glib through libgowl, and plain sockets.
+
+* Security and privacy
+
+- *Secrets.* Samsung's token and LG's client key let anyone holding them control the TV without a prompt. They live only in =tvremote.yaml=, which is written atomically at mode =0600= (a =mkstemp= file at 0600, =fchmod=, =fsync=, =rename=) --- including when it replaces a looser file. A list readable by group or others is *refused*, not read: the panel and tooltip say "run chmod 600 on it". Secrets never appear in argv, logs, the label or the tooltip, and are wiped from memory when a device is freed.
+- *adb is powerful.* With ADB debugging on, any computer on the LAN can ask the TV for a shell; the TV's authorisation prompt is the only gate, so never accept a prompt you did not cause. Turn it off on the TV if you stop using the widget.
+- *TLS without verification.* Samsung and LG serve self-signed certificates with nothing a client could check, so the certificate is accepted as presented. That protects against passive sniffing but not against someone on the LAN impersonating the TV --- the same exposure as their plain-text ports.
+- *Injection.* Typed text reaches the Fire TV's shell single-quoted (='\''= for a quote), with control characters dropped, so no metacharacter or newline can become a command. Package names, app ids and hosts from devices or the config are validated against strict character sets before they reach a shell line, a URL path or a launch request. Every outside string (CLI output, XML, JSON, the config) is made valid UTF-8, stripped of control characters and bounded before it is drawn.
+- *Scanning* only touches the local =/24= and only the six TV ports.
+
+* Troubleshooting
+
+| Symptom                                                    | Cause and fix                                                                                     |
+|------------------------------------------------------------+---------------------------------------------------------------------------------------------------|
+| Yellow, "Accept the prompt on your TV", nothing on the TV  | The prompt timed out or was dismissed. Restart adb's server (=adb kill-server=) or remove and re-add the device; it is shown again on the next connect. |
+| "Nothing answered on HOST:5555"                            | ADB debugging is off, the address changed, or the TV is asleep on a network that powers Wi-Fi down. Check *About → Network*. Retries back off to once a minute. |
+| Fire TV keys work, then stop after the TV sleeps           | Normal: the shell is restarted on the next key and the poll reconnects; a key pressed while it is reconnecting may be lost. |
+| Roku: "refuses remote control"                             | Roku OS 11+ *Control by mobile apps* is Limited. Set *Settings → System → Advanced system settings → Control by mobile apps → Network access* to Default or Permissive. |
+| Samsung refused                                            | Allow it under *Settings → General → External Device Manager → Device Connection Manager*, or remove the device there and pair again. |
+| LG "refused to pair"                                       | The firmware wants a signed manifest (see Known limitations); the TV's error text is shown.        |
+| Typed text is missing letters on a Fire TV                 | Non-ASCII characters cannot be typed through adb; the panel counts them.                          |
+| "The device list cannot be read"                           | =tvremote.yaml= is readable by others (=chmod 600 ~/.config/gowl/tvremote.yaml=) or is not valid YAML. |
+| Scan finds nothing                                         | Multicast blocked (SSDP) and no Fire TV with ADB on; or =scan-subnet= is not the TV's network. Add by address instead. |
+
+* Internals
+
+Files, all in =modules/bar/=:
+
+| File                         | Role                                                                                     |
+|------------------------------+------------------------------------------------------------------------------------------|
+| =bar-plugins-tvremote.c=     | The widget: label, panel, canvas, keys, jobs                                              |
+| =bar-tvremote-model.[ch]=    | Pure: kinds, keymaps, text escaping, adb / Roku / SSDP parsers, layout and hit-test, volume routing, label |
+| =bar-tvremote-config.c=      | The device list: parse, serialise, 0600 load and atomic save                             |
+| =bar-tvremote-json.c=        | Path lookups into Samsung / LG JSON (JSON-GLib)                                           |
+| =bar-tvremote-ws.[ch]=       | A minimal RFC 6455 client (handshake, masking, framing, ping, close) over =GSocketClient= |
+| =bar-tvremote-backend.[ch]=  | The per-kind vtable (key, text, status, apps, launch), sessions, a subprocess runner with a deadline |
+| =bar-tvremote-adb.c=         | Fire TV / Android TV                                                                       |
+| =bar-tvremote-roku.c=        | Roku                                                                                       |
+| =bar-tvremote-samsung.c=     | Samsung                                                                                    |
+| =bar-tvremote-lg.c=          | LG                                                                                         |
+| =bar-tvremote-cli.c=         | Chromecast (catt) and Apple TV (atvremote)                                                 |
+| =bar-tvremote-discover.c=    | SSDP, mDNS and the bounded port probe                                                      |
+
+*Threads.* Nothing talks to a device on the compositor thread. The async poll (a bar worker) reloads the device list when its mtime moves, asks the default device --- and the panel's device while the panel is open --- for status, and swaps the answers in under the plugin's mutex. Every click, key, text submit, add, forget and scan becomes a job on =gowl_bar_plugin_queue_work()=. The panel builder, the canvas painter, the label and the click hit-test read only cached state. Each device has a session with its own I/O mutex, so a key pressed during a status poll waits on the worker, never on the compositor. No GLib main-context source is used anywhere: timing is the poll interval plus monotonic timestamps; subprocesses are reaped with =waitpid= on the worker that started them, and killed by their own PID on a deadline.
+
+*Fire TV latency.* Keys go down one long-lived =adb -s SERIAL shell= per device whose stdin is a socket the worker writes =input keyevent N= lines to; a process per key would cost 300--700 ms. The socket (not a pipe) is so a write to a dead shell returns =EPIPE= via =MSG_NOSIGNAL= instead of raising =SIGPIPE=. The shell is restarted on death, at most four times in ten seconds before the device is marked lost and the poll reconnects (backoff 2, 4, 8 ... 60 s for an unreachable address; none while a pairing prompt is up).
+
+*Websocket TVs.* The Samsung / LG connection is kept open between calls and anything the TV pushes is drained before each write. While a pairing prompt is up the half-open connection is *kept* across polls, so a second prompt is never stacked on the first.
+
+*Layout.* =bar_tvremote_layout()= computes every button rectangle from the canvas size (a nominal 320-wide layout scaled to the real canvas); the canvas draws those rectangles and the click handler hit-tests the same ones with the size the canvas was last painted at.
+
+*Tests.* =tests/test-bar-tvremote.c= (28 cases, offline, about 3 s): the full Fire TV keymap; =input text= escaping verified by running each line through a real =/bin/sh= and decoding Android's =%s= rule (quotes, =$()=, backticks, =;=, =&=, =|=, a literal =%s=, Unicode, newlines, non-UTF-8); focus parsing over Fire OS 7, Fire OS 8, Android TV 12, null and hostile captures; =pm list= and the friendly-name merge; the adb connect / authorize states; =dumpsys audio= (=streamVolume=, per-device =Current=, mute); Roku XML and ECP URL encoding; SSDP, =/proc/net/route=, CIDR and mDNS parsing; a real port probe against a loopback listener; the RFC 6455 accept-key vector and section 5.7 masked frame, extended lengths and malformed frames; layout reachability and non-overlap for every kind at several sizes; volume-via chains, dead ends and loops; config round-trip, mode refusal and 0600 on save. The widget itself runs against a fake =adb= (logging argv, answering from fixtures, recording the persistent shell's stdin), a fake =curl=, and a fake Samsung / LG websocket server on 127.0.0.1: the pairing state machine, one shell process for many keys, restart after the shell is killed, app launch with fallback, missing adb, volume routed to a Roku, Roku's 403, the 0600 config refusal and recovery, add / default / two-step forget, the scan refusing a =/16=, colour overrides, Samsung token pairing (saved 0600, never in the tooltip, every client frame masked) and LG registration, pointer-socket buttons and SSAP volume. Fixtures are in =tests/fixtures/bar/tvremote/=.
+
+* Known limitations
+
+- No IPC to press one remote key from a keybind; it would need a shared bar command (for example =gowl bar-widget-action tvremote vol+=).
+- =↑= / =↓= cannot reach a focused canvas (the panel host navigates with them); =w= / =s= stand in.
+- Android TV Remote v2, pre-2016 Samsung, and Wake-on-LAN power-on are not implemented.
+- Samsung has no play/pause toggle: the widget alternates =KEY_PAUSE= and =KEY_PLAY=, which can be out of step with what the TV is doing.
+- LG uses an unsigned permissions manifest; firmware that insists on LG's signed manifest refuses to pair.
+- Roku's ECP cannot report volume; Samsung's API reports neither the app nor the volume.

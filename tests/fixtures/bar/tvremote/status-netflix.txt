@@ -1,0 +1,22 @@
+  mCurrentFocus=Window{a3f1c2 u0 com.netflix.ninja/com.netflix.ninja.MainActivity}
+  mFocusedApp=AppWindowToken{4b0e2d1 token=Token{8c1f0e4 ActivityRecord{d6f0b47 u0 com.netflix.ninja/.MainActivity t1418}}}
+---
+- STREAM_VOICE_CALL:
+   Muted: false
+   Min: 1
+   Max: 7
+   streamVolume:5
+- STREAM_MUSIC:
+   Muted: false
+   Min: 0
+   Max: 15
+   streamVolume:7
+   Current: 2 (speaker): 9, 400 (hdmi): 7, 40000000 (default): 15
+   Devices: hdmi
+- STREAM_ALARM:
+   Muted: false
+   Max: 7
+   streamVolume:6
+---
+        metadata: size=4, description=Stranger Things, Season 1, null
+        metadata: size=0, description=null, null, null

@@ -1,0 +1,7 @@
+package:com.netflix.ninja
+package:org.jellyfin.androidtv
+package:com.example.sideloaded
+package:com.x;rm -rf /
+garbage line
+package:org.xbmc.kodi
+package:com.netflix.ninja

@@ -1,0 +1,2 @@
+  mCurrentFocus=Window{a3f1c2 u0 com.netflix.ninja/com.netflix.ninja.MainActivity}
+  mFocusedApp=AppWindowToken{4b0e2d1 token=Token{8c1f0e4 ActivityRecord{d6f0b47 u0 com.netflix.ninja/.MainActivity t1418}}}

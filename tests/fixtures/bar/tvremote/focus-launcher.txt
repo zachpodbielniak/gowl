@@ -1,0 +1,2 @@
+  mCurrentFocus=Window{f00ba4 u0 com.amazon.tv.launcher/com.amazon.tv.launcher.ui.HomeActivity_vNext}
+  mFocusedApp=AppWindowToken{1 token=Token{2 ActivityRecord{3 u0 com.amazon.tv.launcher/.ui.HomeActivity_vNext t1}}}

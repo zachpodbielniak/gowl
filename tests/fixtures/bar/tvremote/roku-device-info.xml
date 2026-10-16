@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<device-info>
+	<udn>29380075-0800-1025-80a6-d83134be2f3e</udn>
+	<serial-number>X00400ABCDEF</serial-number>
+	<vendor-name>Roku</vendor-name>
+	<model-name>Roku Ultra</model-name>
+	<user-device-name>Living Room Roku</user-device-name>
+	<friendly-device-name>Living Room Roku</friendly-device-name>
+	<power-mode>PowerOn</power-mode>
+	<supports-ecs-textedit>true</supports-ecs-textedit>
+</device-info>

@@ -1,0 +1,2 @@
+  mCurrentFocus=Window{abc u0 com.evil;reboot/x.Y}
+  mFocusedApp=ActivityRecord{def u0 $(id)/.Main t1}

@@ -1,0 +1,8 @@
+package:android
+package:com.amazon.firebat
+package:com.amazon.tv.launcher
+package:com.amazon.tv.settings.v2
+package:com.netflix.ninja
+package:org.jellyfin.androidtv
+package:com.amazon.firetv.youtube
+package:com.android.systemui

@@ -1,0 +1,2 @@
+  mCurrentFocus=Window{1d2e3f4 u0 NotificationShade}
+  mFocusedApp=ActivityRecord{6f8d0e3 u0 com.amazon.firebat/com.amazon.firebat.deeplink.DeepLinkRoutingActivity t2201}

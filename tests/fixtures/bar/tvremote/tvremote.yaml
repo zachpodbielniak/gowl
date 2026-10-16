@@ -1,0 +1,20 @@
+# a hand-written device list
+default: living-room
+devices:
+  - id: living-room
+    name: "Living room: Fire TV"
+    kind: firetv
+    host: 192.168.1.20
+  - id: den
+    kind: roku
+    host: 192.168.1.134
+    port: 8060
+  - kind: lg
+    host: 192.168.1.77
+    client-key: "abc123"
+  - id: broken
+    kind: toaster
+    host: 192.168.1.99
+  - id: den
+    kind: samsung
+    host: 192.168.1.30

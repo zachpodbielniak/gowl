@@ -1,0 +1,6 @@
+- STREAM_MUSIC:
+   Muted: true
+   Min: 0
+   Max: 25
+   streamVolume:10
+   Devices: hdmi

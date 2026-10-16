@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<apps>
+	<app id="12" type="appl" version="5.1.21">Netflix</app>
+	<app id="837" type="appl" version="2.20.106">YouTube</app>
+	<app id="13" type="appl" version="14.3.2024">Prime Video</app>
+	<app id="tvinput.hdmi1" type="tvin" version="1.0.0">Xbox &amp; Co</app>
+	<app id="bad id;rm" type="appl" version="1">Evil</app>
+	<app id="291097" type="appl" version="1.32.1">Disney Plus</app>
+</apps>

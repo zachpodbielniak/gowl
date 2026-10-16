@@ -1,0 +1,369 @@
+#+title: Network shares
+#+description: The netshares bar widget: mount and unmount CIFS (SMB), NFS and SSHFS shares from the bar
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+:PROPERTIES:
+:CUSTOM_ID: what-it-does
+:END:
+
+=netshares= (aliases =netmount=, =shares=) keeps a list of network shares and mounts or unmounts each one with a click. It handles three kinds:
+
+| Type    | What it mounts                 | How                                                  | Who asks for a password                  |
+|---------+--------------------------------+------------------------------------------------------+------------------------------------------|
+| =cifs=  | An SMB/CIFS share (Samba, a NAS, Windows) | =pkexec mount -t cifs //server/share <folder> -o ...= | polkit (for root), keyring (for the share) |
+| =nfs=   | An NFS export                  | =pkexec mount -t nfs server:/export <folder> -o ...= | polkit                                   |
+| =sshfs= | A directory over SFTP          | =sshfs user@server:path <folder> -o ...= as you      | nobody: your SSH key or agent            |
+
+In the bar it is a network-folder glyph with the number of mounted shares next to it. The glyph is green when everything that should be mounted is, yellow when an automount share is down or the last action on a share failed, and dim when nothing is configured or nothing is expected to be mounted.
+
+The panel lists every connection; clicking one mounts it, clicking it again unmounts it. Under each connection are buttons to open it in the file manager, set its password, force an unmount when files are still open, and forget it. At the bottom is a form to add a new connection.
+
+It is a generic port inspired by Omarchy's =netmount= plugin, a GTK3 SMB mount manager, extended to NFS and SSHFS and rebuilt as a native bar widget.
+
+What it deliberately does *not* do:
+
+- It never writes =/etc/fstab=, never installs a systemd mount unit and never keeps anything mounted across a reboot by itself. A mount exists because you clicked it (or asked for it to be mounted when the bar starts).
+- It never keeps a password in its own file, in a command line, in an environment variable or in a log. CIFS passwords live in the keyring.
+- It does not do SSHFS password logins. SSHFS runs with ~BatchMode=yes~: a key or the SSH agent, or nothing. A password prompt would go to a terminal nobody is looking at and the mount would hang until the timeout.
+- It does not discover shares on the network. You tell it the server.
+
+* Quick start --- standalone gowl
+:PROPERTIES:
+:CUSTOM_ID: quick-start-gowl
+:END:
+
+Add the widget to a bar in =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "netshares"
+    netshares.interval: 10
+    netshares.timeout: 30
+keybinds:
+  "Super+Shift+n": { action: ipc_command, arg: "bar-panel netshares", desc: "Network shares" }
+#+end_src
+
+Open the panel from a shell or a script:
+
+#+begin_src sh
+gowl bar-panel netshares
+#+end_src
+
+Then either use *Add connection* in the panel, or write =~/.config/gowl/netshares.yaml= yourself:
+
+#+begin_src yaml
+connections:
+  - id: nas-media
+    name: NAS media
+    type: cifs
+    server: nas.lan
+    share: media
+    user: zach                  # or WORKGROUP\zach, or zach@corp.example
+    mountpoint: ~/mnt/nas-media
+    automount: true
+    options:
+      encrypt: true             # SMB3 encryption (seal); the default
+      extra: [vers=3.1.1]
+  - id: backup
+    name: Backup export
+    type: nfs
+    server: 192.168.1.20
+    export: /srv/backup
+    mountpoint: ~/mnt/backup
+    options:
+      readonly: true
+      nfs-version: "4.2"
+  - id: devbox
+    name: Dev box
+    type: sshfs
+    server: devbox.lan
+    path: /home/zach/src         # empty for the remote home directory
+    user: zach
+    mountpoint: ~/mnt/devbox
+    options:
+      noexec: false
+      port: 2222
+#+end_src
+
+Then store the CIFS password once, either from the panel (*Password* under the connection) or from a shell:
+
+#+begin_src sh
+secret-tool store --label="gowl netshares NAS media" service gowl-netshares id nas-media
+#+end_src
+
+* Quick start --- cmacs --gowl
+:PROPERTIES:
+:CUSTOM_ID: quick-start-cmacs
+:END:
+
+In =init.el= (or Doom's =config.el=):
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-add" . "netshares")
+   ("netshares.interval" . "10")
+   ("netshares.open-command" . "emacsclient -n")))
+(gowl-add-keybind "Super+Shift+n" 'ipc-command "bar-panel netshares" "Network shares")
+#+end_src
+
+=netshares.open-command= set to =emacsclient -n= opens a mounted share in dired instead of a GUI file manager; the mount point is appended as one shell-quoted argument.
+
+Under =cmacs --gowl= the widget is *off by default*: cmacs adds nothing for it, and it appears only when a configuration adds it to a widget list. The connection file, the keyring entries and the polkit prompts are exactly the same as under standalone gowl.
+
+* Settings
+:PROPERTIES:
+:CUSTOM_ID: settings
+:END:
+
+Set as =netshares.<key>= under =modules: bar:= (or pushed from cmacs as ="netshares.<key>"=).
+
+| Key            | Type      | Default                          | Meaning                                                                                                                                       |
+|----------------+-----------+----------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------|
+| =config=       | path      | =~/.config/gowl/netshares.yaml=  | The connection file. =$XDG_CONFIG_HOME/gowl/netshares.yaml= when that is set. A leading =~= is expanded. Changing it re-reads at the next poll. |
+| =interval=     | seconds   | =10=                             | How often the mount table and the file are re-read (2--3600). Drops to 1 s by itself while a mount runs or a message is waiting.              |
+| =timeout=      | seconds   | =30=                             | Every helper (pkexec, sshfs, fusermount3, secret-tool) is killed after this long (1--600).                                                     |
+| =show-count=   | boolean   | =true=                           | Show the number of mounted shares next to the glyph. Nothing is shown when the count is 0 either way.                                          |
+| =nfs-version=  | string    | (empty)                          | The ~vers=~ for NFS connections that do not set =nfs-version= themselves. Empty lets mount negotiate.                                          |
+| =open-command= | command   | =xdg-open=                       | What *Open* runs; the mount point is appended, shell-quoted.                                                                                   |
+| =edit-command= | command   | =xdg-open=                       | What *Edit file* runs; the connection file's path is appended, shell-quoted.                                                                   |
+| =pkexec=       | program   | =pkexec=                         | The privilege helper for CIFS and NFS.                                                                                                         |
+| =sshfs=        | program   | =sshfs=                          | The SSHFS client.                                                                                                                              |
+| =fusermount=   | program   | =fusermount3=                    | The FUSE unmount helper. When it is the default and not installed, =fusermount= (FUSE 2) is tried.                                             |
+| =secret-tool=  | program   | =secret-tool=                    | The keyring client.                                                                                                                            |
+| =helper-path=  | dir list  | =$PATH= then =/usr/sbin:/sbin=   | Where =mount.cifs= and =mount.nfs= are looked for, to say whether CIFS and NFS can work. Mostly for tests.                                      |
+| =mountinfo=    | path      | =/proc/self/mountinfo=           | The mount table to read. For tests and diagnosis only.                                                                                         |
+| =color-ok=     | colour    | =green=                          | See [[#theming][Theming]].                                                                                                                      |
+| =color-warn=   | colour    | =yellow=                         | See [[#theming][Theming]].                                                                                                                      |
+| =color-idle=   | colour    | =subtext=                        | See [[#theming][Theming]].                                                                                                                      |
+
+** The connection file
+:PROPERTIES:
+:CUSTOM_ID: connection-file
+:END:
+
+A mapping with one key, =connections=, holding a list. Each connection:
+
+| Key          | Required | Meaning                                                                                                                                                                             |
+|--------------+----------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =id=         | yes*     | Letters, digits, =_= and =-=; unique. The keyring entry and the credentials file are keyed on it. *Derived from the name when absent.                                               |
+| =name=       | yes      | What the panel shows.                                                                                                                                                               |
+| =type=       | no       | =cifs= (default; =smb= also accepted), =nfs= or =sshfs= (=ssh= also accepted).                                                                                                       |
+| =server=     | yes      | A host name, an IPv4 address or an IPv6 address (bracketed or not).                                                                                                                 |
+| =share=      | cifs     | The share name. =export= and =path= are the same field and read better for the other types: the NFS export path (absolute), or the SSHFS remote path (empty for the remote home). |
+| =user=       | no       | CIFS: empty for a guest mount; =DOMAIN\user= and =user@domain= work. SSHFS: empty for your local login name. Unused for NFS.                                                         |
+| =mountpoint= | yes      | The local folder. Must be inside your home, =/mnt= or =/media= (see [[#security][Security]]). =~/= is expanded. Created if missing.                                                   |
+| =automount=  | no       | =true= mounts it when the bar starts. Default =false=.                                                                                                                              |
+| =options=    | no       | A mapping, below.                                                                                                                                                                   |
+
+| Option        | Default | Meaning                                                                                                                                                       |
+|---------------+---------+---------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =encrypt=     | =true=  | CIFS only: require SMB3 encryption (=seal=). Turn off only for a server that cannot do SMB3.                                                                   |
+| =noexec=      | =true=  | Mount with =noexec=: nothing on the share can be executed directly.                                                                                            |
+| =readonly=    | =false= | Mount read-only (=ro=).                                                                                                                                       |
+| =port=        | (none)  | A non-default port (~port=~ for all three).                                                                                                                   |
+| =nfs-version= | (none)  | NFS only: ~vers=~, e.g. ="4.2"=. Overrides the widget's =nfs-version= setting.                                                                                 |
+| =extra=       | (none)  | A list of extra =-o= options. Only ~A-Z a-z 0-9 _ = . , : -~ are allowed, and options that would undo the widget's own safety settings are refused (see below). |
+
+A connection that breaks a rule is left out with a warning shown at the top of the panel, and only that one; the others still load. A file that is not YAML, or is not shaped like the above, is an error: the panel shows it, a toast says it once, and the connections from the last good read stay on screen.
+
+Extra options that are always refused: =suid=, =dev=, =exec=, =setuid=, =setuids=, =uid=, =gid=, =file_mode=, =dir_mode=, =forceuid=, =forcegid=, =credentials=, =cred=, =username=, =user=, =password=, =pass=, =password2=, =allow_other=, =allow_root=, =ssh_command=, =sftp_server=, =ssh_protocol=, =directport=, =passive=, =slave=. Use ~noexec: false~ rather than =exec=.
+
+* Theming
+:PROPERTIES:
+:CUSTOM_ID: theming
+:END:
+
+The bar glyph and count take one of three colours:
+
+| Key          | Default role | When                                                                                    |
+|--------------+--------------+-----------------------------------------------------------------------------------------|
+| =color-ok=   | =green=      | At least one share is mounted and nothing needs attention.                              |
+| =color-warn= | =yellow=     | An =automount= share is not mounted, the last action on a share failed, or the file has an error. |
+| =color-idle= | =subtext=    | Nothing is configured, or nothing is mounted and nothing is expected to be.             |
+
+The defaults are palette roles, so they follow the bar's palette (Mocha, Latte, a cmacs-pushed theme) without any setting. Each key takes either a role name or a literal =#rrggbb=; a literal stays that exact colour whatever the palette.
+
+#+begin_src yaml
+modules:
+  bar:
+    netshares.color-ok: teal        # a role: follows the palette
+    netshares.color-warn: "#fab387" # a literal: always this colour
+#+end_src
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("netshares.color-ok" . "teal")
+   ("netshares.color-warn" . "#fab387")))
+#+end_src
+
+Inside the panel the colours are fixed semantic roles --- green for mounted, yellow for working or busy, red for a connection with an error, muted for not mounted --- because panel items take roles, not literals. The =color-*= keys affect the bar glyph only.
+
+* The panel
+:PROPERTIES:
+:CUSTOM_ID: the-panel
+:END:
+
+From top to bottom:
+
+- *Header*: how many of the configured shares are mounted.
+- *Problems*, when there are any: the connection file's error in red, and up to four warnings (a refused connection, an unknown key) in yellow.
+- *Connections*: one row per share --- an icon, the name, a type badge (=SMB=, =NFS=, =SSH=), and as its subtitle either =device -> mount point=, the last error, or the tools that are missing. On the right: =mounted=, =not mounted=, =working...= (with the row's busy indicator) or =busy=. *Click the row to mount or unmount it.*
+- Under each row, a button strip:
+  - *Open* runs =open-command= on the mount point. Only when mounted.
+  - *Password* (CIFS connections with a user) opens a password field for it.
+  - *Force unmount* appears only after an unmount failed because files are still open. The first click turns it into /Click again to force/; a second click within five seconds runs a lazy unmount (=umount -l=, or =fusermount3 -uz=): the share is detached now and cleaned up when the last file closes.
+  - *Forget* removes the connection from the file and its password from the keyring. Two clicks within five seconds. Refused while the share is mounted --- unmount first.
+- *Password for <name>*, when asked for: a field drawn as bullets (=Return= or *Save* stores it in the keyring; *Cancel* drops it). It also opens by itself when a mount finds no password stored.
+- *Add connection*: a row that opens the form. The form has a type switch (=SMB=, =NFS=, =SSH=) and fields for the name, server, share (or export or remote path, by type), user (not for NFS), mount point and, for SMB, the password. An empty mount point becomes =~/mnt/<id>=. *Mount when the bar starts* sets =automount=. *Save* writes the file; *Save & mount* also mounts it; =Return= in any field is *Save*. A mistake is shown in red under the form and nothing is written. New connections are saved with =encrypt=, =noexec= and read-write; edit the file to change those.
+- *File*: where the connection file is, with *Refresh* (re-read the file and the mount table now) and *Edit file* (=edit-command=).
+
+Keys, with a connection's row or its buttons focused (besides the panel's own =Return=, =j=/=k=, =Tab=, =Escape=):
+
+| Key | Does                     |
+|-----+--------------------------|
+| =m= | Mount or unmount it      |
+| =o= | Open it                  |
+| =p= | Ask for its password     |
+
+* Dependencies
+:PROPERTIES:
+:CUSTOM_ID: dependencies
+:END:
+
+Fedora package names; layer the ones for the types you use into the image.
+
+| Package       | Provides                            | Needed for                                      |
+|---------------+-------------------------------------+-------------------------------------------------|
+| =cifs-utils=  | =mount.cifs=                        | CIFS / SMB                                      |
+| =nfs-utils=   | =mount.nfs= (on Fedora 44 through its =nfs-common-utils= dependency) | NFS                |
+| =fuse-sshfs=  | =sshfs=                             | SSHFS                                           |
+| =fuse3=       | =fusermount3=                       | Unmounting SSHFS                                |
+| =polkit=      | =pkexec=                            | CIFS and NFS (mounting needs root)              |
+| =libsecret=   | =secret-tool=                       | CIFS with a user (the password store)           |
+| =xdg-utils=   | =xdg-open=                          | *Open* and *Edit file* with the default settings |
+
+pkexec also needs a running *polkit authentication agent* to show its prompt. GNOME Shell has one built in; under gowl run one yourself --- =mate-polkit= ships =/usr/libexec/polkit-mate-authentication-agent-1=, which can be started from gowl's autostart. Without an agent pkexec fails with /No authentication agent found/, which the widget shows on the row.
+
+The keyring behind =secret-tool= is whatever implements the Secret Service on the session bus (=gnome-keyring=, KeePassXC with its Secret Service integration, ...). It has to be unlocked for a lookup to succeed.
+
+When something is missing the widget does not crash or retry in a loop: each affected row's subtitle says /Needs mount.cifs (cifs-utils), .../, the add form says the same for the type selected, and a mount attempt fails at once with /Not installed: .../ in a toast. Installed tools are re-checked every poll, so adding a package needs no restart.
+
+* Security
+:PROPERTIES:
+:CUSTOM_ID: security
+:END:
+
+** Why pkexec, and why not fstab
+
+Mounting CIFS or NFS needs root. The usual ways around that --- a =user= entry in =/etc/fstab=, a set-uid helper, a systemd automount unit --- all mean editing system files, and an =fstab= line for a share that is not reachable at boot is how a laptop gains a ninety-second boot delay. Running =pkexec mount= keeps the system untouched: each mount is one polkit prompt, and the mount exists only until it is unmounted or the machine restarts.
+
+The prompt's program is =mount= (=/usr/bin/mount= on Fedora). When a mount point under =/mnt= or =/media= does not exist yet it has to be created by root too, and so that it is still *one* prompt, that call is =pkexec /bin/sh -c '<a constant script>' gowl-netshares <folder> <uid:gid> -t ...=: the script creates the folder (0700, owned by you) and then =exec='s mount. The script text never contains a value from the connection; the folder and everything else arrive as positional parameters, so a hostile name cannot be interpreted by the shell. A mount point inside your home is created by the widget as you, with no prompt.
+
+SSHFS is a FUSE mount made by you, so it never involves pkexec.
+
+** The password's path
+
+1. It is typed into a panel field drawn as bullets, or stored beforehand with =secret-tool=.
+2. It goes to the keyring on =secret-tool store='s *stdin*. The keyring entry's attributes are =service gowl-netshares id <id>=; its label is =gowl netshares <name>= and never contains the password.
+3. To mount, it is read back with =secret-tool lookup=, and written to =$XDG_RUNTIME_DIR/gowl-netshares/<id>.cred= --- a directory that is yours and 0700, in a tmpfs that is never written to disk, created with =O_CREAT|O_EXCL|O_NOFOLLOW= at 0600 after removing anything (including a planted symlink) already at that name. The file holds ~username=~, ~password=~ and, for =DOMAIN\user=, ~domain=~.
+4. =mount.cifs= is given ~credentials=<that file>~. The file is deleted the moment =mount= returns, whether it succeeded, failed or timed out.
+
+The password is never in an argument (so never in =ps=), never in the environment, never in a log, a toast or a tooltip; helper output is masked should it ever echo it. The widget overwrites its in-memory copies before freeing them and drops anything typed when the panel closes. A password containing a line break is refused, since it would add a line to the credentials file.
+
+** What the mount allows
+
+Every CIFS and NFS mount gets =nosuid,nodev=; FUSE mounts have both by default. A server you do not control therefore cannot put a set-uid binary or a device node on this machine. =noexec= is on unless a connection turns it off. CIFS files are owned by you (=uid=, =gid=) with ~file_mode=0600,dir_mode=0700~, so other local users cannot read your share through your mount. CIFS requires SMB3 encryption (=seal=) unless ~encrypt: false~; an old server that cannot do it will refuse the mount rather than silently talk in clear. NFS has no equivalent: NFS traffic is only encrypted with Kerberos (~sec=krb5p~) or a tunnel, which =extra= can request.
+
+Extra options are limited to a narrow character set and may not re-enable any of the above or supply credentials (see [[#connection-file][the list]]).
+
+** Where a mount may land
+
+A mount point must resolve --- after following every symlink that exists --- strictly *inside* your home, =/mnt= or =/media=: never one of those directories itself, never =/=, never through a =..= component. A symlink in your home pointing at =/etc= is followed and refused. The path that is checked is the path that is mounted on. The roots are resolved too, so =/home= being a link to =/var/home= (Silverblue) and =/mnt= being a link to =/var/mnt= both work.
+
+One honest limit: between that check and the mount, a link inside your own home could be swapped by a process running as you. That gains nothing an admin who answers the polkit prompt could not do anyway, but it is why the check is a guard against mistakes and hostile configuration, not a sandbox.
+
+** The connection file
+
+It contains no secrets, but it does map your servers, so the widget writes it at 0600 (atomically: a temporary file renamed over the old one), creating =~/.config/gowl= at 0700 if needed. A file that is a symlink --- a dotfiles checkout --- is written through, not replaced. Rewriting it (add, forget) drops comments, and the widget refuses to rewrite a file that loaded with warnings, because the connections it refused would be lost: fix the file first.
+
+** Skipping the prompt (optional)
+
+If you would rather not answer a prompt for every mount, a polkit rule can let your user run =mount= and =umount= through pkexec. This is documented, not installed: decide for yourself. Allowing =pkexec mount= without authentication is root-equivalent --- anything that runs as you could mount over =/etc= --- so prefer =AUTH_ADMIN_KEEP= (one prompt, remembered for about five minutes) to =YES=.
+
+#+begin_src js
+/* /etc/polkit-1/rules.d/49-gowl-netshares.rules */
+polkit.addRule(function(action, subject) {
+	if (action.id == "org.freedesktop.policykit.exec" &&
+	    subject.user == "zach" && subject.local && subject.active) {
+		var program = action.lookup("program");
+
+		if (program == "/usr/bin/mount" || program == "/usr/bin/umount")
+			return polkit.Result.AUTH_ADMIN_KEEP;
+	}
+});
+#+end_src
+
+Never add =/bin/sh= or =/usr/bin/sh= to such a rule: that is a root shell for everything. Without it, creating a missing folder under =/mnt= still prompts; create those once by hand (=sudo install -d -o $USER -m 0700 /mnt/nas=) or keep mount points in your home.
+
+* Troubleshooting
+:PROPERTIES:
+:CUSTOM_ID: troubleshooting
+:END:
+
+| Symptom                                                                 | Cause and fix                                                                                                                                                                                                     |
+|-------------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| /timed out after 30 s/ on every CIFS or NFS mount, no prompt appears    | No polkit agent is running. Start one (see [[#dependencies][Dependencies]]).                                                                                                                                       |
+| /No authentication agent found/                                         | Same.                                                                                                                                                                                                             |
+| /Not authorized/ or /Request dismissed/                                 | The prompt was cancelled or the password was wrong.                                                                                                                                                               |
+| /No password is stored for this share/                                  | Set one: the password field has opened in the panel. A locked keyring looks the same --- unlock it.                                                                                                               |
+| /mount error(13): Permission denied/                                    | The share's user or password is wrong, or the user has no access to that share.                                                                                                                                   |
+| /mount error(95): Operation not supported/ on an old NAS                | It cannot do SMB3 encryption. Set ~encrypt: false~ (and perhaps ~extra: [vers=2.1]~) for that connection only, knowing the traffic is then not encrypted.                                                        |
+| /mount error(112): Host is down/                                        | Wrong server name, the server is off, or SMB is blocked by a firewall.                                                                                                                                            |
+| An NFS mount hangs until the timeout                                    | The server is unreachable or does not export to this host. =showmount -e server= (from =nfs-utils=) lists what it exports to you.                                                                                 |
+| SSHFS: /read: Connection reset by peer/ or a timeout                    | The key is not accepted or the agent has no key loaded. =ssh user@server= in a terminal must work without a password prompt first.                                                                                |
+| /busy: files on it are still open/                                      | Something has a file open on the share (a shell =cd='d into it, an editor buffer). Close it, or use *Force unmount*. =fuser -vm <folder>= (from =psmisc=) names the culprit.                                       |
+| /mount point must be inside /mnt, /media or your home directory/        | The folder resolves outside those --- often through a symlink. The message says where it resolves to.                                                                                                             |
+| /... does not exist; create it and make it yours first/ (SSHFS)          | An SSHFS mount point under =/mnt= or =/media= must already exist and belong to you: =sudo install -d -o $USER /mnt/x=.                                                                                           |
+| A connection is missing from the panel                                  | It was refused; the yellow warning at the top of the panel says which and why.                                                                                                                                    |
+| /... has problems; fix them first, or saving would drop them/           | Add or forget will not rewrite a file the loader refused part of. Fix the warning, then try again.                                                                                                                |
+| The glyph stays yellow                                                  | An =automount= share is down or the last action on a share failed. The panel row in red says which.                                                                                                               |
+| Nothing happens when the bar starts although ~automount: true~          | Automount is tried once per connection per session; a share that was already mounted, or that you unmounted, is left alone. Mount it from the panel.                                                              |
+
+* Internals
+:PROPERTIES:
+:CUSTOM_ID: internals
+:END:
+
+** Files
+
+| File                                          | What                                                                                                                                       |
+|-----------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------|
+| =modules/bar/bar-plugins-netshares.c=         | The widget: state, threads, panel, actions.                                                                                                |
+| =modules/bar/bar-netshares-model.c= and =.h=  | Everything safety-relevant and pure: YAML load/save (yaml-glib), validation, mount point resolution, mountinfo parsing, argv building, the credentials file, a bounded subprocess runner. |
+| =tests/test-bar-netshares.c=                  | The tests.                                                                                                                                 |
+| =tests/fixtures/bar/netshares/=               | A valid, a malformed and a hostile connection file, and a captured mountinfo with escapes, optional fields, an over-mount and a broken line. |
+
+At run time: the connection file (=config=), the keyring (=service gowl-netshares id <id>=), =$XDG_RUNTIME_DIR/gowl-netshares/<id>.cred= for the length of one CIFS mount, and =/proc/self/mountinfo=.
+
+** Threads
+
+Every callback the compositor calls --- poll, panel, action, panel text, panel key, configure --- runs on the compositor's thread holding the gowl lock (under =cmacs --gowl=, Emacs's main thread), so none of them waits on anything: they read and flip state under the widget's =GMutex= and queue work.
+
+- =poll_async= (a bar worker, every =interval=): checks which helpers are installed, re-reads the connection file when its mtime or size changed, reads the mount table, resolves each mount point (=realpath()= can block on a hung NFS mount, which is why this is not the sync poll) and starts any automount not yet tried.
+- Each click that does something (mount, unmount, store a password, forget, save) queues one job with =gowl_bar_plugin_queue_work()=. The job runs its subprocesses, records the outcome, and ends with a full =poll_async= so the panel shows what is, not what was expected.
+- Toasts raised by a worker are queued and shown by the next sync =poll=, because raising one is not something a worker may do; =interval= returns 1 while any job is running or any toast is queued.
+- Subprocesses: =g_spawn_async_with_pipes= in a new process group and =waitpid= on the worker --- no GLib child watch, no GSubprocess async, nothing on a GLib main context. Reading stops when the child exits rather than at end of file, because sshfs leaves =ssh= holding the original stderr open. At =timeout= the process group gets =SIGTERM=, then =SIGKILL=; a child that has become a root =mount= we may not signal is left to a reaper thread and the job reports the timeout. stdin (the password, for =secret-tool store=) is written non-blocking with =SIGPIPE= blocked on the thread, so a helper that exits early or never reads can neither kill nor hang the compositor.
+
+** State
+
+Per connection, by id: mounted, busy, busy-on-unmount (offers *Force unmount*), last error, resolved mount point, the two arming timestamps and whether automount was tried. It survives a reload of the file, so editing the file during a mount does not lose the mount's progress, and it is dropped for connections that disappear.
+
+** Tests
+
+=make build/release/test-bar-netshares && ./build/release/test-bar-netshares= --- all offline. Stand-ins for =pkexec=, =secret-tool=, =sshfs= and =fusermount3= record their argv, environment and stdin into a scratch directory and edit a fake mount table as a real mount would. Covered: loading valid, empty, malformed and hostile files; the extra-option filter; mount point validation including =..=, the home itself, a symlink escape and a symlink that stays inside; mountinfo parsing with =\040= escapes, optional fields and over-mounts; the exact argv for each type and for unmount; the credentials file (format, mode, a planted symlink); the runner's timeout (the process group dies), a child that will not read stdin and one that exits early; output sanitising; and end to end through the widget: a CIFS mount whose password appears in no argv and no environment and whose credentials file is 0600 while pkexec runs and gone after, failure messages, a hung pkexec, the password reaching =secret-tool= on stdin, a busy unmount and the two-step lazy unmount, an SSHFS round trip, forget (two-step, refused while mounted, file and keyring entry removed, 0600), the add form (inline errors, the saved file, a symlinked file written through), missing tools naming their packages, colours and colour overrides, a malformed file toasting once, and the busy state while a job is in flight. A source check in the same file fails if any argv line in either source mentions a password or a secret.

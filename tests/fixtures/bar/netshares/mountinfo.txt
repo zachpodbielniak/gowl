@@ -1,0 +1,8 @@
+22 1 0:21 / / rw,relatime shared:1 - btrfs /dev/nvme0n1p3 rw,seclabel,compress=zstd:1
+95 22 0:52 / /var/home/zach/mnt/nas\040media rw,nosuid,nodev,relatime shared:50 - cifs //nas.lan/media rw,vers=3.1.1,seal,cache=strict
+96 22 0:53 / /var/home/zach/mnt/backup ro,nosuid,nodev,noexec,relatime shared:51 master:7 - nfs4 192.168.1.20:/srv/backup ro,vers=4.2
+97 22 0:54 / /var/home/zach/mnt/devbox rw,nosuid,nodev,relatime shared:52 - fuse.sshfs zach@devbox.lan:/home/zach/src rw,user_id=1000,group_id=1000
+98 22 0:55 / /var/home/zach/mnt/tab\011and\134slash rw - tmpfs tmpfs rw
+99 22 0:56 / /broken-line-without-separator rw shared:9
+100 22 0:57 / /var/home/zach/mnt/stacked rw - nfs4 a:/x rw
+101 100 0:58 / /var/home/zach/mnt/stacked rw - tmpfs tmpfs rw

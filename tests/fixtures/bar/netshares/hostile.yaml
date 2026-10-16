@@ -1,0 +1,82 @@
+# Every entry but `good-spaces' must be refused, each with a reason.
+connections:
+  - id: good-spaces
+    name: Shared Music
+    type: cifs
+    server: nas.lan
+    share: Shared Music
+    mountpoint: ~/mnt/music
+  - id: comma-share
+    name: Comma share
+    type: cifs
+    server: nas.lan
+    share: media,uid=0
+    mountpoint: ~/mnt/a
+  - id: quote-share
+    name: Quote share
+    type: cifs
+    server: nas.lan
+    share: "me'dia"
+    mountpoint: ~/mnt/b
+  - id: suid-extra
+    name: Suid extra
+    type: nfs
+    server: nas.lan
+    export: /srv/x
+    mountpoint: ~/mnt/c
+    options:
+      extra: ["rw,suid"]
+  - id: space-extra
+    name: Space extra
+    type: nfs
+    server: nas.lan
+    export: /srv/x
+    mountpoint: ~/mnt/d
+    options:
+      extra: ["vers=4 sec=sys"]
+  - id: option-server
+    name: Option server
+    type: sshfs
+    server: -oProxyCommand=touch
+    mountpoint: ~/mnt/e
+  - id: unknown-type
+    name: Unknown type
+    type: smbfs
+    server: nas.lan
+    share: x
+    mountpoint: ~/mnt/f
+  - id: dotdot
+    name: Dotdot
+    type: cifs
+    server: nas.lan
+    share: x
+    mountpoint: ~/../../etc
+  - id: newline-user
+    name: Newline user
+    type: cifs
+    server: nas.lan
+    share: x
+    user: "zach\nusername=root"
+    mountpoint: ~/mnt/g
+  - id: credentials-extra
+    name: Credentials extra
+    type: cifs
+    server: nas.lan
+    share: x
+    mountpoint: ~/mnt/h
+    options:
+      extra: ["credentials=/etc/shadow"]
+  - id: bad-bool
+    name: Bad bool
+    type: cifs
+    server: nas.lan
+    share: x
+    mountpoint: ~/mnt/i
+    options:
+      encrypt: maybe
+  - id: good-spaces
+    name: Duplicate id
+    type: cifs
+    server: nas.lan
+    share: y
+    mountpoint: ~/mnt/j

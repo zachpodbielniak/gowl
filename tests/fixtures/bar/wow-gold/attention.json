@@ -1,0 +1,135 @@
+{
+  "title": "Needs attention",
+  "generated": "2026-10-16T00:52:38-0400",
+  "generator": "tsmctl 1.0.0",
+  "sections": [
+    {
+      "title": "Needs a login",
+      "values": {
+        "Auctions expiring within": "12.0h",
+        "Mail expiring within": "3.0d",
+        "Stale after": "14.0d"
+      },
+      "tables": [
+        {
+          "title": "",
+          "columns": [
+            "priority",
+            "what",
+            "login",
+            "realm",
+            "char",
+            "count",
+            "value_copper",
+            "left",
+            "due",
+            "note",
+            "account"
+          ],
+          "rows": [
+            {
+              "priority": 2,
+              "what": "auctions expired, collect",
+              "login": "MAIN",
+              "realm": "Thorium Brotherhood",
+              "char": "Crafter",
+              "count": 4,
+              "value_copper": 1992725,
+              "left": -1363017,
+              "due": "2026-09-30T06:15:38-04:00",
+              "note": "",
+              "account": "MAIN"
+            },
+            {
+              "priority": 2,
+              "what": "auctions expired, collect",
+              "login": "MAIN",
+              "realm": "Illidan",
+              "char": "Goldmonger",
+              "count": 1,
+              "value_copper": 30405700,
+              "left": -976266,
+              "due": "2026-10-04T17:41:29-04:00",
+              "note": "",
+              "account": "MAIN"
+            },
+            {
+              "priority": 2,
+              "what": "auctions expired, collect",
+              "login": "MAIN",
+              "realm": "Cenarius",
+              "char": "Mailboxer",
+              "count": 6,
+              "value_copper": 186372330,
+              "left": -899930,
+              "due": "2026-10-05T14:53:45-04:00",
+              "note": "",
+              "account": "MAIN"
+            },
+            {
+              "priority": 2,
+              "what": "auctions expired, collect",
+              "login": "MAIN",
+              "realm": "Thorium Brotherhood",
+              "char": "Flipper",
+              "count": 75,
+              "value_copper": 16124697,
+              "left": -826389,
+              "due": "2026-10-06T11:19:26-04:00",
+              "note": "",
+              "account": "MAIN"
+            },
+            {
+              "priority": 2,
+              "what": "auctions expired, collect",
+              "login": "MAIN",
+              "realm": "Thorium Brotherhood",
+              "char": "Goldmonger",
+              "count": 580,
+              "value_copper": 302906580300,
+              "left": -595874,
+              "due": "2026-10-09T03:21:21-04:00",
+              "note": "",
+              "account": "MAIN"
+            },
+            {
+              "priority": 2,
+              "what": "auctions expired, collect",
+              "login": "MAIN",
+              "realm": "Moon Guard",
+              "char": "Mailboxer",
+              "count": 146,
+              "value_copper": 10422389800,
+              "left": -595720,
+              "due": "2026-10-09T03:23:55-04:00",
+              "note": "",
+              "account": "MAIN"
+            },
+            {
+              "priority": 4,
+              "what": "mail waiting",
+              "login": "MAIN",
+              "realm": "Thorium Brotherhood",
+              "char": "Vendorbot",
+              "count": 1,
+              "value_copper": 0,
+              "left": 994428,
+              "due": "2026-10-27T13:06:23-04:00",
+              "note": "",
+              "account": "MAIN"
+            }
+          ],
+          "totals": null
+        }
+      ],
+      "notes": [
+        "- log into ZAKMANN → Thorium Brotherhood: Harmless, Coinpurse, Drgold, Illidayum, Oofmjalaty (auctions expired, collect; mail waiting)",
+        "- log into ZAKMANN → Illidan: Drgold (auctions expired, collect)",
+        "- log into ZAKMANN → Cenarius: Drgoldbank (auctions expired, collect)",
+        "- log into ZAKMANN → Moon Guard: Drgoldbank (auctions expired, collect)",
+        "- not seen in 14.0d: Marketsniper (Thorium Brotherhood, WoW1), Doomkîn (Thorium Brotherhood, WoW1), Oofmjalaty (Thorium Brotherhood, ZAKMANN), Nametaken (Thorium Brotherhood, ZAKMANN), Drheals (Thorium Brotherhood, ZAKMANN), Mathmatican (Medivh, ZAKMANN), Harmless (Thorium Brotherhood, ZAKMANN), Drgoldbank (Kalecgos, ZAKMANN), Drgoldbank (Stormreaver, ZAKMANN), Contritus (Thorium Brotherhood, ZAKMANN)",
+        "Value is the buyout of the auctions, or the gold plus the items' value for mail; for stale characters it is their gold. Due is the deadline (negative: already past; for stale characters, when they were last seen)."
+      ]
+    }
+  ]
+}

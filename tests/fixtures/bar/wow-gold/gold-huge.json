@@ -1,0 +1,24 @@
+{
+  "title": "Gold",
+  "sections": [
+    {
+      "title": "Gold on hand",
+      "values": {},
+      "tables": [
+        {
+          "title": "",
+          "columns": ["owner", "realm", "kind", "gold_copper"],
+          "rows": [
+            {"owner": "Overflow", "realm": "X", "kind": "character", "gold_copper": 99999999999999999999},
+            {"owner": "Maxed", "realm": "X", "kind": "character", "gold_copper": 9223372036854775807},
+            {"owner": "Alsomaxed", "realm": "X", "kind": "character", "gold_copper": 9223372036854775807},
+            {"owner": "Float", "realm": "X", "kind": "character", "gold_copper": 1.25e4},
+            {"owner": "Formatted", "realm": "X", "kind": "character", "gold_copper": "1,234g 5s"}
+          ],
+          "totals": null
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

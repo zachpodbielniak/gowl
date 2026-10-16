@@ -1,0 +1,21 @@
+{
+  "title": "Gold",
+  "sections": [
+    {
+      "title": "Gold on hand",
+      "values": {},
+      "tables": [
+        {
+          "title": "",
+          "columns": ["owner", "realm", "kind", "gold_copper"],
+          "rows": [
+            {"owner": "Smallfry", "realm": "Medivh", "kind": "character", "gold_copper": 1500000},
+            {"owner": "Bigfish", "realm": "Medivh", "kind": "character", "gold_copper": 25000000},
+            {"owner": "Nobody", "realm": "Medivh", "kind": "character", "gold_copper": null}
+          ]
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "title": "Sales",
+  "sections": [
+    {
+      "title": "Sales",
+      "values": {},
+      "tables": [
+        {
+          "title": "",
+          "columns": ["time", "item", "item_name", "qty", "price_copper", "total_copper", "player", "realm", "source"],
+          "rows": [
+            {"time": "2026-11-01T01:30:00-05:00", "item": "i:1", "item_name": "After the change", "qty": 1, "price_copper": 100, "total_copper": 100, "player": "A", "realm": "R", "source": "Auction"},
+            {"time": "2026-11-01T01:45:00-04:00", "item": "i:2", "item_name": "Before the change", "qty": 3, "price_copper": 200, "total_copper": 600, "player": "B", "realm": "R", "source": "Vendor"},
+            {"time": "not a time", "item": "i:3", "item_name": "", "qty": null, "price_copper": 50, "player": "C", "realm": "R", "source": "Trade"}
+          ],
+          "totals": {"time": "3 rows", "qty": 4, "total_copper": 750}
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

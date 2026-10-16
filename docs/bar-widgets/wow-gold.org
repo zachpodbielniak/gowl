@@ -1,0 +1,282 @@
+#+title: WoW gold
+#+description: World of Warcraft gold, sales and trends in the gowl bar, read from your addons through tsmctl
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+:PROPERTIES:
+:CUSTOM_ID: what-it-does
+:END:
+
+=wow-gold= (alias =wowgold=) puts your World of Warcraft fortune in the bar: the account-wide gold total, compact (=3.49Mg=) or in full (=3,490,145g=), with a ▲ or ▼ for how today went against yesterday, coloured green, red, or dimmed for a flat day. Hover for the total, the day's change and the last sale.
+
+Click it for a dropdown with the total and today's change, a 30-day trend graph, today against yesterday, the 7-day and whole-window change, today's sales, spending and profit, the last ten sales, where the gold is (per character, richest first), and the characters that need a login (expired auctions to collect, mail about to expire). Buttons refresh it, open the full =tsmctl report= in a terminal, and copy a one-line summary to the clipboard.
+
+It is a front end for =tsmctl=, Zach's read-only command-line tool for TradeSkillMaster data (=~/.dotfiles/bin/scripts/tsmctl=, documented in =~/.dotfiles/docs/tsmctl.org=). It is not a port of anything: there is no equivalent in the Omarchy plugin set the rest of the extended widgets were inspired by.
+
+What it deliberately does not do:
+
+- It never writes anything.  It runs only tsmctl's read commands (=get=, =pnl=, =attention=, =report=); it never runs =tsmctl venture push=, =export=, or =--save=.
+- It does not read SavedVariables itself.  tsmctl owns that format, the account/login mapping, warbanks and the ssh copy; the widget would only drift from it.
+- It does not talk to Blizzard's API or any web service.  Everything comes from your addons' files.
+- It does not ssh on every poll.  See [[#refresh-model][How often it asks]].
+
+** Where the numbers come from
+
+tsmctl merges three addons' SavedVariables into one picture:
+
+- *TradeSkillMaster* (=TradeSkillMaster.lua=, =TradeSkillMaster_AppHelper.lua=): the ledger (sales, purchases, expenses, expired and cancelled auctions), the per-character gold log that the trend graph is drawn from, and AuctionDB prices.
+- *Altoholic's DataStore* (=DataStore*.lua=): per-character money, bags, bank, mail and auctions, so characters TSM has not seen recently still count.
+- *Syndicator* (Baganator's data store): the same kind of inventory and money data, for players who use it instead of, or as well as, DataStore.
+
+Which sources are read is tsmctl's =sources= setting (default: every one present). The widget sees only tsmctl's merged answer, so a character that appears in DataStore but not TSM is in the per-character list and the total exactly as =tsmctl get gold= shows it.
+
+* Quick start --- standalone gowl
+:PROPERTIES:
+:CUSTOM_ID: quick-start-gowl
+:END:
+
+=~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "wow-gold"
+    # Read the machine that runs WoW over ssh (key-based, see below).
+    wow-gold.host: "mob-zach"
+    # Or leave host out to use tsmctl's own config, or "local".
+    wow-gold.tsmctl-command: "~/.dotfiles/bin/scripts/tsmctl"
+keybinds:
+  "Super+Shift+g": { action: ipc_command, arg: "bar-panel wow-gold", desc: "WoW gold" }
+#+end_src
+
+From a shell:
+
+#+begin_src sh
+gowl bar-panel wow-gold     # open the dropdown
+gowl bar-panel              # close it
+#+end_src
+
+=tsmctl-command= is worth setting to a full path: a compositor started by a display manager does not source =~/.bashrc=, so =~/bin/scripts= is usually not on its =PATH= even though it is in every terminal.
+
+* Quick start --- cmacs --gowl
+:PROPERTIES:
+:CUSTOM_ID: quick-start-cmacs
+:END:
+
+In =init.el= (or Doom's =config.el=):
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-add" . "wow-gold")
+   ("wow-gold.host" . "mob-zach")
+   ("wow-gold.tsmctl-command" . "~/.dotfiles/bin/scripts/tsmctl")))
+(gowl-add-keybind "Super+Shift+g" 'ipc-command "bar-panel wow-gold" "WoW gold")
+#+end_src
+
+cmacs --gowl does nothing for this widget by default: it is off until you add it to a widget list.
+
+** Opening the report in an org buffer
+
+=report-command= replaces the terminal.  Under cmacs it can hand the report to Emacs instead.  Keep it asynchronous: =emacsctl eval= runs on the compositor's thread, and a =call-process= of a ten-second tsmctl there would freeze the desktop for ten seconds.
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("wow-gold.report-command" .
+    "emacsctl eval '(let ((b (get-buffer-create \"*tsmctl report*\"))) (with-current-buffer b (let ((inhibit-read-only t)) (erase-buffer))) (make-process :name \"tsmctl-report\" :buffer b :command (list \"tsmctl\" \"--offline\" \"--quiet\" \"-o\" \"org\" \"report\") :sentinel (lambda (p _e) (when (memq (process-status p) (quote (exit signal))) (with-current-buffer (process-buffer p) (org-mode) (goto-char (point-min))) (pop-to-buffer (process-buffer p))))))'")))
+#+end_src
+
+The command is run as given; the widget adds nothing to it.
+
+* Settings
+:PROPERTIES:
+:CUSTOM_ID: settings
+:END:
+
+Every key is =wow-gold.<key>= in the bar's configuration.
+
+| Key               | Type    | Default    | Meaning                                                                                                     |
+|-------------------+---------+------------+-------------------------------------------------------------------------------------------------------------|
+| =tsmctl-command=  | string  | =tsmctl=   | The tsmctl to run.  Split with shell quoting rules but never run through a shell; a leading =~/= is expanded |
+| =host=            | string  | (empty)    | Empty: tsmctl's own config (=host:= / =hosts:= / =$TSMCTL_HOST=).  =local=: =--local=.  Otherwise =--host=    |
+| =realm=           | string  | (empty)    | Comma-separated realms, one =--realm= each (tsmctl prefix-matches)                                          |
+| =char=            | string  | (empty)    | Comma-separated characters, one =--char= each                                                               |
+| =account=         | string  | (empty)    | Comma-separated logins (WoW account folders, =account_labels= labels or =battlenet_groups= names)           |
+| =flavor=          | string  | (empty)    | Game flavor directory, e.g. =_classic_=; empty for tsmctl's (=_retail_=)                                     |
+| =interval=        | seconds | =300=      | How often to re-read tsmctl's cache.  Minimum 30                                                            |
+| =refresh-every=   | seconds | =1800=     | How often a poll also fetches from the host.  Minimum 60                                                    |
+| =timeout=         | seconds | =120=      | A tsmctl call that runs longer is stopped, with everything it started                                       |
+| =period=          | string  | =30d=      | The trend window, passed to =get gold-history --since=.  =Nd=, =Nw=, =Nm=, =Ny= set the graph's length too   |
+| =money-format=    | =g= / =gsc= | =g=    | Whole gold (=123,456g=) or gold, silver and copper (=123,456g 12s 34c=), in the panel and tooltip            |
+| =label-format=    | =compact= / =full= | =compact= | =3.49Mg= or =3,490,145g= in the bar                                                         |
+| =show-delta=      | bool    | =false=    | Follow the arrow with the day's change: =3.49Mg ▲300g=                                                      |
+| =sales-count=     | int     | =10=       | Sales asked for and listed (1--100)                                                                         |
+| =character-count= | int     | =10=       | Characters listed; the rest are counted                                                                     |
+| =attention-count= | int     | =8=        | Attention rows listed                                                                                       |
+| =report-command=  | string  | (empty)    | Replaces the terminal report (see above)                                                                    |
+| =copy-command=    | string  | =wl-copy=  | Reads the text to copy on stdin                                                                             |
+| =icon=            | string  | coin glyph | The bar glyph (Nerd Font =nf-fa-coins=, U+F51E)                                                             |
+| =color-up=        | colour  | =green=    | Label colour on a day that gained                                                                           |
+| =color-down=      | colour  | =red=      | Label colour on a day that lost                                                                             |
+| =color-flat=      | colour  | =subtext=  | Label colour on a flat day, or with no history                                                              |
+| =color-error=     | colour  | =red=      | Label colour when there is no data and the last read failed                                                 |
+
+The terminal for the report is =$TERMINAL=, else =gst=.
+
+* Theming
+:PROPERTIES:
+:CUSTOM_ID: theming
+:END:
+
+The four =color-*= keys take a palette role name or a =#rrggbb= literal.  A role follows the palette when you switch it (Mocha to Latte, say); a literal stays exactly that colour.  They are read through the bar's one colour interpreter, =bar_plugin_apply_color()=, so the spellings are the same as every other widget's.
+
+| Key           | Default role | When                                      |
+|---------------+--------------+-------------------------------------------|
+| =color-up=    | =green=      | today ended above yesterday               |
+| =color-down=  | =red=        | today ended below yesterday               |
+| =color-flat=  | =subtext=    | no change, or not enough history to tell  |
+| =color-error= | =red=        | no data at all and the last read failed   |
+
+#+begin_src yaml
+modules:
+  bar:
+    wow-gold.color-up: "yellow"       # a role: gold on a good day
+    wow-gold.color-down: "#c0392b"    # a literal
+#+end_src
+
+The panel uses the palette's own roles (gold-yellow hero, green and red for profit and loss, red for an error); the =color-*= keys tint the bar label only, because panel items name roles, not literals.  A missing tsmctl draws the glyph in =overlay=, the colour the bar uses for "not available".
+
+* The panel
+:PROPERTIES:
+:CUSTOM_ID: the-panel
+:END:
+
+From the top:
+
+- *Headline*: the total in full, and "▲ +300g today", "▼ -80g today", "No change today", or "No gold history yet".
+- *Last refresh failed* (red, only when it did): tsmctl's own error line, and *Stale since* with the time the data on screen was current.  The data is not cleared: a stale total is more useful than none.
+- *Trend graph*: one sample per day of the window, scaled to the window's own range so a 1% move is visible.
+- *Today / Yesterday*: the closing totals from the gold log.
+- *7-day change / N-day change*: today against seven days ago, and against the first day of the window with data.
+- *Sales today / Spent today / Profit today*: =tsmctl pnl --period today= --- revenue after the auction house cut; purchases plus expenses (postage, deposits, repairs); and tsmctl's net cash flow, green or red.
+- *Last sales*: item and quantity, who sold it, where (Auction, Vendor, Trade...) and when, with the total.  Clicking a row copies "WoW Token ×2 sold for 581,100g by Goldmonger".
+- *Characters*: =Name-Realm= and gold, richest first; a warbank or guild bank says so.  Characters with no gold are left out.  Clicking copies "Name-Realm: gold".
+- *Needs attention (N)*: from =tsmctl attention=, most urgent first: what, who, and what it is worth (or how many).  Absent when nothing needs a login, or when the tsmctl is too old to have =attention=.
+- A footer: when it was read, and from where.
+- *Refresh*: re-read now, going to the host.  Reads "Refreshing…" while a fetch is running.
+- *Open report*: the full =tsmctl report=, in colour, in a pager, in a terminal (or =report-command=).
+- *Copy summary*: one line, e.g. =WoW gold: 3,490,145g (today +300g, 7 days +700g); last sale WoW Token ×2 for 581,100g=, through =copy-command=.
+
+Keys while the panel is open:
+
+| Key | Does           |
+|-----+----------------|
+| =r= | Refresh        |
+| =o= | Open report    |
+| =c= | Copy summary   |
+
+Plus the bar's own (=j=/=k=, =Return=, =Escape=).
+
+* How often it asks
+:PROPERTIES:
+:CUSTOM_ID: refresh-model
+:END:
+
+One reading is five tsmctl calls --- =get gold=, =get gold-history --by=day=, =get sales=, =pnl --period=today= and =attention= --- and each parses every SavedVariables file, about two seconds apiece on a large account.  So:
+
+- Every =interval= (300 s) a poll reads tsmctl's *cache* with =--offline=: no network.
+- Every =refresh-every= (1800 s), on the *Refresh* button, at start-up, and right after you change =host=, a filter, =period= or the command, the *first* call of the reading goes to the host (no =--offline=), which brings tsmctl's cache up to date; the other four read the cache it just filled.  One ssh session per refresh, not five.
+- If the host cannot be reached, the widget reads the cache instead and says so ("could not reach the host: ... Showing tsmctl's cached copy"), with the time of the last successful sync.
+- With =host: local= there is no cache and no network; every call reads the local install.
+- Two fetches never run at once: a Refresh pressed during one makes it go round again.
+
+Changing a colour or a format redraws at once and fetches nothing.
+
+** Host mode and ssh
+
+=host= is passed to tsmctl as =--host=HOST=, and tsmctl copies the SavedVariables over ssh (=find= and =tar= on the far side, read-only, into =~/.cache/tsmctl/hosts/HOST/=).  tsmctl runs ssh with =BatchMode=yes= and =ConnectTimeout=10=, so it never prompts: the host must accept *key-based* login without a passphrase prompt (an unlocked agent, or a dedicated key in =~/.ssh/config=).  A host that would ask for a password simply fails, and the panel shows ssh's error.
+
+The host must look like an ssh destination (=user@host=, =host=, =host:port= style characters).  A value starting with =-= or containing spaces or shell characters is refused before anything runs: tsmctl hands it to ssh as a bare argument, where =-oProxyCommand=...= would be a command rather than a host.
+
+Leave =host= empty to use tsmctl's config, which can name several machines (=hosts:=) and merge them; the widget then shows the merged total.
+
+* Dependencies
+:PROPERTIES:
+:CUSTOM_ID: dependencies
+:END:
+
+| Package           | Why                                                                  |
+|-------------------+----------------------------------------------------------------------|
+| =python3=         | tsmctl is a Python 3 script (standard library only)                  |
+| =openssh-clients= | reading another machine (=host=); tsmctl uses =ssh=                  |
+| =wl-clipboard=    | *Copy summary* and row copies (=wl-copy=), unless =copy-command= is set |
+| =less=            | the pager the default *Open report* pipes into                       |
+
+The machine that runs WoW needs =findutils= and =tar= (present on any Fedora).  tsmctl itself is *not a Fedora package*: it is =~/.dotfiles/bin/scripts/tsmctl= from Zach's dotfiles.
+
+When tsmctl cannot be found, the glyph is drawn dimmed with no label, the tooltip says "WoW gold: tsmctl not found", and the panel says where tsmctl comes from and to set =wow-gold.tsmctl-command= to its full path.  The widget stays visible: you added it, so its absence should be explained, not hidden.  *Check again* re-looks without restarting anything.
+
+* Security and privacy
+:PROPERTIES:
+:CUSTOM_ID: security
+:END:
+
+- tsmctl is always run as an argv, never through a shell, and every setting goes in as one =--opt=VALUE= word; a realm called =x; rm -rf ~= reaches tsmctl as text.  Settings with control characters, or over 128 bytes, are refused.
+- The two places a shell is involved quote everything: the copy line (=printf %s 'TEXT' | wl-copy=) and the terminal report (each tsmctl word quoted, then the whole command quoted again for =sh -c=).  =report-command= and =copy-command= are yours and are run as written.
+- tsmctl is put in its own process group, so a timeout stops its ssh and tar too.
+- Nothing from tsmctl is trusted: output over 8 MiB is refused, names are made valid UTF-8 with control characters removed and cut at 160 characters, and numbers that overflow 64 bits are dropped rather than wrapped.
+- The widget never runs tsmctl's VENTURE commands, so it never reads the VENTURE token.  Character names, realms and gold are shown in the bar and panel, and copied to the clipboard only when you ask.
+
+* Troubleshooting
+:PROPERTIES:
+:CUSTOM_ID: troubleshooting
+:END:
+
+| Symptom                                                          | Cause and fix                                                                                                                       |
+|------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------|
+| "tsmctl not found" but it works in a terminal                    | The compositor's =PATH= lacks =~/bin/scripts=.  Set =wow-gold.tsmctl-command= to the full path                                       |
+| "--offline given but nothing is cached for HOST yet"             | The very first sync failed (host asleep, ssh key not loaded).  Wake the host and press *Refresh*                                    |
+| "could not reach the host ... Showing tsmctl's cached copy"      | ssh failed; the numbers are from the last sync.  Run =tsmctl --host HOST status= in a terminal to see why                           |
+| "the host setting is not an ssh host name"                       | =host= has spaces, shell characters or a leading =-=.  Use an alias from =~/.ssh/config=                                            |
+| Arrow never appears                                              | The gold log has no entry for today or yesterday yet (TSM logs on login and on balance changes), or the day was flat                |
+| Small changes do not show                                        | TSM rounds retail gold logs to the nearest 1,000g; the trend and deltas use that log, the headline total is exact                   |
+| "tsmctl did not finish within 120 s"                             | A slow first copy over a slow link.  Raise =timeout=, or run =tsmctl --host HOST status= once by hand to fill the cache             |
+| "tsmctl get gold did not print tsmctl JSON"                      | tsmctl crashed with a traceback on stdout, or =tsmctl-command= is some other program.  Run =tsmctl --offline -o json get gold= by hand and read what it prints        |
+| Needs attention section missing                                  | Nothing needs a login, or the tsmctl predates =attention=                                                                           |
+
+* Internals
+:PROPERTIES:
+:CUSTOM_ID: internals
+:END:
+
+** Files
+
+| File                                   | Holds                                                                                          |
+|----------------------------------------+------------------------------------------------------------------------------------------------|
+| =modules/bar/bar-plugins-wowgold.c=    | The vtable: scheduling, the subprocess runner, presentation, panel, actions                    |
+| =modules/bar/bar-wowgold-model.c/.h=   | Pure: money formatting and parsing, the JSON walk, document parsers, daily series, argv builder |
+| =tests/test-bar-wow-gold.c=            | GTest suite, 32 tests                                                                          |
+| =tests/fixtures/bar/wow-gold/=         | Captured =tsmctl -o json= output (names changed) and hand-written edge cases                   |
+
+** Threads
+
+Every tsmctl call runs on a bar worker: the periodic one in =poll_async=, Refresh through =gowl_bar_plugin_queue_work()=.  The child is started with =g_spawn_async_with_pipes()= in its own process group, its stdout and stderr drained together with =poll()= under a deadline, and reaped with =waitpid()= on the same worker --- never a GLib child watch, which under cmacs would fire on Emacs's thread.  There is no synchronous =poll= slot; =configure=, =panel=, =action= and =panel_key= on the compositor thread only read state and spawn detached commands.
+
+The worker builds a complete new =BarWowgoldData= and swaps it in under the widget's mutex; the panel reads under the same mutex; the old reading is freed after the swap, outside the lock.  A clicked row is copied by index into the current reading, and an index that no longer exists copies nothing.
+
+** Parsing
+
+tsmctl's JSON is ={title, generated, generator, sections: [{title, values, tables: [{columns, rows, totals}], notes}]}=, with money always as integer copper (=*_copper= columns) whatever =--money= says.  The model walks it with a small reader of its own that looks only at an object's *top-level* members, skipping strings and nested values whole.  barkit's =gowl-bar-json.h= was not enough here: it anchors on the first ="key":= anywhere below the point it is given and has no number reader, and =bar.so= does not link json-glib.  Money that arrives as a string ("1,234g 5s") is parsed rather than zeroed.
+
+The daily series carries a missing day forward from the day before (TSM logs gold when it changes, so a day without an entry is a day it stayed put) and leaves days before the first entry unknown rather than zero.  The deltas are history against history, never the exact live total against the rounded log.
+
+** State
+
+None on disk.  tsmctl's own cache (=~/.cache/tsmctl/hosts/<host>/=) is the only persistent state, and it is tsmctl's.
+
+** Tests
+
+=make build/release/test-bar-wow-gold && ./build/release/test-bar-wow-gold=.  Pure helpers are compiled straight into the test; the widget is loaded from =bar.so= through =tests/bar-widget-harness.h= and pointed at a stand-in tsmctl (a bash script) that logs its argv and answers from the fixtures, with flag files for failure modes: =fail-all= (exit 1 with an error on stderr), =fail-online= (the non-=--offline= call fails, as ssh would), =hang= (for the timeout), =junk= (a traceback on stdout), =no-attention= (an old tsmctl), and =down=/=flat= (history shapes).  Covered: money formatting and parsing, JSON decoys/overflow/non-UTF-8, series with gaps, exact argv for every command and source mode, refusal of a hostile host, shell syntax in a filter running nothing, cache-versus-host scheduling, the stale and fallback paths, the missing-command panel, label colours and literal overrides, panel contents, and every action.

@@ -1,0 +1,26 @@
+{
+  "title": "Gold history",
+  "sections": [
+    {
+      "title": "Gold history (per day)",
+      "values": {},
+      "tables": [
+        {
+          "title": "",
+          "columns": ["date", "gold_copper", "change_copper", "bar"],
+          "rows": [
+            {"date": "2026-10-01T23:59:59-04:00", "gold_copper": 1000000, "change_copper": null, "bar": ""},
+            {"date": "not a date", "gold_copper": 99990000, "change_copper": 0, "bar": ""},
+            {"date": "2026-10-03T23:59:59-04:00", "gold_copper": 1500000, "change_copper": 500000, "bar": ""},
+            {"date": "2026-10-03T23:59:59-04:00", "gold_copper": 1600000, "change_copper": 100000, "bar": ""},
+            {"date": "2026-10-05T23:59:59-04:00", "gold_copper": null, "change_copper": null, "bar": ""},
+            {"date": "2026-10-07T23:59:59-04:00", "gold_copper": 1200000, "change_copper": -400000, "bar": ""},
+            {"date": "2026-10-12T23:59:59-04:00", "gold_copper": 5000000, "change_copper": 0, "bar": ""}
+          ],
+          "totals": null
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

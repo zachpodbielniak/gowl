@@ -1,0 +1,66 @@
+{
+  "title": "Profit & loss",
+  "generated": "2026-10-16T00:52:35-0400",
+  "generator": "tsmctl 1.0.0",
+  "sections": [
+    {
+      "title": "Profit & loss (cash basis)",
+      "values": {
+        "Period": "2026-10-16 00:00 → now",
+        "AH sales (net of cut)": 12500000,
+        "Vendor sales": 34500,
+        "Trade/COD sales": 0,
+        "Other income": 0,
+        "Revenue": 12534500,
+        "Purchases": 2000000,
+        "Expenses": 150000,
+        "Net cash flow": 10384500,
+        "Units sold": 7
+      },
+      "tables": [],
+      "notes": []
+    },
+    {
+      "title": "By week",
+      "values": {},
+      "tables": [
+        {
+          "title": "",
+          "columns": [
+            "bucket",
+            "ah_copper",
+            "vendor_copper",
+            "other_copper",
+            "revenue_copper",
+            "purchases_copper",
+            "expenses_copper",
+            "net_copper",
+            "cumulative_copper",
+            "units"
+          ],
+          "rows": [],
+          "totals": {
+            "bucket": "TOTAL",
+            "ah_copper": 0,
+            "vendor_copper": 0,
+            "other_copper": 0,
+            "revenue_copper": 0,
+            "purchases_copper": 0,
+            "expenses_copper": 0,
+            "net_copper": 0,
+            "units": 0
+          }
+        }
+      ],
+      "notes": []
+    },
+    {
+      "title": "Notes",
+      "values": {},
+      "tables": [],
+      "notes": [
+        "Cash basis: purchases count when bought, not when the goods sell, so a heavy buying week shows as a loss. TSM records AH sale prices after the auction house cut; internal transfers between your own characters are excluded unless --include-internal."
+      ]
+    }
+  ]
+}

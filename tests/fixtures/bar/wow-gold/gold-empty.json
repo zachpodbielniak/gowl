@@ -1,0 +1,20 @@
+{
+  "title": "Gold",
+  "generated": "2026-10-16T00:52:25-0400",
+  "generator": "tsmctl 1.0.0",
+  "sections": [
+    {
+      "title": "Gold on hand",
+      "values": {},
+      "tables": [
+        {
+          "title": "",
+          "columns": ["owner", "realm", "kind", "login", "class", "gold_copper", "share", "account"],
+          "rows": [],
+          "totals": null
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

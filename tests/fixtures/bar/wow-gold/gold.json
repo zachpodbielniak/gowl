@@ -1,0 +1,123 @@
+{
+  "title": "Gold",
+  "generated": "2026-10-16T00:52:25-0400",
+  "generator": "tsmctl 1.0.0",
+  "sections": [
+    {
+      "title": "Gold on hand",
+      "values": {},
+      "tables": [
+        {
+          "title": "",
+          "columns": [
+            "owner",
+            "realm",
+            "kind",
+            "login",
+            "class",
+            "gold_copper",
+            "share",
+            "account"
+          ],
+          "rows": [
+            {
+              "owner": "Goldmonger",
+              "realm": "Thorium Brotherhood",
+              "kind": "character",
+              "login": "MAIN",
+              "class": "Warrior",
+              "gold_copper": 27688336070,
+              "share": 0.77684,
+              "account": "MAIN"
+            },
+            {
+              "owner": "Bankalt",
+              "realm": "Thorium Brotherhood",
+              "kind": "character",
+              "login": "MAIN",
+              "class": "Warrior",
+              "gold_copper": 3963466672,
+              "share": 0.111201,
+              "account": "MAIN"
+            },
+            {
+              "owner": "Thrall",
+              "realm": "Thorium Brotherhood",
+              "kind": "character",
+              "login": "MAIN",
+              "class": "Paladin",
+              "gold_copper": 1235519310,
+              "share": 0.034664,
+              "account": "MAIN"
+            },
+            {
+              "owner": "Hoardé",
+              "realm": "Thorium Brotherhood",
+              "kind": "character",
+              "login": "MAIN",
+              "class": "Rogue",
+              "gold_copper": 705758293,
+              "share": 0.019801,
+              "account": "MAIN"
+            },
+            {
+              "owner": "Warbank",
+              "realm": "",
+              "kind": "warbank",
+              "login": "MAIN",
+              "class": "",
+              "gold_copper": 450000000,
+              "share": 0.012625,
+              "account": "MAIN"
+            },
+            {
+              "owner": "Coinpurse",
+              "realm": "Thorium Brotherhood",
+              "kind": "character",
+              "login": "MAIN",
+              "class": "Druid",
+              "gold_copper": 413546071,
+              "share": 0.011603,
+              "account": "MAIN"
+            },
+            {
+              "owner": "Vendorbot",
+              "realm": "Thorium Brotherhood",
+              "kind": "character",
+              "login": "MAIN",
+              "class": "Demon Hunter",
+              "gold_copper": 249603050,
+              "share": 0.007003,
+              "account": "MAIN"
+            },
+            {
+              "owner": "Mailboxer",
+              "realm": "Moon Guard",
+              "kind": "character",
+              "login": "MAIN",
+              "class": "Warrior",
+              "gold_copper": 195228908,
+              "share": 0.005477,
+              "account": "MAIN"
+            },
+            {
+              "owner": "The Guild Vault",
+              "realm": "Thorium Brotherhood",
+              "kind": "guild (log)",
+              "login": "",
+              "class": "",
+              "gold_copper": 0,
+              "share": 0.0,
+              "account": ""
+            }
+          ],
+          "totals": {
+            "owner": "TOTAL",
+            "gold_copper": 34901458374
+          }
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "title": "Sales",
+  "generated": "2026-10-16T01:08:36-0400",
+  "generator": "tsmctl 1.0.0",
+  "sections": [
+    {
+      "title": "Sales",
+      "values": {},
+      "tables": [
+        {
+          "title": "",
+          "columns": [
+            "time",
+            "item",
+            "item_name",
+            "qty",
+            "price_copper",
+            "total_copper",
+            "other",
+            "player",
+            "realm",
+            "source",
+            "stack",
+            "account"
+          ],
+          "rows": [
+            {
+              "time": "2026-10-09T03:17:05-04:00",
+              "item": "i:122284",
+              "item_name": "WoW Token",
+              "qty": 2,
+              "price_copper": 2905500000,
+              "total_copper": 5811000000,
+              "other": "Multiple Buyers",
+              "player": "Goldmonger",
+              "realm": "Thorium Brotherhood",
+              "source": "Auction",
+              "stack": 1,
+              "account": "MAIN"
+            },
+            {
+              "time": "2026-10-09T03:09:28-04:00",
+              "item": "i:127144",
+              "item_name": "Damp Note",
+              "qty": 1,
+              "price_copper": 26,
+              "total_copper": 26,
+              "other": "Merchant",
+              "player": "Bankalt",
+              "realm": "Thorium Brotherhood",
+              "source": "Vendor",
+              "stack": 1,
+              "account": "MAIN"
+            },
+            {
+              "time": "2026-10-09T03:09:28-04:00",
+              "item": "i:127146",
+              "item_name": "Dirty Note",
+              "qty": 1,
+              "price_copper": 26,
+              "total_copper": 26,
+              "other": "Merchant",
+              "player": "Bankalt",
+              "realm": "Thorium Brotherhood",
+              "source": "Vendor",
+              "stack": 1,
+              "account": "MAIN"
+            },
+            {
+              "time": "2026-10-09T03:09:27-04:00",
+              "item": "i:127145",
+              "item_name": "Faded Note",
+              "qty": 1,
+              "price_copper": 26,
+              "total_copper": 26,
+              "other": "Merchant",
+              "player": "Bankalt",
+              "realm": "Thorium Brotherhood",
+              "source": "Vendor",
+              "stack": 1,
+              "account": "MAIN"
+            },
+            {
+              "time": "2026-10-09T03:09:27-04:00",
+              "item": "i:127143",
+              "item_name": "Faded Treasure Map",
+              "qty": 1,
+              "price_copper": 26,
+              "total_copper": 26,
+              "other": "Merchant",
+              "player": "Bankalt",
+              "realm": "Thorium Brotherhood",
+              "source": "Vendor",
+              "stack": 1,
+              "account": "MAIN"
+            },
+            {
+              "time": "2026-10-09T03:09:27-04:00",
+              "item": "i:127147",
+              "item_name": "Moonlit Note",
+              "qty": 1,
+              "price_copper": 26,
+              "total_copper": 26,
+              "other": "Merchant",
+              "player": "Bankalt",
+              "realm": "Thorium Brotherhood",
+              "source": "Vendor",
+              "stack": 1,
+              "account": "MAIN"
+            }
+          ],
+          "totals": {
+            "time": "1867 rows",
+            "qty": 33024,
+            "total_copper": 10342798276
+          }
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

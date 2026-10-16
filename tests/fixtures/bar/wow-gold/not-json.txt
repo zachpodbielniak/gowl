@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/home/user/.dotfiles/bin/scripts/tsmctl", line 9700, in <module>
+    main()
+KeyError: 'sections'

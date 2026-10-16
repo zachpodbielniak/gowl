@@ -1285,13 +1285,16 @@ tv_panel_remote_section(GowlBarPlugin *plugin, TvData *td,
 	guint i;
 
 	td->canvas_index = (gint)gowl_bar_panel_n_items(panel);
-	gowl_bar_panel_add_canvas(panel, "pad",
-	                          bar_tvremote_canvas_height(sel->kind));
+	item = gowl_bar_panel_add_canvas(panel, "pad",
+	                                 bar_tvremote_canvas_height(sel->kind));
+	/* The keyboard starts on the remote: it is what the panel is for. */
+	gowl_bar_panel_item_set_prop(item, GOWL_BAR_ENTRY_PROP_AUTOFOCUS,
+	                             "true");
 	gowl_bar_panel_add_label(panel,
-		"Keys on the remote: \xe2\x86\x90 \xe2\x86\x92 / w a s d move "
-		"\xc2\xb7 Return OK \xc2\xb7 BackSpace back \xc2\xb7 h home "
+		"Keys on the remote: arrows, w a s d or j k move "
+		"\xc2\xb7 Return or Space OK \xc2\xb7 BackSpace back \xc2\xb7 h home "
 		"\xc2\xb7 m menu \xc2\xb7 p play \xc2\xb7 r / f rewind / forward "
-		"\xc2\xb7 + \xe2\x88\x92 volume \xc2\xb7 0 mute \xc2\xb7 "
+		"\xc2\xb7 + \xe2\x88\x92 or the wheel volume \xc2\xb7 0 mute \xc2\xb7 "
 		"L hold OK");
 
 	if (sel->kind != BAR_TVREMOTE_KIND_CAST) {
@@ -1506,7 +1509,6 @@ tv_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	TvJob *job = NULL;
 	BarTvremoteDevice *sel;
 
-	(void)button;
 	if (item_id == NULL)
 		return;
 
@@ -1514,6 +1516,18 @@ tv_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 		gint key;
 		BarTvremoteKind kind;
 		gint w, h;
+
+		/* The wheel over the remote is its volume. */
+		if (button == GOWL_BAR_BUTTON_SCROLL_UP) {
+			tv_press(plugin, td, BAR_TVREMOTE_KEY_VOL_UP, FALSE, 1,
+			         FALSE);
+			return;
+		}
+		if (button == GOWL_BAR_BUTTON_SCROLL_DOWN) {
+			tv_press(plugin, td, BAR_TVREMOTE_KEY_VOL_DOWN, FALSE, 1,
+			         FALSE);
+			return;
+		}
 
 		/* Return on the focused canvas arrives as (-1, -1): OK. */
 		if (index < 0) {
@@ -1643,8 +1657,18 @@ tv_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
 	switch (keysym) {
 	case XKB_KEY_Left:  case XKB_KEY_a: key = BAR_TVREMOTE_KEY_LEFT; break;
 	case XKB_KEY_Right: case XKB_KEY_d: key = BAR_TVREMOTE_KEY_RIGHT; break;
-	case XKB_KEY_w:                     key = BAR_TVREMOTE_KEY_UP; break;
-	case XKB_KEY_s:                     key = BAR_TVREMOTE_KEY_DOWN; break;
+	/* A focused canvas hears Up, Down, j, k, Return and Space before
+	   the panel's navigation does, so the remote can have real arrows;
+	   w/a/s/d stay for the left hand. */
+	case XKB_KEY_Up:    case XKB_KEY_w: case XKB_KEY_k:
+		key = BAR_TVREMOTE_KEY_UP;
+		break;
+	case XKB_KEY_Down:  case XKB_KEY_s: case XKB_KEY_j:
+		key = BAR_TVREMOTE_KEY_DOWN;
+		break;
+	case XKB_KEY_Return: case XKB_KEY_KP_Enter: case XKB_KEY_space:
+		key = BAR_TVREMOTE_KEY_SELECT;
+		break;
 	case XKB_KEY_BackSpace:             key = BAR_TVREMOTE_KEY_BACK; break;
 	case XKB_KEY_h:                     key = BAR_TVREMOTE_KEY_HOME; break;
 	case XKB_KEY_m:                     key = BAR_TVREMOTE_KEY_MENU; break;

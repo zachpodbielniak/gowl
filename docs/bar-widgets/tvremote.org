@@ -161,12 +161,12 @@ From the top:
 
 ** Keys
 
-With the keyboard on the remote canvas (Tab to it):
+The keyboard starts on the remote canvas when the panel opens (Tab moves on; Shift+Tab comes back):
 
 | Key                     | Does                     |
 |-------------------------+--------------------------|
 | =←= =→=, =a= =d=        | Left / right             |
-| =w= =s=                 | Up / down                |
+| =↑= =↓=, =w= =s=, =k= =j= | Up / down              |
 | =Return=, =Space=       | OK                       |
 | =L=                     | Long-press OK            |
 | =BackSpace=             | Back                     |
@@ -174,10 +174,10 @@ With the keyboard on the remote canvas (Tab to it):
 | =m=                     | Menu                     |
 | =p=                     | Play / pause             |
 | =r= / =f=               | Rewind / fast forward    |
-| =+= =-= (and keypad)    | Volume up / down         |
+| =+= =-= (and keypad), the wheel over the remote | Volume up / down |
 | =0=                     | Mute                     |
 
-=↑= and =↓= move between panel rows, as in every panel, and do not reach the canvas; hence =w= / =s=. There is no key-repeat or key-release signal to a panel, so "hold" is its own key (=L=) rather than a long press of Return.
+A focused canvas hears every key but Escape before the panel's own navigation does (see [[file:../bar.org::#plugin-canvas][Canvases]]), which is what lets the arrows drive the D-pad; a key the remote does not use (Tab) still moves through the panel. There is no key-repeat or key-release signal to a panel, so "hold" is its own key (=L=) rather than a long press of Return.
 
 * Discovery
 
@@ -262,7 +262,6 @@ Files, all in =modules/bar/=:
 * Known limitations
 
 - No IPC to press one remote key from a keybind; it would need a shared bar command (for example =gowl bar-widget-action tvremote vol+=).
-- =↑= / =↓= cannot reach a focused canvas (the panel host navigates with them); =w= / =s= stand in.
 - Android TV Remote v2, pre-2016 Samsung, and Wake-on-LAN power-on are not implemented.
 - Samsung has no play/pause toggle: the widget alternates =KEY_PAUSE= and =KEY_PLAY=, which can be out of step with what the TV is doing.
 - LG uses an unsigned permissions manifest; firmware that insists on LG's signed manifest refuses to pair.

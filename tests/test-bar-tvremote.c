@@ -1265,6 +1265,51 @@ test_firetv_persistent_shell(void)
 	bar_harness_down(&h);
 }
 
+/* A focused canvas hears the arrows, j/k, Return and the wheel before
+   the panel's navigation (host change e0288a6).  Catches: the remote
+   still answering only w/s, the wheel scrolling the panel instead of
+   changing the volume, and the canvas not taking the keyboard when the
+   panel opens. */
+static void
+test_firetv_arrows_and_wheel(void)
+{
+	BarHarness h;
+	g_autofree gchar *log = NULL;
+	g_autoptr(GowlBarPanel) panel = NULL;
+	GowlBarPanelItem *pad_item;
+	gint pad;
+
+	if (!widget_up(&h, FIRE_YAML))
+		return;
+	bar_harness_poll(&h);
+	log = bar_harness_path(&h, "shell.log");
+
+	pad = pad_index(&h);
+	g_assert_cmpint(pad, >=, 0);
+	panel = bar_harness_panel(&h);
+	pad_item = gowl_bar_panel_find(panel, "pad");
+	g_assert_nonnull(pad_item);
+	g_assert_cmpstr(gowl_bar_panel_item_get_prop(pad_item,
+	                GOWL_BAR_ENTRY_PROP_AUTOFOCUS), ==, "true");
+
+	g_assert_true(gowl_bar_plugin_panel_key(h.plugin, XKB_KEY_Down, 0, pad));
+	g_assert_true(gowl_bar_plugin_panel_key(h.plugin, XKB_KEY_k, 0, pad));
+	g_assert_true(gowl_bar_plugin_panel_key(h.plugin, XKB_KEY_Return, 0,
+	                                        pad));
+	gowl_bar_plugin_panel_action(h.plugin, "pad", 10, 10.0,
+	                             GOWL_BAR_BUTTON_SCROLL_UP);
+	gowl_bar_plugin_panel_action(h.plugin, "pad", 10, 10.0,
+	                             GOWL_BAR_BUTTON_SCROLL_DOWN);
+
+	g_assert_true(wait_lines(log, 5));
+	g_assert_true(file_has(log, "input keyevent 20\n"));   /* DPAD_DOWN */
+	g_assert_true(file_has(log, "input keyevent 19\n"));   /* DPAD_UP */
+	g_assert_true(file_has(log, "input keyevent 23\n"));   /* CENTER */
+	g_assert_true(file_has(log, "input keyevent 24\n"));   /* VOL_UP */
+	g_assert_true(file_has(log, "input keyevent 25\n"));   /* VOL_DOWN */
+	bar_harness_down(&h);
+}
+
 /* The shell dies (the TV slept); the next key restarts it.  Catches: a
    dead shell swallowing every later key, and a SIGPIPE from writing to
    it taking the compositor down. */
@@ -1968,6 +2013,8 @@ main(int argc, char **argv)
 	g_test_add_func("/bar/tvremote/widget/firetv-pairing", test_firetv_pairing);
 	g_test_add_func("/bar/tvremote/widget/firetv-persistent-shell",
 	                test_firetv_persistent_shell);
+	g_test_add_func("/bar/tvremote/widget/firetv-arrows-and-wheel",
+	                test_firetv_arrows_and_wheel);
 	g_test_add_func("/bar/tvremote/widget/firetv-shell-restart",
 	                test_firetv_shell_restart);
 	g_test_add_func("/bar/tvremote/widget/firetv-apps", test_firetv_apps);

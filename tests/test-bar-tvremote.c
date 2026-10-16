@@ -1301,7 +1301,13 @@ test_firetv_arrows_and_wheel(void)
 	gowl_bar_plugin_panel_action(h.plugin, "pad", 10, 10.0,
 	                             GOWL_BAR_BUTTON_SCROLL_DOWN);
 
-	g_assert_true(wait_lines(log, 5));
+	/* A named key, as `gowl bar-widget-action tvremote key:mute'
+	   delivers it; an unknown name is ignored. */
+	gowl_bar_plugin_panel_action(h.plugin, "key:mute", -1, 0.0, 0);
+	gowl_bar_plugin_panel_action(h.plugin, "key:no-such-key", -1, 0.0, 0);
+
+	g_assert_true(wait_lines(log, 6));
+	g_assert_true(file_has(log, "input keyevent 164\n"));  /* MUTE */
 	g_assert_true(file_has(log, "input keyevent 20\n"));   /* DPAD_DOWN */
 	g_assert_true(file_has(log, "input keyevent 19\n"));   /* DPAD_UP */
 	g_assert_true(file_has(log, "input keyevent 23\n"));   /* CENTER */

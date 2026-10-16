@@ -666,6 +666,15 @@ gowl bar-panel network      # open the network dropdown
 gowl bar-panel              # close whatever is open
 #+end_src
 
+Or send a widget one of its panel actions without opening anything --- what a keybind for "TV volume up" uses:
+
+#+begin_src sh
+gowl bar-widget-action WIDGET ID [INDEX [VALUE]]
+gowl bar-widget-action tvremote key:vol_up
+#+end_src
+
+The widget receives exactly what a click on an item with that =ID= would send (=INDEX= defaults to -1, =VALUE= to 0, and the button is 0, meaning "not a pointer"), under the same fault guard. Which ids a widget answers is on its own page.
+
 ** Toasts
 :PROPERTIES:
 :CUSTOM_ID: toasts

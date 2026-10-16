@@ -656,6 +656,35 @@ test_widget_settings_wait_for_their_widget(void)
 }
 
 
+/* `bar-widget-action' answers usage and unknown widgets in words, and
+   reaches a widget that is there.  Catches a malformed line crashing
+   the IPC handler, and a typo'd widget name silently doing nothing. */
+static void
+test_widget_action_ipc(void)
+{
+	GowlModule *module;
+	g_autofree gchar *usage = NULL;
+	g_autofree gchar *missing = NULL;
+	g_autofree gchar *ok = NULL;
+
+	module = load_bar_module();
+	if (module == NULL)
+		return;
+
+	usage = gowl_ipc_handler_handle_command(GOWL_IPC_HANDLER(module),
+		"bar-widget-action", "clock");
+	g_assert_true(g_str_has_prefix(usage, "error: usage"));
+	missing = gowl_ipc_handler_handle_command(GOWL_IPC_HANDLER(module),
+		"bar-widget-action", "no-such-widget key:x");
+	g_assert_true(g_str_has_prefix(missing, "error: no bar widget"));
+	ok = gowl_ipc_handler_handle_command(GOWL_IPC_HANDLER(module),
+		"bar-widget-action", "clock anything 3 0.5");
+	g_assert_cmpstr(ok, ==, "ok\n");
+
+	g_object_unref(module);
+}
+
+
 int
 main(int argc, char *argv[])
 {
@@ -686,6 +715,8 @@ main(int argc, char *argv[])
 	                test_aliases_and_specs);
 	g_test_add_func("/bar-module/settings-wait-for-their-widget",
 	                test_widget_settings_wait_for_their_widget);
+	g_test_add_func("/bar-module/widget-action-ipc",
+	                test_widget_action_ipc);
 	g_test_add_func("/bar-module/nothing-to-show-is-off",
 	                test_a_widget_with_nothing_to_show_is_marked_off);
 

@@ -1512,6 +1512,18 @@ tv_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	if (item_id == NULL)
 		return;
 
+	/* `key:<name>' (vol_up, play_pause, ...): one remote key by
+	   name, which is what `gowl bar-widget-action tvremote key:vol_up'
+	   sends from a keybind without opening the panel. */
+	if (g_str_has_prefix(item_id, "key:")) {
+		gint named = bar_tvremote_key_from_name(item_id + 4);
+
+		if (named >= 0)
+			tv_press(plugin, td, (BarTvremoteKey)named, FALSE, 1,
+			         FALSE);
+		return;
+	}
+
 	if (strcmp(item_id, "pad") == 0) {
 		gint key;
 		BarTvremoteKind kind;

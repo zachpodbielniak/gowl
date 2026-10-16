@@ -2588,6 +2588,45 @@ bar_panel_deliver(GowlModuleBar *self, const gchar *item_id, gint index,
 	bar_redraw_all(self);
 }
 
+/*
+ * Deliver an action to a widget whose panel need not be open -- the
+ * `bar-widget-action' IPC command.  @button 0 says "not a pointer".
+ * Returns FALSE when the plugin faulted (it is quarantined by then).
+ */
+static gboolean
+bar_widget_deliver_action(GowlModuleBar *self, BarItem *item,
+                          const gchar *item_id, gint index, gdouble value)
+{
+	ActionCtx ctx;
+	g_autofree gchar *owned_id = NULL;
+	gint signo = 0;
+
+	owned_id = g_strdup(item_id);
+	ctx.plugin  = item->plugin;
+	ctx.item_id = owned_id;
+	ctx.index   = index;
+	ctx.value   = value;
+	ctx.button  = 0;
+
+	if (!gowl_bar_guard_call(bar_panel_action_body, &ctx, &signo,
+	                         gowl_bar_plugin_get_id(item->plugin))) {
+		const gchar *name;
+
+		name = gowl_bar_plugin_get_setting(item->plugin, "name");
+		gowl_bar_registry_quarantine(self->registry,
+			(name != NULL) ? name
+			               : gowl_bar_plugin_get_id(item->plugin),
+			"it faulted handling a widget action");
+		if (self->panel.item == item)
+			bar_panel_close(self);
+		return FALSE;
+	}
+	if (self->panel.item == item)
+		bar_panel_rebuild(self);
+	g_atomic_int_set(&self->redraw_pending, 1);
+	return TRUE;
+}
+
 /* ----------------------------------------------------------------
  * Toasts
  * ---------------------------------------------------------------- */
@@ -5091,6 +5130,36 @@ bar_handle_command(GowlIpcHandler *handler, const gchar *command,
 		if (out->len == 0)
 			g_string_append(out, "nothing is quarantined\n");
 		return g_string_free(out, FALSE);
+	}
+
+	if (strcmp(command, "bar-widget-action") == 0) {
+		g_auto(GStrv) argv = NULL;
+		BarItem *item;
+		GowlBarInstance *bar = NULL;
+		gint index = -1;
+		gdouble value = 0.0;
+		gboolean ok;
+
+		/* WIDGET ID [INDEX [VALUE]] -- the panel action a click would
+		   send, without the panel: what lets a media key turn a TV
+		   down.  Delivered under the fault guard like any action. */
+		argv = (args != NULL) ? g_strsplit_set(args, " \t", 4) : NULL;
+		if (argv == NULL || argv[0] == NULL || argv[0][0] == '\0' ||
+		    argv[1] == NULL || argv[1][0] == '\0')
+			return g_strdup("error: usage: bar-widget-action "
+			                "WIDGET ID [INDEX [VALUE]]\n");
+		item = bar_find_item(self, argv[0], &bar);
+		if (item == NULL)
+			return g_strdup_printf("error: no bar widget named '%s'\n",
+			                       argv[0]);
+		if (argv[2] != NULL)
+			index = (gint)g_ascii_strtoll(argv[2], NULL, 10);
+		if (argv[2] != NULL && argv[3] != NULL)
+			value = g_ascii_strtod(argv[3], NULL);
+		ok = bar_widget_deliver_action(self, item, argv[1], index, value);
+		return ok ? g_strdup("ok\n")
+		          : g_strdup_printf("error: '%s' faulted and was held "
+		                            "back\n", argv[0]);
 	}
 
 	if (strcmp(command, "bar-panel") == 0) {

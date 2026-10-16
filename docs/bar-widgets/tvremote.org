@@ -40,13 +40,20 @@ modules:
     tvremote.refresh: 15
     tvremote.scan-subnet: auto
 keybinds:
-  "Super+Alt+t": { action: ipc_command, arg: "bar-panel tvremote", desc: "TV remote" }
+  "Super+Alt+o": { action: ipc_command, arg: "bar-panel tvremote", desc: "TV remote" }
+  # One remote key without opening the panel (names: up down left right
+  # select back home menu play_pause rewind fast_forward vol_up vol_down
+  # mute power ...; see "The keys" below):
+  "Super+Alt+equal": { action: ipc_command, arg: "bar-widget-action tvremote key:vol_up", desc: "TV volume up" }
+  "Super+Alt+minus": { action: ipc_command, arg: "bar-widget-action tvremote key:vol_down", desc: "TV volume down" }
+  "Super+Alt+p":     { action: ipc_command, arg: "bar-widget-action tvremote key:play_pause", desc: "TV play / pause" }
 #+end_src
 
 Then click the TV glyph, type the TV's address under *Add a TV*, pick its kind, and press *Add and pair*. From a shell:
 
 #+begin_src sh
-gowl bar-panel tvremote     # open the remote
+gowl bar-panel tvremote                         # open the remote
+gowl bar-widget-action tvremote key:vol_up      # press one key, panel closed
 #+end_src
 
 The devices themselves live in =~/.config/gowl/tvremote.yaml= (see [[*The device list][The device list]]), not in =config.yaml=, because pairing writes secrets into it.
@@ -57,12 +64,16 @@ The devices themselves live in =~/.config/gowl/tvremote.yaml= (see [[*The device
 (cmacs-gowl-bar-configure-top
  '(("widgets-right-add" . "tvremote")
    ("tvremote.refresh" . "15")))
-(gowl-add-keybind "Super+Alt+t" 'ipc-command "bar-panel tvremote" "TV remote")
+(gowl-add-keybind "Super+Alt+o" 'ipc-command "bar-panel tvremote" "TV remote")
+(gowl-add-keybind "Super+Alt+equal" 'ipc-command
+                  "bar-widget-action tvremote key:vol_up" "TV volume up")
+(gowl-add-keybind "Super+Alt+minus" 'ipc-command
+                  "bar-widget-action tvremote key:vol_down" "TV volume down")
 #+end_src
 
 Under =cmacs --gowl= the widget is *off by default*; nothing in cmacs configures it. Everything above is optional beyond adding it to a widget list.
 
-There is no IPC today to press a single remote key from a keybind (for example a media key bound to the TV's volume): =gowl bar-panel tvremote= opens the panel, and the remote's keys work from there. See [[*Known limitations][Known limitations]].
+Any remote key can be pressed from a keybind or a script without opening the panel: =gowl bar-widget-action tvremote key:NAME= sends it to the default (selected) device. The names are the remote's own (=vol_up=, =vol_down=, =mute=, =play_pause=, =home=, =back=, =select=, =up= ...); an unknown name does nothing.
 
 * Fire TV setup
 
@@ -261,7 +272,6 @@ Files, all in =modules/bar/=:
 
 * Known limitations
 
-- No IPC to press one remote key from a keybind; it would need a shared bar command (for example =gowl bar-widget-action tvremote vol+=).
 - Android TV Remote v2, pre-2016 Samsung, and Wake-on-LAN power-on are not implemented.
 - Samsung has no play/pause toggle: the widget alternates =KEY_PAUSE= and =KEY_PLAY=, which can be out of step with what the TV is doing.
 - LG uses an unsigned permissions manifest; firmware that insists on LG's signed manifest refuses to pair.

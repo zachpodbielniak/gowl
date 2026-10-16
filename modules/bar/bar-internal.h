@@ -75,6 +75,19 @@ void bar_register_net_plugins     (GowlBarRegistry *registry);
 void bar_register_desktop_plugins (GowlBarRegistry *registry);
 void bar_register_tray_plugins    (GowlBarRegistry *registry);
 
+/* The extended set: one file and one registration call per widget,
+   so each can be worked on without touching the others. */
+void bar_register_tvremote_plugins    (GowlBarRegistry *registry);
+void bar_register_devservices_plugins (GowlBarRegistry *registry);
+void bar_register_webmail_plugins     (GowlBarRegistry *registry);
+void bar_register_translate_plugins   (GowlBarRegistry *registry);
+void bar_register_keywheel_plugins    (GowlBarRegistry *registry);
+void bar_register_airewrite_plugins   (GowlBarRegistry *registry);
+void bar_register_meeting_plugins     (GowlBarRegistry *registry);
+void bar_register_netshares_plugins   (GowlBarRegistry *registry);
+void bar_register_assistant_plugins   (GowlBarRegistry *registry);
+void bar_register_wowgold_plugins     (GowlBarRegistry *registry);
+
 /* --- The output a widget is being run for -------------------------- */
 
 /**

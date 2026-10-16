@@ -5667,6 +5667,16 @@ gowl_module_bar_init(GowlModuleBar *self)
 	bar_register_net_plugins(self->registry);
 	bar_register_desktop_plugins(self->registry);
 	bar_register_tray_plugins(self->registry);
+	bar_register_tvremote_plugins(self->registry);
+	bar_register_devservices_plugins(self->registry);
+	bar_register_webmail_plugins(self->registry);
+	bar_register_translate_plugins(self->registry);
+	bar_register_keywheel_plugins(self->registry);
+	bar_register_airewrite_plugins(self->registry);
+	bar_register_meeting_plugins(self->registry);
+	bar_register_netshares_plugins(self->registry);
+	bar_register_assistant_plugins(self->registry);
+	bar_register_wowgold_plugins(self->registry);
 
 	g_signal_connect(self->registry, "plugin-unloaded",
 	                 G_CALLBACK(bar_on_plugin_unloaded), self);

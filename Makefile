@@ -923,6 +923,30 @@ $(OBJDIR)/tests/test-hints.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath 
 
 $(OUTDIR)/test-bar-monitor: $(OUTDIR)/modules/bar.so
 $(OUTDIR)/test-bar-entry-panel: $(OUTDIR)/modules/bar.so
+# The extended widget set: each test loads the real bar.so through
+# tests/bar-widget-harness.h and reads fixtures from tests/fixtures/bar.
+$(OUTDIR)/test-bar-tvremote: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-tvremote.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
+$(OUTDIR)/test-bar-devservices: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-devservices.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
+$(OUTDIR)/test-bar-webmail: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-webmail.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
+$(OUTDIR)/test-bar-translate: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-translate.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
+$(OUTDIR)/test-bar-keywheel: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-keywheel.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
+$(OUTDIR)/test-bar-ai-rewrite: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-ai-rewrite.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
+$(OUTDIR)/test-bar-meeting-notes: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-meeting-notes.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
+$(OUTDIR)/test-bar-netshares: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-netshares.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
+$(OUTDIR)/test-bar-ai-assistant: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-ai-assistant.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
+$(OUTDIR)/test-bar-wow-gold: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-wow-gold.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
+$(OUTDIR)/test-bar-cpu-activity: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-cpu-activity.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
 $(OUTDIR)/test-bar-ai: $(OUTDIR)/modules/bar.so
 $(OBJDIR)/tests/test-bar-ai.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"'
 $(OBJDIR)/tests/test-bar-entry-panel.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

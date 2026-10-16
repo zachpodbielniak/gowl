@@ -561,6 +561,27 @@ modules:
 
 A command line that uses anything only a shell understands --- =$(...)=, a variable, a pipe, =&&=, a redirection, a glob --- is run through =sh -c=. One that does not is run directly, as an argv, with =~= expanded. So the example above works as written: it used to be split into words and handed to =wf-recorder= with a literal =$(slurp)= as its geometry. The same rule applies to every command a shipped widget runs and to =gowl_bar_plugin_spawn()=. =cmd= strips every ANSI escape from the line it shows, not only the colour ones; an =ESC [ K= used to swallow the text up to the next letter =m=.
 
+** The extended widget set
+:PROPERTIES:
+:CUSTOM_ID: extended-widgets
+:END:
+
+Shipped in =bar.so= but *off* unless you add them to a widget list. Each has its own page under =docs/bar-widgets/= with every setting, a standalone-gowl configuration and the cmacs one.
+
+| Widget          | Does                                                                   | On by default under =cmacs --gowl= | Page                                      |
+|-----------------+------------------------------------------------------------------------+------------------------------------+-------------------------------------------|
+| =cpu= (activity) | The CPU widget's activity mode: a load creature, process list, kill    | yes (=cpu.style: creature=)        | [[file:bar-widgets/cpu-activity.org]]       |
+| =ai-assistant=  | Chat with any provider, manage local ollama models, see the machine    | yes                                | [[file:bar-widgets/ai-assistant.org]]       |
+| =meeting-notes= | Record outputs and mics, transcribe, summarise, file the result        | yes                                | [[file:bar-widgets/meeting-notes.org]]      |
+| =ai-rewrite=    | Rewrite the selected text: fix, improve, shorten, translate, custom    | no                                 | [[file:bar-widgets/ai-rewrite.org]]         |
+| =translate=     | A two-pane translator overlay                                          | no                                 | [[file:bar-widgets/translate.org]]          |
+| =keywheel=      | A radial cheat sheet of every keybinding                               | no                                 | [[file:bar-widgets/keywheel.org]]           |
+| =webmail=       | A themed web mail window with an unread count                          | no                                 | [[file:bar-widgets/webmail.org]]            |
+| =devservices=   | Start, stop and watch a project's development services                | no                                 | [[file:bar-widgets/devservices.org]]        |
+| =netshares=     | Mount CIFS, NFS and SSHFS shares                                       | no                                 | [[file:bar-widgets/netshares.org]]          |
+| =tvremote=      | Remote for Fire TV, Android TV, Roku, Samsung and LG                   | no                                 | [[file:bar-widgets/tvremote.org]]           |
+| =wow-gold=      | World of Warcraft gold, sales and trends from your addons, via tsmctl | no                                 | [[file:bar-widgets/wow-gold.org]]           |
+
 ** Panels
 :PROPERTIES:
 :CUSTOM_ID: panels
@@ -578,6 +599,24 @@ While a panel is open:
 | =Return= / =Space= | Activate the focused row   |
 
 The wheel scrolls a panel taller than the screen. Sliders are draggable.
+
+When the keyboard is on a *text field*, the field gets the keys first: =j=, =k= and =Space= type, as does everything printable. The field's own keys:
+
+| Key                          | Does                                            |
+|------------------------------+-------------------------------------------------|
+| =Return=                     | Submit (=Ctrl+Return= in a multiline field)     |
+| =Tab= / =Shift+Tab=          | Leave the field, to the next / previous item    |
+| =Up= / =Down=                | Leave a one-line field                          |
+| =Left= =Right= =Home= =End=  | Move the cursor                                 |
+| =Ctrl+A= / =Ctrl+E=          | Start / end                                     |
+| =Ctrl+B= / =Ctrl+F=          | Back / forward one character                    |
+| =BackSpace= / =Delete=       | Delete before / after the cursor                |
+| =Ctrl+W= / =Ctrl+BackSpace=  | Delete the previous word                        |
+| =Ctrl+U=                     | Delete everything before the cursor             |
+| =Ctrl+V= / =Shift+Insert=    | Paste the clipboard                             |
+| =Escape=                     | Close the panel                                 |
+
+Any other =Ctrl= chord is the widget's (the translator's =Ctrl+S= swaps languages). =Alt= and =Super= chords are never taken by a field: they belong to the window manager, and a text field that swallowed them would trap you in it.
 
 Open a panel without the pointer:
 
@@ -785,6 +824,54 @@ It is not a JSON parser: it does not validate, build a tree, or address
 a path. What it does is fail by returning =NULL= rather than by
 returning somebody else's value. The Tailscale widget is built on it.
 
+*** Asking a language model
+:PROPERTIES:
+:CUSTOM_ID: plugin-ai
+:END:
+
+The shipped AI widgets (=ai-rewrite=, =ai-assistant=, =translate='s =ai= engine, =meeting-notes='s summary) all go through =modules/bar/bar-ai.c=. It has two backends, picked per widget by the =ai-backend= setting, and *both are out of process*:
+
+| =ai-backend=     | Route                                                                                                                                                                                                                                                                                   |
+|------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =cmacs=          | =emacsctl eval '(cmacs-gowl-bar-ai-run ...)'= starts an *asynchronous* cmacs-ai stream and returns at once; cmacs pushes the answer back into the widget as =<widget>.ai-id=, =.ai-state=, =.ai-text= and =.ai-error= settings. Every provider configured in cmacs-ai is available. =cmacs --gowl= sets this for every AI widget. |
+| =ai=             | ai-glib's own =ai= command on a bar worker thread: the prompt on stdin (never in argv, so it is not in =ps=), the answer streamed from stdout. Providers, models and keys come from =~/.config/ai-glib/config.yaml= --- the standalone-gowl route.                                         |
+| =none=           | Off; the widget says how to turn it on.                                                                                                                                                                                                                                                 |
+| =auto= (default) | =ai= if the command is installed, else =none=.                                                                                                                                                                                                                                          |
+
+Out of process on purpose: cmacs links its own ai-glib statically and loads this module *into itself*, so linking a second copy here would bind against whichever one the loader found first.
+
+Settings every AI widget accepts:
+
+| Setting       | Default    | Meaning                                                              |
+|---------------+------------+----------------------------------------------------------------------|
+| =ai-backend=  | =auto=     | See above                                                            |
+| =ai-provider= | (default)  | A provider name (=claude=, =ollama=, =claude-code=, ...); empty for the backend's default |
+| =ai-model=    | (default)  | A model id; empty for the provider's default                          |
+| =ai-command=  | =ai=       | The ai-glib CLI, for the =ai= backend                                 |
+| =emacsctl=    | =emacsctl= | The cmacs control CLI, for the =cmacs= backend                        |
+| =ai-timeout=  | =300=      | Seconds before an =ai= request is killed                              |
+
+#+begin_src yaml
+modules:
+  bar:
+    ai-rewrite.ai-backend: ai
+    ai-rewrite.ai-provider: ollama
+    ai-rewrite.ai-model: qwen3.5:9b
+#+end_src
+
+A slot holds one request; starting another abandons the first (its child is sent =SIGTERM=), and every write is checked against a generation counter, so an answer that arrives after the user has moved on is dropped rather than painted over the new one. =tests/test-bar-ai.c= covers both routes against stand-in =ai= and =emacsctl= scripts.
+
+The cmacs half of the contract, for anyone writing another client of it:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-ai-run WIDGET REQUEST-ID SYSTEM PROMPT PROVIDER MODEL)
+;; returns at once, then pushes, throttled:
+;;   ("WIDGET.ai-id"    . REQUEST-ID)
+;;   ("WIDGET.ai-state" . "waiting" | "streaming" | "done" | "error")
+;;   ("WIDGET.ai-text"  . "the answer so far")
+;;   ("WIDGET.ai-error" . "why")          ; only when state is error
+#+end_src
+
 *** Colour
 :PROPERTIES:
 :CUSTOM_ID: plugin-colour
@@ -834,13 +921,91 @@ my_panel(GowlBarPlugin *plugin, gpointer data)
 }
 #+end_src
 
-Item kinds: =HERO=, =SECTION=, =LABEL=, =FIELD=, =FIELD_PAIR=, =SEPARATOR=, =SLIDER=, =TOGGLE=, =BUTTONS=, =ROW=, =PROGRESS=, =GRAPH=, =CALENDAR=, =SPACER=.
+Item kinds: =HERO=, =SECTION=, =LABEL=, =FIELD=, =FIELD_PAIR=, =SEPARATOR=, =SLIDER=, =TOGGLE=, =BUTTONS=, =ROW=, =PROGRESS=, =GRAPH=, =CALENDAR=, =SPACER=, =ENTRY=, =CANVAS=.
 
 =LABEL= wraps and takes the height its text needs, so an explanation in a panel can be a sentence rather than a truncated line.
 
 The =action= callback is given the item's id, a child index for a button row, and a slider's new value. Rows in a list all share one id unless you give each a distinct one --- the shipped plugins encode the payload into the id (=connect:SSID=, =peer:100.x.y.z=) because the callback sees nothing else.
 
 =build_panel= is called every time the panel is shown *or refreshed*, so it must be cheap and must not block. Refresh it from a poll with =gowl_bar_plugin_refresh_panel()=.
+
+**** Text fields
+:PROPERTIES:
+:CUSTOM_ID: plugin-entry
+:END:
+
+=gowl_bar_panel_add_entry(panel, id, placeholder, text)= adds a text field the *host* edits (keys under [[#panels][Panels]]). The plugin hears about it through the =panel_text= vtable slot:
+
+#+begin_src C
+static GowlBarPanel *
+ask_panel(GowlBarPlugin *plugin, gpointer data)
+{
+	Ask *self = data;
+	GowlBarPanel *panel;
+	GowlBarPanelItem *entry;
+	gchar rev[16];
+
+	panel = gowl_bar_panel_new();
+	entry = gowl_bar_panel_add_entry(panel, "question", "Ask anything", "");
+	gowl_bar_panel_item_set_prop(entry, GOWL_BAR_ENTRY_PROP_AUTOFOCUS, "true");
+
+	/* Bump the revision to replace what the user typed -- here,
+	   to clear the field after each question. */
+	g_snprintf(rev, sizeof(rev), "%u", self->asked);
+	gowl_bar_panel_item_set_prop(entry, GOWL_BAR_ENTRY_PROP_REVISION, rev);
+
+	gowl_bar_panel_add_label(panel, self->answer);
+	return panel;
+}
+
+static void
+ask_text(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
+         const gchar *text, gboolean submitted)
+{
+	Ask *self = data;
+
+	if (!submitted)
+		return;            /* every keystroke arrives; a filter would use them */
+	self->asked++;
+	start_asking(self, text);
+}
+#+end_src
+
+- *The host owns the text while the panel is open.* Every edit rebuilds the panel, and if the text the plugin returned won, the user would never see their own typing. The host keeps the text by item id and takes the plugin's value again only when =GOWL_BAR_ENTRY_PROP_REVISION= changes.
+- =panel_text= is called after every edit with =submitted= =FALSE=, and once more on =Return= with =TRUE=. The panel is rebuilt afterwards, as after an action.
+- Props: =GOWL_BAR_ENTRY_PROP_AUTOFOCUS= (keyboard starts here), =GOWL_BAR_ENTRY_PROP_MULTILINE= (=Return= is a newline, =Ctrl+Return= submits; the item's height is the field's height), =GOWL_BAR_ENTRY_PROP_SECRET= (drawn as bullets; the plugin still gets the real text).
+- The title, if set, is a small caption above the field.
+- *Paste never blocks.* The clipboard's owner writes into a pipe, and it can only do that while the compositor thread is free, so the bar waits for the text on the compositor's own =wl_event_loop=. A one-line field turns pasted newlines and tabs into spaces; text that is not UTF-8 is refused.
+
+**** Canvases
+:PROPERTIES:
+:CUSTOM_ID: plugin-canvas
+:END:
+
+=gowl_bar_panel_add_canvas(panel, id, height)= reserves a full-width rectangle the plugin paints through the =panel_canvas= vtable slot --- for things that are a picture rather than a list: a remote control, a radial keybinding wheel, a map of CPU cores.
+
+#+begin_src C
+static void
+cores_canvas(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
+             cairo_t *cr, const GowlBarTheme *theme, gint width, gint height)
+{
+	/* (0, 0) is the canvas's top-left; drawing is clipped to it. */
+	gowl_bar_theme_cairo_set(theme, cr, GOWL_BAR_COLOR_ACCENT);
+	cairo_rectangle(cr, 0, 0, width / 2, height);
+	cairo_fill(cr);
+}
+#+end_src
+
+- A click reaches the =action= slot with =index= set to the canvas-local x and =value= to the y, both in pixels. =Return= on a focused canvas sends =-1= for both; other keys reach =panel_key= with the canvas focused.
+- It runs on the compositor thread inside a render: draw from state you already have, never block, and use theme roles for colour.
+- A canvas that faults is quarantined *after* the render finishes, so the panel being walked is never freed under the renderer.
+
+**** Overlay-style panels
+:PROPERTIES:
+:CUSTOM_ID: plugin-centered
+:END:
+
+=gowl_bar_panel_set_centered(panel, TRUE)= opens the panel a little above the middle of the output instead of hanging it from its widget. Use it for panels that are really overlays and are usually opened from a keybind (=gowl bar-panel translate=), where the widget's position means nothing.
 
 *** Loading, reloading, unloading
 :PROPERTIES:

@@ -188,6 +188,7 @@ The *picker* replaces the two panes while it is open: a filter field, then the m
 |----------------+--------------------------------------------------------|
 | =Ctrl+Return=  | Translate now (in either text field)                   |
 | =Ctrl+S=       | Swap the languages (and the texts)                     |
+| =Ctrl+1= / =Ctrl+2= | Put the keyboard in the source / translation pane |
 | =Ctrl+L=       | Pick the source language                               |
 | =Ctrl+Shift+L= | Pick the target language                               |
 | =Ctrl+Shift+C= | Copy the translation                                   |
@@ -202,7 +203,6 @@ Notes, all consequences of the shared text field (the host owns these keys, not 
 
 - In a text field, =Ctrl+Shift+V= is the field's own paste (it pastes into the field without translating). Use the =Clipboard= button, or press it with the keyboard on a chip or button.
 - =Ctrl+Return= outside a text field activates the focused control, like =Return=.
-- =Ctrl+1= / =Ctrl+2= (jump to a pane) are not available: a plugin cannot move the panel's keyboard focus. They show a hint to use =Tab=. =Ctrl+L= from the source pane does land in the picker's filter, because both are the panel's second item.
 
 ** Translate while typing
 

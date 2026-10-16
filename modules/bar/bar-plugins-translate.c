@@ -116,6 +116,12 @@ typedef struct {
 	/* The translation shown, and its revision likewise. */
 	gchar    *out_text;
 	guint     out_rev;
+
+	/* Ctrl+1 / Ctrl+2: which pane asked for the keyboard (1 source,
+	   2 translation, 0 none) and the token that makes the host move
+	   it (GOWL_BAR_PANEL_PROP_FOCUS). */
+	gint      focus_pane;
+	guint     focus_seq;
 	gchar    *ai_seen;      /* the AI answer last copied into out_text */
 	gboolean  ai_active;    /* out_text follows the AI slot */
 	gchar    *detected;
@@ -1408,7 +1414,8 @@ tr_panel(GowlBarPlugin *plugin, gpointer data)
 	g_autofree gchar *tgt_chip = NULL;
 	g_autofree gchar *status = NULL;
 	gchar rev[16];
-	guint src_rev, out_rev, filter_rev;
+	guint src_rev, out_rev, filter_rev, focus_seq;
+	gint focus_pane;
 	gboolean busy, auto_on, help, have_curl;
 	TrPicker picker;
 	BarTranslateEngine engine;
@@ -1439,6 +1446,8 @@ tr_panel(GowlBarPlugin *plugin, gpointer data)
 	src_rev    = td->src_rev;
 	out_rev    = td->out_rev;
 	filter_rev = td->filter_rev;
+	focus_pane = td->focus_pane;
+	focus_seq  = td->focus_seq;
 	busy       = td->busy || bar_ai_is_busy(td->ai);
 	auto_on    = td->auto_on;
 	help       = td->help;
@@ -1526,6 +1535,11 @@ tr_panel(GowlBarPlugin *plugin, gpointer data)
 	g_snprintf(rev, sizeof(rev), "%u", src_rev);
 	gowl_bar_panel_item_set_prop(item, GOWL_BAR_ENTRY_PROP_REVISION, rev);
 	gowl_bar_panel_item_set_height(item, 120);
+	if (focus_pane == 1) {
+		g_snprintf(rev, sizeof(rev), "%u", focus_seq);
+		gowl_bar_panel_item_set_prop(item, GOWL_BAR_PANEL_PROP_FOCUS,
+		                             rev);
+	}
 
 	/* The translation is a field too, not a label: it can be read
 	   with a cursor, corrected before copying, and selected. */
@@ -1538,6 +1552,11 @@ tr_panel(GowlBarPlugin *plugin, gpointer data)
 	g_snprintf(rev, sizeof(rev), "%u", out_rev);
 	gowl_bar_panel_item_set_prop(item, GOWL_BAR_ENTRY_PROP_REVISION, rev);
 	gowl_bar_panel_item_set_height(item, 120);
+	if (focus_pane == 2) {
+		g_snprintf(rev, sizeof(rev), "%u", focus_seq);
+		gowl_bar_panel_item_set_prop(item, GOWL_BAR_PANEL_PROP_FOCUS,
+		                             rev);
+	}
 
 	/* Status: engine, size, and what is going on. */
 	status = g_strdup_printf("%s \xc2\xb7 %ld characters \xc2\xb7 %s",
@@ -1929,12 +1948,13 @@ tr_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
 		return TRUE;
 	case XKB_KEY_1:
 	case XKB_KEY_2:
-		/* A plugin cannot move the panel's keyboard focus yet; say
-		   how to get there instead of closing the panel. */
+		/* Ask the host to move the keyboard: a new token on the
+		   chosen pane, obeyed on the rebuild that follows. */
 		g_mutex_lock(&td->lock);
-		tr_set_str(&td->note, "Tab and Shift+Tab move between the "
-		           "panes.");
+		td->focus_pane = (keysym == XKB_KEY_1) ? 1 : 2;
+		td->focus_seq++;
 		g_mutex_unlock(&td->lock);
+		gowl_bar_plugin_request_panel_refresh(plugin);
 		return TRUE;
 	default:
 		break;

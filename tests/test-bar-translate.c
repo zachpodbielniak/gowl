@@ -1155,10 +1155,37 @@ test_widget_picker_and_keys(void)
 		GOWL_KEY_MOD_CTRL | GOWL_KEY_MOD_ALT, 1));
 	g_assert_false(gowl_bar_plugin_panel_key(h.plugin, XKB_KEY_l,
 		GOWL_KEY_MOD_LOGO, 1));
-	/* Ctrl+1 is claimed (not closing the panel) with a pointer to Tab. */
-	g_assert_true(gowl_bar_plugin_panel_key(h.plugin, XKB_KEY_1,
-	                                        GOWL_KEY_MOD_CTRL, 1));
-	g_assert_true(panel_says(&h, "Tab and Shift+Tab"));
+	/* Ctrl+2 / Ctrl+1 ask the host to move the keyboard to a pane: a
+	   NEW focus token on that pane each time (the host obeys a token
+	   only when it changes). */
+	{
+		g_autoptr(GowlBarPanel) p1 = NULL;
+		g_autoptr(GowlBarPanel) p2 = NULL;
+		g_autofree gchar *tok = NULL;
+
+		g_assert_true(gowl_bar_plugin_panel_key(h.plugin, XKB_KEY_2,
+		                                        GOWL_KEY_MOD_CTRL, 1));
+		p1 = bar_harness_panel(&h);
+		g_assert_nonnull(gowl_bar_panel_item_get_prop(
+			gowl_bar_panel_find(p1, "translation"),
+			GOWL_BAR_PANEL_PROP_FOCUS));
+		g_assert_null(gowl_bar_panel_item_get_prop(
+			gowl_bar_panel_find(p1, "source"),
+			GOWL_BAR_PANEL_PROP_FOCUS));
+		tok = g_strdup(gowl_bar_panel_item_get_prop(
+			gowl_bar_panel_find(p1, "translation"),
+			GOWL_BAR_PANEL_PROP_FOCUS));
+
+		g_assert_true(gowl_bar_plugin_panel_key(h.plugin, XKB_KEY_1,
+		                                        GOWL_KEY_MOD_CTRL, 1));
+		p2 = bar_harness_panel(&h);
+		g_assert_nonnull(gowl_bar_panel_item_get_prop(
+			gowl_bar_panel_find(p2, "source"),
+			GOWL_BAR_PANEL_PROP_FOCUS));
+		g_assert_cmpstr(gowl_bar_panel_item_get_prop(
+			gowl_bar_panel_find(p2, "source"),
+			GOWL_BAR_PANEL_PROP_FOCUS), !=, tok);
+	}
 
 	bar_harness_down(&h);
 }

@@ -4856,8 +4856,16 @@ offer_plugin:
 
 		if (bar_guard_call_key(self, item->plugin, keysym, modifiers,
 		                       self->panel.focus_item, &claimed)
-		    && claimed)
+		    && claimed) {
+			/* Rebuilt now rather than at the next tick: a key
+			   that changed what the panel shows -- or asked for
+			   the keyboard to move -- should be seen at once. */
+			if (self->panel.item != NULL) {
+				bar_panel_rebuild(self);
+				bar_redraw_all(self);
+			}
 			return TRUE;
+		}
 	}
 
 	/*

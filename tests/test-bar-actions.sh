@@ -86,7 +86,7 @@ for f in modules/bar/bar-plugins-*.c; do
 
 	# Ids the action handler answers.
 	handled=$(grep -ohE \
-		'(g_strcmp0|g_str_has_prefix)\(item_id, *"[^"]*"' "$f" \
+		'(g_strcmp0|strcmp|g_str_has_prefix|[a-z_0-9]*id_arg)\(item_id, *"[^"]*"' "$f" \
 		| sed 's/.*item_id, *"\([^"]*\)".*/\1/' \
 		| sed 's/%.*//' | sort -u)
 

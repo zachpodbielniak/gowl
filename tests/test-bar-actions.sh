@@ -38,9 +38,22 @@ for f in modules/bar/bar-plugins-*.c; do
 	# add_hero is deliberately absent: its second argument is an ICON,
 	# not an id, and a hero carries no action.  Including it reported
 	# every glyph in the tree as an unhandled control.
-	emitted=$( { grep -ohE \
-		'gowl_bar_panel_add_(toggle|buttons|slider|row)\(panel, *"[^"]+"' "$f" \
-		| sed 's/.*panel, *"\([^"]*\)".*/\1/'
+	#
+	# The file is read flattened, so a call whose arguments wrap onto
+	# the next line still counts.  ENTRY and CANVAS items carry ids too
+	# (their handlers are panel_text and the canvas click).  And a local
+	# wrapper macro whose first parameter is the id --
+	#   #define NS_ENTRY(id_, ...) gowl_bar_panel_add_entry(panel, id_ ...
+	# -- is followed to its call sites.
+	macros=$(tr '\n' ' ' < "$f" \
+		| grep -oE '#define [A-Z_]+\(id_[^)]*\)[^#]*gowl_bar_panel_add_[a-z_]+\( *panel, *id_' \
+		| sed 's/#define \([A-Z_]*\)(.*/\1/' | sort -u)
+	emitted=$( { tr '\n' ' ' < "$f" | grep -oE \
+		'gowl_bar_panel_add_(toggle|buttons|slider|row|entry|canvas)\([[:space:]]*panel,[[:space:]]*"[^"]+"' \
+		| sed 's/.*panel,[[:space:]]*"\([^"]*\)".*/\1/'
+	    for m in $macros; do
+		grep -ohE "$m\\( *\"[^\"]+\"" "$f" | sed 's/.*( *"\([^"]*\)".*/\1/'
+	    done
 	    # An id can also be attached after the fact, which is how a
 	    # control built by a shared helper gets named.  Only count it
 	    # when the item's KIND actually emits a hit rect: a calendar

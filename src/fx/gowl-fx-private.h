@@ -633,6 +633,7 @@ gboolean gowl_fx_egl_enter (GowlFxGl *self, GowlFxEglSave *save);
 void     gowl_fx_egl_leave (GowlFxEglSave *save);
 GLuint   gowl_fx_link_program (const gchar *vert_src, const gchar *frag_src);
 void     gowl_fx_draw_screen_quad (GLint a_pos, GLint a_uv);
+void     gowl_fx_draw_quad_uv (GLint a_pos, GLint a_uv, const gfloat uv[8]);
 gboolean gowl_fx_texture_alloc (GowlFxTexture *tex, gint width, gint height);
 
 G_END_DECLS

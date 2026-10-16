@@ -647,6 +647,29 @@ void gowl_compositor_set_backdrop_style (GowlCompositor    *self,
                                          GowlBackdropStyle  style);
 
 /**
+ * gowl_compositor_backdrop_changed:
+ * @self: a #GowlCompositor
+ * @monitor: (nullable): the output whose background changed, or %NULL
+ *   for all of them
+ *
+ * Tells the backdrop effects that what is behind the windows on
+ * @monitor is no longer what they captured.
+ *
+ * For a wallpaper provider to call when it shows a different picture.
+ * The effects cannot notice on their own: they keep one capture of the
+ * background per output, because capturing is a full scene render, and
+ * nothing about the windows or the output changed.  Without this a new
+ * wallpaper showed everywhere except through the glass, which kept the
+ * old one until a restart.
+ *
+ * Bumps the monitor's backdrop serial at once and re-places every window
+ * from an idle, which is what makes each effect look at its cache again.
+ * Cheap to call more than once: the re-place is coalesced.
+ */
+void gowl_compositor_backdrop_changed (GowlCompositor *self,
+                                       GowlMonitor    *monitor);
+
+/**
  * gowl_compositor_cycle_backdrop_style:
  * @self: a #GowlCompositor
  * @direction: 1 forwards, -1 backwards

@@ -154,6 +154,8 @@ typedef struct {
 	GowlFxTexture  sharp;
 	GowlFxTexture  soft;
 	guint32        tags;      /* what was showing when it was taken */
+	/* the size, rotation and wallpaper it was taken under */
+	GowlFxCaptureKey key;
 	gint           width, height;
 	guint64        serial;    /* which capture this is */
 	gint           frost;     /* what it was frosted with */
@@ -465,6 +467,7 @@ glass_build_source(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 	/* A new capture, so every window's render is redone -- and only
 	 * then, which is what the serial is for. */
 	src->serial = ++mod->serial;
+	gowl_fx_capture_key_take(&src->key, m);
 	return TRUE;
 }
 
@@ -487,8 +490,7 @@ glass_ensure_source(GowlModuleLiquidGlass *mod, GowlCompositor *self,
 	stale = src->sharp.tex == 0
 	        || src->soft.tex == 0
 	        || src->tags != m->tagset[m->seltags]
-	        || src->width != m->wlr_output->width
-	        || src->height != m->wlr_output->height
+	        || !gowl_fx_capture_key_matches(&src->key, m)
 	        || src->frost != mod->style.frost
 	        || src->frost_passes != mod->style.frost_passes;
 

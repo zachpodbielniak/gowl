@@ -66,7 +66,7 @@ sheet_swapchain_init(GowlFxSheet *sheet)
 	format.modifiers = &modifier;
 
 	sheet->swapchain = wlr_swapchain_create(sheet->compositor->allocator,
-	                                        output->width, output->height,
+	                                        sheet->width, sheet->height,
 	                                        &format);
 	if (sheet->swapchain == NULL) {
 		/* Some drivers refuse the output's render format for an
@@ -76,7 +76,7 @@ sheet_swapchain_init(GowlFxSheet *sheet)
 		                                : DRM_FORMAT_XRGB8888;
 		sheet->swapchain = wlr_swapchain_create(
 			sheet->compositor->allocator,
-			output->width, output->height, &format);
+			sheet->width, sheet->height, &format);
 	}
 	return sheet->swapchain != NULL;
 }
@@ -132,8 +132,19 @@ gowl_fx_sheet_new(GowlCompositor   *compositor,
 	sheet->compositor = compositor;
 	sheet->monitor    = monitor;
 	sheet->is_filter  = (flags & GOWL_FX_SHEET_FILTER) != 0;
-	sheet->width      = monitor->wlr_output->width;
-	sheet->height     = monitor->wlr_output->height;
+	/*
+	 * UPRIGHT, the size gowl_fx_capture() stores at: the sheet is a
+	 * scene buffer in layout coordinates, and the output turns it on the
+	 * way out like everything else in the scene.  The mode's own width
+	 * and height are the panel's orientation, not the screen's, and a
+	 * sheet that size on a rotated output came out squeezed into the
+	 * other axis.
+	 */
+	gowl_fx_capture_size(monitor, 1, &sheet->width, &sheet->height);
+	if (sheet->width <= 0 || sheet->height <= 0) {
+		g_free(sheet);
+		return NULL;
+	}
 
 	if (!sheet_swapchain_init(sheet)) {
 		g_warning("fx: no off-screen buffers for %s; effects on that "
@@ -307,11 +318,49 @@ gowl_fx_sheet_free(GowlFxSheet *sheet)
 	g_free(sheet);
 }
 
+/*
+ * Follow the output if it was turned or re-moded under a sheet that is
+ * still up.  The tube and the magnifier keep theirs for as long as they
+ * are on, so the size they were made at is not a size they can keep.
+ * The old swapchain goes only once a new one exists; a buffer the scene
+ * still shows holds its own lock and outlives it.
+ */
+static void
+sheet_follow_output(GowlFxSheet *sheet)
+{
+	struct wlr_swapchain *old;
+	gint                  width, height, was_w, was_h;
+
+	if (sheet->monitor == NULL || sheet->swapchain == NULL)
+		return;
+
+	gowl_fx_capture_size(sheet->monitor, 1, &width, &height);
+	if (width <= 0 || height <= 0
+	    || (width == sheet->width && height == sheet->height))
+		return;
+
+	old   = sheet->swapchain;
+	was_w = sheet->width;
+	was_h = sheet->height;
+
+	sheet->swapchain = NULL;
+	sheet->width     = width;
+	sheet->height    = height;
+	if (!sheet_swapchain_init(sheet)) {
+		sheet->swapchain = old;
+		sheet->width     = was_w;
+		sheet->height    = was_h;
+		return;
+	}
+	g_clear_pointer(&old, wlr_swapchain_destroy);
+}
+
 struct wlr_buffer *
 gowl_fx_sheet_acquire(GowlFxSheet *sheet)
 {
 	if (sheet == NULL || sheet->swapchain == NULL)
 		return NULL;
+	sheet_follow_output(sheet);
 	return wlr_swapchain_acquire(sheet->swapchain);
 }
 
@@ -351,6 +400,10 @@ gowl_fx_sheet_get_monitor(GowlFxSheet *sheet)
 void
 gowl_fx_sheet_get_size(GowlFxSheet *sheet, gint *width, gint *height)
 {
+	/* The size the NEXT acquire hands out, so a caller that asks first
+	 * and draws second agrees with the buffer it gets. */
+	if (sheet != NULL)
+		sheet_follow_output(sheet);
 	if (width != NULL)
 		*width = sheet != NULL ? sheet->width : 0;
 	if (height != NULL)

@@ -333,14 +333,6 @@ cube_run_start(GowlModuleCube *mod, GowlCompositor *self, GowlMonitor *m,
 	    || m->m.width <= 0 || m->m.height <= 0)
 		return NULL;
 
-	/*
-	 * A rotated output renders into a buffer whose axes are not the
-	 * screen's, and the cube's projection assumes they are.  Rather than
-	 * present a sideways desktop, sit the rotation out.
-	 */
-	if (m->wlr_output->transform != WL_OUTPUT_TRANSFORM_NORMAL)
-		return NULL;
-
 	run = g_new0(GowlCubeRun, 1);
 	run->monitor = m;
 

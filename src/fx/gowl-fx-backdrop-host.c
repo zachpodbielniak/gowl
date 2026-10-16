@@ -83,6 +83,8 @@ typedef struct {
 	GowlFxTexture  sharp;
 	GowlFxTexture  soft;
 	guint32        tags;
+	/* the size, rotation and wallpaper it was taken under */
+	GowlFxCaptureKey key;
 	gint           width, height;
 	guint64        serial;
 	gint           frost;
@@ -318,6 +320,7 @@ host_build_source(GowlBackdropHost *host, GowlCompositor *self,
 	src->frost        = cm->frost;
 	src->frost_passes = cm->frost_passes;
 	src->serial       = ++host->serial;
+	gowl_fx_capture_key_take(&src->key, m);
 	return TRUE;
 }
 
@@ -347,8 +350,7 @@ host_ensure_source(GowlBackdropHost *host, GowlCompositor *self,
 	stale = src->sharp.tex == 0
 	        || src->soft.tex == 0
 	        || src->tags != m->tagset[m->seltags]
-	        || src->width != m->wlr_output->width
-	        || src->height != m->wlr_output->height
+	        || !gowl_fx_capture_key_matches(&src->key, m)
 	        || src->frost != cm->frost
 	        || src->frost_passes != cm->frost_passes;
 

@@ -1392,6 +1392,15 @@ gowl_monitor_set_transform(
 			self->w = self->m;
 		}
 		gowl_compositor_arrange(self->compositor, self);
+
+		/*
+		 * The backdrop effects hold a capture of this output's
+		 * background taken at the old rotation.  A half turn keeps the
+		 * size, so nothing about the layout tells them -- and arrange
+		 * only re-places windows that moved, which after a half turn
+		 * on a single panel is none of them.
+		 */
+		gowl_compositor_backdrop_changed(self->compositor, self);
 	}
 
 	return ok;

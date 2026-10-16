@@ -396,13 +396,18 @@ gowl_fx_gl_free(GowlFxGl *self)
 
 /* ── Textures ────────────────────────────────────────────────────── */
 
+/*
+ * The full-target quad with the texture coordinates of its four corners
+ * given, in the same order as the vertices: (-1,-1), (1,-1), (-1,1),
+ * (1,1).  The plain screen quad is this with the identity mapping; a
+ * capture taken off a rotated output is this with the mapping that
+ * turns it the right way up.
+ */
 void
-gowl_fx_draw_screen_quad(GLint a_pos, GLint a_uv)
+gowl_fx_draw_quad_uv(GLint a_pos, GLint a_uv, const gfloat uv[8])
 {
 	static const gfloat pos[8] = { -1.0f, -1.0f,  1.0f, -1.0f,
 	                               -1.0f,  1.0f,  1.0f,  1.0f };
-	static const gfloat uv[8]  = {  0.0f,  0.0f,  1.0f,  0.0f,
-	                                0.0f,  1.0f,  1.0f,  1.0f };
 
 	if (a_pos < 0)
 		return;
@@ -417,6 +422,15 @@ gowl_fx_draw_screen_quad(GLint a_pos, GLint a_uv)
 	glDisableVertexAttribArray((GLuint)a_pos);
 	if (a_uv >= 0)
 		glDisableVertexAttribArray((GLuint)a_uv);
+}
+
+void
+gowl_fx_draw_screen_quad(GLint a_pos, GLint a_uv)
+{
+	static const gfloat uv[8] = { 0.0f, 0.0f,  1.0f, 0.0f,
+	                              0.0f, 1.0f,  1.0f, 1.0f };
+
+	gowl_fx_draw_quad_uv(a_pos, a_uv, uv);
 }
 
 /* Allocate or resize an owned texture.  Caller must hold the context. */
@@ -490,13 +504,18 @@ gowl_fx_texture_set_filter(GowlFxGl *self, const GowlFxTexture *tex,
 	gowl_fx_egl_leave(&save);
 }
 
-gboolean
-gowl_fx_texture_store(
+/*
+ * The copy behind both store functions: @source into @dst at
+ * @width x @height, sampling the corners of @source named by @uv.
+ */
+static gboolean
+texture_store_uv(
 	GowlFxGl           *self,
 	GowlFxTexture      *dst,
 	struct wlr_texture *source,
 	gint                width,
-	gint                height
+	gint                height,
+	const gfloat        uv[8]
 ){
 	GowlFxEglSave save;
 	struct wlr_gles2_texture_attribs attribs;
@@ -540,7 +559,7 @@ gowl_fx_texture_store(
 			glTexParameteri(attribs.target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 			glTexParameteri(attribs.target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 			glUniform1i(prog->u_tex, 0);
-			gowl_fx_draw_screen_quad(prog->a_pos, prog->a_uv);
+			gowl_fx_draw_quad_uv(prog->a_pos, prog->a_uv, uv);
 			glBindTexture(attribs.target, 0);
 			glUseProgram(0);
 			ok = TRUE;
@@ -558,6 +577,35 @@ gowl_fx_texture_store(
 	if (!ok)
 		gowl_fx_texture_drop(self, dst);
 	return ok;
+}
+
+gboolean
+gowl_fx_texture_store(
+	GowlFxGl           *self,
+	GowlFxTexture      *dst,
+	struct wlr_texture *source,
+	gint                width,
+	gint                height
+){
+	static const gfloat identity[8] = { 0.0f, 0.0f,  1.0f, 0.0f,
+	                                    0.0f, 1.0f,  1.0f, 1.0f };
+
+	return texture_store_uv(self, dst, source, width, height, identity);
+}
+
+gboolean
+gowl_fx_texture_store_upright(
+	GowlFxGl           *self,
+	GowlFxTexture      *dst,
+	struct wlr_texture *source,
+	gint                width,
+	gint                height,
+	gint                transform
+){
+	gfloat uv[8];
+
+	gowl_fx_upright_uv(transform, uv);
+	return texture_store_uv(self, dst, source, width, height, uv);
 }
 
 /* One separable half-pass: src -> dst at dst's size, offset by u_step. */

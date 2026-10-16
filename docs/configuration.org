@@ -403,8 +403,7 @@ are unchanged with both loaded.
 
 The plugin borrows the compositor's GLES2 context. Under any other
 renderer (Vulkan, pixman) it logs a message, stands down, and tag
-switches stay instant; nothing else changes. A rotated output also sits
-rotations out, because the projection assumes screen-aligned axes.
+switches stay instant; nothing else changes. A rotated output works the same as any other: every capture the effect layer takes is stored upright (see /Rotated outputs/ in =docs/modules.org=).
 
 | Property               | Type   | Default               | Description |
 |------------------------+--------+-----------------------+-------------|

@@ -314,11 +314,6 @@ expo_open(GowlModuleExpo *mod, GowlCompositor *self, GowlMonitor *m,
 	    || m->m.width <= 0 || m->m.height <= 0)
 		return NULL;
 
-	/* Same reason as the cube: the projection assumes screen-aligned
-	 * axes, and a rotated output does not have them. */
-	if (m->wlr_output->transform != WL_OUTPUT_TRANSFORM_NORMAL)
-		return NULL;
-
 	run = expo_run_for(mod, m);
 	if (run != NULL)
 		return run;

@@ -1601,6 +1601,31 @@ GLES2 renderer already owns. Under any other renderer =gowl_fx_gl_new()=
 returns %NULL, every module treats that as "sit this session out", and
 the desktop behaves exactly as it did without them.
 
+** Rotated outputs
+:PROPERTIES:
+:CUSTOM_ID: fx-rotated-outputs
+:END:
+
+Every capture the effect layer takes is stored *upright*: in the output's logical orientation, at its transformed device size. =gowl_fx_capture()= renders the scene into the output's own buffer, where wlroots has already applied the output transform --- a 1080x1920 panel turned on its side renders 1080x1920 pixels with the desktop lying on its side in them --- and undoes that transform once on the way into the stored texture, asking wlroots (=wlr_fbox_transform()= with the inverted transform) the same question wlr_scene asked when it placed the picture, so the two cannot disagree.
+
+That is the one contract every reader relies on:
+
+- A point in layout coordinates maps onto a capture by the monitor box alone, one axis at a time (=gowl_backdrop_plan()=, =gowl_blur_backdrop_box()=, the magnifier's centre). No reader needs to know the output is rotated.
+- Anything built from a capture and handed back to the scene --- a backdrop buffer in a window's tree, a sheet --- is upright too, because the scene rotates it again on the way out. =gowl_fx_capture_size()= is the size to allocate; =wlr_output->width= and =->height= are the mode's, in the panel's own orientation, and are the wrong size on a quarter-turned output. Sheets follow the output: one still up when the panel is turned is reallocated at the new size on its next acquire.
+- =gowl_fx_capture_to_buffer()= is the exception: it hands back the output's own buffer, *not* upright.
+
+Before this, every backdrop (blur, glass, water, rain, fizz, leaves, snow and the backdrop host) showed the wallpaper 90 degrees off and stretched inside translucent windows on a rotated output, the tube and the magnifier drew sideways, and the cube, expo and switcher refused to run at all. =tests/test-capture-transform.c= renders a rotated headless output through wlr_scene for all eight transforms and checks the stored capture's corners.
+
+*** When a cached capture goes stale
+
+The backdrop effects capture each output's background once and keep it, because a capture is a full scene render. A =GowlFxCaptureKey= records what it was taken under and =gowl_fx_capture_key_matches()= says when to capture again:
+
+- the upright size (a mode change, or a quarter turn);
+- the transform itself, because a half turn keeps the size --- keying on =wlr_output->width/height= alone kept the picture taken at the old rotation;
+- the monitor's =backdrop_serial=, which only =gowl_compositor_backdrop_changed()= bumps.
+
+The serial is for what nothing else can see: the wallpaper. A wallpaper provider calls =gowl_compositor_backdrop_changed()= whenever it shows a different picture (=modules/wallpaper= does, on a new node and when a fade settles), and the compositor calls it itself on a transform or size change. It bumps the serial at once and re-places every window from an idle, which is what makes the static backdrops (blur, glass) look at their caches again; the animated ones would notice on their next tick anyway.
+
 ** Taking an output, and giving it back
 
 An effect that replaces the whole screen --- the cube's rotation, the

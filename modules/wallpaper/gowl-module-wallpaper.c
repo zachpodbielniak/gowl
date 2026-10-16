@@ -182,6 +182,7 @@ typedef struct {
 	gchar   *shown_path;      /* what scene_buf is currently showing */
 	gchar   *shown_mode;      /* and in which scaling mode */
 	guint32  shown_tags;      /* the tag set it was chosen for */
+	guint    shown_generation;   /* self->generation it was built at */
 
 	/*
 	 * A cross-fade in flight.  The incoming picture is a second node
@@ -220,6 +221,11 @@ struct _GowlModuleWallpaper {
 	 * switch, re-reading a file from disk to show a picture it decoded a
 	 * moment ago. */
 	GHashTable *decoded;     /* path -> GdkPixbuf* */
+
+	/* Bumped by every explicit `path' or `mode' handed to configure,
+	 * so that setting the SAME path again re-reads the file rather than
+	 * being taken for "already showing that". */
+	guint       generation;
 
 	/* ::renderer-replaced, connected at startup. */
 	gulong      renderer_replaced_id;
@@ -790,6 +796,7 @@ wallpaper_on_output(
 	    && state->scale == mon_scale
 	    && g_strcmp0(state->shown_path, path) == 0
 	    && g_strcmp0(state->shown_mode, mode) == 0
+	    && state->shown_generation == self->generation
 	    && state->fading_buf == NULL) {
 		/* ... but it may have MOVED.  Unplugging one display shifts
 		 * every display to its right, and the picture is the same
@@ -806,6 +813,7 @@ wallpaper_on_output(
 			state->y = mon_y;
 			g_debug("wallpaper: monitor %s moved to +%d+%d",
 			        mon_name, mon_x, mon_y);
+			gowl_compositor_backdrop_changed(compositor, monitor);
 		}
 		return;
 	}
@@ -838,9 +846,18 @@ wallpaper_on_output(
 	state->shown_path = g_strdup(path);
 	state->shown_mode = g_strdup(mode);
 	state->shown_tags = monitor->tagset[monitor->seltags];
+	state->shown_generation = self->generation;
 
 	g_hash_table_insert(self->per_monitor,
 	                    g_strdup(mon_name), (gpointer)state);
+
+	/*
+	 * A different picture behind the windows.  The backdrop effects
+	 * (blur, glass, rain, ...) keep their own capture of it and cannot
+	 * see this happen: say so, or every translucent window goes on
+	 * showing the old wallpaper.
+	 */
+	gowl_compositor_backdrop_changed(compositor, monitor);
 
 	g_debug("wallpaper: set for monitor %s (%dx%d+%d+%d @%.2f, mode=%s, "
 	        "path=%s)", mon_name, mon_w, mon_h, mon_x, mon_y, mon_scale,
@@ -892,6 +909,9 @@ wallpaper_frame(GowlSceneEffect *effect, GowlCompositor *comp,
 		wlr_scene_buffer_set_opacity(state->fading_buf, (gfloat)t);
 		if (t >= 1.0) {
 			wallpaper_settle(state);
+			/* Only now: a backdrop captured mid-fade would hold a
+			 * blend of the two pictures. */
+			gowl_compositor_backdrop_changed(comp, monitor);
 			return FALSE;
 		}
 		return TRUE;   /* keep the frames coming while it fades */
@@ -933,6 +953,7 @@ wallpaper_frame(GowlSceneEffect *effect, GowlCompositor *comp,
 	if (fade_ms <= 0) {
 		wlr_scene_buffer_set_opacity(state->fading_buf, 1.0f);
 		wallpaper_settle(state);
+		gowl_compositor_backdrop_changed(comp, monitor);
 		return FALSE;
 	}
 
@@ -1109,11 +1130,21 @@ wallpaper_configure(GowlModule *mod, gpointer config)
 
 	settings = (GHashTable *)config;
 
-	/* Image path */
+	/*
+	 * Image path.  Handing one over is a request to SHOW it, so it is
+	 * read again even when it is the path already showing: that is how a
+	 * picture edited in place gets back onto the screen.  Without this
+	 * the decode cache kept the old pixels, and the "already showing
+	 * this path" check in wallpaper_on_output() then skipped the redraw
+	 * outright.
+	 */
 	val = (const gchar *)g_hash_table_lookup(settings, "path");
 	if (val != NULL) {
 		g_free(self->path);
 		self->path = expand_path(val);
+		if (self->decoded != NULL && self->path != NULL)
+			g_hash_table_remove(self->decoded, self->path);
+		self->generation++;
 	}
 
 	/* Scaling mode */
@@ -1121,6 +1152,7 @@ wallpaper_configure(GowlModule *mod, gpointer config)
 	if (val != NULL) {
 		g_free(self->mode);
 		self->mode = g_strdup(val);
+		self->generation++;
 	}
 
 	g_message("wallpaper: configured (path=%s, mode=%s)",

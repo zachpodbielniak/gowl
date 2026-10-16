@@ -23,11 +23,15 @@
 
 #include "core/gowl-core-private.h"
 
+#include <string.h>
+
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_buffer.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_scene.h>
+#include <wlr/util/box.h>
+#include <wlr/util/transform.h>
 
 typedef struct {
 	struct wlr_scene_node *node;
@@ -303,18 +307,36 @@ gowl_fx_capture(GowlFxGl       *self,
 	struct wlr_output_state state;
 	struct wlr_texture     *texture;
 	gboolean                ok = FALSE;
+	gint                    transform;
+	gint                    width, height;
 
 	if (self == NULL || out == NULL)
 		return FALSE;
 	if (!capture_state(compositor, monitor, &state))
 		return FALSE;
 
-	divisor = MAX(1, divisor);
+	/*
+	 * Stored UPRIGHT: in the output's logical orientation, at its
+	 * transformed size, whatever the panel's rotation.
+	 *
+	 * The buffer wlr_scene rendered into is the output's own, with the
+	 * output transform already applied -- a 1080x1920 panel turned on
+	 * its side renders 1080x1920 pixels with the desktop lying on its
+	 * side in them.  Everything that reads a capture works in layout
+	 * coordinates (a window frame, a crop, a magnifier centre) and
+	 * feeds the result back into the scene, which rotates it AGAIN on
+	 * the way out.  Handing those readers the raw buffer showed the
+	 * wallpaper 90 degrees off, and stretched, inside every translucent
+	 * window on a rotated screen.  Undoing the transform once, here,
+	 * puts every effect right at once.
+	 */
+	divisor   = MAX(1, divisor);
+	transform = (gint)monitor->wlr_output->transform;
+	gowl_fx_capture_size(monitor, divisor, &width, &height);
 	texture = wlr_texture_from_buffer(compositor->renderer, state.buffer);
 	if (texture != NULL) {
-		ok = gowl_fx_texture_store(self, out, texture,
-		                           MAX(1, state.buffer->width / divisor),
-		                           MAX(1, state.buffer->height / divisor));
+		ok = gowl_fx_texture_store_upright(self, out, texture,
+		                                   width, height, transform);
 		wlr_texture_destroy(texture);
 	}
 
@@ -344,4 +366,88 @@ gowl_fx_capture_to_buffer(GowlFxGl           *self,
 	wlr_output_state_finish(&state);
 	wlr_damage_ring_add_whole(&monitor->scene_output->damage_ring);
 	return *out != NULL;
+}
+
+/*
+ * The four corners of the quad, in the order gowl_fx_draw_quad_uv()
+ * draws them, mapped from the UPRIGHT picture to where wlr_scene put
+ * the same point in the output's buffer.
+ *
+ * wlr_scene places a logical box in the buffer with
+ * wlr_box_transform(box, invert(output transform), ...), so asking
+ * wlroots the same question here keeps the two in step by construction
+ * rather than by a table that could disagree with it.  A unit square
+ * stands in for both extents: every output transform is a combination
+ * of an axis swap and reflections, which normalised coordinates survive
+ * unchanged, so the logical size and the buffer size cancel.
+ */
+void
+gowl_fx_upright_uv(gint transform, gfloat uv[8])
+{
+	static const gdouble corner[4][2] = {
+		{ 0.0, 0.0 }, { 1.0, 0.0 }, { 0.0, 1.0 }, { 1.0, 1.0 },
+	};
+	enum wl_output_transform inv;
+	gint i;
+
+	inv = wlr_output_transform_invert(
+		(enum wl_output_transform)(transform & 7));
+
+	for (i = 0; i < 4; i++) {
+		struct wlr_fbox in  = { corner[i][0], corner[i][1], 0.0, 0.0 };
+		struct wlr_fbox got;
+
+		wlr_fbox_transform(&got, &in, inv, 1.0, 1.0);
+		uv[i * 2]     = (gfloat)got.x;
+		uv[i * 2 + 1] = (gfloat)got.y;
+	}
+}
+
+void
+gowl_fx_capture_size(GowlMonitor *monitor, gint divisor,
+                     gint *width, gint *height)
+{
+	gint w = 0, h = 0;
+
+	if (monitor != NULL && monitor->wlr_output != NULL)
+		wlr_output_transformed_resolution(monitor->wlr_output, &w, &h);
+
+	divisor = MAX(1, divisor);
+	if (width != NULL)
+		*width = w > 0 ? MAX(1, w / divisor) : 0;
+	if (height != NULL)
+		*height = h > 0 ? MAX(1, h / divisor) : 0;
+}
+
+void
+gowl_fx_capture_key_take(GowlFxCaptureKey *key, GowlMonitor *monitor)
+{
+	if (key == NULL)
+		return;
+
+	memset(key, 0, sizeof(*key));
+	if (monitor == NULL || monitor->wlr_output == NULL)
+		return;
+
+	gowl_fx_capture_size(monitor, 1, &key->width, &key->height);
+	key->transform = (gint)monitor->wlr_output->transform;
+	key->serial    = monitor->backdrop_serial;
+	key->valid     = TRUE;
+}
+
+gboolean
+gowl_fx_capture_key_matches(const GowlFxCaptureKey *key,
+                            GowlMonitor            *monitor)
+{
+	GowlFxCaptureKey now;
+
+	if (key == NULL || !key->valid)
+		return FALSE;
+
+	gowl_fx_capture_key_take(&now, monitor);
+	return now.valid
+	       && now.width     == key->width
+	       && now.height    == key->height
+	       && now.transform == key->transform
+	       && now.serial    == key->serial;
 }

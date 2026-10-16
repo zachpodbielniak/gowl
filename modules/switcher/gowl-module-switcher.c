@@ -272,8 +272,6 @@ switcher_open(GowlModuleSwitcher *mod, GowlCompositor *self, guint hold_mask)
 	if (m == NULL || m->wlr_output == NULL || m->scene_output == NULL
 	    || m->m.width <= 0 || m->m.height <= 0)
 		return NULL;
-	if (m->wlr_output->transform != WL_OUTPUT_TRANSFORM_NORMAL)
-		return NULL;
 
 	all_tags = gowl_config_get_switcher_all_tags(self->config);
 

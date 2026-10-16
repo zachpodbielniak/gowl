@@ -634,6 +634,11 @@ gowl_compositor_finalize(GObject *object)
 			wl_event_source_remove(self->gpu_reset_idle);
 			self->gpu_reset_idle = NULL;
 		}
+		/* Nor does a re-place for a wallpaper that changed. */
+		if (self->backdrop_idle != NULL) {
+			wl_event_source_remove(self->backdrop_idle);
+			self->backdrop_idle = NULL;
+		}
 		wl_display_destroy_clients(self->wl_display);
 
 #ifdef GOWL_HAVE_XWAYLAND
@@ -3023,6 +3028,53 @@ compositor_replace_backdrops(GowlCompositor *self)
 
 	for (l = self->clients; l != NULL; l = l->next)
 		gowl_effects_client_placed(self, (GowlClient *)l->data);
+}
+
+/*
+ * The deferred half of gowl_compositor_backdrop_changed().
+ *
+ * Not done in place because the background changes from inside other
+ * dispatches -- the wallpaper's fade settles in its own frame hook, and
+ * a new wallpaper arrives in the middle of an output reconfiguration --
+ * and re-placing a window can make an effect capture the whole output.
+ * The idle is the first moment nothing else is half done.
+ */
+static void
+compositor_backdrop_idle(void *data)
+{
+	GowlCompositor *self = data;
+	GList *l;
+
+	self->backdrop_idle = NULL;
+	compositor_replace_backdrops(self);
+
+	/* An output with nothing moving on it has stopped asking for frames,
+	 * and the new backdrops have to reach the glass. */
+	for (l = self->monitors; l != NULL; l = l->next) {
+		GowlMonitor *m = (GowlMonitor *)l->data;
+
+		if (m->wlr_output != NULL && m->in_layout)
+			wlr_output_schedule_frame(m->wlr_output);
+	}
+}
+
+void
+gowl_compositor_backdrop_changed(GowlCompositor *self, GowlMonitor *monitor)
+{
+	GList *l;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (monitor != NULL) {
+		monitor->backdrop_serial++;
+	} else {
+		for (l = self->monitors; l != NULL; l = l->next)
+			((GowlMonitor *)l->data)->backdrop_serial++;
+	}
+
+	if (self->event_loop != NULL && self->backdrop_idle == NULL)
+		self->backdrop_idle = wl_event_loop_add_idle(
+			self->event_loop, compositor_backdrop_idle, self);
 }
 
 /*
@@ -9005,6 +9057,9 @@ gowl_compositor_notify_output_resized(GowlCompositor    *self,
 
 		backdrops_sync(self);
 		recording_indicator_sync(self);
+		/* A reshaped output's background was captured at the old
+		 * shape. */
+		gowl_compositor_backdrop_changed(self, m);
 
 		if (self->module_mgr != NULL) {
 			gowl_module_manager_dispatch_wallpaper_output(

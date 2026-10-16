@@ -144,6 +144,45 @@ gboolean gowl_fx_texture_store (GowlFxGl           *self,
                                 gint                height);
 
 /**
+ * gowl_fx_texture_store_upright:
+ * @self: the context
+ * @dst: (inout): the texture to fill; reused when already the right size
+ * @source: a wlroots texture holding an output's own buffer
+ * @width: width to store at, in the UPRIGHT orientation
+ * @height: height to store at, likewise
+ * @transform: the output's transform (an `enum wl_output_transform')
+ *
+ * As gowl_fx_texture_store(), but undoes @transform on the way: what is
+ * stored is the picture the way the user sees it, row 0 at the top of
+ * the screen, so a 1080x1920 panel turned sideways stores 1920x1080.
+ *
+ * @width and @height are the stored size and already swapped for a
+ * quarter turn; gowl_fx_capture_size() gives them for an output.
+ *
+ * Returns: %TRUE on success.
+ */
+gboolean gowl_fx_texture_store_upright (GowlFxGl           *self,
+                                        GowlFxTexture      *dst,
+                                        struct wlr_texture *source,
+                                        gint                width,
+                                        gint                height,
+                                        gint                transform);
+
+/**
+ * gowl_fx_upright_uv:
+ * @transform: an output transform (an `enum wl_output_transform')
+ * @uv: (out caller-allocates) (array fixed-size=8): receives four
+ *   (u, v) pairs
+ *
+ * Where in an output's buffer each corner of the upright picture is,
+ * for the quad corners in order top-left, top-right, bottom-left,
+ * bottom-right (v = 0 is the top row).  The identity for
+ * WL_OUTPUT_TRANSFORM_NORMAL.  Exposed for the tests; effects should
+ * not need it, because gowl_fx_capture() already applies it.
+ */
+void gowl_fx_upright_uv (gint transform, gfloat uv[8]);
+
+/**
  * gowl_fx_texture_drop:
  * @self: the context
  * @tex: (inout): the texture to release; safe when already empty
@@ -2293,6 +2332,13 @@ gboolean gowl_fx_client_is_pinned (GowlClient *client);
  *
  * Renders @monitor's scene AS IT CURRENTLY STANDS into @out.
  *
+ * @out is UPRIGHT: in the output's logical orientation, at
+ * gowl_fx_capture_size() --- the device resolution with the axes swapped
+ * on a quarter-turned output.  So a point in layout coordinates maps
+ * onto it by the monitor box alone, one axis at a time, whatever the
+ * output's transform; and a picture made from it can be handed back to
+ * the scene, which applies the transform itself.
+ *
  * The caller decides what "as it currently stands" means by setting scene
  * visibility with #GowlFxVis first, and must restore it afterwards.  The
  * render is transient: nothing is presented, so a capture may show a
@@ -2319,6 +2365,10 @@ gboolean gowl_fx_capture (GowlFxGl       *self,
  *
  * Returns: %TRUE on success; unlock @out with wlr_buffer_unlock().
  *
+ * Unlike gowl_fx_capture(), the buffer is NOT upright: it is the
+ * output's own, with the output transform already applied, so on a
+ * rotated output its axes are not the screen's.
+ *
  * The returned buffer belongs to the OUTPUT'S SWAPCHAIN.  Present it and
  * drop it within the frame; never store it.
  *
@@ -2338,6 +2388,76 @@ gboolean gowl_fx_capture_to_buffer (GowlFxGl           *self,
                                     GowlCompositor     *compositor,
                                     GowlMonitor        *monitor,
                                     struct wlr_buffer **out);
+
+/**
+ * gowl_fx_capture_size:
+ * @monitor: the output
+ * @divisor: 1 for full size
+ * @width: (out) (optional): the width gowl_fx_capture() stores at
+ * @height: (out) (optional): likewise
+ *
+ * The size of an upright capture of @monitor: its device resolution with
+ * the output transform applied, divided by @divisor.  Both are 0 for a
+ * monitor with no output.
+ *
+ * NOT wlr_output->width and ->height, which are the mode's and do not
+ * change when the panel is turned --- the reason a cache keyed on them
+ * kept a picture taken at the old rotation.
+ */
+void gowl_fx_capture_size (GowlMonitor *monitor,
+                           gint         divisor,
+                           gint        *width,
+                           gint        *height);
+
+/**
+ * GowlFxCaptureKey:
+ * @width: upright capture width at the time
+ * @height: likewise
+ * @transform: the output transform at the time
+ * @serial: the monitor's backdrop serial at the time
+ * @valid: %FALSE for a key never taken, which matches nothing
+ *
+ * What a cached capture of an output's BACKGROUND was taken under, so a
+ * cache can tell when it no longer shows what is there.
+ *
+ * Every backdrop effect keeps one picture of the wallpaper per output
+ * and rebuilds it only when this stops matching, because capturing per
+ * frame is a full scene render.  Three things invalidate it, and a cache
+ * that misses any one of them shows the wrong picture with nothing
+ * logged: the output's size, its rotation (a half turn keeps the size),
+ * and the wallpaper itself, which only the wallpaper provider knows has
+ * changed --- it says so with gowl_compositor_backdrop_changed(), which
+ * bumps the serial.
+ */
+typedef struct {
+	gint     width;
+	gint     height;
+	gint     transform;
+	guint64  serial;
+	gboolean valid;
+} GowlFxCaptureKey;
+
+/**
+ * gowl_fx_capture_key_take:
+ * @key: (out caller-allocates): the key to fill
+ * @monitor: the output just captured
+ *
+ * Records what a capture of @monitor was taken under.  Call it beside
+ * the capture.
+ */
+void gowl_fx_capture_key_take (GowlFxCaptureKey *key,
+                               GowlMonitor      *monitor);
+
+/**
+ * gowl_fx_capture_key_matches:
+ * @key: a key from gowl_fx_capture_key_take()
+ * @monitor: the output
+ *
+ * Returns: %TRUE while a capture taken under @key still shows what is
+ *   behind the windows on @monitor; %FALSE means capture again.
+ */
+gboolean gowl_fx_capture_key_matches (const GowlFxCaptureKey *key,
+                                      GowlMonitor            *monitor);
 
 /* ── Sheet ───────────────────────────────────────────────────────── */
 
@@ -2468,7 +2588,10 @@ GowlMonitor *gowl_fx_sheet_get_monitor (GowlFxSheet *sheet);
  * @height: (out) (optional): buffer height in pixels
  *
  * The size of the buffers gowl_fx_sheet_acquire() hands out, which is the
- * output's pixel size and not its logical size.
+ * output's pixel size and not its logical size --- UPRIGHT, so on a
+ * quarter-turned output it is the mode's size with the axes swapped
+ * (gowl_fx_capture_size()).  It follows the output: a sheet still up
+ * when the panel is turned is reallocated at the new size.
  */
 void gowl_fx_sheet_get_size (GowlFxSheet *sheet, gint *width, gint *height);
 

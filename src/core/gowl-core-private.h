@@ -504,6 +504,9 @@ struct _GowlCompositor {
 	struct wl_listener gpu_reset;
 	/* The renderer swap a lost renderer schedules; see on_gpu_reset(). */
 	struct wl_event_source *gpu_reset_idle;
+	/* Re-places every window once the background changed; see
+	 * gowl_compositor_backdrop_changed(). */
+	struct wl_event_source *backdrop_idle;
 	struct wl_listener new_idle_inhibitor;
 	struct wl_listener new_session_lock;
 	struct wl_listener request_activate;
@@ -886,6 +889,16 @@ struct _GowlMonitor {
 	 * screen-sized picture at coordinates that describe nothing.
 	 */
 	gboolean in_layout;
+
+	/*
+	 * Bumped whenever what is BEHIND the windows on this output changes
+	 * in a way the scene cannot tell an effect about: a new wallpaper,
+	 * a fade between two finishing.  Every backdrop effect keeps one
+	 * capture of the background per output (a capture is a full scene
+	 * render), and compares this to the serial it was taken under ---
+	 * see GowlFxCaptureKey and gowl_compositor_backdrop_changed().
+	 */
+	guint64  backdrop_serial;
 
 	guint32  tagset[2];
 	guint    seltags;    /* index into tagset[] (0 or 1) */

@@ -137,6 +137,10 @@ typedef struct {
 	 * the only other thing that makes a backdrop stale is its size or
 	 * its tags. */
 	guint64            kernel_gen;
+	/* The output's rotation and wallpaper this was captured under.  The
+	 * size alone misses a half turn, which keeps it, and a new
+	 * wallpaper, which nothing but the wallpaper module knows about. */
+	GowlFxCaptureKey   key;
 } GowlBlurBackdrop;
 
 /*
@@ -414,14 +418,26 @@ static struct wlr_buffer *
 blur_acquire_buffer(GowlCompositor *self, GowlMonitor *m, GowlBlurBackdrop *bd)
 {
 	struct wlr_output *output = m->wlr_output;
+	gint               width, height;
 
 	if (output == NULL || self->allocator == NULL)
+		return NULL;
+
+	/*
+	 * UPRIGHT, like the capture it holds: the backdrop node is a scene
+	 * buffer in the window's tree, in layout coordinates, and the output
+	 * rotates it on the way out.  Sizing this from output->width and
+	 * ->height -- the mode's, in the panel's own orientation -- squeezed
+	 * a sideways picture into it on a rotated screen.
+	 */
+	gowl_fx_capture_size(m, 1, &width, &height);
+	if (width <= 0 || height <= 0)
 		return NULL;
 
 	/* Reallocate when the output changed shape under us; a stale
 	 * swapchain hands back a buffer of the wrong size. */
 	if (bd->swapchain != NULL
-	    && (bd->width != output->width || bd->height != output->height))
+	    && (bd->width != width || bd->height != height))
 		g_clear_pointer(&bd->swapchain, wlr_swapchain_destroy);
 
 	if (bd->swapchain == NULL) {
@@ -435,11 +451,11 @@ blur_acquire_buffer(GowlCompositor *self, GowlMonitor *m, GowlBlurBackdrop *bd)
 		format.modifiers = &modifier;
 
 		bd->swapchain = wlr_swapchain_create(self->allocator,
-			output->width, output->height, &format);
+			width, height, &format);
 		if (bd->swapchain == NULL) {
 			format.format = DRM_FORMAT_XRGB8888;
 			bd->swapchain = wlr_swapchain_create(self->allocator,
-				output->width, output->height, &format);
+				width, height, &format);
 		}
 		if (bd->swapchain == NULL)
 			return NULL;
@@ -558,6 +574,7 @@ blur_build_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m,
 	 * and only then, which is what the serial is for. */
 	bd->serial = ++mod->serial;
 	bd->kernel_gen = mod->kernel_gen;
+	gowl_fx_capture_key_take(&bd->key, m);
 	return TRUE;
 }
 
@@ -566,6 +583,7 @@ blur_ensure_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m)
 {
 	GowlBlurBackdrop *bd = blur_backdrop_for(mod, m);
 	gboolean stale;
+	gint     out_w, out_h;
 
 	if (bd == NULL) {
 		bd = g_new0(GowlBlurBackdrop, 1);
@@ -574,11 +592,12 @@ blur_ensure_backdrop(GowlModuleBlur *mod, GowlCompositor *self, GowlMonitor *m)
 	}
 
 	blur_read_kernel(mod, self->config);
+	gowl_fx_capture_size(m, 1, &out_w, &out_h);
 	stale = gowl_blur_backdrop_stale(bd->buffer != NULL,
 	                                 bd->tags, m->tagset[m->seltags],
 	                                 bd->width, bd->height,
-	                                 m->wlr_output->width,
-	                                 m->wlr_output->height)
+	                                 out_w, out_h)
+	        || !gowl_fx_capture_key_matches(&bd->key, m)
 	        || bd->kernel_gen != mod->kernel_gen;
 
 	if (stale && !blur_build_backdrop(mod, self, m, bd))

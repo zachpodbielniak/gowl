@@ -231,13 +231,15 @@ gchar **bar_meeting_expand_template (const gchar         *tmpl,
  * @inputs: (array zero-terminated=1): the recordings
  * @output: the mixed file to write
  *
- * The ffmpeg call that mixes several recordings into one 16 kHz mono
- * WAV, which is what whisper wants.  `normalize=0' keeps each input at
- * its own level: amix's default divides every input by the input
- * count, which turns a quiet remote voice inaudible.
+ * The ffmpeg call that mixes the recordings into one 16 kHz mono WAV,
+ * which is what whisper wants.  `normalize=0' keeps each input at its
+ * own level: amix's default divides every input by the input count,
+ * which turns a quiet remote voice inaudible.  A single input is only
+ * decoded and resampled (an Ogg recording still needs a WAV for
+ * whisper).
  *
- * Returns: (transfer full) (nullable): the argv, or %NULL for fewer
- *   than two inputs (one recording needs no mixing)
+ * Returns: (transfer full) (nullable): the argv, or %NULL with no
+ *   inputs or no @output
  */
 gchar **bar_meeting_mix_argv (const gchar         *ffmpeg,
                               const gchar * const *inputs,
@@ -275,14 +277,16 @@ gchar *bar_meeting_session_name (GDateTime *when);
  * bar_meeting_recording_filename:
  * @index: the source's position, from zero
  * @source: the source name
+ * @ext: (nullable): the extension without its dot; `ogg' when %NULL
  *
- * `01-<sanitised name>.wav'.  The index keeps two sources whose names
+ * `01-<sanitised name>.ogg'.  The index keeps two sources whose names
  * sanitise alike from writing the same file.
  *
  * Returns: (transfer full): a file name with no directory part
  */
 gchar *bar_meeting_recording_filename (guint        index,
-                                       const gchar *source);
+                                       const gchar *source,
+                                       const gchar *ext);
 
 /**
  * bar_meeting_notes_filename:

@@ -315,20 +315,31 @@ test_template_tokenisation(void)
 }
 
 /*
- * The mix.  Catches: running ffmpeg for one input, amix's default
+ * The mix.  Catches: amix run on a single input, amix's default
  * normalisation (which makes a quiet remote voice inaudible), and a
  * missing resample to the 16 kHz mono whisper wants.
  */
 static void
 test_mix_argv(void)
 {
-	const gchar *one[] = { "/s/a.wav", NULL };
+	const gchar *one[] = { "/s/a.ogg", NULL };
 	const gchar *three[] = { "/s/a.wav", "/s/b c.wav", "/s/d.wav", NULL };
 	g_auto(GStrv) argv = NULL;
 	g_autofree gchar *joined = NULL;
 	guint n;
+	g_auto(GStrv) solo = NULL;
+	g_autofree gchar *solo_joined = NULL;
 
-	g_assert_null(bar_meeting_mix_argv(NULL, one, "/s/m.wav"));
+	/* One recording is decoded and resampled, not mixed: an Ogg still
+	   has to become the WAV whisper reads. */
+	g_assert_null(bar_meeting_mix_argv(NULL, NULL, "/s/m.wav"));
+	g_assert_null(bar_meeting_mix_argv(NULL, one, NULL));
+	solo = bar_meeting_mix_argv(NULL, one, "/s/m.wav");
+	solo_joined = g_strjoinv("|", solo);
+	g_assert_cmpstr(solo[0], ==, "ffmpeg");
+	g_assert_null(strstr(solo_joined, "amix"));
+	g_assert_nonnull(strstr(solo_joined, "|-i|/s/a.ogg|"));
+	g_assert_true(g_str_has_suffix(solo_joined, "|-ar|16000|-ac|1|/s/m.wav"));
 
 	argv = bar_meeting_mix_argv("/usr/bin/ffmpeg", three, "/s/m.wav");
 	n = g_strv_length(argv);
@@ -369,7 +380,7 @@ test_names(void)
 	plain   = bar_meeting_notes_filename(when, NULL, "org");
 	titled  = bar_meeting_notes_filename(when, "Q4 Planning", "org");
 	md      = bar_meeting_notes_filename(when, "", "md");
-	rec     = bar_meeting_recording_filename(0, "alsa_input.x/../y");
+	rec     = bar_meeting_recording_filename(0, "alsa_input.x/../y", NULL);
 	title   = bar_meeting_default_title(when);
 
 	g_assert_cmpstr(c1, ==, "01:05");
@@ -382,7 +393,10 @@ test_names(void)
 	g_assert_cmpstr(plain, ==, "2026-10-16_14-05_meeting.org");
 	g_assert_cmpstr(titled, ==, "2026-10-16_14-05_meeting_q4_planning.org");
 	g_assert_cmpstr(md, ==, "2026-10-16_14-05_meeting.md");
-	g_assert_cmpstr(rec, ==, "01-alsa_input_x____y.wav");
+	g_assert_cmpstr(rec, ==, "01-alsa_input_x____y.ogg");
+	g_free(rec);
+	rec = bar_meeting_recording_filename(1, "mic", "wav");
+	g_assert_cmpstr(rec, ==, "02-mic.wav");
 	g_assert_cmpstr(title, ==, "Meeting 2026-10-16 14:05");
 }
 
@@ -753,6 +767,32 @@ assert_recorders_reaped(Rig *r, gboolean expect_int)
 	return n;
 }
 
+/* Files in every session directory whose name ends in @suffix. */
+static guint
+count_in_sessions(Rig *r, const gchar *suffix)
+{
+	GDir *top, *sess;
+	const gchar *sname, *fname;
+	guint n = 0;
+
+	top = g_dir_open(r->rec_dir, 0, NULL);
+	g_assert_nonnull(top);
+	while ((sname = g_dir_read_name(top)) != NULL) {
+		g_autofree gchar *sdir = g_build_filename(r->rec_dir, sname,
+		                                          NULL);
+
+		sess = g_dir_open(sdir, 0, NULL);
+		if (sess == NULL)
+			continue;
+		while ((fname = g_dir_read_name(sess)) != NULL)
+			if (g_str_has_suffix(fname, suffix))
+				n++;
+		g_dir_close(sess);
+	}
+	g_dir_close(top);
+	return n;
+}
+
 static gchar *
 only_file_in(const gchar *dir)
 {
@@ -854,6 +894,10 @@ test_widget_local_end_to_end(void)
 	g_assert_cmpint(gowl_bar_plugin_get_color(r.h.plugin), ==,
 	                GOWL_BAR_COLOR_SUBTEXT);
 
+	/* The WAV made for whisper is gone; the recordings are not. */
+	g_assert_cmpuint(count_in_sessions(&r, "mixed.wav"), ==, 0);
+	g_assert_cmpuint(count_in_sessions(&r, ".ogg"), ==, 2);
+
 	/* Two sources were mixed, without normalisation. */
 	g_assert_true(g_file_get_contents(r.argfile, &mixargs, NULL, NULL));
 	g_assert_nonnull(strstr(mixargs, "amix=inputs=2:"));
@@ -894,6 +938,130 @@ test_widget_local_end_to_end(void)
 	for (i = 0; i < 3; i++)
 		bar_harness_poll(&r.h);
 	g_assert_true(label_is(&r, NULL));
+	rig_down(&r);
+}
+
+/*
+ * The default shape: a recorder that writes raw PCM to stdout (its
+ * template does not name {output}) piped into ffmpeg, which writes the
+ * Opus file.  Catches: the pipe not connected (an empty .ogg), the
+ * encoder killed instead of finishing on end-of-input (a truncated
+ * file), the encoder left running, the bitrate setting ignored or let
+ * into the argument list as extra words, and the transient WAV kept.
+ */
+static void
+test_widget_piped_opus(void)
+{
+	Rig r;
+	g_autofree gchar *pcm = NULL;
+	g_autofree gchar *ff = NULL;
+	g_autofree gchar *ffbody = NULL;
+	g_autofree gchar *pcmbody = NULL;
+	g_autofree gchar *args = NULL;
+	g_autofree gchar *rc = NULL;
+	g_autofree gchar *pids = NULL;
+	gint round;
+
+	if (!rig_up(&r, NULL))
+		return;
+	pids = bar_harness_path(&r.h, "pids");
+	g_assert_cmpint(g_mkdir_with_parents(pids, 0700), ==, 0);
+
+	/* PCM to stdout until SIGINT; the pid file is named by source. */
+	pcmbody = g_strdup_printf(
+		"pf='%s'/$(echo \"$2\" | tr -c 'A-Za-z0-9\\n' _).pid\n"
+		"echo $$ > \"$pf\"\n"
+		"trap 'echo stopped-by-int >> \"$pf\"; exit 0' INT\n"
+		"while :; do head -c 1600 /dev/zero; sleep 0.02; done", pids);
+	pcm = bar_harness_script(&r.h, "fake-pcm", pcmbody);
+	rc = g_strdup_printf("'%s' --target {source} --raw -", pcm);
+	bar_harness_set(&r.h, "record-command", rc);
+
+	/* One ffmpeg for both jobs: as the encoder (pipe:0) it copies its
+	   input to the file and notes that the input ENDED; as the mixer
+	   it writes a WAV. */
+	ffbody = g_strdup_printf(
+		"printf '%%s\\n' \"$@\" >> '%s'; echo --- >> '%s'\n"
+		"out=\"${@: -1}\"\n"
+		"case \" $* \" in\n"
+		"  *' pipe:0 '*) cat > \"$out\"; echo eof > \"$out.enc\" ;;\n"
+		"  *) printf 'RIFF' > \"$out\"; head -c 2000 /dev/zero >> \"$out\" ;;\n"
+		"esac", r.argfile, r.argfile);
+	ff = bar_harness_script(&r.h, "fake-ffmpeg-enc", ffbody);
+	bar_harness_set(&r.h, "ffmpeg", ff);
+
+	for (round = 0; round < 2; round++) {
+		g_clear_pointer(&args, g_free);
+		g_unlink(r.argfile);
+		/* A bitrate is honoured; one with words in it is not. */
+		bar_harness_set(&r.h, "audio-bitrate",
+		                round == 0 ? "24k" : "24k -f null");
+
+		click(&r, BTN_LEFT);
+		g_usleep(300 * 1000);
+		bar_harness_poll(&r.h);
+		click(&r, BTN_LEFT);
+		g_assert_true(pump_until_toast(&r, "Meeting notes saved"));
+
+		g_assert_true(g_file_get_contents(r.argfile, &args, NULL,
+		                                  NULL));
+		g_assert_nonnull(strstr(args, "-i\npipe:0\n-c:a\nlibopus\n"));
+		g_assert_nonnull(strstr(args, round == 0 ? "-b:a\n24k\n"
+		                                         : "-b:a\n32k\n"));
+		g_assert_null(strstr(args, "null"));
+		g_assert_nonnull(strstr(args, "-application\nvoip\n"));
+		bar_harness_toasts_clear(&r.h);
+		/* A session directory is named to the second. */
+		g_usleep(1100 * 1000);
+	}
+
+	/* Two meetings, two sources each: four Opus files that each
+	   received the recorder's bytes and saw their input end. */
+	g_assert_cmpuint(count_in_sessions(&r, ".ogg"), ==, 4);
+	g_assert_cmpuint(count_in_sessions(&r, ".ogg.enc"), ==, 4);
+	g_assert_cmpuint(count_in_sessions(&r, ".wav"), ==, 0);
+	{
+		GDir *top = g_dir_open(r.rec_dir, 0, NULL);
+		const gchar *sname;
+
+		while ((sname = g_dir_read_name(top)) != NULL) {
+			g_autofree gchar *sdir = g_build_filename(r.rec_dir,
+			                                          sname, NULL);
+			GDir *sess = g_dir_open(sdir, 0, NULL);
+			const gchar *f;
+
+			while ((f = g_dir_read_name(sess)) != NULL) {
+				g_autofree gchar *fp = NULL;
+				GStatBuf st;
+
+				if (!g_str_has_suffix(f, ".ogg"))
+					continue;
+				fp = g_build_filename(sdir, f, NULL);
+				g_assert_cmpint(g_stat(fp, &st), ==, 0);
+				g_assert_cmpint(st.st_size, >, 1024);
+			}
+			g_dir_close(sess);
+		}
+		g_dir_close(top);
+	}
+	/* Every recorder was asked with SIGINT, and is gone. */
+	{
+		GDir *d = g_dir_open(pids, 0, NULL);
+		const gchar *f;
+		guint n = 0;
+
+		while ((f = g_dir_read_name(d)) != NULL) {
+			g_autofree gchar *fp = g_build_filename(pids, f, NULL);
+			g_autofree gchar *text = NULL;
+
+			g_assert_true(g_file_get_contents(fp, &text, NULL, NULL));
+			g_assert_nonnull(strstr(text, "stopped-by-int"));
+			g_assert_cmpint(kill((pid_t)atoi(text), 0), ==, -1);
+			n++;
+		}
+		g_dir_close(d);
+		g_assert_cmpuint(n, ==, 2);
+	}
 	rig_down(&r);
 }
 
@@ -1090,6 +1258,9 @@ test_widget_cmacs_route(void)
 	bar_harness_set(&r.h, "emacsctl", ctl);
 	bar_harness_set(&r.h, "backend", "cmacs");
 	bar_harness_set(&r.h, "destination", "both");
+	/* No open-command of the user's: under cmacs the notes open in
+	   cmacs. */
+	gowl_bar_plugin_set_setting(r.h.plugin, "open-command", NULL);
 
 	click(&r, BTN_LEFT);
 	g_usleep(100 * 1000);
@@ -1103,7 +1274,9 @@ test_widget_cmacs_route(void)
 	g_assert_true(g_str_has_prefix(form,
 		"(cmacs-gowl-bar-meeting-finish \"meeting-notes\" \"mn-"));
 	g_assert_nonnull(strstr(form, "(list \"01-"));
-	g_assert_nonnull(strstr(form, ".wav\" \"02-alsa_input_"));
+	/* Opus recordings now: no uncompressed audio is kept. */
+	g_assert_nonnull(strstr(form, ".ogg\" \"02-alsa_input_"));
+	g_assert_null(strstr(form, ".wav"));
 	g_assert_true(g_str_has_suffix(form, " nil \"both\")"));
 	g_assert_nonnull(strstr(form, r.rec_dir));
 	g_assert_cmpuint(assert_recorders_reaped(&r, TRUE), ==, 2);
@@ -1131,12 +1304,62 @@ test_widget_cmacs_route(void)
 	g_assert_true(label_is(&r, NULL));
 	g_assert_true(bar_harness_toasted(&r.h,
 		"Meeting notes filed|/notes/00_inbox/x.org"));
+	/* A click on the toast visits the notes in cmacs, over emacsctl,
+	   never xdg-open. */
+	g_assert_true(bar_harness_toasted(&r.h, "eval '(cmacs-gowl-bar-"
+		"meeting-open \"/notes/00_inbox/x.org\")'"));
+	g_assert_false(bar_harness_toasted(&r.h, "xdg-open"));
 	toasts = r.h.host->toasts->len;
 
 	/* The same push again (every reconfigure re-delivers): nothing. */
 	bar_harness_set(&r.h, "color-idle", "subtext");
 	bar_harness_poll(&r.h);
 	g_assert_cmpuint(r.h.host->toasts->len, ==, toasts);
+	rig_down(&r);
+}
+
+/*
+ * Opening notes in cmacs.  Catches: a quote or a space in the path
+ * ending the Elisp string or splitting the command line, a newline
+ * reaching emacsctl at all, and a user's own open-command overridden.
+ */
+static void
+test_widget_open_in_cmacs(void)
+{
+	Rig r;
+	const gchar *nasty = "/notes/it's \"q4\" \\ plan.org";
+	g_autofree gchar *id = g_strdup_printf("open:%s", nasty);
+	g_auto(GStrv) argv = NULL;
+	const gchar *cmd = NULL;
+	guint i;
+
+	if (!rig_up(&r, NULL))
+		return;
+	bar_harness_set(&r.h, "backend", "cmacs");
+	bar_harness_set(&r.h, "emacsctl", "/opt/my ctl/emacsctl");
+	gowl_bar_plugin_set_setting(r.h.plugin, "open-command", NULL);
+
+	gowl_bar_plugin_panel_action(r.h.plugin, id, 0, 0, 1);
+	for (i = 0; i < r.h.host->spawned->len; i++)
+		if (strstr(g_ptr_array_index(r.h.host->spawned, i), "eval"))
+			cmd = g_ptr_array_index(r.h.host->spawned, i);
+	g_assert_nonnull(cmd);
+	g_assert_true(g_shell_parse_argv(cmd, NULL, &argv, NULL));
+	g_assert_cmpuint(g_strv_length(argv), ==, 3);
+	g_assert_cmpstr(argv[0], ==, "/opt/my ctl/emacsctl");
+	g_assert_cmpstr(argv[1], ==, "eval");
+	g_assert_cmpstr(argv[2], ==, "(cmacs-gowl-bar-meeting-open "
+		"\"/notes/it's \\\"q4\\\" \\\\ plan.org\")");
+
+	/* A newline cannot be said safely to emacsctl: xdg-open instead. */
+	gowl_bar_plugin_panel_action(r.h.plugin, "open:/notes/a\nb.org", 0,
+	                             0, 1);
+	g_assert_true(bar_harness_spawned(&r.h, "xdg-open '/notes/a\nb.org'"));
+
+	/* The user's own command wins under cmacs too. */
+	bar_harness_set(&r.h, "open-command", "my-viewer");
+	gowl_bar_plugin_panel_action(r.h.plugin, "open:/notes/x.org", 0, 0, 1);
+	g_assert_true(bar_harness_spawned(&r.h, "my-viewer '/notes/x.org'"));
 	rig_down(&r);
 }
 
@@ -1264,6 +1487,8 @@ main(int argc, char *argv[])
 	                test_widget_idle_and_colours);
 	g_test_add_func("/meeting-notes/widget/local-end-to-end",
 	                test_widget_local_end_to_end);
+	g_test_add_func("/meeting-notes/widget/piped-opus",
+	                test_widget_piped_opus);
 	g_test_add_func("/meeting-notes/widget/markdown-no-summary",
 	                test_widget_markdown_without_summary);
 	g_test_add_func("/meeting-notes/widget/early-death",
@@ -1278,6 +1503,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/meeting-notes/widget/cmacs-route",
 	                test_widget_cmacs_route);
 	g_test_add_func("/meeting-notes/widget/panel", test_widget_panel);
+	g_test_add_func("/meeting-notes/widget/open-in-cmacs",
+	                test_widget_open_in_cmacs);
 
 	return g_test_run();
 }

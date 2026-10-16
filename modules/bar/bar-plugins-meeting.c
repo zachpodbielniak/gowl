@@ -23,7 +23,11 @@
  * A microphone in the bar.  Left-click starts recording every selected
  * source --- by default what the speakers play (the default sink's
  * monitor) and the default microphone --- each into its own 16 kHz mono
- * WAV in a session directory.  Left-click again stops them, and the
+ * recording in a session directory: Opus in Ogg by default, piped
+ * from the recorder through ffmpeg, because a WAV of an hour-long
+ * meeting is over 100 MB of audio nobody listens to twice.  Whisper
+ * still wants a WAV; that one is made when it is needed and deleted
+ * as soon as whisper is done (see `Audio files' below).  Left-click again stops them, and the
  * meeting is processed by one of two backends:
  *
  *   cmacs   `emacsctl eval (cmacs-gowl-bar-meeting-finish ...)' hands
@@ -58,6 +62,19 @@
  *     that finishes late drop its result instead of resurrecting a
  *     cancelled meeting.
  *
+ * Audio files:
+ *
+ *   - A recorder template that names {output} writes the file itself
+ *     (the WAV-only path, or ffmpeg's pulse input straight to Ogg).
+ *     One that does NOT name it writes raw s16le 16 kHz mono PCM to
+ *     stdout, and is piped into `encode-command' (ffmpeg -> Opus), two
+ *     processes per source.  Stopping signals the recorder only; the
+ *     encoder finishes the file when its input ends.
+ *   - The local backend mixes or decodes the recordings into one
+ *     transient `mixed.wav' for whisper-cli and deletes it when the
+ *     transcription is over, whatever its outcome.  The cmacs backend
+ *     never makes one: cmacs-transcribe makes and deletes its own.
+ *
  * Speaker separation (diarisation) and recognising voices are
  * deliberately not here yet; see docs/bar-widgets/meeting-notes.org.
  */
@@ -71,6 +88,7 @@
 #include <unistd.h>
 
 #include <glib/gstdio.h>
+#include <glib-unix.h>
 #include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
@@ -84,11 +102,27 @@
 #define MEET_ICON_FILE       "\xef\x85\x9c"   /* nf-fa-file_text */
 #define MEET_ICON_MODEL      "\xef\x83\xab"   /* nf-fa-lightbulb */
 
+/* Raw PCM to stdout: no {output}, so it is piped into the encoder. */
 #define MEET_DEFAULT_RECORD \
 	"pw-record --target {source} --rate 16000 --channels 1 " \
+	"--format s16 --raw -"
+/* pw-record and no ffmpeg: the old uncompressed WAV, said once. */
+#define MEET_WAV_RECORD \
+	"pw-record --target {source} --rate 16000 --channels 1 " \
 	"--format s16 {output}"
+/* ffmpeg and no pw-record: ffmpeg records and encodes in one process. */
 #define MEET_FALLBACK_RECORD \
-	"ffmpeg -f pulse -i {source} -ac 1 -ar 16000 {output}"
+	"{ffmpeg} -hide_banner -loglevel error -nostdin -f pulse " \
+	"-i {source} -ac 1 -ar 16000 {codec} {output}"
+#define MEET_FALLBACK_RECORD_WAV \
+	"{ffmpeg} -hide_banner -loglevel error -nostdin -f pulse " \
+	"-i {source} -ac 1 -ar 16000 {output}"
+/* Raw PCM on stdin to Opus.  `voip' tunes the codec for speech. */
+#define MEET_DEFAULT_ENCODE \
+	"{ffmpeg} -hide_banner -loglevel error -y -f s16le -ar 16000 " \
+	"-ac 1 -i pipe:0 -c:a libopus -b:a {bitrate} -application voip " \
+	"{output}"
+#define MEET_DEFAULT_BITRATE "32k"
 #define MEET_DEFAULT_TRANSCRIBE \
 	"whisper-cli -m {model} -l {language} -t {threads} -otxt " \
 	"-of {output_base} {input}"
@@ -97,8 +131,11 @@
 #define MEET_DEFAULT_OUTPUT     "~/Documents/notes/00_inbox"
 #define MEET_DEFAULT_MODELS     "~/.local/share/cmacs/whisper-models"
 
-/* A WAV header is 44 bytes; a file no bigger than that holds no audio. */
+/* A WAV header is 44 bytes; a file no bigger than that holds no audio.
+   An Ogg file's headers are a few hundred, and under a kilobyte of
+   Opus at 32 kb/s is a quarter of a second: nothing worth transcribing. */
 #define MEET_WAV_HEADER      (44)
+#define MEET_OGG_EMPTY       (1024)
 #define MEET_TRANSCRIPT_MAX  (8 * 1024 * 1024)
 #define MEET_PROMPT_MAX      (400 * 1024)
 #define MEET_TITLE_MAX       (120)
@@ -111,14 +148,22 @@
  * State
  * ---------------------------------------------------------------- */
 
+/*
+ * One source.  Piped, it is two processes: the recorder (pid) writing
+ * PCM into the encoder (enc_pid).  Each pid is zeroed once collected,
+ * and `running' lasts until both are --- a pid of 0 must never reach
+ * kill(), which would signal our whole process group.
+ */
 typedef struct {
 	GPid      pid;
+	GPid      enc_pid;    /* 0: not piped, or collected */
 	gchar    *source;
 	gchar    *label;
 	gchar    *path;
 	gchar    *log;
 	gboolean  running;
 	gboolean  early;      /* died before it was asked to stop */
+	gboolean  lost;       /* `early' was raised; never twice */
 } MeetRecorder;
 
 /* A child we stopped wanting --- a cancelled recorder, a transcriber
@@ -156,6 +201,7 @@ typedef struct {
 	GPid             child;          /* ffmpeg or whisper-cli */
 	gchar           *child_log;
 	gchar           *mixed;          /* the WAV whisper is given */
+	gboolean         mixed_transient; /* we made it: delete after */
 	gchar           *transcript_base;
 	gchar           *transcript;
 	gchar           *summary_note;
@@ -284,9 +330,13 @@ meet_destroy(GowlBarPlugin *plugin, gpointer data)
 		MeetRecorder *r = g_ptr_array_index(md->recorders, i);
 
 		if (r->running) {
-			kill((pid_t)r->pid, SIGINT);
-			if (meet_reap(r->pid, NULL))
-				r->running = FALSE;
+			if (r->pid > 0) {
+				kill((pid_t)r->pid, SIGINT);
+				meet_reap(r->pid, NULL);
+			}
+			if (r->enc_pid > 0)
+				meet_reap(r->enc_pid, NULL);
+			r->running = FALSE;
 		}
 	}
 	if (md->child > 0) {
@@ -419,7 +469,17 @@ meet_fail_locked(MeetData *md, const gchar *message)
 	                  message, NULL);
 }
 
-/* The command a click on a saved file runs, or NULL. */
+/*
+ * The command a click on a saved file runs, or NULL.
+ *
+ * Under cmacs the notes open in cmacs itself, in the frame the user is
+ * working in, over emacsctl: `cmacs-gowl-bar-meeting-open' only
+ * schedules the visit and returns, because an eval runs on the
+ * compositor's thread.  An `open-command' the user set wins either way.
+ * Standalone, xdg-open.  The path is quoted for Elisp inside the form
+ * and the form for the command line, so neither a quote nor a space in
+ * it can split or end anything.
+ */
 static gchar *
 meet_open_command(GowlBarPlugin *plugin, const gchar *path)
 {
@@ -427,6 +487,20 @@ meet_open_command(GowlBarPlugin *plugin, const gchar *path)
 
 	if (path == NULL || path[0] == '\0')
 		return NULL;
+	if (gowl_bar_plugin_get_setting(plugin, "open-command") == NULL &&
+	    meet_backend_is_cmacs(plugin) && g_utf8_validate(path, -1, NULL) &&
+	    strpbrk(path, "\n\r") == NULL) {
+		g_autofree gchar *lisp = bar_elisp_quote(path);
+		g_autofree gchar *form = NULL;
+		g_autofree gchar *ctl = NULL;
+
+		form = g_strdup_printf("(cmacs-gowl-bar-meeting-open \"%s\")",
+		                       lisp);
+		ctl = g_shell_quote(meet_setting(plugin, "emacsctl",
+		                                 "emacsctl"));
+		quoted = g_shell_quote(form);
+		return g_strdup_printf("%s eval %s", ctl, quoted);
+	}
 	quoted = g_shell_quote(path);
 	return g_strdup_printf("%s %s",
 		meet_setting(plugin, "open-command", "xdg-open"), quoted);
@@ -459,13 +533,17 @@ meet_log_tail(const gchar *path)
 	return NULL;
 }
 
-/* Whether @path holds more than a WAV header.  Worker only. */
+/* Whether @path holds more than its container's headers.  Worker
+   only. */
 static gboolean
 meet_has_audio(const gchar *path)
 {
 	GStatBuf st;
 
-	return g_stat(path, &st) == 0 && st.st_size > MEET_WAV_HEADER;
+	if (g_stat(path, &st) != 0)
+		return FALSE;
+	return st.st_size > (g_str_has_suffix(path, ".wav")
+	                     ? MEET_WAV_HEADER : MEET_OGG_EMPTY);
 }
 
 /*
@@ -498,6 +576,72 @@ meet_spawn(gchar **argv, const gchar *log, GPid *pid, GError **error)
 	if (fd >= 0)
 		close(fd);
 	return ok;
+}
+
+/*
+ * Spawn @rec_argv with its stdout piped into @enc_argv's stdin, both
+ * logging into @log.  Worker only.  The encoder starts first so the
+ * recorder never writes into a pipe with nobody on the other end; the
+ * pipe's ends are close-on-exec, so neither child keeps the other's
+ * end open and the encoder sees end-of-file when the recorder exits.
+ */
+static gboolean
+meet_spawn_piped(gchar **rec_argv, gchar **enc_argv, const gchar *log,
+                 GPid *rec_pid, GPid *enc_pid, GError **error)
+{
+	gint fds[2] = { -1, -1 };
+	gint logfd;
+	gboolean ok;
+
+	*rec_pid = 0;
+	*enc_pid = 0;
+	logfd = g_open(log, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND |
+	               O_CLOEXEC, 0600);
+	if (logfd < 0) {
+		g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno),
+		            "cannot write %s: %s", log, g_strerror(errno));
+		return FALSE;
+	}
+	if (!g_unix_open_pipe(fds, FD_CLOEXEC, error)) {
+		close(logfd);
+		return FALSE;
+	}
+
+	ok = g_spawn_async_with_fds(NULL, enc_argv, NULL,
+	                            G_SPAWN_SEARCH_PATH |
+	                            G_SPAWN_DO_NOT_REAP_CHILD,
+	                            NULL, NULL, enc_pid, fds[0], logfd, logfd,
+	                            error);
+	if (ok)
+		ok = g_spawn_async_with_fds(NULL, rec_argv, NULL,
+		                            G_SPAWN_SEARCH_PATH |
+		                            G_SPAWN_DO_NOT_REAP_CHILD |
+		                            G_SPAWN_STDIN_FROM_DEV_NULL,
+		                            NULL, NULL, rec_pid, -1, fds[1],
+		                            logfd, error);
+	close(fds[0]);
+	close(fds[1]);
+	close(logfd);
+
+	if (!ok && *enc_pid > 0) {
+		/* No recorder: the encoder has just seen its input close and
+		   is exiting.  This is a worker, so it can wait for it. */
+		kill((pid_t)*enc_pid, SIGTERM);
+		waitpid((pid_t)*enc_pid, NULL, 0);
+		*enc_pid = 0;
+	}
+	return ok;
+}
+
+/* Signal a recorder's processes: the recorder, and the encoder too
+   when @both.  Collected pids are 0 and skipped. */
+static void
+meet_recorder_kill(MeetRecorder *r, gint sig, gboolean both)
+{
+	if (r->pid > 0)
+		kill((pid_t)r->pid, sig);
+	if (both && r->enc_pid > 0)
+		kill((pid_t)r->enc_pid, sig);
 }
 
 /* ----------------------------------------------------------------
@@ -791,6 +935,30 @@ meet_refresh_sources(GowlBarPlugin *plugin, MeetData *md)
 	g_strfreev(loaded);
 }
 
+/* @text with every @from replaced by @to. */
+static gchar *
+meet_replace(const gchar *text, const gchar *from, const gchar *to)
+{
+	g_auto(GStrv) parts = g_strsplit(text, from, -1);
+
+	return g_strjoinv(to, parts);
+}
+
+/* Whether @rate is a bitrate ffmpeg reads (`32k', `48000'): it lands
+   inside the recorder's argument list, so nothing else is let in. */
+static gboolean
+meet_bitrate_ok(const gchar *rate)
+{
+	const gchar *p;
+
+	if (rate == NULL || rate[0] == '\0' || strlen(rate) > 12)
+		return FALSE;
+	for (p = rate; *p != '\0'; p++)
+		if (!g_ascii_isalnum(*p) && *p != '.')
+			return FALSE;
+	return TRUE;
+}
+
 /* The program a command template runs, found on PATH, or NULL.
    Worker only: it walks PATH. */
 static gchar *
@@ -940,6 +1108,10 @@ typedef struct {
 	gchar    **labels;
 	gchar     *template;
 	gboolean   template_is_default;
+	gchar     *encode;       /* encode-command, or NULL for ours */
+	gchar     *ffmpeg;
+	gchar     *bitrate;
+	gboolean   wav;          /* audio-format: wav */
 	gchar     *recordings_dir;
 	gchar     *title;
 } MeetStartJob;
@@ -952,6 +1124,9 @@ meet_start_job_free(gpointer data)
 	g_strfreev(job->names);
 	g_strfreev(job->labels);
 	g_free(job->template);
+	g_free(job->encode);
+	g_free(job->ffmpeg);
+	g_free(job->bitrate);
 	g_free(job->recordings_dir);
 	g_free(job->title);
 	g_free(job);
@@ -972,9 +1147,16 @@ meet_start_work(GowlBarPlugin *plugin, gpointer user_data)
 	g_autofree gchar *session = NULL;
 	g_autofree gchar *session_dir = NULL;
 	g_autofree gchar *first_program = NULL;
+	g_autofree gchar *ffmpeg_path = NULL;
+	g_autofree gchar *codec = NULL;
 	GPtrArray *recorders;
 	GString *failures;
 	const gchar *tmpl;
+	const gchar *encode;
+	const gchar *ext;
+	gboolean piped;
+	gboolean wav_fallback = FALSE;
+	gboolean wav_file = FALSE;
 	guint i;
 
 	now = g_date_time_new_now_local();
@@ -998,39 +1180,83 @@ meet_start_work(GowlBarPlugin *plugin, gpointer user_data)
 		return;
 	}
 
-	/* pw-record when it is installed, ffmpeg's pulse input when it is
-	   not --- unless the user named a recorder, which is then theirs
-	   to get right. */
+	/*
+	 * Which recorder, and whether it is piped into an encoder.  A
+	 * template that names {output} writes the file itself; one that
+	 * does not writes raw PCM, which ffmpeg compresses.  With the
+	 * defaults: pw-record into ffmpeg when both are installed, ffmpeg's
+	 * pulse input alone without pw-record, and pw-record's own WAV
+	 * without ffmpeg (said once in a toast, since that is the big
+	 * file this is meant to avoid).  A user's recorder is theirs to
+	 * get right.
+	 */
+	ffmpeg_path = g_find_program_in_path(job->ffmpeg);
 	tmpl = job->template;
-	first_program = meet_template_program(tmpl);
-	if (first_program == NULL && job->template_is_default) {
-		g_autofree gchar *ff = g_find_program_in_path("ffmpeg");
-
-		if (ff != NULL)
-			tmpl = MEET_FALLBACK_RECORD;
+	if (job->template_is_default) {
+		first_program = meet_template_program(tmpl);
+		if (first_program == NULL && ffmpeg_path != NULL) {
+			tmpl = job->wav ? MEET_FALLBACK_RECORD_WAV
+			                : MEET_FALLBACK_RECORD;
+			wav_file = job->wav;
+		} else if (first_program != NULL &&
+		           (ffmpeg_path == NULL || job->wav)) {
+			tmpl = MEET_WAV_RECORD;
+			wav_file = TRUE;
+		}
+		wav_fallback = (first_program != NULL &&
+		                ffmpeg_path == NULL && !job->wav);
 	}
+	piped  = (strstr(tmpl, "{output}") == NULL);
+	encode = (job->encode != NULL) ? job->encode : MEET_DEFAULT_ENCODE;
+	/* The file is what the encoder or the recorder writes: Opus in Ogg
+	   unless the recording is a plain WAV. */
+	ext = (wav_file || (job->wav && job->encode == NULL && piped))
+		? "wav" : "ogg";
+	if (piped && job->wav && job->encode == NULL)
+		encode = "{ffmpeg} -hide_banner -loglevel error -y -f s16le "
+		         "-ar 16000 -ac 1 -i pipe:0 {output}";
+	codec = g_strdup_printf("-c:a libopus -b:a %s -application voip",
+	                        job->bitrate);
 
 	for (i = 0; job->names[i] != NULL; i++) {
 		g_autofree gchar *file = NULL;
 		g_autofree gchar *path = NULL;
 		g_autofree gchar *log = NULL;
+		g_autofree gchar *rec_tmpl = NULL;
 		g_auto(GStrv) argv = NULL;
+		g_auto(GStrv) enc_argv = NULL;
 		GError *error = NULL;
 		GPid pid = 0;
-		const gchar *pairs[5];
+		GPid enc_pid = 0;
+		gboolean ok;
+		const gchar *pairs[11];
 
-		file = bar_meeting_recording_filename(i, job->names[i]);
+		file = bar_meeting_recording_filename(i, job->names[i], ext);
 		path = g_build_filename(session_dir, file, NULL);
 		log  = g_strdup_printf("%.*s.log",
-			(gint)(strlen(path) - strlen(".wav")), path);
+			(gint)(strlen(path) - strlen(ext) - 1), path);
 
-		pairs[0] = "source";
-		pairs[1] = job->names[i];
-		pairs[2] = "output";
-		pairs[3] = path;
-		pairs[4] = NULL;
-		argv = bar_meeting_expand_template(tmpl, pairs, &error);
-		if (argv == NULL || !meet_spawn(argv, log, &pid, &error)) {
+		pairs[0] = "source";  pairs[1] = job->names[i];
+		pairs[2] = "output";  pairs[3] = path;
+		pairs[4] = "ffmpeg";  pairs[5] = job->ffmpeg;
+		pairs[6] = "bitrate"; pairs[7] = job->bitrate;
+		pairs[8] = "codec";   pairs[9] = codec;
+		pairs[10] = NULL;
+		/* {codec} is several words: substituted into the template
+		   before it is split, unlike a value, which is one word. */
+		rec_tmpl = meet_replace(tmpl, "{codec}", codec);
+		argv = bar_meeting_expand_template(rec_tmpl, pairs, &error);
+		if (argv != NULL && piped)
+			enc_argv = bar_meeting_expand_template(encode, pairs,
+			                                       &error);
+		if (argv == NULL || (piped && enc_argv == NULL))
+			ok = FALSE;
+		else if (piped)
+			ok = meet_spawn_piped(argv, enc_argv, log, &pid,
+			                      &enc_pid, &error);
+		else
+			ok = meet_spawn(argv, log, &pid, &error);
+		if (!ok) {
 			g_string_append_printf(failures, "%s%s: %s",
 				(failures->len > 0) ? "; " : "",
 				job->labels[i],
@@ -1043,6 +1269,7 @@ meet_start_work(GowlBarPlugin *plugin, gpointer user_data)
 			MeetRecorder *r = g_new0(MeetRecorder, 1);
 
 			r->pid     = pid;
+			r->enc_pid = enc_pid;
 			r->source  = g_strdup(job->names[i]);
 			r->label   = g_strdup(job->labels[i]);
 			r->path    = g_steal_pointer(&path);
@@ -1061,6 +1288,7 @@ meet_start_work(GowlBarPlugin *plugin, gpointer user_data)
 			MeetRecorder *r = g_ptr_array_index(recorders, i);
 
 			meet_orphan_locked(md, r->pid, SIGINT);
+			meet_orphan_locked(md, r->enc_pid, SIGINT);
 		}
 		g_mutex_unlock(&md->lock);
 		g_ptr_array_unref(recorders);
@@ -1096,6 +1324,13 @@ meet_start_work(GowlBarPlugin *plugin, gpointer user_data)
 	md->stop_stage = 0;
 	g_clear_pointer(&md->error, g_free);
 	meet_set_phase_locked(md, BAR_MEETING_RECORDING);
+	if (wav_fallback)
+		meet_toast_locked(md, GOWL_BAR_TOAST_NORMAL,
+		                  "Recording uncompressed",
+		                  "ffmpeg is not installed, so this meeting is "
+		                  "being recorded as WAV, about 115 MB an hour "
+		                  "per source.  Install ffmpeg-free for Opus.",
+		                  NULL);
 	if (failures->len > 0)
 		meet_toast_locked(md, GOWL_BAR_TOAST_NORMAL,
 		                  "Some sources are not being recorded",
@@ -1203,6 +1438,16 @@ meet_start(GowlBarPlugin *plugin, MeetData *md)
 	job->template_is_default = (tmpl == NULL || tmpl[0] == '\0');
 	job->template = g_strdup(job->template_is_default
 	                         ? MEET_DEFAULT_RECORD : tmpl);
+	tmpl = gowl_bar_plugin_get_setting(plugin, "encode-command");
+	job->encode  = (tmpl != NULL && tmpl[0] != '\0') ? g_strdup(tmpl)
+	                                                 : NULL;
+	job->ffmpeg  = g_strdup(meet_setting(plugin, "ffmpeg", "ffmpeg"));
+	job->bitrate = g_strdup(meet_bitrate_ok(meet_setting(plugin,
+	                                 "audio-bitrate", MEET_DEFAULT_BITRATE))
+		? meet_setting(plugin, "audio-bitrate", MEET_DEFAULT_BITRATE)
+		: MEET_DEFAULT_BITRATE);
+	job->wav     = (g_ascii_strcasecmp(meet_setting(plugin,
+	                "audio-format", "ogg"), "wav") == 0);
 	job->recordings_dir = meet_path_setting(plugin, "recordings-dir",
 	                                        MEET_DEFAULT_RECORDINGS);
 
@@ -1232,8 +1477,11 @@ meet_stop_locked(MeetData *md)
 	for (i = 0; i < md->recorders->len; i++) {
 		MeetRecorder *r = g_ptr_array_index(md->recorders, i);
 
+		/* The recorder only: its encoder finishes the file when
+		   the pipe closes, and a SIGINT of its own could cut the
+		   last buffer off. */
 		if (r->running)
-			kill((pid_t)r->pid, SIGINT);
+			meet_recorder_kill(r, SIGINT, FALSE);
 	}
 	md->rec_stopped = g_get_monotonic_time();
 	md->stop_sent = md->rec_stopped;
@@ -1258,6 +1506,8 @@ meet_cancel(GowlBarPlugin *plugin, MeetData *md)
 
 		if (r->running) {
 			meet_orphan_locked(md, r->pid, SIGINT);
+			meet_orphan_locked(md, r->enc_pid, SIGINT);
+			r->pid = r->enc_pid = 0;
 			r->running = FALSE;
 		}
 	}
@@ -1307,6 +1557,31 @@ meet_usable_recordings(MeetData *md)
 	g_ptr_array_add(out, NULL);
 	g_ptr_array_unref(paths);
 	return (gchar **)g_ptr_array_free(out, FALSE);
+}
+
+/*
+ * Delete the WAV made for whisper once nothing can still want it: not
+ * mixing or transcribing, and no child of ours left that might be
+ * writing it (a cancelled ffmpeg is an orphan until collected).  The
+ * recordings themselves stay.  Worker only.
+ */
+static void
+meet_drop_transient(MeetData *md)
+{
+	g_autofree gchar *path = NULL;
+
+	g_mutex_lock(&md->lock);
+	if (md->mixed_transient && md->mixed != NULL && md->child == 0 &&
+	    md->orphans->len == 0 &&
+	    md->phase != BAR_MEETING_MIXING &&
+	    md->phase != BAR_MEETING_TRANSCRIBING) {
+		path = g_steal_pointer(&md->mixed);
+		md->mixed_transient = FALSE;
+	}
+	g_mutex_unlock(&md->lock);
+	if (path != NULL && g_unlink(path) != 0 && errno != ENOENT)
+		g_warning("meeting-notes: could not delete %s: %s", path,
+		          g_strerror(errno));
 }
 
 /* Hand the session to cmacs.  Worker only (one emacsctl round trip). */
@@ -1459,8 +1734,9 @@ meet_start_transcription(GowlBarPlugin *plugin, MeetData *md, guint gen)
 	g_mutex_unlock(&md->lock);
 }
 
-/* The recorders are done: mix (when there are several) or go straight
-   to whisper.  Worker only. */
+/* The recorders are done: mix or decode them into the WAV whisper
+   reads, or go straight to whisper when the one recording already is a
+   WAV.  Worker only. */
 static void
 meet_process_local(GowlBarPlugin *plugin, MeetData *md, guint gen,
                    gchar **files)
@@ -1476,11 +1752,13 @@ meet_process_local(GowlBarPlugin *plugin, MeetData *md, guint gen,
 	session = g_strdup(md->session_dir);
 	g_mutex_unlock(&md->lock);
 
-	if (files[1] == NULL) {
-		/* One recording is already what whisper wants. */
+	if (files[1] == NULL && g_str_has_suffix(files[0], ".wav")) {
+		/* One WAV recording is already what whisper wants --- and
+		   it is the recording, so it is not ours to delete. */
 		g_mutex_lock(&md->lock);
 		g_free(md->mixed);
 		md->mixed = g_strdup(files[0]);
+		md->mixed_transient = FALSE;
 		g_mutex_unlock(&md->lock);
 		meet_start_transcription(plugin, md, gen);
 		return;
@@ -1513,6 +1791,7 @@ meet_process_local(GowlBarPlugin *plugin, MeetData *md, guint gen,
 		md->child_log = g_steal_pointer(&log);
 		g_free(md->mixed);
 		md->mixed = g_steal_pointer(&mixed);
+		md->mixed_transient = TRUE;
 		meet_set_phase_locked(md, BAR_MEETING_MIXING);
 	}
 	g_mutex_unlock(&md->lock);
@@ -1749,15 +2028,31 @@ meet_reap_recorders_locked(MeetData *md)
 	for (i = 0; i < md->recorders->len; i++) {
 		MeetRecorder *r = g_ptr_array_index(md->recorders, i);
 
+		gboolean lost = FALSE;
+
 		if (!r->running)
 			continue;
-		if (!meet_reap(r->pid, NULL)) {
+		if (r->pid > 0 && meet_reap(r->pid, NULL)) {
+			r->pid = 0;
+			lost = TRUE;
+		}
+		if (r->enc_pid > 0 && meet_reap(r->enc_pid, NULL)) {
+			r->enc_pid = 0;
+			lost = TRUE;
+		}
+		/* Either half dying while we still record is an early
+		   death.  A recorder whose encoder died is writing into a
+		   closed pipe: stop it rather than wait for SIGPIPE. */
+		if (lost && md->phase == BAR_MEETING_RECORDING && !r->lost) {
+			r->lost  = TRUE;
+			r->early = TRUE;
+			meet_recorder_kill(r, SIGINT, FALSE);
+		}
+		if (r->pid > 0 || r->enc_pid > 0) {
 			alive++;
 			continue;
 		}
 		r->running = FALSE;
-		if (md->phase == BAR_MEETING_RECORDING)
-			r->early = TRUE;
 	}
 	return alive;
 }
@@ -1871,7 +2166,7 @@ meet_poll_async(GowlBarPlugin *plugin, gpointer data)
 					md->recorders, i);
 
 				if (r->running)
-					kill((pid_t)r->pid, SIGTERM);
+					meet_recorder_kill(r, SIGTERM, TRUE);
 			}
 			md->stop_stage = 1;
 		} else if (alive > 0 && md->stop_stage == 1 &&
@@ -1882,7 +2177,7 @@ meet_poll_async(GowlBarPlugin *plugin, gpointer data)
 					md->recorders, i);
 
 				if (r->running)
-					kill((pid_t)r->pid, SIGKILL);
+					meet_recorder_kill(r, SIGKILL, TRUE);
 			}
 			md->stop_stage = 2;
 		}
@@ -1958,6 +2253,7 @@ meet_poll_async(GowlBarPlugin *plugin, gpointer data)
 	} else if (phase == BAR_MEETING_TRANSCRIBING && child_done) {
 		meet_after_transcription(plugin, md, gen, status);
 	}
+	meet_drop_transient(md);
 
 	/* A summary in flight (local backend): file once it is in, with or
 	   without it --- the transcript is never lost to a model error. */

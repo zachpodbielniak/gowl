@@ -558,7 +558,7 @@ bar_meeting_mix_argv(const gchar *ffmpeg, const gchar * const *inputs,
 	guint n, i;
 
 	n = (inputs != NULL) ? g_strv_length((gchar **)inputs) : 0;
-	if (n < 2 || output == NULL)
+	if (n < 1 || output == NULL)
 		return NULL;
 
 	argv = g_ptr_array_new();
@@ -572,9 +572,13 @@ bar_meeting_mix_argv(const gchar *ffmpeg, const gchar * const *inputs,
 		g_ptr_array_add(argv, g_strdup("-i"));
 		g_ptr_array_add(argv, g_strdup(inputs[i]));
 	}
-	g_ptr_array_add(argv, g_strdup("-filter_complex"));
-	g_ptr_array_add(argv, g_strdup_printf(
-		"amix=inputs=%u:duration=longest:normalize=0", n));
+	/* One input is only decoded and resampled: an Ogg recording still
+	   has to become the WAV whisper reads. */
+	if (n > 1) {
+		g_ptr_array_add(argv, g_strdup("-filter_complex"));
+		g_ptr_array_add(argv, g_strdup_printf(
+			"amix=inputs=%u:duration=longest:normalize=0", n));
+	}
 	g_ptr_array_add(argv, g_strdup("-ar"));
 	g_ptr_array_add(argv, g_strdup("16000"));
 	g_ptr_array_add(argv, g_strdup("-ac"));
@@ -639,7 +643,8 @@ bar_meeting_session_name(GDateTime *when)
 }
 
 gchar *
-bar_meeting_recording_filename(guint index, const gchar *source)
+bar_meeting_recording_filename(guint index, const gchar *source,
+                               const gchar *ext)
 {
 	GString *safe;
 	const gchar *p;
@@ -655,8 +660,10 @@ bar_meeting_recording_filename(guint index, const gchar *source)
 	if (safe->len == 0)
 		g_string_append(safe, "source");
 	{
-		gchar *name = g_strdup_printf("%02u-%s.wav", index + 1,
-		                              safe->str);
+		gchar *name = g_strdup_printf("%02u-%s.%s", index + 1,
+		                              safe->str,
+		                              (ext != NULL && ext[0] != '\0')
+		                              ? ext : "ogg");
 
 		g_string_free(safe, TRUE);
 		return name;

@@ -186,6 +186,8 @@ typedef struct {
 	gchar         *choice_provider;
 	gchar         *choice_model;
 	guint          model_rev;        /* the model field's revision */
+	gchar         *model_draft;      /* typed in the field, not sent */
+	gchar         *settings_note;    /* why the last Save was refused */
 	gchar        **cli_providers;    /* lock: from `ai --list-providers' */
 	gboolean       cli_listed;       /* lock: asked once this session */
 
@@ -1586,10 +1588,36 @@ build_settings(GowlBarPanel *panel, GowlBarPlugin *plugin, AiRewrite *self)
 	gowl_bar_panel_item_set_prop(item, GOWL_BAR_ENTRY_PROP_REVISION, rev);
 
 	gowl_bar_panel_add_label(panel,
-		"Saved for next time.  An action that names its own provider"
+		"A click on a row is saved at once; a typed model is saved by"
+		" Return or Save.  An action that names its own provider"
 		" still uses it.");
 	item = gowl_bar_panel_add_buttons(panel, "settings-close");
-	gowl_bar_panel_add_button(item, "Done", TRUE);
+	gowl_bar_panel_add_button(item, "Save", TRUE);
+}
+
+/* Save a model typed into the field but not yet submitted.  Returns
+   FALSE when there was one and it is not a model id, with the reason
+   left in settings_note; TRUE when there was nothing to save or it was
+   saved. */
+static gboolean
+model_draft_commit(AiRewrite *self, GowlBarPlugin *plugin)
+{
+	g_autofree gchar *draft = NULL;
+
+	draft = g_strstrip(g_strdup((self->model_draft != NULL)
+	                            ? self->model_draft : ""));
+	g_clear_pointer(&self->model_draft, g_free);
+	if (draft[0] == '\0')
+		return TRUE;
+	/* The field is cleared either way: the pick shows in the rows. */
+	self->model_rev++;
+	if (!bar_airewrite_choice_name_ok(draft)) {
+		set_str(&self->settings_note, "That is not a model id.");
+		return FALSE;
+	}
+	set_str(&self->choice_model, draft);
+	choice_save(self, plugin);
+	return TRUE;
 }
 
 /* Act on a click in the provider / model view.  Returns TRUE when it
@@ -1628,6 +1656,12 @@ settings_action(AiRewrite *self, GowlBarPlugin *plugin, const gchar *item_id)
 		return TRUE;
 	}
 	if (strcmp(item_id, "settings-close") == 0) {
+		/* A model typed but never sent with Return is what the user
+		   means by Save; dropping it was the bug.  A bad one keeps
+		   the view open and says why rather than closing on it. */
+		if (!model_draft_commit(self, plugin))
+			return TRUE;
+		g_clear_pointer(&self->settings_note, g_free);
 		self->settings_open = FALSE;
 		return TRUE;
 	}
@@ -1651,6 +1685,8 @@ airewrite_panel_opened(GowlBarPlugin *plugin, gpointer data)
 	   lands on the actions as usual. */
 	self->settings_open = self->settings_on_open;
 	self->settings_on_open = FALSE;
+	g_clear_pointer(&self->model_draft, g_free);
+	g_clear_pointer(&self->settings_note, g_free);
 
 	/* The window to paste back into is the one focused NOW, before
 	   anything the panel does can move focus. */
@@ -2127,7 +2163,9 @@ airewrite_panel(GowlBarPlugin *plugin, gpointer data)
 
 	if (self->settings_open) {
 		gowl_bar_panel_add_hero(panel, "\xe2\x9a\x99", "AI rewrite",
-		                        "Which model rewrites your text");
+		                        (self->settings_note != NULL)
+		                        ? self->settings_note
+		                        : "Which model rewrites your text");
 		build_settings(panel, plugin, self);
 		return panel;
 	}
@@ -2410,23 +2448,23 @@ airewrite_panel_text(GowlBarPlugin *plugin, gpointer data,
 	g_autofree gchar *trimmed = NULL;
 	gint max_chars;
 
-	if (self == NULL || !submitted || text == NULL)
+	if (self == NULL || text == NULL)
+		return;
+
+	/* The model field: every edit is remembered, so Save can commit
+	   what was typed without Return; Return commits it now. */
+	if (g_strcmp0(item_id, "model") == 0 && self->settings_open) {
+		set_str(&self->model_draft, text);
+		if (submitted && model_draft_commit(self, plugin))
+			g_clear_pointer(&self->settings_note, g_free);
+		return;
+	}
+
+	if (!submitted)
 		return;
 	trimmed = g_strstrip(g_strdup(text));
 	if (trimmed[0] == '\0')
 		return;
-
-	if (g_strcmp0(item_id, "model") == 0 && self->settings_open) {
-		if (bar_airewrite_choice_name_ok(trimmed)) {
-			set_str(&self->choice_model, trimmed);
-			choice_save(self, plugin);
-		} else {
-			set_str(&self->note, "That is not a model id.");
-		}
-		/* Clear the field: the pick shows in the rows above. */
-		self->model_rev++;
-		return;
-	}
 
 	if (g_strcmp0(item_id, "text") == 0 && self->view == VIEW_ENTER_TEXT) {
 		AirewriteStep *step;
@@ -2488,6 +2526,9 @@ airewrite_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
 	   closing the panel, and everything else is the host's. */
 	if (self->settings_open) {
 		if (keysym == XKB_KEY_BackSpace) {
+			/* Back, not Save: a half-typed model is dropped. */
+			g_clear_pointer(&self->model_draft, g_free);
+			g_clear_pointer(&self->settings_note, g_free);
 			self->settings_open = FALSE;
 			return TRUE;
 		}
@@ -2699,6 +2740,8 @@ airewrite_destroy(GowlBarPlugin *plugin, gpointer data)
 	g_free(self->actions_key);
 	g_free(self->choice_provider);
 	g_free(self->choice_model);
+	g_free(self->model_draft);
+	g_free(self->settings_note);
 	g_strfreev(self->cli_providers);
 	g_free(self->note);
 	g_free(self->status);

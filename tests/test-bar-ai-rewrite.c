@@ -1614,6 +1614,36 @@ test_choice_in_the_panel(void)
 	g_assert_true(panel_has(&r, "provider:claude"));
 	g_assert_true(key(&r, XKB_KEY_BackSpace, 0));
 	g_assert_true(panel_has(&r, "act:proofread"));
+
+	/* Catches: Save dropping a model that was typed but never sent
+	   with Return -- the field at the bottom of a long list, filled
+	   in, and the button under it pressed. */
+	gowl_bar_plugin_panel_action(r.h.plugin, "settings", -1, 0.0, 1);
+	gowl_bar_plugin_panel_text(r.h.plugin, "model", "claude-opus", FALSE);
+	gowl_bar_plugin_panel_text(r.h.plugin, "model", "claude-opus-5-5 ",
+	                           FALSE);
+	gowl_bar_plugin_panel_action(r.h.plugin, "settings-close", 0, 0.0, 1);
+	g_assert_true(panel_has(&r, "act:proofread"));
+	g_assert_true(panel_says(&r, "claude \xc2\xb7 claude-opus-5-5"));
+	g_free(saved);
+	saved = slurp(path);
+	g_assert_nonnull(strstr(saved, "model=claude-opus-5-5"));
+
+	/* A bad one keeps the choice open and says why, saving nothing. */
+	gowl_bar_plugin_panel_action(r.h.plugin, "settings", -1, 0.0, 1);
+	gowl_bar_plugin_panel_text(r.h.plugin, "model", "a b; c", FALSE);
+	gowl_bar_plugin_panel_action(r.h.plugin, "settings-close", 0, 0.0, 1);
+	g_assert_true(panel_has(&r, "provider:claude"));
+	g_assert_true(panel_says(&r, "That is not a model id."));
+	g_free(saved);
+	saved = slurp(path);
+	g_assert_nonnull(strstr(saved, "model=claude-opus-5-5"));
+	/* BackSpace is back, not Save. */
+	gowl_bar_plugin_panel_text(r.h.plugin, "model", "never-saved", FALSE);
+	g_assert_true(key(&r, XKB_KEY_BackSpace, 0));
+	g_free(saved);
+	saved = slurp(path);
+	g_assert_null(strstr(saved, "never-saved"));
 	rig_down(&r);
 }
 

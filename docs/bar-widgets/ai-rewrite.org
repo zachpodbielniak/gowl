@@ -214,8 +214,9 @@ Colour is never the only signal in the diff: every removed row carries a =−= a
 *Right-click the bar icon*, or click the =⚙= row at the bottom of the panel, to choose which provider and model rewrite your text:
 
 - *Provider*: /Default/ (what the widget's =ai-provider= setting says, else --- under cmacs --- the AI menu's provider, named in brackets), then every provider offered. Under cmacs the list is cmacs-ai's (pushed); standalone it is ai-glib's, from =ai --list-providers= (asked once, on a worker).
-- *Model*: /The provider's default/, the models cmacs pushed for the chosen provider (=models.<provider>=), and a text field for any model id (=Return= takes it).
-- *Done* (or =Backspace=) goes back to the text.
+- *Model*: /The provider's default/, the models cmacs pushed for the chosen provider (=models.<provider>=), and a text field for any model id.
+- A click on a row is saved at once. A model typed into the field is saved by =Return= *or* by *Save* --- the field sits at the bottom of a list that usually scrolls, so filling it in and pressing the button under it is the natural order. A typed id that is not a model id (spaces, shell punctuation) keeps the view open and says so in its heading, saving nothing.
+- *Save* returns to the text; =Backspace= goes back too, but *without* saving a half-typed model.
 
 The choice is saved in the bar's state directory (=$XDG_STATE_HOME/gowl/ai-rewrite.choice=, mode 0600) and survives restarts. Switching provider drops the model, since a model id belongs to its provider. It sits between the action and the settings: an action that names its own =provider= still uses it (with its own model, or that provider's default); otherwise the choice applies; with no choice, =ai-rewrite.ai-provider= / =ai-model=, then the backend's default. The footer row shows what the next request will ask.
 

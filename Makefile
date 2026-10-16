@@ -923,6 +923,7 @@ $(OBJDIR)/tests/test-hints.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath 
 
 $(OUTDIR)/test-bar-monitor: $(OUTDIR)/modules/bar.so
 $(OUTDIR)/test-bar-entry-panel: $(OUTDIR)/modules/bar.so
+$(OUTDIR)/test-bar-panel-scroll: $(OUTDIR)/modules/bar.so
 # The extended widget set: each test loads the real bar.so through
 # tests/bar-widget-harness.h and reads fixtures from tests/fixtures/bar.
 $(OUTDIR)/test-bar-tvremote: $(OUTDIR)/modules/bar.so
@@ -950,6 +951,7 @@ $(OBJDIR)/tests/test-bar-cpu-activity.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='
 $(OUTDIR)/test-bar-ai: $(OUTDIR)/modules/bar.so
 $(OBJDIR)/tests/test-bar-ai.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"'
 $(OBJDIR)/tests/test-bar-entry-panel.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+$(OBJDIR)/tests/test-bar-panel-scroll.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 $(OBJDIR)/tests/test-bar-monitor.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 
 # The wallpaper against the real .so in a headless compositor, with

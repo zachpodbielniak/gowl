@@ -1,0 +1,295 @@
+#+title: Translate
+#+description: A two-pane translator overlay for the gowl bar: type or paste, read the translation, swap, copy
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+:PROPERTIES:
+:CUSTOM_ID: what-it-does
+:END:
+
+=translate= is a translator that lives in the bar. The widget itself is a glyph (optionally followed by the language pair, =EN→RU=); its panel is an *overlay* that opens centred on the screen, a little above the middle, whether you click the widget or press a key.
+
+The panel has the source text on top and its translation underneath, a row of language chips (source, swap =⇄=, target), and a language picker you can filter by name, native name or code. It translates *as you type*, once typing pauses, and never sends the same text twice. It can copy the translation to the clipboard and translate whatever is on the clipboard.
+
+It talks to one of four engines: a language model through the bar's shared AI backend (cmacs-ai under =cmacs --gowl=, ai-glib's =ai= command standalone), a LibreTranslate server you run, the public MyMemory API, or --- only if you ask for it --- Google's keyless web endpoint.
+
+It is a generic port inspired by the Omarchy shell's translate overlay plugin. What it deliberately does *not* do:
+
+- It does not ship an HTTP library: every request is a =curl= child on a worker thread.
+- It does not choose Google on its own, ever. See [[#privacy][Security and privacy]].
+- It does not fall back from an engine you named to a different one. If you set =engine: libretranslate= and the server is not configured, it says so instead of quietly sending your text to MyMemory.
+- It does not translate documents or files; it translates text.
+
+* Quick start --- standalone gowl
+:PROPERTIES:
+:CUSTOM_ID: quick-start-gowl
+:END:
+
+=~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "translate"
+    translate.target: en
+    # Private and local: a LibreTranslate container (see below)
+    translate.engine: libretranslate
+    translate.libretranslate-url: http://localhost:5000
+keybinds:
+  "Super+Alt+t": { action: ipc_command, arg: "bar-panel translate", desc: "Translator" }
+#+end_src
+
+Or from a shell, with the widget already in a widget list:
+
+#+begin_src sh
+gowl bar-panel translate     # open (or close) the overlay
+#+end_src
+
+=Super+Alt+t= is the suggested key. The original plugin used =Super+Shift+k=, but that is taken: in cmacs it moves a window up the stack. Neither gowl's =data/default-config.yaml= nor cmacs's default bindings use =Super+Alt+t=.
+
+With no configuration at all the widget still works: =engine: auto= picks an AI backend when ai-glib's =ai= is installed and otherwise MyMemory, which needs nothing but =curl=.
+
+** A LibreTranslate server with podman
+
+LibreTranslate is free software (AGPL-3.0) and runs entirely on your machine: nothing you translate leaves it.
+
+#+begin_src sh
+podman run -d --name libretranslate -p 127.0.0.1:5000:5000 \
+    docker.io/libretranslate/libretranslate \
+    --load-only en,de,fr,es,ru,ja,zh
+#+end_src
+
+The first start downloads the language models (a few hundred MB per pair), so give it a minute. =--load-only= keeps memory down; drop it for every language. As a quadlet, so it starts with your session --- =~/.config/containers/systemd/libretranslate.container=:
+
+#+begin_src conf
+[Unit]
+Description=LibreTranslate
+
+[Container]
+Image=docker.io/libretranslate/libretranslate:latest
+ContainerName=libretranslate
+PublishPort=127.0.0.1:5000:5000
+Exec=--load-only en,de,fr,es,ru,ja,zh
+Volume=libretranslate-models:/home/libretranslate/.local:Z
+
+[Install]
+WantedBy=default.target
+#+end_src
+
+#+begin_src sh
+systemctl --user daemon-reload && systemctl --user start libretranslate
+#+end_src
+
+A server started with =--api-keys= wants a key: put it in =translate.libretranslate-key=. The key goes to curl on standard input, never on its command line.
+
+* Quick start --- cmacs --gowl
+:PROPERTIES:
+:CUSTOM_ID: quick-start-cmacs
+:END:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-add" . "translate")
+   ("translate.target" . "en")))
+(gowl-add-keybind "Super+Alt+t" 'ipc-command "bar-panel translate" "Translator")
+#+end_src
+
+What cmacs does for this widget by default: it is *off* (not in any widget list) until you add it, exactly as standalone. Once it is there, =cmacs --gowl= pushes =translate.ai-backend: cmacs= and =translate.engine: ai=, so translations go through cmacs-ai with whatever provider and model you already use there --- nothing is configured twice. The request is started with =emacsctl eval '(cmacs-gowl-bar-ai-run "translate" ...)'=, which returns at once; cmacs streams the answer back into the widget as =translate.ai-*= settings (see [[file:../bar.org::#plugin-ai][Asking a language model]]). To pick a provider or model for translation only:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("translate.ai-provider" . "ollama")
+   ("translate.ai-model" . "qwen3.5:9b")))
+#+end_src
+
+To use a web engine under cmacs instead, set =translate.engine= after the defaults are applied, e.g. =("translate.engine" . "libretranslate")=.
+
+* Settings
+:PROPERTIES:
+:CUSTOM_ID: settings
+:END:
+
+Every key is set as =translate.<key>= (or =bottom-translate.<key>= for a bottom-bar copy).
+
+| Key                  | Type                                                   | Default                             | Meaning                                                                                                                       |
+|----------------------+--------------------------------------------------------+-------------------------------------+-------------------------------------------------------------------------------------------------------------------------------|
+| =engine=             | =auto=, =ai=, =libretranslate=, =mymemory=, =google=, =none= | =auto=                              | Which engine translates. =auto=: AI when a backend resolves, else LibreTranslate when =libretranslate-url= is set, else MyMemory |
+| =source=             | language code or =auto=                                | =auto=                              | The source language until you pick one in the panel                                                                           |
+| =target=             | language code                                          | =en=                                | The target language until you pick one                                                                                        |
+| =auto-translate=     | bool                                                   | =true=                              | Translate while typing, the first time; the panel toggle (=Ctrl+P=) is remembered after that                                    |
+| =debounce-ms=        | integer, ms                                            | =600=                               | How long typing must pause before translating                                                                                 |
+| =remember-text=      | bool                                                   | =true=                              | Keep the last source text across sessions                                                                                     |
+| =show-pair=          | bool                                                   | =true=                              | Show =EN→RU= beside the glyph; =false= for the glyph alone                                                                     |
+| =icon=               | text                                                   | 󰗊 (Nerd Font translate)             | The glyph                                                                                                                     |
+| =libretranslate-url= | http(s) URL                                            | empty                               | Your LibreTranslate server; =/translate= is appended. Required for that engine                                                |
+| =libretranslate-key= | text                                                   | empty                               | The server's API key, when it wants one. Sent on stdin, never in argv                                                         |
+| =mymemory-email=     | e-mail address                                         | empty                               | Raises MyMemory's anonymous daily quota (about 5000 characters) to about 50000                                                |
+| =curl=               | command                                                | =curl=                              | The curl binary                                                                                                               |
+| =timeout=            | integer, s                                             | =15=                                | =curl --max-time= for one request                                                                                             |
+| =copy-command=       | command line                                           | =wl-copy=                           | Receives the translation on stdin. Parsed with shell quoting, run without a shell                                             |
+| =paste-command=      | command line                                           | =wl-paste --no-newline --type text= | Prints the clipboard as text                                                                                                  |
+| =color=              | role or =#rrggbb=                                      | text (yellow while translating)     | The bar label                                                                                                                 |
+| =color-chip=         | role or =#rrggbb=                                      | =accent=                            | The language chips and the current language in the picker                                                                     |
+| =color-error=        | role or =#rrggbb=                                      | =red=                               | Errors, in the panel and on the bar label                                                                                     |
+| =color-muted=        | role or =#rrggbb=                                      | =muted=                             | The status line, notes and the key list                                                                                       |
+
+The shared AI keys apply to the =ai= engine: =ai-backend=, =ai-provider=, =ai-model=, =ai-command=, =emacsctl=, =ai-timeout=. See [[file:../bar.org::#plugin-ai][Asking a language model]].
+
+Language codes are ISO 639-1 (=de=, =ja=, =ru= ...) plus =zh-CN= and =zh-TW= for the two Chinese scripts. About a hundred languages are listed; the picker shows them all. Codes are translated to each engine's own spelling (LibreTranslate's =zh-Hans=, =nb= ...).
+
+* Theming
+:PROPERTIES:
+:CUSTOM_ID: theming
+:END:
+
+| Key           | Default role                     | Where                                                   |
+|---------------+----------------------------------+---------------------------------------------------------|
+| =color=       | =text=, =yellow= while translating | The bar label                                           |
+| =color-error= | =red=                            | Error lines in the panel; the bar label while in error  |
+| =color-chip=  | =accent=                         | The source / swap / target chips; the current language  |
+| =color-muted= | =muted=                          | Status line, notes, the key list, =Cancel= in the picker |
+
+All four follow the palette: a role name (=accent=, =green=, =peach= ...) is re-resolved whenever the palette changes, so switching from Mocha to Latte restyles the widget with everything else.
+
+A =#rrggbb= literal is honoured exactly on the *bar label* (=color=, and =color-error= while in error). Panel rows are drawn in palette roles --- an item has no literal colour --- so a literal given for a panel part is snapped to the nearest role of the current palette.
+
+#+begin_src yaml
+modules:
+  bar:
+    translate.color-chip: mauve       # a role: follows the palette
+    translate.color: "#89dceb"        # a literal: exactly this, on the label
+#+end_src
+
+* The panel
+:PROPERTIES:
+:CUSTOM_ID: the-panel
+:END:
+
+From the top:
+
+- *Language chips.* =Source=, =⇄=, =Target=. Clicking a language chip opens the picker for that side (clicking it again closes it). An auto source reads =Auto-detect=, or =Auto (French)= once a language has been detected. =⇄= swaps the pair --- see below.
+- *Source* (a multi-line text field, focused when the panel opens). Its caption is the source language. =Return= is a newline; =Ctrl+Return= translates now.
+- *Translation* (a multi-line text field too, not a label). It can be read with a cursor, corrected before you copy it, and copied. Your edits are what =Copy= copies; a new translation replaces them.
+- *Status line*: the engine, the character count, and whether it translates as you type. Errors (red) and notes (muted) follow it.
+- *Translate while typing*: the toggle (=Ctrl+P=).
+- *Buttons*: =Translate=, =Copy=, =Clipboard= (translate the clipboard), =Clear=, =Keys= (the key list).
+
+The *picker* replaces the two panes while it is open: a filter field, then the matching languages (=Auto-detect= first, on the source side only). The filter matches a code prefix, the English name or the native name, ignoring case and accents: =deu=, =germ=, =DE= and =deutsch= all find German, =francais= finds Français. =Return= in the filter takes the first match; an exact code is always first. Picking for one side the language the other side already has swaps the two.
+
+*Swap* exchanges the languages *and* the texts: the translation becomes the new source, and the old source is already its translation, so no request is made. With an auto source the detected language is used; if nothing has been detected yet, swap refuses and says so --- =auto= cannot be a target.
+
+** Keys
+
+| Key            | Does                                                   |
+|----------------+--------------------------------------------------------|
+| =Ctrl+Return=  | Translate now (in either text field)                   |
+| =Ctrl+S=       | Swap the languages (and the texts)                     |
+| =Ctrl+L=       | Pick the source language                               |
+| =Ctrl+Shift+L= | Pick the target language                               |
+| =Ctrl+Shift+C= | Copy the translation                                   |
+| =Ctrl+Shift+V= | Translate the clipboard (see the note below)           |
+| =Ctrl+Shift+X= | Clear both panes                                       |
+| =Ctrl+P=       | Translate while typing on / off                        |
+| =F1=           | Show / hide the key list                               |
+| =Tab= / =Shift+Tab= | Next / previous pane or control                   |
+| =Escape=       | Close                                                  |
+
+Notes, all consequences of the shared text field (the host owns these keys, not the widget):
+
+- In a text field, =Ctrl+Shift+V= is the field's own paste (it pastes into the field without translating). Use the =Clipboard= button, or press it with the keyboard on a chip or button.
+- =Ctrl+Return= outside a text field activates the focused control, like =Return=.
+- =Ctrl+1= / =Ctrl+2= (jump to a pane) are not available: a plugin cannot move the panel's keyboard focus. They show a hint to use =Tab=. =Ctrl+L= from the source pane does land in the picker's filter, because both are the panel's second item.
+
+** Translate while typing
+
+On every edit the widget notes the time. The bar polls it once a second while the panel is open, and a poll translates when typing has paused for at least =debounce-ms= *and* the text (or the pair) differs from what was last sent. The effective latency is therefore the debounce rounded up to the next one-second tick: with the default 600 ms, a translation starts between 0.6 and 1.6 s after your last keystroke. Identical text is never sent twice; a request that failed is not retried by typing (=Ctrl+Return= retries it).
+
+A reply for older text is dropped. Every request carries a generation number, and a result whose generation is no longer current --- a slow answer for "hel" arriving after "hello" was sent --- is discarded; a request superseded mid-flight is killed.
+
+* Dependencies
+:PROPERTIES:
+:CUSTOM_ID: dependencies
+:END:
+
+Fedora packages:
+
+| Package        | For                                                   | When missing                                                                |
+|----------------+-------------------------------------------------------+-----------------------------------------------------------------------------|
+| =curl=         | the LibreTranslate, MyMemory and Google engines       | The panel and tooltip say "curl is not installed ... Fedora package: curl"; the AI engine still works |
+| =wl-clipboard= | =Copy= (=wl-copy=) and =Clipboard= (=wl-paste=)       | The action reports "wl-copy is not installed (Fedora package: wl-clipboard)" |
+
+Optional, for the =ai= engine: ai-glib's =ai= command (standalone) or cmacs (under =cmacs --gowl=). With neither, =engine: auto= uses MyMemory and =engine: ai= says how to get a backend.
+
+The widget never hides itself: a translator with a missing tool still has a panel that says what to install.
+
+* Security and privacy
+:PROPERTIES:
+:CUSTOM_ID: privacy
+:END:
+
+Where your text goes depends entirely on the engine, so choose deliberately:
+
+| Engine           | Where the text goes                                                   |
+|------------------+-----------------------------------------------------------------------|
+| =ai= (cmacs-ai / ai-glib) | Whatever provider you configured: local (ollama) stays on the machine; a hosted model sees the text |
+| =libretranslate= | Your own server. Self-hosted, nothing leaves your network --- *preferred* |
+| =mymemory=       | api.mymemory.translated.net (Translated srl). Public; may be kept in their translation memory |
+| =google=         | Google, through the keyless endpoint the browser dictionary extension uses. Unofficial, rate-limited, may stop working any day, and Google sees everything. *Opt-in only*: never chosen by =auto= |
+
+=auto= deliberately prefers the private routes (your model, then your server) and only then MyMemory. Google is used only with =engine: google=. An engine you name explicitly is never swapped for another one.
+
+Other guarantees:
+
+- The text never travels in a command line, so it is not visible in =ps=. GET engines receive their URL as a curl config on stdin (=--config -=); LibreTranslate receives its JSON body on stdin (=--data-binary @-=). The LibreTranslate API key is in that body, never in argv, and never in the label or tooltip. The AI route sends the text on stdin (ai) or inside the =emacsctl eval= form (cmacs).
+- curl is restricted to http and https (=--proto =http,https=), so a mistyped =libretranslate-url= such as =file:///etc/passwd= cannot read a local file into the panel.
+- Everything in a request is percent-encoded or JSON-escaped: an =&=, =+=, =#= or newline in your text cannot add URL parameters or curl config directives, and a quote cannot break the JSON body.
+- Every reply is validated as UTF-8 and capped (256 KiB) before it reaches the screen. A reply that is not a translation (an HTML error or captcha page, a MyMemory warning) is shown as an error, not as text.
+- The state file (with =remember-text=, your last source text) is written mode 0600. Set =remember-text: false= to keep no text on disk.
+- The copy sends the translation to =wl-copy= on stdin.
+
+* Troubleshooting
+:PROPERTIES:
+:CUSTOM_ID: troubleshooting
+:END:
+
+- *Nothing happens when I type.* Translate-while-typing may be off (=Ctrl+P=, or the toggle); press =Ctrl+Return=. With it on, the translation starts up to a second after the debounce.
+- *"engine: libretranslate needs translate.libretranslate-url".* Set the URL of your server, e.g. =http://localhost:5000=. Check it with =curl -s localhost:5000/languages=.
+- *"LibreTranslate: ... is not supported".* The server was started with =--load-only= and does not have that language. Add it there.
+- *"MyMemory cannot detect the language: assumed English".* MyMemory has no detection; pick a source language with =Ctrl+L=, or use another engine.
+- *"MyMemory: the free daily quota is used up".* Set =mymemory-email= (about ten times the quota), wait for the reset, or run LibreTranslate.
+- *"Google: rate limited".* The keyless endpoint throttles; use another engine.
+- *"Could not resolve host" / "timed out".* Network, DNS or a server that is down; =timeout= raises the patience.
+- *The answer starts with "Sure! Here is..."* A chatty model under the =ai= engine. The prompt asks for the translation only; a smaller instruction-tuned model, or a different =ai-model=, behaves better.
+- *Ctrl+Shift+V pasted instead of translating.* The keyboard was in a text field; see [[#the-panel][The panel]].
+- *The pair in my config is ignored.* Once you pick a pair in the panel it is remembered and wins over =source=/=target=. Delete =translate.state= (below) to follow the config again.
+
+* Internals
+:PROPERTIES:
+:CUSTOM_ID: internals
+:END:
+
+Files:
+
+- =modules/bar/bar-plugins-translate.c= --- the widget: panel, keys, workers, state.
+- =modules/bar/bar-translate-model.c= / =.h= --- everything pure: the language table, engine selection, request building (curl argv, JSON body, curl config URLs), response parsing (with full =\uXXXX= decoding --- LibreTranslate escapes every non-ASCII character), chunking, the debounce decision, the swap rule, the state file format.
+- =modules/bar/bar-ai.c= --- the shared AI slot, for the =ai= engine.
+
+Threads. Panel build, keys, text edits, actions and the sync poll run on the compositor's thread and only read and write the widget's state under its mutex. Every request, the clipboard and the state file run on bar workers: each HTTP request is a =curl= child spawned with =g_spawn_async_with_pipes=, its stdin written and stdout/stderr read together with =poll()= (so a child that fills stderr cannot deadlock against us), killed at the deadline or when superseded, and reaped with =waitpid= on the worker --- never with a GLib child watch, which under cmacs would fire on Emacs's thread. Writing to a child that exited early cannot raise =SIGPIPE= in the compositor: the signal is blocked on the worker for the write and consumed. Nothing calls back into the host (=queue_work=, the AI slot) while holding the widget's lock.
+
+Chunking. A text longer than the engine's limit (450 bytes for MyMemory, 5000 for LibreTranslate and Google; the AI engine gets the whole text, because splitting a prompt loses context) is split at the best boundary that fits: a paragraph break, a line break, the end of a sentence (including =。！？=), a space, and only then mid-word on a character boundary. Each piece is sent in turn; the whitespace at each cut is kept aside and put back, so paragraphs survive.
+
+AI detection. With an auto source the AI prompt asks the model to lead with the detected language as =<<fr>>=; the widget takes that marker off (hiding it while it streams), which is how swap works after an AI translation.
+
+State. =$XDG_STATE_HOME/gowl/translate.state= (the bar's state directory, =~/.local/state/gowl=), a GKeyFile: the pair (only once you have chosen one, so an untouched pair keeps following the config), the toggle, and the source text when =remember-text= is on. Read once on a worker at start; written by the next async poll after a change, mode 0600.
+
+Polling. Once a second while the panel is open or anything is in flight; every 30 s otherwise.
+
+Tests. =tests/test-bar-translate.c= compiles the model in directly and drives the widget through =bar.so= with the widget harness, against stand-ins for =curl= (recording argv and stdin, answering from =tests/fixtures/bar/translate/=), =ai=, =emacsctl=, =wl-copy= and =wl-paste=. It covers engine selection; request building (unicode, =&=, ===, =+=, newlines, JSON escaping, no text or key in argv); parsing of good, error, quota, captcha and non-UTF-8 replies; chunk boundaries; the language filter; the debounce decision; swap with an auto source; the state round trip and file mode; the clipboard flow; stale results; key handling; missing tools; both AI routes; and the colour settings.
+
+#+begin_src sh
+make build/release/test-bar-translate && ./build/release/test-bar-translate
+#+end_src

@@ -1247,8 +1247,8 @@ test_widget_state_colour(void)
 	w_down(&w);
 }
 
-/* Catches: reduced-motion still animating (no glyph), the glyph
-   showing otherwise, or show-label not labelling. */
+/* Catches: the bar showing anything but the robot by default, the
+   wave style losing its equaliser, or show-label not labelling. */
 static void
 test_widget_reduced_motion_and_label(void)
 {
@@ -1260,6 +1260,11 @@ test_widget_reduced_motion_and_label(void)
 
 	if (!w_up(&w, NULL))
 		return;
+	bar_harness_poll(&w.h);
+	icon = gowl_bar_plugin_dup_icon(w.h.plugin);
+	g_assert_cmpstr(icon, ==, AS_TEST_GLYPH);
+	g_clear_pointer(&icon, g_free);
+	bar_harness_set(&w.h, "icon-style", "wave");
 	bar_harness_poll(&w.h);
 	icon = gowl_bar_plugin_dup_icon(w.h.plugin);
 	g_assert_null(icon);
@@ -1275,6 +1280,76 @@ test_widget_reduced_motion_and_label(void)
 	g_assert_cmpstr(icon2, ==, AS_TEST_GLYPH);
 	label = gowl_bar_plugin_dup_label(w.h.plugin);
 	g_assert_cmpstr(label, ==, "ollama/qwen3:8b");
+	w_down(&w);
+}
+
+/* Render the bar item at @height into @name.png under
+   GOWL_TEST_DUMP_PANELS; return its measured width. */
+static gint
+bar_item_width(W *w, const gchar *name)
+{
+	const gchar *dir = g_getenv("GOWL_TEST_DUMP_PANELS");
+	cairo_surface_t *cs;
+	PangoLayout *layout;
+	cairo_t *cr;
+	gint width;
+
+	cs = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 200, 30);
+	cr = cairo_create(cs);
+	layout = pango_cairo_create_layout(cr);
+	width = gowl_bar_plugin_measure(w->h.plugin, layout, w->h.host->theme,
+	                                30);
+	gowl_bar_theme_cairo_set(w->h.host->theme, cr, GOWL_BAR_COLOR_BASE);
+	cairo_paint(cr);
+	gowl_bar_plugin_draw(w->h.plugin, cr, layout, w->h.host->theme, 0, 0,
+	                     width, 30, FALSE, FALSE);
+	if (dir != NULL && dir[0] != '\0') {
+		g_autofree gchar *file = g_strconcat(name, ".png", NULL);
+		g_autofree gchar *path = g_build_filename(dir, file, NULL);
+
+		g_mkdir_with_parents(dir, 0700);
+		cairo_surface_write_to_png(cs, path);
+	}
+	g_object_unref(layout);
+	cairo_destroy(cr);
+	cairo_surface_destroy(cs);
+	return width;
+}
+
+/* Catches: the robot not growing its small wave while the model works
+   (no sign of activity left in the bar), keeping it at rest, showing it
+   under reduced-motion, or the wave style changing width with it. */
+static void
+test_widget_robot_icon(void)
+{
+	W w;
+	g_autofree gchar *ctl = NULL;
+	g_autofree gchar *formfile = NULL;
+	gint idle, busy, still, wave;
+
+	if (!w_up(&w, NULL))
+		return;
+	ctl = fake_emacsctl(&w, &formfile);
+	bar_harness_set(&w.h, "emacsctl", ctl);
+	bar_harness_set(&w.h, "ai-backend", "cmacs");
+	bar_harness_poll(&w.h);
+	idle = bar_item_width(&w, "ai-assistant-bar-idle");
+
+	w_ask(&w, "q");                /* cmacs has not answered: thinking */
+	bar_harness_poll(&w.h);
+	busy = bar_item_width(&w, "ai-assistant-bar-busy");
+	g_assert_cmpint(busy, >, idle + 6);
+
+	bar_harness_set(&w.h, "reduced-motion", "true");
+	bar_harness_poll(&w.h);
+	still = bar_item_width(&w, "ai-assistant-bar-reduced");
+	g_assert_cmpint(still, ==, idle);
+
+	bar_harness_set(&w.h, "reduced-motion", "false");
+	bar_harness_set(&w.h, "icon-style", "wave");
+	bar_harness_poll(&w.h);
+	wave = bar_item_width(&w, "ai-assistant-bar-wave");
+	g_assert_cmpint(wave, >, 0);
 	w_down(&w);
 }
 
@@ -1710,6 +1785,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/bar-ai-assistant/widget/stop", test_widget_stop);
 	g_test_add_func("/bar-ai-assistant/widget/state-colour",
 	                test_widget_state_colour);
+	g_test_add_func("/bar-ai-assistant/widget/robot-icon",
+	                test_widget_robot_icon);
 	g_test_add_func("/bar-ai-assistant/widget/reduced-motion-and-label",
 	                test_widget_reduced_motion_and_label);
 	g_test_add_func("/bar-ai-assistant/widget/machine-context",

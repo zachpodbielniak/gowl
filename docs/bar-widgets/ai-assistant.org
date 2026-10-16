@@ -14,7 +14,7 @@
 - *Models* --- the local ollama server: what is installed and loaded, how big each model is, its family, parameter count and quantisation, and a *fit* badge saying whether it fits this machine. Load, unload, delete and pull (download), every download, delete and load behind an approval card.
 - *Machine* --- CPU, memory, GPU and VRAM, the model disk, network throughput, the largest processes, the loaded models and the memory they hold, and *Free model memory*.
 
-The bar indicator is a little pixel wave whose bars follow recent activity --- streaming throughput while an answer arrives, CPU/GPU load at rest --- coloured by state: idle, thinking, streaming, error.
+The bar indicator is a robot head (the panel's own glyph), coloured by state: idle, thinking, streaming, error. While the model works a small three-bar wave appears beside it, following streaming throughput; at rest it is the robot alone. =icon-style: wave= swaps the robot for the older indicator, a wider wave that is always there and follows CPU/GPU load at rest.
 
 It is a generic port inspired by the Omarchy "local AI hub" plugin, generalised from one local runtime to any provider.
 
@@ -105,9 +105,10 @@ Every key is set as =ai-assistant.<key>= in the bar's configuration (or pushed f
 | =machine-context=      | bool          | =false=                         | Prepend a live machine summary (CPU, memory, GPU, disk, top processes, loaded models) to the system prompt |
 | =history-turns=        | int, 2--200   | =12=                            | Messages kept in memory and sent with each question (a question and its answer are two)                  |
 | =refresh=              | seconds, 5--60 | =10=                           | Poll interval while idle; it is 1 s while anything is in flight                                           |
-| =reduced-motion=       | bool          | =false=                         | Draw a static glyph instead of the moving wave                                                            |
-| =show-label=           | bool          | =false=                         | Show =provider/model= after the wave                                                                      |
-| =bars=                 | int, 3--12    | =5=                             | Bars in the wave                                                                                          |
+| =icon-style=           | string        | =robot=                         | =robot=, with a small wave while busy, or =wave=, the equaliser alone                                       |
+| =reduced-motion=       | bool          | =false=                         | No moving parts: the robot only, never a wave, whatever =icon-style= says                                  |
+| =show-label=           | bool          | =false=                         | Show =provider/model= after the icon                                                                      |
+| =bars=                 | int, 3--12    | =5=                             | Bars in the =wave= style (the robot's wave is always three)                                               |
 | =width=                | px, 320--1200 | =680=                           | Panel width. Wide by default: answers are paragraphs and code, and the Models tab is a table              |
 | =ollama-url=           | URL           | =http://127.0.0.1:11434=        | Where ollama listens; =http://= or =https://= only                                                       |
 | =curl=                 | command       | =curl=                          | The curl used to talk to ollama                                                                           |
@@ -121,7 +122,7 @@ Every key is set as =ai-assistant.<key>= in the bar's configuration (or pushed f
 
 | Key               | Default role | Colours                                                    |
 |-------------------+--------------+------------------------------------------------------------|
-| =color-idle=      | =subtext=    | The wave at rest                                           |
+| =color-idle=      | =subtext=    | The robot (or wave) at rest                                |
 | =color-thinking=  | =yellow=     | Asked and waiting; a model being loaded or pulled          |
 | =color-streaming= | =accent=     | An answer arriving                                         |
 | =color-error=     | =red=        | The last request, pull or model operation failed           |
@@ -230,7 +231,7 @@ Mounting =~/.ollama= keeps the models where the widget's default =models-dir= lo
 | Model list for a provider is empty                    | Only ollama and the providers cmacs pushes =models.<provider>= for have one. Type the id in *Other model*                           |
 | A model shows "too big" but you know it runs          | The badge is about fitting *comfortably* with context. A model ollama splits across GPU and CPU reads as =tight= at best              |
 | VRAM reads "no GPU" on an APU                         | VRAM under 2 GiB is treated as a carve-out; fit is judged against RAM, which is what ollama uses there                                |
-| The wave never moves                                  | =reduced-motion= is on, or nothing is happening. At rest it follows CPU/GPU load from the bar's shared reader                         |
+| No wave beside the robot                              | Nothing is being asked, or =reduced-motion= is on. The robot's wave shows only while thinking or streaming; =icon-style: wave= is always there |
 | *Copy* says "wl-copy is not installed"                | Layer =wl-clipboard=                                                                                                                  |
 
 * Internals

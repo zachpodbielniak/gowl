@@ -69,12 +69,15 @@
 /* The widget's registry name; cmacs addresses its AI replies to it. */
 #define AS_WIDGET "ai-assistant"
 
-/* The glyph drawn instead of the wave under `reduced-motion': a robot
-   head (nf-md-robot). */
+/* The bar icon, and the panel's: a robot head (nf-md-robot).  The
+   old equaliser-only look is `icon-style: wave'. */
+#define AS_MINI_BARS (3)
 /* Wide by default: answers are paragraphs and code, and the Models tab
    is a table.  `width' overrides it. */
 #define AS_PANEL_WIDTH (680)
 #define AS_GLYPH "\xf3\xb0\x9a\xa9"
+
+static gboolean as_wave_style (GowlBarPlugin *plugin);
 
 /* How many activity samples the wave remembers.  More than the widest
    wave anyone configures, so `bars' can grow without the history
@@ -1499,8 +1502,12 @@ as_apply_look(GowlBarPlugin *plugin, Assistant *as)
 	look = as_compute_look(as);
 	as_sample_activity(as, look);
 
-	bars = (guint)CLAMP(gowl_bar_plugin_get_setting_int(plugin, "bars", 5),
-	                    3, 12);
+	/* The robot carries a small three-bar wave while it works; the
+	   wave style is all bars. */
+	bars = as_wave_style(plugin)
+		? (guint)CLAMP(gowl_bar_plugin_get_setting_int(plugin, "bars",
+		                                              5), 3, 12)
+		: AS_MINI_BARS;
 	animate = (look == BAR_ASSISTANT_LOOK_THINKING ||
 	           look == BAR_ASSISTANT_LOOK_STREAMING);
 
@@ -1516,10 +1523,9 @@ as_apply_look(GowlBarPlugin *plugin, Assistant *as)
 			bar_assistant_look_color_key(look)),
 		as_look_role(look));
 
-	/* The static glyph is the reduced-motion form; the wave has none. */
+	/* The robot, unless the bar is all wave. */
 	gowl_bar_plugin_set_icon(plugin,
-		gowl_bar_plugin_get_setting_bool(plugin, "reduced-motion", FALSE)
-			? AS_GLYPH : NULL);
+		as_wave_style(plugin) ? NULL : AS_GLYPH);
 
 	provider = as_provider(plugin);
 	model = as_shown_model(plugin);
@@ -1647,6 +1653,14 @@ as_configure(GowlBarPlugin *plugin, gpointer data, GHashTable *settings)
 
 /* ── Measure and draw ─────────────────────────────────────────────── */
 
+/* The wave's geometry for a bar @height pixels tall. */
+static void
+as_wave_metrics(gint height, gint *bar_w, gint *gap)
+{
+	*bar_w = MAX(2, height / 8);
+	*gap   = MAX(1, *bar_w / 2 + 1);
+}
+
 static gboolean
 as_reduced(GowlBarPlugin *plugin)
 {
@@ -1654,12 +1668,41 @@ as_reduced(GowlBarPlugin *plugin)
 	                                        FALSE);
 }
 
-/* The wave's geometry for a bar @height pixels tall. */
-static void
-as_wave_metrics(gint height, gint *bar_w, gint *gap)
+/* `icon-style: wave', the equaliser on its own.  reduced-motion wins:
+   it asks for no moving parts at all. */
+static gboolean
+as_wave_style(GowlBarPlugin *plugin)
 {
-	*bar_w = MAX(2, height / 8);
-	*gap   = MAX(1, *bar_w / 2 + 1);
+	return !as_reduced(plugin) &&
+	       g_strcmp0(gowl_bar_plugin_get_setting(plugin, "icon-style"),
+	                 "wave") == 0;
+}
+
+/* Whether the robot shows its small wave: only while the model works,
+   and never under reduced-motion.  Compositor thread. */
+static gboolean
+as_robot_busy(GowlBarPlugin *plugin, Assistant *as)
+{
+	BarAssistantLook look;
+
+	if (as_reduced(plugin) || as_wave_style(plugin))
+		return FALSE;
+	g_mutex_lock(&as->lock);
+	look = as->look;
+	g_mutex_unlock(&as->lock);
+	return look == BAR_ASSISTANT_LOOK_THINKING ||
+	       look == BAR_ASSISTANT_LOOK_STREAMING;
+}
+
+/* The small wave's width beside the robot, for a bar @height tall. */
+static gint
+as_mini_width(const GowlBarTheme *theme, gint height)
+{
+	gint bar_w, gap;
+
+	as_wave_metrics(height, &bar_w, &gap);
+	return gowl_bar_theme_metric(theme, GOWL_BAR_METRIC_ITEM_PAD) / 2 +
+	       AS_MINI_BARS * (bar_w + gap) - gap;
 }
 
 static gint
@@ -1671,9 +1714,14 @@ as_measure(GowlBarPlugin *plugin, gpointer data, PangoLayout *layout,
 	gint pad, bar_w, gap, width;
 	guint bars;
 
-	if (as_reduced(plugin))
+	/* The robot: the ordinary icon (and label), plus the small wave
+	   while the model works.  The bar re-measures when the signature
+	   changes, which it does when the look does. */
+	if (!as_wave_style(plugin))
 		return gowl_bar_plugin_measure_label(plugin, layout, theme,
-		                                     height);
+		                                     height) +
+		       (as_robot_busy(plugin, as)
+		        ? as_mini_width(theme, height) : 0);
 
 	g_mutex_lock(&as->lock);
 	bars = as->n_heights;
@@ -1714,14 +1762,61 @@ as_draw(GowlBarPlugin *plugin, gpointer data, cairo_t *cr,
 	gint pad, radius, bar_w, gap, max_h, cx, center;
 	guint bars, i;
 
-	if (as_reduced(plugin)) {
-		gowl_bar_plugin_draw_label(plugin, cr, layout, theme, x, y,
-		                           width, height, hovered, panel_open);
-		return;
-	}
-
 	pad    = gowl_bar_theme_metric(theme, GOWL_BAR_METRIC_ITEM_PAD);
 	radius = gowl_bar_theme_metric(theme, GOWL_BAR_METRIC_RADIUS);
+
+	if (!as_wave_style(plugin)) {
+		gint mini = as_robot_busy(plugin, as)
+			? as_mini_width(theme, height) : 0;
+
+		if (mini == 0) {
+			gowl_bar_plugin_draw_label(plugin, cr, layout, theme,
+			                           x, y, width, height, hovered,
+			                           panel_open);
+			return;
+		}
+		/* The hover wash and open-panel rule span the robot and
+		   its wave alike, so they are drawn here for the whole
+		   width and the robot is drawn plain. */
+		if (hovered || panel_open) {
+			gowl_bar_cairo_rounded_rect(cr, x + 1, y + 2, width - 2,
+			                            height - 4, radius * 0.7);
+			gowl_bar_theme_cairo_set_alpha(theme, cr,
+				GOWL_BAR_COLOR_SURFACE,
+				panel_open ? 0.95 : 0.55);
+			cairo_fill(cr);
+		}
+		if (panel_open) {
+			gowl_bar_theme_cairo_set(theme, cr,
+			                         GOWL_BAR_COLOR_ACCENT);
+			cairo_rectangle(cr, x + pad / 2, y + height - 3,
+			                width - pad, 2);
+			cairo_fill(cr);
+		}
+		gowl_bar_plugin_draw_label(plugin, cr, layout, theme, x, y,
+		                           width - mini, height, FALSE, FALSE);
+
+		g_mutex_lock(&as->lock);
+		bars = MIN(as->n_heights, G_N_ELEMENTS(heights));
+		memcpy(heights, as->heights, bars * sizeof(gdouble));
+		g_mutex_unlock(&as->lock);
+
+		/* The wave tucks in after the robot, inside the right pad. */
+		as_wave_metrics(height, &bar_w, &gap);
+		max_h  = MAX(4, (height * 2) / 5);
+		center = y + height / 2;
+		cx     = x + width - mini - pad / 2;
+		gowl_bar_plugin_cairo_set_color(plugin, theme, cr);
+		for (i = 0; i < bars; i++) {
+			gint h = MAX(2, (gint)lround(heights[i] *
+			                             (gdouble)max_h));
+
+			cairo_rectangle(cr, cx, center - h / 2, bar_w, h);
+			cx += bar_w + gap;
+		}
+		cairo_fill(cr);
+		return;
+	}
 
 	/* The same hover wash and open-panel rule as every other widget. */
 	if (hovered || panel_open) {
@@ -1782,7 +1877,8 @@ as_signature(GowlBarPlugin *plugin, gpointer data, GString *out)
 	Assistant *as = data;
 	guint i;
 
-	g_string_append_printf(out, "|%d", as_reduced(plugin) ? 1 : 0);
+	g_string_append_printf(out, "|%d%d", as_reduced(plugin) ? 1 : 0,
+	                       as_wave_style(plugin) ? 1 : 0);
 	g_mutex_lock(&as->lock);
 	g_string_append_printf(out, "|%s|", bar_assistant_look_name(as->look));
 	for (i = 0; i < as->n_heights && i < G_N_ELEMENTS(as->heights); i++)

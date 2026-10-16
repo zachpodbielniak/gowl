@@ -1,0 +1,305 @@
+#+title: AI rewrite
+#+description: Rewrite the selected text anywhere on the desktop with a language model, see a word diff, and paste the result back over the selection.
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+
+Select text in any window --- a browser field, a mail composer, a terminal, an Electron app, an X11 program --- press a key, pick what to do with it, look at what the model changed, press Enter. The result replaces the selection, and a second later the clipboard holds what it held before.
+
+- *Capture.* The text is the Wayland PRIMARY selection (what you highlighted). If nothing is highlighted the clipboard is used instead, and the panel says so. If both are empty the panel offers a text field to type or paste into; a result made from typed text goes to the clipboard only, because there is nothing to paste over.
+- *Actions.* A list of things to do, each with a one-letter key: by default Fix spelling & grammar (=f=), Improve (=i=), Shorten (=s=), Translate to English (=e=) and Custom (=c=, which asks for an instruction). Add your own in a YAML file; under cmacs the list is the right-click AI menu's.
+- *Preview.* The answer is shown as a word-level diff: deleted words struck through in red, inserted words underlined in green.
+- *Chain.* Any action can be applied to the result, and again to that result; =Backspace= walks back one step at a time.
+- *Paste back.* =Enter= (or =v=) puts the result on the clipboard, closes the panel, puts the keyboard back on the window the text came from and types its paste chord into it --- =Ctrl+V=, or =Ctrl+Shift+V= in a terminal. Then the clipboard is restored. =y= only copies.
+
+What it deliberately does *not* do:
+
+- It does not type the result character by character. Pasting is one atomic edit the application can undo in one step, it keeps Unicode intact in every toolkit, and it does not trigger autocomplete on every keystroke.
+- It does not restore rich clipboard content. The previous clipboard is saved and restored as text; an image or a rich-text-only clipboard is not put back (see [[*Security and privacy][Security and privacy]]).
+- It does not run any model itself: it goes through the bar's shared AI backend ([[file:../bar.org::#plugin-ai][Asking a language model]]), so a standalone gowl uses ai-glib's =ai= command and cmacs uses cmacs-ai.
+
+It is a generic port of the Omarchy shell plugin "ai-edit", reimplemented against gowl's bar plugin API.
+
+* Quick start --- standalone gowl
+
+Add the widget to a bar and bind a key to its panel in =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "ai-rewrite"
+    ai-rewrite.ai-backend: ai          # ai-glib's `ai' command
+    ai-rewrite.ai-provider: ollama     # optional; empty for ai's default
+    ai-rewrite.ai-model: "qwen3.5:9b"  # optional
+keybinds:
+  "Super+e": { action: ipc_command, arg: "bar-panel ai-rewrite", desc: "AI rewrite the selection" }
+#+end_src
+
+=Super+e= is free in gowl's shipped =data/default-config.yaml= and in cmacs's =cmacs-gowl--install-default-keybinds= (checked 2026-10-16), and it is the key the original plugin used. The same from a shell or a script:
+
+#+begin_src sh
+gowl bar-panel ai-rewrite
+#+end_src
+
+The widget's bar glyph (=✎=) opens the same panel when clicked. It is mostly a keybind tool, so you can keep it out of the bar's way with =ai-rewrite.show-in-bar: false=: the widget stays registered and the keybind keeps working, it just takes no space. (The panel opens centred on the screen, so where the widget sits does not matter.)
+
+The widget is an alias target too: =ai-edit= and =rewrite= name the same widget.
+
+* Quick start --- cmacs --gowl
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-add" . "ai-rewrite")
+   ("ai-rewrite.show-in-bar" . "false")))
+(gowl-add-keybind "Super+e" 'ipc-command "bar-panel ai-rewrite"
+                  "AI rewrite the selection")
+;; Only needed when the widget is added AFTER cmacs started:
+(cmacs-gowl-bar-rewrite-push)
+#+end_src
+
+What =cmacs --gowl= does for this widget:
+
+- It is *off by default*: nothing adds it to a bar, and no key is bound.
+- At startup cmacs pushes its own action list, =ai-backend=cmacs= and the provider names to it (=cmacs-gowl-bar-rewrite-push=, =lisp/cmacs/cmacs-gowl-bar-rewrite.el=). So adding the widget is the one line above, and every provider configured in cmacs-ai --- API, CLI and named OpenAI-compatible endpoints --- is available with nothing configured twice.
+- A setting pushed to a widget that is not in the bar is dropped, so a widget added after startup needs the push again: call =(cmacs-gowl-bar-rewrite-push)= (or =M-x cmacs-gowl-bar-rewrite-push=) after adding it. Customising =cmacs-gowl-bar-rewrite-actions= through =customize= pushes by itself.
+
+The cmacs list is everything the right-click AI menu does to plain text, with the menu's own system prompts --- customise =cmacs-ai-proofread-system-prompt= and the bar's Fix spelling & grammar changes with it:
+
+| Key | Action                 | Prompt comes from                                    | Shown as |
+|-----+------------------------+------------------------------------------------------+----------|
+| =f= | Fix spelling & grammar | =cmacs-ai-proofread-system-prompt=, textops =proofread= | diff     |
+| =r= | Rephrase               | =cmacs-ai-rephrase-system-prompt=, textops =rephrase=   | diff     |
+| =i= | Improve                | the rephrase system prompt, its own instruction       | diff     |
+| =h= | Shorten                | the rephrase system prompt, its own instruction       | diff     |
+| =e= | Translate to English   | its own translator prompt                             | diff     |
+| =s= | Summarize              | =cmacs-ai-summarize-system-prompt=, textops =summarize= | text     |
+| =x= | Explain                | =cmacs-ai-explain-system-prompt=, textops =explain=     | text     |
+| =p= | Reply                  | =cmacs-ai-reply-system-prompt=, textops =reply=         | text     |
+| =a= | Ask about this...      | =cmacs-ai-ask-system-prompt=, textops =ask=, asks first | text     |
+| =c= | Custom...              | the rephrase prompts, with your instruction as "How"  | diff     |
+
+Each entry of =cmacs-gowl-bar-rewrite-actions= is =(KEY ID LABEL SYSTEM INSTRUCTION . PROPS)=; SYSTEM may be a variable name (read at push time) and INSTRUCTION may be =(textops OP)= or =(textops OP input)=, so the list follows =cmacs-ai-textops--specs= instead of copying it. =cmacs-gowl-bar-rewrite-actions-mode= is ="replace"= by default (the cmacs list already covers the five built-ins); ="extend"= lays it over them instead.
+
+* Settings
+
+Every key is set as =ai-rewrite.<key>= (or =bottom-ai-rewrite.<key>= in the bottom bar).
+
+| Key                   | Type      | Default                       | Meaning |
+|-----------------------+-----------+-------------------------------+---------|
+| =width=               | int       | =560=                         | Panel width in pixels (240--2000) |
+| =paste-command=       | command   | =wl-paste=                    | Reads the selection; the widget appends =--primary --no-newline --type text= (or the same without =--primary=). Run as an argv on a worker thread |
+| =copy-command=        | command   | =wl-copy=                     | Sets the clipboard; the text goes on its STDIN, never in argv |
+| =config=              | path      | =~/.config/gowl/ai-rewrite.yaml= | The action file (see below); re-read when its mtime changes, at most 256 KiB |
+| =actions=             | text      | empty                         | Pushed actions in the line format below; what cmacs sends |
+| =actions-mode=        | string    | =extend=                      | =extend= lays =actions= over the built-ins and the file; =replace= shows only =actions= (an empty push never replaces) |
+| =restore-clipboard=   | bool      | =true=                        | Put the previous clipboard back after pasting |
+| =restore-delay-ms=    | int       | =1000=                        | How long the result stays on the clipboard before that (100--60000) |
+| =paste-keys=          | chord     | =ctrl+v=                      | The paste chord sent to the window |
+| =paste-keys-terminal= | chord     | =ctrl+shift+v=                | The chord for terminals; empty means use =paste-keys= |
+| =terminal-app-ids=    | list      | =gst,foot,footclient,kitty,alacritty,org.wezfurlong.wezterm,com.mitchellh.ghostty= | Comma-separated app ids (X11: the class) that get =paste-keys-terminal=; exact match, any case |
+| =capture-timeout=     | seconds   | =3=                           | How long a =wl-paste= may take before it is killed (1--30) |
+| =max-chars=           | int       | =20000=                       | Longest selection taken; a longer one is refused with a note |
+| =label=               | string    | =✎=                           | The bar glyph |
+| =show-in-bar=         | bool      | =true=                        | =false= hides the widget from the bar; the keybind still opens it |
+| =color=               | colour    | =text= (=peach= while asking) | The bar glyph's colour |
+| =color-deleted=       | colour    | =red=                         | Deleted words in the diff |
+| =color-inserted=      | colour    | =green=                       | Inserted words in the diff |
+| =color-text=          | colour    | =text=                        | Unchanged words in the diff |
+| =color-key=           | role      | =accent=                      | The action rows' key letter |
+| =ai-backend=          | string    | =auto=                        | Shared AI setting --- [[file:../bar.org::#plugin-ai][Asking a language model]] |
+| =ai-provider=         | string    | (default)                     | Shared AI setting |
+| =ai-model=            | string    | (default)                     | Shared AI setting |
+| =ai-command=          | command   | =ai=                          | Shared AI setting |
+| =emacsctl=            | command   | =emacsctl=                    | Shared AI setting |
+| =ai-timeout=          | seconds   | =300=                         | Shared AI setting |
+| =ai-default-provider= | string    | (pushed by cmacs)             | Shown in the "Waiting for ..." line; set by =cmacs-gowl-bar-ai-push-providers= |
+
+Chords are =modifier+...+key=: =ctrl= (=control=), =shift=, =alt= (=mod1=), =super= (=logo=, =mod4=), then an XKB key name (=v=, =Insert=).
+
+** The action file
+
+=~/.config/gowl/ai-rewrite.yaml=:
+
+#+begin_src yaml
+replace-builtins: false        # true: only the actions below
+actions:
+  - key: t                     # a-z or 0-9; j, k, y, v are the panel's own
+    id: friendlier             # unique; reusing a built-in id replaces it
+    label: Make it friendlier
+    system: |
+      You rewrite text in a warmer, friendlier tone.
+      Keep every fact.  Output ONLY the rewritten text.
+    instruction: "Make the following friendlier:"
+  - key: q
+    id: question
+    label: Ask a question
+    input: "What do you want to know?"   # asks for a line first
+    instruction: "Answer this question about the text: {input}"
+    diff: false                # an answer, not a rewrite: show as text
+  - key: n
+    id: now
+    label: Fix and paste
+    instruction: "Fix the typos in the following."
+    preview: false             # paste straight away
+#+end_src
+
+| Field         | Default | Meaning |
+|---------------+---------+---------|
+| =key=         | none    | The hotkey; one lower-case letter or digit. A key another action already holds is dropped (the row stays clickable). An action from the file or a push wins a key over a built-in |
+| =id=          | ---     | Required, unique |
+| =label=       | ---     | Required; the row's text |
+| =system=      | none    | The system prompt |
+| =instruction= | empty   | What to do; ={input}= is replaced by what the user typed |
+| =input=       | none    | Ask for a line first; this is the field's placeholder |
+| =preview=     | =true=  | =false= pastes the answer without showing it |
+| =diff=        | =true=  | =false= shows the answer as plain text |
+| =provider=    | none    | Parsed and kept, but not used yet: see [[*Limitations][Limitations]] |
+| =model=       | none    | Likewise |
+
+An entry with no id or no label is skipped; the rest of the file still loads. A file that is not YAML is reported in the panel and ignored.
+
+** The prompt
+
+The model is sent the action's system prompt, and this user message:
+
+#+begin_example
+<instruction, {input} replaced, trimmed>
+
+<the selected text, exactly as selected>
+#+end_example
+
+An instruction that is empty after replacement sends the text alone. The answer is cleaned before it is shown: a =```= fence or a pair of quotes around the whole answer that the selection did not have is removed, surrounding blank space is trimmed, and the trailing white space the selection ended with (its newline, typically) is put back.
+
+** The pushed format
+
+The =actions= setting --- what cmacs sends --- is one action per line, after a =#ai-rewrite-actions 1= header:
+
+#+begin_example
+KEY<TAB>ID<TAB>LABEL<TAB>FLAGS<TAB>INPUT<TAB>PROVIDER<TAB>MODEL<TAB>SYSTEM<TAB>INSTRUCTION
+#+end_example
+
+Every field has =\=, tab, newline and carriage return escaped as =\\=, =\t=, =\n= and =\r=; nothing else is touched, so UTF-8 passes as it is. FLAGS holds =p= (preview) and =d= (diff). Lines starting with =#= and blank lines are skipped; a line without exactly nine fields, without an id or label, that is not UTF-8, or that repeats an id is dropped and the rest are kept. One setting rather than a setting per field means a push is atomic: the widget never sees half a list.
+
+* Theming
+
+| Key              | Role default | Applies to |
+|------------------+--------------+------------|
+| =color=          | =text= (=peach= while the model is answering) | The bar glyph |
+| =color-deleted=  | =red=        | Deleted words: also struck through |
+| =color-inserted= | =green=      | Inserted words: also underlined |
+| =color-text=     | =text=       | Unchanged words |
+| =color-key=      | =accent=     | The key letter of each action row |
+
+Each accepts a palette role name (=mauve=, =peach=, =sapphire=, ...) or a =#rrggbb= literal. A role follows the palette: switch the bar from Mocha to Latte and the diff follows. A literal stays exactly that colour. The exception is =color-key=: panel rows are drawn by the bar from a role, so a literal there falls back to =accent=; the diff and the bar glyph take either.
+
+#+begin_src yaml
+modules:
+  bar:
+    ai-rewrite.color-deleted: maroon
+    ai-rewrite.color-inserted: "#40a02b"
+    ai-rewrite.color-key: mauve
+#+end_src
+
+Colour is never the only signal in the diff: deleted text is struck through and inserted text underlined, so it reads without telling red from green.
+
+* The panel
+
+The panel opens in the middle of the screen.
+
+- *While reading the selection*: a busy row, for the moment =wl-paste= takes.
+- *Nothing selected*: a multi-line text field, focused; type or paste, then =Ctrl+Return=.
+- *The list*: where the text came from (/Selected text/, /From the clipboard/, /Typed text/, or /Current text/ once you have chained), a preview of it (six lines, 400 characters), then one row per action with its key. A row marked /asks.../ asks for a line first; one marked /pastes/ does not preview.
+- *Asking*: the action and its input field, focused; =Return= runs it.
+- *Running*: a busy row naming the provider when one is known, the tail of the answer as it streams, and Cancel.
+- *Result*: the diff, then *Paste* (*Copy* for typed text), *Copy*, *Again* (re-run the same action on the same input), *Back*, and the action list again under /Then/ for chaining.
+- *Error*: why, with *Again* and *Back*.
+
+Keys:
+
+| Key             | Does |
+|-----------------+------|
+| a letter or digit | Run that action on the text shown (in the result view: on the result) |
+| =Shift+=letter  | Run it, and paste the answer as soon as it arrives |
+| =v=             | Paste the result (result view) |
+| =Enter=         | Activates the focused item: on the diff it pastes, on a row it runs that action. Press =Tab= once to focus the diff (see [[*Limitations][Limitations]]) |
+| =y=             | Copy the result, leaving the panel open |
+| =Backspace=     | Back one step: cancel a running request, drop the last result, leave the input or error view |
+| =?=             | Show or hide these keys |
+| =j= / =k= / =Tab= | Move between rows (the bar's own keys) |
+| =Escape=        | Close; a running request is abandoned |
+
+Every letter is taken by the panel in the list and result views, bound or not: an unbound key does nothing rather than closing the panel and losing a result the model took twenty seconds to write. =Ctrl=, =Alt= and =Super= chords are not taken.
+
+* Dependencies
+
+Fedora packages:
+
+- =wl-clipboard= --- =wl-paste= and =wl-copy=. Without it the panel says so (naming the package) and falls back to the text field; Copy and Paste then fail with a toast naming the package.
+- For the standalone AI route: ai-glib's =ai= command (built from source; it is not in Fedora). Under cmacs nothing extra is needed: =emacsctl= and cmacs-ai ship with cmacs.
+
+Without any AI backend the panel says so up front and an action shows the reason in the error view.
+
+* Security and privacy
+
+- The text --- the selection, the result and the saved clipboard --- never appears in any argv. =wl-copy= gets it on stdin; the =ai= command gets the prompt on stdin (bar-ai's rule). Nothing is visible in =ps=.
+- The saved clipboard may be a password. It is held in memory only between the copy and the restore (about a second), zeroed when freed, written only to =wl-copy='s stdin, and never logged, toasted or shown.
+- The selected text is sent to whichever model the backend uses. For a hosted provider that means it leaves the machine; use a local provider (ollama) for anything sensitive.
+- If a clipboard history module is running it records the result and the restored text as two new entries.
+- The paste chord is synthetic input sent by the compositor to one window. It is refused while the session is locked or while a launcher or popup holds the keyboard.
+
+* Troubleshooting
+
+| Symptom | Cause and fix |
+|---------+---------------|
+| "Nothing selected" although text is highlighted | The application does not offer a primary selection (some Electron and Java apps). Copy it with =Ctrl+C= first; the clipboard is the fallback |
+| The panel uses the clipboard and says so | Nothing was highlighted, or the highlight was not text |
+| A terminal gets =^V= instead of the text | Its app id is not in =terminal-app-ids=. Find it with =gowl clients= (or =(gowl-focused-client)= in cmacs) and add it |
+| The OLD text was pasted | The application read the clipboard after it had already been restored. Raise =restore-delay-ms= (e.g. =2500=) |
+| The result was copied but not pasted, and a toast says why | The window closed, the session locked, a launcher held the keyboard, or no key in the layout types the chord. The result is on the clipboard: paste it by hand |
+| "No AI backend" | Install ai-glib's =ai=, or set =ai-rewrite.ai-backend: cmacs= under cmacs |
+| Only five actions under cmacs | The push happened before the widget was added. Run =(cmacs-gowl-bar-rewrite-push)= |
+| The answer is wrapped in quotes or a code fence | Only a wrapper the selection did not have is removed; tighten the action's system prompt |
+| "the selection holds N characters; the limit is M" | Raise =max-chars=, or select less |
+| A YAML error in the panel | The file is not valid YAML or not a mapping; the message names the file and the parser's complaint |
+
+* Limitations
+
+- *Per-action provider and model are parsed but not used.* The shared =bar_ai_start()= reads the provider and model from the widget's settings only, so every action uses =ai-provider= / =ai-model=. Honouring them needs a =bar_ai_start_full()= in =modules/bar/bar-ai.c= taking both.
+- *=Enter= pastes only once the diff has keyboard focus.* The bar host gives =Return= to the focused item and does nothing when nothing is focused, which is the state a freshly built panel is in. =v= pastes directly; =Tab= then =Enter= also works. A host change offering =Return= to the plugin when nothing is focused would make =Enter= alone work.
+- The restore puts back text only.
+- =j=, =k=, =y= and =v= cannot be action keys.
+
+* Internals
+
+Files:
+
+- =modules/bar/bar-plugins-airewrite.c= --- the widget: state, threads, panel, paste-back.
+- =modules/bar/bar-airewrite-model.c=, =.h= --- everything pure: the action list, the YAML reader (yaml-glib, through =libgowl=), the pushed format, prompt composition, answer cleaning, the word diff, the paste-chord choice and the paste/restore state machine.
+- =tests/test-bar-ai-rewrite.c= and =tests/fixtures/bar/ai-rewrite/=.
+- cmacs: =lisp/cmacs/cmacs-gowl-bar-rewrite.el=, =test/cmacs/cmacs-gowl-bar-rewrite-tests.el=.
+
+Threads. Everything the widget does on the compositor thread is bounded and non-blocking:
+
+| Step | Thread | How |
+|------+--------+-----|
+| Remember the focused window | compositor | =panel_opened=, a =GWeakRef= to the client, re-checked against the client list before use |
+| Read the action file, the selection, the clipboard | worker | =gowl_bar_plugin_queue_work()=; each =wl-paste= killed (its PID only) after =capture-timeout=; results swapped in under a mutex with a generation counter, so a capture for a panel that was closed is dropped |
+| Ask the model | worker or cmacs | =bar_ai_start()=; the answer is absorbed in =poll= (once a second while busy), in =configure= (every cmacs push lands there) and in the panel builder |
+| Diff | compositor | prefix/suffix trim, then an LCS over tokens, bounded at a million cells; above that, one replacement |
+| Save the clipboard and copy the result | worker | =wl-paste= then =wl-copy= with the text on stdin; =wl-copy='s stdout is =/dev/null=, because the child it forks keeps it and a pipe would never close |
+| Paste chord | compositor | a =wl_event_loop= timer polls the paste machine every 25 ms while a worker owns it; =paste_inject()= shows the window if focus moved (=gowl_compositor_show_client=) and taps the chord with =gowl_compositor_send_key_to_client()=, which reaches Wayland and X11 windows alike and honours the keyboard grabs |
+| Restore | worker | after =restore-delay-ms=, =wl-copy= again with the saved text |
+
+No =g_timeout_add= and no GLib child watch: under cmacs both would fire on Emacs's thread (guard 7). The poll also steps the paste machine, which is how it runs without a compositor (the tests) and a safety net with one.
+
+The paste/restore sequence is a pure state machine (=bar_airewrite_paste_step()=): =COPYING= (worker) → =COPIED= → keys go, =SETTLING= → after the delay, =RESTORING= (worker) → idle. A failed copy sends no keys; a copy-only request restores nothing; keys that failed turn the restore off so the result stays on the clipboard; nothing is restored when nothing was saved.
+
+The word diff tokenizes into runs of letters and digits, runs of white space, and single other characters (punctuation, symbols, emoji), so concatenating the tokens gives back the text exactly. Inside each changed stretch deletions come before insertions, and white space between two changes joins both sides, so =the cat= → =a dog= reads as one replacement. The canvas paints the deleted and inserted texts interleaved, with Pango attributes for colour, strikethrough and underline, measured with the same layout at build time to size the canvas.
+
+Testing. =tests/test-bar-ai-rewrite.c= runs offline against stand-in =wl-paste=, =wl-copy=, =ai= and =emacsctl= scripts that record their argv and stdin: the primary → clipboard → text-field fallbacks (including white-space-only and non-UTF-8 selections), a stale capture being dropped, the YAML file and pushed actions reaching the panel (with hostile prompts arriving intact in the Elisp form), the keys (letter, =Shift=+letter, =?=, =Backspace= through every view, unbound letters, =Ctrl= chords), chaining and the back stack, =Again=, errors, the CLI route's prompt on stdin and not in argv, the missing-backend and missing-=wl-clipboard= paths, copy on stdin, copy-only for typed text, auto-paste for =Shift= and =preview: false=, the colour settings (the canvas is rendered and its pixels checked), and every pure helper against golden cases (=diff-golden.tsv=). The cmacs serialiser and this parser are both tested against one golden string (=pushed-from-cmacs.txt=).
+
+What no headless test reaches is the keystroke itself, which needs a compositor, a keymap and a client. It is isolated in =paste_inject()= (about thirty lines, every decision in it made beforehand in tested code), and it uses the same =gowl_compositor_send_key_to_client()= the macro module's targeted keys use, which =tests/test-macro-targeted-key.c= and =tests/test-broadcast-x11.c= cover against real Wayland and Xwayland clients. It was not exercised on a live session as part of this change.

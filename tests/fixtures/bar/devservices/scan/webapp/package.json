@@ -1,0 +1,10 @@
+{
+  "name": "webapp",
+  "private": true,
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite --port 5173",
+    "test": "vitest"
+  },
+  "devDependencies": { "vite": "^6.0.0" }
+}

@@ -1,0 +1,45 @@
+[
+  {
+    "AutoRemove": false,
+    "Command": ["postgres"],
+    "Id": "5f1c3e9a7b2d",
+    "Image": "docker.io/library/postgres:16",
+    "Labels": {
+      "com.docker.compose.container-number": "1",
+      "com.docker.compose.project": "shop",
+      "com.docker.compose.project.config_files": "compose.yaml",
+      "com.docker.compose.project.working_dir": "/home/dev/source/projects/shop",
+      "com.docker.compose.service": "postgres",
+      "io.podman.compose.project": "shop",
+      "io.podman.compose.version": "1.2.0"
+    },
+    "Names": ["shop_postgres_1"],
+    "Ports": [{"host_ip": "", "container_port": 5432, "host_port": 5432, "range": 1, "protocol": "tcp"}],
+    "State": "running",
+    "Status": "Up 3 minutes"
+  },
+  {
+    "Id": "9a0b1c2d3e4f",
+    "Image": "docker.io/library/redis:7",
+    "Labels": {
+      "com.docker.compose.project": "shop",
+      "com.docker.compose.project.working_dir": "/home/dev/source/projects/shop",
+      "com.docker.compose.service": "redis"
+    },
+    "Names": ["shop_redis_1"],
+    "State": "exited",
+    "Status": "Exited (0) 2 hours ago"
+  },
+  {
+    "Id": "77aa88bb99cc",
+    "Image": "docker.io/library/postgres:15",
+    "Labels": {
+      "com.docker.compose.project": "other",
+      "com.docker.compose.project.working_dir": "/home/dev/source/projects/other",
+      "com.docker.compose.service": "postgres"
+    },
+    "Names": ["other_postgres_1"],
+    "State": "running",
+    "Status": "Up 1 day"
+  }
+]

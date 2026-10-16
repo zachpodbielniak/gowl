@@ -1,0 +1,12 @@
+services:
+  db:
+    image: docker.io/library/postgres:16
+    ports:
+      - "127.0.0.1:5432:5432"
+    env_file: .env
+  cache:
+    image: docker.io/library/redis:7
+    ports:
+      - "6379:6379"
+  worker:
+    image: localhost/webapp-worker

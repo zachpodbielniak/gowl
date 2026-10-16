@@ -1,0 +1,46 @@
+# A typical web app: PostgreSQL in a container, an API, a frontend.
+name: Shop
+root: ~/source/projects/shop
+
+services:
+  - id: db
+    label: PostgreSQL
+    type: podman
+    compose: compose.yaml
+    service: postgres
+    port: 5432
+    health: port
+    wait: 90
+
+  - id: api
+    label: Backend API
+    type: process
+    dir: backend
+    cmd: ["uv", "run", "uvicorn", "shop.app:app", "--port", "8000"]
+    port: 8000
+    health: http://127.0.0.1:8000/healthz
+    needs: [db]
+    env:
+      DATABASE_URL: postgres://shop@127.0.0.1:5432/shop
+      LOG_LEVEL: debug
+
+  - id: web
+    label: Frontend
+    dir: frontend
+    cmd: "npm run dev -- --port 5173 2>&1 | tee -a /dev/null"
+    port: 5173
+    health: http://127.0.0.1:5173/
+    url: http://127.0.0.1:5173/
+    open: true
+    wait: 120
+    needs: [api]
+
+tasks:
+  - id: migrate
+    label: Run migrations
+    dir: backend
+    cmd: ["uv", "run", "alembic", "upgrade", "head"]
+    needs: [db]
+  - id: test
+    label: Test suite
+    cmd: ["make", "test"]

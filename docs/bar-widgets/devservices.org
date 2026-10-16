@@ -1,0 +1,320 @@
+#+title: Dev services
+#+description: Start, stop and watch a project's development services (containers, servers, tasks) from the gowl bar
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+
+The =devservices= widget (alias =devstack=) manages the development stack of a project: the database in a container, the backend, the frontend, the one-off tasks around them. You declare a project's services once, in a YAML file, and then bring the whole stack up, watch it, and bring it down from the bar.
+
+- *Follows your focus.* In the default =auto= mode the widget shows the project the focused window is working in: it finds the shell the focused terminal is showing, reads its working directory, and picks the declared project whose root contains it. Switch terminals and the bar follows.
+- *Brings a stack up in order.* Containers first (=podman compose up -d=), wait for their ports, then the processes, wait for their health checks, then open the URLs you asked for. =needs= between services is honoured, and a cycle is refused with the names in it.
+- *Stops exactly what it started.* Every process is started in its own session, so its own process group; stopping it signals that group (=SIGTERM=, then =SIGKILL= after a grace period) and nothing else. The pid, the group and the process's start time are recorded in a state file, so a restarted gowl still sees and can still stop what it started --- and never signals a pid that has since been reused by an unrelated process.
+- *Watches it.* Every few seconds: is it running, is its port listening, does its health check pass. A service that stays running but unhealthy turns *stuck*; one that exits on its own turns *failed* with its exit status. The bar shows =up/total= in a colour that says it all.
+- *Logs.* Each service's output goes to its own log; the panel shows the last line under each service, and one click tails it in a terminal.
+- *Tasks.* Migrations, seeders, test suites: run with their =needs= started first, reported when they finish.
+- *Finds projects.* /Scan for projects/ looks through your source directories for recognisable stacks (compose files, a =package.json= dev script, Cargo, Go, a Makefile =run= / =dev= target, pyproject) and drafts a stack file you can edit.
+
+What it deliberately does not do:
+
+- It never uses Docker. Containers go through =podman compose=.
+- It never pattern-kills (=pkill=, =killall=). It signals process groups it started, after checking their start time, and the one pid that holds a port when you explicitly ask it to (two clicks).
+- It does not rewrite your code. When two projects declare the same port the panel says so and tells you where to change it (/Move port/ is a hint, not an action): changing a port means changing the application's own configuration, which the widget has no business editing.
+- It does not read =.env= files, ever --- not when scanning, not when starting. Put the variables a service needs under its =env:=, or let the service read its own =.env=.
+- It does not stop your services when gowl exits. They are your dev servers; the state file lets the next gowl adopt them.
+
+It is a generic, native port of the idea behind the Omarchy shell plugin /devstack/ (a per-project dev stack manager), rebuilt on gowl's bar: worker threads, the bar's own panels and toasts, podman, and process groups.
+
+* Quick start --- standalone gowl
+
+Declare a stack, for example =~/.config/gowl/devservices/shop.yaml= (a full example is under [[*Stack files][Stack files]]):
+
+#+begin_src yaml
+name: Shop
+root: ~/source/projects/shop
+services:
+  - id: db
+    type: podman
+    compose: compose.yaml
+    service: postgres
+    port: 5432
+    health: port
+  - id: api
+    dir: backend
+    cmd: ["uv", "run", "uvicorn", "shop.app:app", "--port", "8000"]
+    port: 8000
+    health: http://127.0.0.1:8000/healthz
+    needs: [db]
+#+end_src
+
+Add the widget to the bar in =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "devservices"
+    devservices.mode: auto
+    devservices.search-roots: "~/source/projects:~/Projects"
+keybinds:
+  "Super+Shift+d": { action: ipc_command, arg: "bar-panel devservices", desc: "Dev services panel" }
+#+end_src
+
+Open the panel without the pointer:
+
+#+begin_src sh
+gowl bar-panel devservices
+#+end_src
+
+* Quick start --- cmacs --gowl
+
+In =init.el= (or Doom's =config.el=):
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-add" . "devservices")
+   ("devservices.mode" . "auto")
+   ("devservices.search-roots" . "~/source/projects:~/Projects")))
+(gowl-add-keybind "Super+Shift+d" 'ipc-command "bar-panel devservices" "Dev services panel")
+#+end_src
+
+Under =cmacs --gowl= the widget is *off by default*; the lines above turn it on.
+
+When the focused window is an Emacs frame, the window's process is cmacs itself, whose working directory means nothing. The widget then uses the =focus-cwd= setting instead, which cmacs can keep pointed at the current buffer's =default-directory= (for example from =buffer-list-update-hook= or =window-selection-change-functions=):
+
+#+begin_src emacs-lisp
+(defun my/devservices-follow-buffer (&rest _)
+  (when (fboundp 'cmacs-gowl-bar-push)
+    (cmacs-gowl-bar-push "devservices"
+                         `(("focus-cwd" . ,(expand-file-name default-directory))))))
+(add-hook 'window-selection-change-functions #'my/devservices-follow-buffer)
+#+end_src
+
+* Settings
+
+All settings are per widget: =devservices.<key>= in the bar's configuration, or pushed at runtime by cmacs.
+
+| Key               | Type                      | Default                              | Meaning                                                                                                                       |
+|-------------------+---------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------|
+| =mode=            | =auto= / =all= / =fixed=  | =auto=                               | Which project the bar shows: the focused window's (=auto=), every project aggregated (=all=), or =project= (=fixed=)          |
+| =project=         | string                    | (none)                               | The project for =fixed= mode: a stack's file stem or its =name=                                                              |
+| =config-dir=      | path                      | =~/.config/gowl/devservices=         | Where stack files (=*.yaml=, =*.yml=) live; =~= allowed                                                                       |
+| =state-dir=       | path                      | =$XDG_STATE_HOME/gowl/devservices=   | Logs and state files                                                                                                          |
+| =focus-cwd=       | path                      | (none)                               | The directory to match when the focused window is gowl/cmacs itself or there is no compositor (see the cmacs quick start)    |
+| =interval=        | seconds                   | =5=                                  | Status poll period; the widget polls every second while anything is starting, stopping, or scanning                          |
+| =stuck-after=     | polls                     | =6=                                  | Consecutive unhealthy polls of a running service before it is /stuck/                                                        |
+| =stop-grace=      | seconds                   | =5=                                  | Time between =SIGTERM= and =SIGKILL= when stopping a process group                                                           |
+| =notify=          | =final= / =all= / =off=   | =final=                              | Toasts: when an up/down/task finishes or fails (=final=), also every service turning up/stuck (=all=), or none (=off=)        |
+| =podman=          | command                   | =podman=                             | The podman binary, for =podman ps=                                                                                            |
+| =compose-command= | command line              | =podman compose=                     | The compose front end; =-f FILE [-p PROJECT] up -d SERVICE= / =down SERVICE= are appended (=podman-compose= works too)         |
+| =curl=            | command                   | =curl=                               | Used for URL health checks: =curl -fsS --max-time 2 URL=                                                                      |
+| =open-command=    | command line              | =xdg-open=                           | Opens a service's =url= (the URL is appended, shell-quoted)                                                                    |
+| =terminal=        | command                   | =$TERMINAL=, else =gst=              | The terminal the default log and edit commands run in                                                                          |
+| =log-command=     | command line              | =<terminal> -e tail -F=              | Shows logs; the quoted log paths are appended                                                                                  |
+| =edit-command=    | command line              | =<terminal> -e $EDITOR=, else =xdg-open= | Opens a stack file; the quoted path is appended                                                                           |
+| =search-roots=    | colon-separated paths     | =~/source/projects:~/Projects=       | Where /Scan for projects/ looks, one level deep                                                                               |
+| =icon=            | glyph                     | (server rack, U+F233)                | The bar glyph                                                                                                                  |
+| =color-off=       | role or =#rrggbb=         | =subtext=                            | Bar colour when nothing is running                                                                                             |
+| =color-ok=        | role or =#rrggbb=         | =green=                              | Bar colour when services are up and nothing is wrong                                                                           |
+| =color-working=   | role or =#rrggbb=         | =yellow=                             | Bar colour while something starts or stops                                                                                     |
+| =color-error=     | role or =#rrggbb=         | =red=                                | Bar colour when something is stuck or failed                                                                                   |
+
+** Stack files
+
+One file per project in =config-dir=. The file's stem (=shop= for =shop.yaml=) is the project's key: it names its state file and logs, so it must be letters, digits, =_=, =.= and =-=. A bad file is listed under /Problems/ in the panel and skipped; the others still load. A file is refused as a whole on any bad entry, because a stack that silently dropped its database would start without it and report success.
+
+Top level:
+
+| Key        | Required | Meaning                                                              |
+|------------+----------+----------------------------------------------------------------------|
+| =name=     | no       | Display name; defaults to the file stem                              |
+| =root=     | yes      | The project directory, absolute or =~/...=; this is what =auto= matches |
+| =services= | no       | List of services                                                     |
+| =tasks=    | no       | List of tasks                                                        |
+
+A service:
+
+| Key       | Type                     | Default      | Meaning                                                                                                                        |
+|-----------+--------------------------+--------------+--------------------------------------------------------------------------------------------------------------------------------|
+| =id=      | id                       | (required)   | Letters, digits, =_=, =.=, =-=; unique in the stack; names the log                                                              |
+| =label=   | string                   | =id=         | What the panel shows                                                                                                           |
+| =type=    | =process= / =podman=     | =process=    | A command the widget runs, or a compose service                                                                                |
+| =dir=     | path                     | =root=       | Working directory, relative to =root= (or absolute)                                                                            |
+| =cmd=     | list or string           | (process: required) | The command. *A list is the argv as written* and is preferred: no shell sees it, nothing needs quoting. *A string is run with =sh -c=*, whole --- use it for pipes, redirections, =&&= |
+| =port=    | 1--65535                 | (none)       | The port it listens on: used for health, for spotting a stranger on it, and for clash detection                                |
+| =health=  | =port= or http(s) URL    | (see below)  | =port=: a TCP connect to localhost; a URL: =curl -fsS= must succeed                                                             |
+| =url=     | http(s) URL              | (none)       | What /Open/ opens                                                                                                              |
+| =open=    | bool                     | =false=      | Open =url= when the service becomes healthy during /Up/                                                                        |
+| =wait=    | seconds                  | =60=         | How long /Up/ waits for it to become healthy before failing                                                                    |
+| =env=     | map                      | (none)       | Extra environment variables                                                                                                    |
+| =needs=   | list of service ids      | (none)       | Start after these are healthy; stop before them                                                                                |
+| =compose= | path                     | (podman: required) | The compose file, relative to =root=                                                                                     |
+| =service= | name                     | =id=         | The service's name inside the compose file                                                                                     |
+| =project= | name                     | (compose's default) | An explicit compose project name (=-p=)                                                                                 |
+
+With no =health=, a service with a =port= is healthy when the port listens; with neither, a process is healthy once it has stayed running for a second (so a command that dies on a bad flag fails the /Up/ instead of passing it), and a container once =podman ps= shows it running.
+
+A task:
+
+| Key     | Meaning                                        |
+|---------+------------------------------------------------|
+| =id=    | Unique in the stack                            |
+| =label= | What the panel shows                           |
+| =dir=   | Working directory, relative to =root=          |
+| =cmd=   | List or string, as for a service               |
+| =needs= | Services started (and healthy) before it runs  |
+
+A complete example for a typical web app --- PostgreSQL through podman compose, a Python backend and a Vite frontend. The same file is the test fixture =tests/fixtures/bar/devservices/web-app.yaml=.
+
+#+begin_src yaml
+# ~/.config/gowl/devservices/shop.yaml
+name: Shop
+root: ~/source/projects/shop
+
+services:
+  - id: db
+    label: PostgreSQL
+    type: podman
+    compose: compose.yaml        # in the project root
+    service: postgres            # the service name inside it
+    port: 5432
+    health: port
+    wait: 90                     # a first pull can take a while
+
+  - id: api
+    label: Backend API
+    type: process
+    dir: backend
+    cmd: ["uv", "run", "uvicorn", "shop.app:app", "--port", "8000"]
+    port: 8000
+    health: http://127.0.0.1:8000/healthz
+    needs: [db]
+    env:
+      DATABASE_URL: postgres://shop@127.0.0.1:5432/shop
+      LOG_LEVEL: debug
+
+  - id: web
+    label: Frontend
+    dir: frontend
+    # The string form: run by sh -c, so the pipe works.
+    cmd: "npm run dev -- --port 5173 2>&1 | tee -a /dev/null"
+    port: 5173
+    health: http://127.0.0.1:5173/
+    url: http://127.0.0.1:5173/
+    open: true
+    wait: 120
+    needs: [api]
+
+tasks:
+  - id: migrate
+    label: Run migrations
+    dir: backend
+    cmd: ["uv", "run", "alembic", "upgrade", "head"]
+    needs: [db]
+  - id: test
+    label: Test suite
+    cmd: ["make", "test"]
+#+end_src
+
+/Up/ on this stack runs: =podman compose -f ~/source/projects/shop/compose.yaml up -d postgres=, waits for 5432, starts the API in =backend/=, waits for =/healthz=, starts the frontend, waits for it, then opens =http://127.0.0.1:5173/=. /Down/ stops them in the reverse order.
+
+** Ordering
+
+Services start in *waves*. A service's wave is the length of its =needs= chain, and within that, containers before processes. With no =needs= at all that is simply "every container, then every process"; with them, a process that needs another process starts after it. Each wave must be healthy before the next starts; a wave that is not healthy within its longest =wait= fails the /Up/ (the services already started are left running so you can read their logs). /Down/ walks the same waves backwards. A =needs= cycle is refused with the services in it named.
+
+* Theming
+
+The bar label's colour follows the aggregate state of the shown project (or of every project in =all= mode): error beats working beats ok beats off, so a red widget is never repainted yellow by an unrelated service that is merely starting.
+
+| Setting         | State                                            | Default role |
+|-----------------+--------------------------------------------------+--------------|
+| =color-off=     | nothing running                                  | =subtext=    |
+| =color-ok=      | something up, nothing wrong                      | =green=      |
+| =color-working= | something starting or stopping, or an action runs | =yellow=     |
+| =color-error=   | something stuck or failed                        | =red=        |
+
+Each accepts a palette role name, which follows the session palette (Mocha, Latte, ...), or a =#rrggbb= literal, which is used exactly:
+
+#+begin_src yaml
+modules:
+  bar:
+    devservices.color-ok: teal
+    devservices.color-error: "#ff5555"
+#+end_src
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("devservices.color-ok" . "teal")
+   ("devservices.color-error" . "#ff5555")))
+#+end_src
+
+The state badges in the panel use the same four roles (green, yellow, red, subtext) and follow the palette; the =color-*= settings apply to the bar label.
+
+* The panel
+
+From top to bottom:
+
+- *Hero*: the project's name and "N of M up" (or the action in progress: "Starting wave 2 of 3"). The last action's error, if any, is shown in red under it.
+- *Services*: one row per service --- label; the last line of its log as the subtitle (or why it failed); its state and port on the right (=up :8000=, =starting=, =stuck=, =failed=, =stopping=, =off=). Clicking a row tails that service's log.
+- *Take over port N*: shown under a service that is not running while another process listens on its port, with that process's name and pid. The first click arms it (the row reads /Click again to stop pid N/); a second click within five seconds sends =SIGTERM= to *that one pid* --- never a group, never gowl itself, never another user's process. A port held by another user's process is only reported.
+- *Buttons*: /Up/, /Down/, /Restart/ (down then up), /Logs/ (tails every service's log in one terminal), /Open/ (every service =url=). Disabled while an action runs.
+- *Tasks*: one row per task, with what it needs. Click to run it; while it runs the row says so and a click stops it (its process group). Its result (/finished/, /failed (status N)/) is shown afterwards and toasted.
+- *Projects* (in =auto= and =all= mode, or when pinned): every declared project with its =up/total=. Clicking one *pins* it --- the bar and panel show it regardless of focus --- and /Unpin/ goes back to following the focus (or to the aggregate in =all= mode). The pin lasts until gowl restarts; use =mode: fixed= to make it permanent.
+- *Port clashes*: two projects declaring the same port, with the /Move port/ hint.
+- *Problems*: stack files that did not load, each with the reason.
+- Missing-dependency notes (podman, curl) with the Fedora package names.
+- /Scan for projects/ and /Edit stack/. A scan lists undeclared projects found one level under =search-roots=, with what was recognised; /Declare/ writes a draft =KEY.yaml= into =config-dir= (mode 0644, never overwriting an existing file) and the row becomes /Edit/.
+
+The usual panel keys apply (=j=/=k=/=Tab= to move, =Return= to activate, =Escape= to close); the widget adds none of its own.
+
+* Dependencies
+
+Fedora packages (the names to layer into the image):
+
+| Package          | Needed for                                                    | When missing                                                                                                  |
+|------------------+---------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------|
+| =podman=         | =type: podman= services (=podman ps=, =podman compose=)        | Panel and tooltip say "podman is not installed (Fedora: podman, podman-compose)"; /Up/ fails with that reason |
+| =podman-compose= | the provider =podman compose= delegates to                    | =podman compose= fails; the reason is the last line of the service's log, shown in the panel                   |
+| =curl=           | URL health checks                                             | Panel notes it; URL checks fall back to the port (or to "running")                                             |
+| =xdg-utils=      | =xdg-open= for /Open/ and =open: true=                         | Nothing opens; set =open-command=                                                                              |
+
+Process services need nothing but their own tools. The widget is part of =bar.so= and links nothing new.
+
+* Security and privacy
+
+- *Never a shell unless you asked for one.* A list =cmd= is executed as an argv. Commands the widget builds for the panel (logs, open, edit) append every path and URL through =g_shell_quote=, so a URL with =;= in it or a state directory with a quote in it stays one word. =url= and =health= must be =http://= or =https://=, so /Open/ can never be pointed at a file or another scheme handler.
+- *Only what it started.* Stopping signals a process group recorded in the state file, and only after the leader's =/proc= start time matches the record. A reused pid is detected and left alone; a group whose members predate the record is refused. The widget refuses to signal its own process group.
+- *Take over port* stops one pid, owned by you, after two clicks.
+- *Logs* (=STATE/KEY-ID.log=, mode 0600) hold whatever your services print, which for a dev server is often tokens and connection strings; they are readable only by you. Logs rotate at 5 MiB (the old contents move to =.log.1=).
+- *State files* (=STATE/KEY.state=, mode 0600) hold pids and start times only.
+- *Scanning is read-only*, bounded (256 KiB per file) and never opens a =.env=. Drafts are 0644 and contain only commands and ports.
+- =env:= values in a stack file are passed to the service's environment, never on a command line; but they are in the stack file, so do not commit a stack file with real secrets.
+
+* Troubleshooting
+
+| Symptom                                                    | Cause and fix                                                                                                                                                       |
+|------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| No count in the bar, tooltip "not in a declared project"   | =auto= mode and the focused window's shell is outside every =root=. Check =root=, pin a project in the panel, or use =mode: fixed=                                   |
+| Always "not in a declared project" under cmacs             | The focused window is cmacs itself: push =focus-cwd= (see the cmacs quick start)                                                                                    |
+| A stack is missing from the panel                          | It failed to load: see /Problems/. The file stem must be a valid id and the file under 256 KiB                                                                       |
+| A service flips to /failed/ right after /Up/               | It exited; the panel shows the status and the last log line. /Logs/ shows the rest                                                                                   |
+| A service is /stuck/                                       | Running, but its health check failed =stuck-after= times in a row. Check the URL with =curl -fsS URL=, or the port                                                   |
+| /Up/ fails with "not healthy in time"                      | It took longer than =wait=. Raise =wait= (a first container pull can take minutes)                                                                                   |
+| "podman compose up failed"                                 | Read the service's log (row click). Usually no compose provider: install =podman-compose=                                                                            |
+| A container shows /off/ although it runs                   | It belongs to a different compose project. Set =project:= to the name =podman ps= shows in =com.docker.compose.project=                                               |
+| "Take over port N" appears                                 | Another process listens on the service's port (often a server left running in a terminal). Stop it there, or take over the port                                     |
+| After a gowl restart a service shows /off/ though it runs  | Its pid was reused or it was started outside the widget. The widget will not adopt it; stop it where it was started                                                |
+| "Dev services are busy"                                    | One action at a time; wait for the current one                                                                                                                      |
+
+* Internals
+
+- *Files.* =modules/bar/bar-plugins-devservices.c= is the widget; =modules/bar/bar-devservices-model.{c,h}= is the pure half --- YAML parsing (yaml-glib, from =libgowl=), wave planning, root matching, the =/proc= walk, =/proc/net/tcp= parsing, the state file, spawning into a new session, liveness and signalling, the status machine, the scan. Every =/proc= reader takes the proc root as a parameter.
+- *Threads.* The compositor-thread side does only cheap things: the poll reads the focused client's pid (=gowl_compositor_get_focused_client= + =gowl_client_get_pid=, which may only be asked there), raises queued toasts and sets the label; the panel and actions copy state under the lock and queue work. Everything that waits --- reading stacks, =podman ps=, =curl=, connecting to ports, spawning, signalling, scanning --- runs in one *step* on a bar worker, serialised by a work mutex, and swaps its results in under the data lock.
+- *Actions are a state machine.* /Up/, /Down/, /Restart/ and tasks are a list of waves advanced one step per worker run: one step starts a wave, later steps check it. No step blocks longer than a health check, because the bar's worker pool is shared by every widget. While an action runs the widget asks for a poll every second.
+- *Children.* Services are spawned with =g_spawn_async_with_fds= and =G_SPAWN_DO_NOT_REAP_CHILD=, with =setsid()= in the child, stdout and stderr appended to the log, stdin from =/dev/null=. They are reaped with =waitpid(WNOHANG)= on the worker --- never a GLib child watch, which under cmacs would fire on Emacs's thread. =podman compose up/down= runs the same way, logged into the service's log. Detached launches (terminal, browser, editor) go through =gowl_bar_plugin_spawn=.
+- *Liveness.* A run is alive when its leader's =/proc/PID/stat= start time equals the recorded one; when the leader has exited but members of its group remain (all started after it), the group is still ours and still stoppable; otherwise it is gone or, if the pid is alive with a different start time, someone else's.
+- *State paths.* =$XDG_STATE_HOME/gowl/devservices/KEY.state= (=id.pid=, =id.pgid=, =id.starttime=, =id.started= lines, written atomically) and =KEY-ID.log= / =KEY-task-ID.log=.
+- *Reloading.* The config directory's signature (names, sizes, mtimes) is checked every step; a change reloads the stacks and carries each service's live state across by key and id, so editing a label while a server runs neither loses nor restarts it. Removing a running service from its stack file forgets it: stop it first.
+- *Tests.* =tests/test-bar-devservices.c= (=make build/release/test-bar-devservices=): parsing of both =cmd= forms and of every refusal, non-UTF-8 input, wave order and cycles, root matching (longest prefix, path components, symlinks), the shell walk on a fabricated =/proc=, =/proc/net/tcp= and =tcp6= parsing from fixtures, socket ownership, the state file round trip and hostile state entries, real =sleep= children in their own group with a backgrounded grandchild killed by a group stop, start-time mismatch refusal, orphaned groups, log tail and rotation, the status machine, podman argv and =podman ps= matching, port clashes, the scan and draft writing on fixture projects (with a =.env= that must never leak). Through =bar.so= and the stub host: up/down end to end, failures, a missing podman, a stand-in podman and curl, stuck detection, colour overrides, =notify=, quoting of every spawned command line, tasks, a =needs= cycle, a two-click port takeover against a real listener, scan-and-declare, focus following and pinning, adoption after a restart, and a stale state file that must not be signalled.

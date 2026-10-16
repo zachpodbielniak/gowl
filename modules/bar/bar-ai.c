@@ -547,6 +547,15 @@ gboolean
 bar_ai_start(BarAi *self, GowlBarPlugin *plugin, const gchar *system,
              const gchar *prompt, GError **error)
 {
+	return bar_ai_start_full(self, plugin, system, prompt, NULL, NULL,
+	                         error);
+}
+
+gboolean
+bar_ai_start_full(BarAi *self, GowlBarPlugin *plugin, const gchar *system,
+                  const gchar *prompt, const gchar *req_provider,
+                  const gchar *req_model, GError **error)
+{
 	BarAiBackend backend;
 	const gchar *provider, *model;
 	guint generation;
@@ -568,8 +577,15 @@ bar_ai_start(BarAi *self, GowlBarPlugin *plugin, const gchar *system,
 		return FALSE;
 	}
 
-	provider = gowl_bar_plugin_get_setting(plugin, "ai-provider");
-	model    = gowl_bar_plugin_get_setting(plugin, "ai-model");
+	/* A request's own provider and model win over the widget's.  A
+	   model with no provider of its own still pairs with the widget's
+	   provider, which is what someone naming just a model means. */
+	provider = (req_provider != NULL && req_provider[0] != '\0')
+		? req_provider
+		: gowl_bar_plugin_get_setting(plugin, "ai-provider");
+	model = (req_model != NULL && req_model[0] != '\0')
+		? req_model
+		: gowl_bar_plugin_get_setting(plugin, "ai-model");
 
 	/* Abandon whatever was running, then claim the slot. */
 	bar_ai_cancel(self);

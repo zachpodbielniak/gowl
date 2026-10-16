@@ -129,6 +129,31 @@ gboolean     bar_ai_start      (BarAi         *self,
                                  GError       **error);
 
 /**
+ * bar_ai_start_full:
+ * @self: the slot
+ * @plugin: the widget asking
+ * @system: (nullable): a system prompt
+ * @prompt: the user's text
+ * @provider: (nullable): a provider for THIS request, or %NULL / ""
+ *   for the widget's `ai-provider' setting
+ * @model: (nullable): likewise, a model for this request
+ * @error: (out) (optional): why nothing was sent
+ *
+ * bar_ai_start() with a per-request provider and model, for widgets
+ * whose actions each name their own (an ai-rewrite action that wants a
+ * small local model for "fix spelling" and a large one for "improve").
+ *
+ * Returns: %TRUE when the request is on its way
+ */
+gboolean     bar_ai_start_full (BarAi         *self,
+                                 GowlBarPlugin *plugin,
+                                 const gchar   *system,
+                                 const gchar   *prompt,
+                                 const gchar   *provider,
+                                 const gchar   *model,
+                                 GError       **error);
+
+/**
  * bar_ai_cancel:
  * @self: the slot
  *

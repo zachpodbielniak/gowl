@@ -62,6 +62,9 @@ typedef struct {
 	gint     (*parse)       (const gchar *, gboolean);
 	gboolean (*start)       (BarAi *, GowlBarPlugin *, const gchar *,
 	                         const gchar *, GError **);
+	gboolean (*start_full)  (BarAi *, GowlBarPlugin *, const gchar *,
+	                         const gchar *, const gchar *, const gchar *,
+	                         GError **);
 	void     (*cancel)      (BarAi *);
 	gboolean (*absorb)      (BarAi *, GowlBarPlugin *);
 	gint     (*get)         (BarAi *, gchar **, gchar **);
@@ -108,6 +111,7 @@ fixture_up(Fixture *f)
 	SYM(free_,      "bar_ai_free");
 	SYM(parse,      "bar_ai_parse_backend");
 	SYM(start,      "bar_ai_start");
+	SYM(start_full, "bar_ai_start_full");
 	SYM(cancel,     "bar_ai_cancel");
 	SYM(absorb,     "bar_ai_absorb_settings");
 	SYM(get,        "bar_ai_get");
@@ -270,6 +274,45 @@ test_the_cli_route_streams_an_answer(void)
 
 	g_free(text);
 	g_free(err);
+	fixture_down(&f);
+}
+
+/* A request's own provider and model win over the widget's settings;
+   an empty one falls back to them. */
+static void
+test_a_request_names_its_own_model(void)
+{
+	Fixture f;
+	g_autofree gchar *argfile = NULL;
+	g_autofree gchar *script = NULL;
+	g_autofree gchar *body = NULL;
+	g_autofree gchar *args = NULL;
+	g_autofree gchar *args2 = NULL;
+
+	if (!fixture_up(&f))
+		return;
+
+	argfile = bar_harness_path(&f.h, "args");
+	body = g_strdup_printf("printf '%%s\\n' \"$@\" > '%s'\ncat >/dev/null\n"
+	                       "echo ok", argfile);
+	script = bar_harness_script(&f.h, "fake-ai", body);
+	gowl_bar_plugin_set_setting(f.plugin, "ai-backend", "ai");
+	gowl_bar_plugin_set_setting(f.plugin, "ai-command", script);
+	gowl_bar_plugin_set_setting(f.plugin, "ai-provider", "claude");
+	gowl_bar_plugin_set_setting(f.plugin, "ai-model", "opus");
+
+	g_assert_true(f.api.start_full(f.ai, f.plugin, NULL, "hi", "ollama",
+	                               "qwen3", NULL));
+	g_assert_true(g_file_get_contents(argfile, &args, NULL, NULL));
+	g_assert_nonnull(strstr(args, "--provider\nollama\n"));
+	g_assert_nonnull(strstr(args, "--model\nqwen3\n"));
+
+	g_assert_true(f.api.start_full(f.ai, f.plugin, NULL, "hi", "", NULL,
+	                               NULL));
+	g_assert_true(g_file_get_contents(argfile, &args2, NULL, NULL));
+	g_assert_nonnull(strstr(args2, "--provider\nclaude\n"));
+	g_assert_nonnull(strstr(args2, "--model\nopus\n"));
+
 	fixture_down(&f);
 }
 
@@ -487,6 +530,8 @@ main(int argc, char *argv[])
 	                test_the_elisp_form_cannot_be_broken_out_of);
 	g_test_add_func("/bar-ai/cli-streams",
 	                test_the_cli_route_streams_an_answer);
+	g_test_add_func("/bar-ai/per-request-model",
+	                test_a_request_names_its_own_model);
 	g_test_add_func("/bar-ai/cli-failure", test_a_failing_cli_says_why);
 	g_test_add_func("/bar-ai/cli-timeout", test_a_hung_model_is_stopped);
 	g_test_add_func("/bar-ai/refusals", test_nothing_to_send_and_no_backend);

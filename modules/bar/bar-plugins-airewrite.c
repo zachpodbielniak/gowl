@@ -821,7 +821,8 @@ run_action(AiRewrite *self, GowlBarPlugin *plugin, const gchar *action_id,
 	set_str(&self->run_input, input);
 
 	prompt = bar_airewrite_compose_prompt(a, input, top->text);
-	if (!bar_ai_start(self->ai, plugin, a->system, prompt, &error)) {
+	if (!bar_ai_start_full(self->ai, plugin, a->system, prompt,
+	                       a->provider, a->model, &error)) {
 		set_view_error(self, (error != NULL) ? error->message
 		                                     : "the model could not be asked");
 		return;

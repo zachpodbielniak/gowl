@@ -490,6 +490,8 @@ sys_interval_fast(GowlBarPlugin *plugin, gpointer data)
 /* The journal is pruned at most hourly unless it outgrows its cap. */
 #define CPU_PRUNE_EVERY_US  ((gint64)3600 * G_USEC_PER_SEC)
 /* The CPU die: one cell's height, the gap, and the legend strip. */
+#define CPU_PANEL_WIDTH     640
+#define CPU_WIDE_PANEL      560  /* one-line process rows from here */
 #define CPU_DIE_CELL        26
 #define CPU_DIE_GAP         4
 #define CPU_DIE_LEGEND      20
@@ -1251,7 +1253,7 @@ cpu_is_armed(CpuData *cd, gint pid, guint64 start)
 }
 
 static void
-cpu_add_processes(GowlBarPanel *panel, CpuData *cd)
+cpu_add_processes(GowlBarPanel *panel, CpuData *cd, gboolean wide)
 {
 	GowlBarPanelItem *item;
 	guint i, shown = 0;
@@ -1291,7 +1293,19 @@ cpu_add_processes(GowlBarPanel *panel, CpuData *cd)
 		else
 			g_strlcpy(val, "--", sizeof(val));
 
-		item = gowl_bar_panel_add_row(panel, id, NULL, p->name, sub);
+		/* Wide, a process is one line: the name, then the pid and
+		   memory as a dimmed column before its CPU -- twice the
+		   processes in the same height.  Narrow, the details go
+		   underneath as before. */
+		if (wide) {
+			item = gowl_bar_panel_add_row(panel, id, NULL, p->name,
+			                              NULL);
+			gowl_bar_panel_item_set_prop(item,
+				GOWL_BAR_ROW_PROP_DETAIL, sub);
+		} else {
+			item = gowl_bar_panel_add_row(panel, id, NULL, p->name,
+			                              sub);
+		}
 		gowl_bar_panel_item_set_value(item, val);
 		if (p->cpu >= 0.0)
 			gowl_bar_panel_item_set_value_color(item,
@@ -1395,6 +1409,12 @@ cpu_panel(GowlBarPlugin *plugin, gpointer data)
 	panel = sys_build_panel_body(plugin, "cpu", &opts);
 	if (panel == NULL)
 		return NULL;
+	/* Wider than the other system dropdowns: the die, the process
+	   table and the GPU rows all have more to say than a battery. */
+	gowl_bar_panel_set_width(panel,
+		CLAMP(gowl_bar_plugin_get_setting_int(plugin, "panel-width",
+		                                      CPU_PANEL_WIDTH),
+		      320, 1200));
 	cpu_flush_toast(plugin, cd);
 
 	cpu_add_die(panel, info);
@@ -1405,7 +1425,8 @@ cpu_panel(GowlBarPlugin *plugin, gpointer data)
 	if (cd->expanded) {
 		cpu_add_gpu(panel, info, cd);
 		cpu_add_filesystems(panel, cd);
-		cpu_add_processes(panel, cd);
+		cpu_add_processes(panel, cd,
+			gowl_bar_panel_get_width(panel) >= CPU_WIDE_PANEL);
 	}
 
 	g_mutex_lock(&cd->lock);

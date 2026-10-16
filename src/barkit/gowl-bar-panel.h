@@ -441,6 +441,16 @@ GowlBarPanelItem *gowl_bar_panel_add_button (GowlBarPanelItem *row,
 #define GOWL_BAR_PANEL_PROP_FOCUS     "focus"
 
 /**
+ * GOWL_BAR_ROW_PROP_DETAIL:
+ *
+ * Item property, on a %GOWL_BAR_ITEM_ROW: dimmed text drawn on the
+ * title's line, right-aligned just before the value --- the columns of
+ * a one-line table row (`clangd   pid 4242 \xc2\xb7 3.1 GB   12.3%'), where a
+ * subtitle would cost a second line.  Truncated before the title is.
+ */
+#define GOWL_BAR_ROW_PROP_DETAIL      "detail"
+
+/**
  * gowl_bar_panel_add_entry:
  * @self: a #GowlBarPanel
  * @id: the id reported to the plugin's panel_text hook

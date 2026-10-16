@@ -865,7 +865,7 @@ static void
 pass_draw_row(PanelPass *p, GowlBarPanelItem *item, gint index,
               gint y, gint h, gboolean hovered)
 {
-	const gchar *subtitle, *value, *badge;
+	const gchar *subtitle, *value, *badge, *detail;
 	gint x, center, icon_w, right;
 	gdouble alpha;
 
@@ -906,6 +906,24 @@ pass_draw_row(PanelPass *p, GowlBarPanelItem *item, gint index,
 		                     gowl_bar_panel_item_get_value_color(item),
 		                     alpha, vw);
 		right -= vw + p->gap;
+	}
+
+	/* A detail column sits between the title and the value, dimmed,
+	   and gives way first: it may take at most half of what is left,
+	   so the title always keeps the other half. */
+	detail = gowl_bar_panel_item_get_prop(item, GOWL_BAR_ROW_PROP_DETAIL);
+	if (detail != NULL && detail[0] != '\0') {
+		gint dw;
+
+		pass_set_font(p, SMALL_SCALE, FALSE, FALSE);
+		pass_measure_text(p, detail, &dw, NULL);
+		if (dw > (right - x) / 2)
+			dw = (right - x) / 2;
+		if (dw > 0) {
+			pass_draw_text_right(p, detail, right, center,
+			                     GOWL_BAR_COLOR_MUTED, alpha, dw);
+			right -= dw + p->gap * 2;
+		}
 	}
 
 	subtitle = gowl_bar_panel_item_get_subtitle(item);

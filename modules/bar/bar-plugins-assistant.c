@@ -71,6 +71,9 @@
 
 /* The glyph drawn instead of the wave under `reduced-motion': a robot
    head (nf-md-robot). */
+/* Wide by default: answers are paragraphs and code, and the Models tab
+   is a table.  `width' overrides it. */
+#define AS_PANEL_WIDTH (680)
 #define AS_GLYPH "\xf3\xb0\x9a\xa9"
 
 /* How many activity samples the wave remembers.  More than the widest
@@ -2300,8 +2303,9 @@ as_panel(GowlBarPlugin *plugin, gpointer data)
 
 	panel = gowl_bar_panel_new();
 	gowl_bar_panel_set_width(panel,
-		CLAMP(gowl_bar_plugin_get_setting_int(plugin, "width", 420),
-		      320, 900));
+		CLAMP(gowl_bar_plugin_get_setting_int(plugin, "width",
+		                                      AS_PANEL_WIDTH),
+		      320, 1200));
 	/* A long conversation scrolls inside a dropdown-sized panel rather
 	   than growing to the height of the screen. */
 	gowl_bar_panel_set_max_height(panel, 760);

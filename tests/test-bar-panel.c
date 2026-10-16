@@ -833,6 +833,81 @@ test_a_secret_entry_renders(void)
 	fixture_clear(&f);
 }
 
+/* Render one row into a fresh surface and return it; caller destroys. */
+static cairo_surface_t *
+render_row(const gchar *title, const gchar *detail)
+{
+	GowlBarPanel *panel;
+	GowlBarPanelItem *item;
+	GowlBarPanelRenderCtx ctx;
+	GowlBarTheme *theme;
+	cairo_surface_t *cs;
+	PangoLayout *layout;
+	cairo_t *cr;
+
+	cs = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, PANEL_W, 80);
+	cr = cairo_create(cs);
+	layout = pango_cairo_create_layout(cr);
+	theme = gowl_bar_theme_new();
+	panel = gowl_bar_panel_new();
+	item = gowl_bar_panel_add_row(panel, "r", NULL, title, NULL);
+	gowl_bar_panel_item_set_value(item, "9%");
+	if (detail != NULL)
+		gowl_bar_panel_item_set_prop(item, GOWL_BAR_ROW_PROP_DETAIL,
+		                             detail);
+	gowl_bar_panel_render_ctx_init(&ctx, PANEL_W);
+	gowl_bar_panel_render(panel, cr, layout, theme, &ctx);
+	g_object_unref(panel);
+	gowl_bar_theme_free(theme);
+	g_object_unref(layout);
+	cairo_destroy(cr);
+	cairo_surface_flush(cs);
+	return cs;
+}
+
+/* Painted pixels in columns [x0, x1) of @cs. */
+static guint
+inked(cairo_surface_t *cs, gint x0, gint x1)
+{
+	guchar *data = cairo_image_surface_get_data(cs);
+	gint stride = cairo_image_surface_get_stride(cs);
+	gint h = cairo_image_surface_get_height(cs);
+	guint n = 0;
+	gint x, y;
+
+	for (y = 0; y < h; y++)
+		for (x = x0; x < x1; x++)
+			if (((guint32 *)(data + y * stride))[x] >> 24 != 0)
+				n++;
+	return n;
+}
+
+/* Catches: a row's detail column not drawn, or drawn over its title.
+   The detail is a one-line table's middle column (the cpu widget's
+   process rows), and it must give way before the title does. */
+static void
+test_a_row_detail_column(void)
+{
+	cairo_surface_t *plain, *with, *greedy;
+
+	plain  = render_row("clangd", NULL);
+	with   = render_row("clangd", "pid 4242 \xc2\xb7 3.1 GB");
+	greedy = render_row("clangd",
+		"a detail far too long to fit beside the title in any panel "
+		"this narrow, which has to be cut short rather than overlap");
+
+	/* Drawn: the right half has more ink than without it. */
+	g_assert_cmpuint(inked(with, PANEL_W / 2, PANEL_W - 60), >,
+	                 inked(plain, PANEL_W / 2, PANEL_W - 60) + 50);
+	/* Never over the title: the left part matches the plain row. */
+	g_assert_cmpuint(inked(greedy, 0, PANEL_W / 4), ==,
+	                 inked(plain, 0, PANEL_W / 4));
+
+	cairo_surface_destroy(plain);
+	cairo_surface_destroy(with);
+	cairo_surface_destroy(greedy);
+}
+
 typedef struct {
 	guint  calls;
 	gint   width;
@@ -999,6 +1074,7 @@ main(int argc, char *argv[])
 	g_test_add_func("/bar-panel/canvas-painted-by-owner",
 	                test_a_canvas_is_painted_by_its_owner);
 	g_test_add_func("/bar-panel/centered", test_the_centered_flag);
+	g_test_add_func("/bar-panel/row-detail", test_a_row_detail_column);
 
 	return g_test_run();
 }

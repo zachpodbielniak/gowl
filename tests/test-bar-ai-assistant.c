@@ -913,6 +913,46 @@ w_ask(W *w, const gchar *text)
 	gowl_bar_plugin_panel_text(w->h.plugin, "prompt", text, TRUE);
 }
 
+/* Catches: the panel shrinking back to dropdown size.  The assistant
+   reads long answers and a model table, so it is wide by default and
+   `width' still overrides it.  GOWL_TEST_DUMP_PANELS=dir writes each
+   tab as a PNG to look at. */
+static void
+test_widget_wide_panel(void)
+{
+	W w;
+	GowlBarPanel *panel;
+
+	if (!w_up(&w, NULL))
+		return;
+	g_setenv("FAKE_AI_ANSWER", "Sure. A tiling compositor arranges "
+	         "windows so they never overlap; gowl does it from Emacs.\n\n"
+	         "- one\n- two", TRUE);
+	gowl_bar_plugin_panel_opened(w.h.plugin);
+	w_ask(&w, "What is a tiling compositor?");
+	panel = bar_harness_panel(&w.h);
+	g_assert_cmpint(gowl_bar_panel_get_width(panel), >=, 640);
+	bar_harness_dump_panel(&w.h, panel, "ai-assistant-chat");
+	g_object_unref(panel);
+
+	gowl_bar_plugin_panel_action(w.h.plugin, "tab", 1, 0.0, 1);
+	panel = bar_harness_panel(&w.h);
+	bar_harness_dump_panel(&w.h, panel, "ai-assistant-models");
+	g_object_unref(panel);
+	gowl_bar_plugin_panel_action(w.h.plugin, "tab", 2, 0.0, 1);
+	panel = bar_harness_panel(&w.h);
+	bar_harness_dump_panel(&w.h, panel, "ai-assistant-machine");
+	g_object_unref(panel);
+
+	/* The setting still wins, within its bounds. */
+	bar_harness_set(&w.h, "width", "480");
+	panel = bar_harness_panel(&w.h);
+	g_assert_cmpint(gowl_bar_panel_get_width(panel), ==, 480);
+	g_object_unref(panel);
+	gowl_bar_plugin_panel_closed(w.h.plugin);
+	w_down(&w);
+}
+
 /* Catches: the widget or its aliases not being registered. */
 static void
 test_widget_aliases(void)
@@ -1655,6 +1695,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/bar-ai-assistant/model/format-bytes",
 	                test_format_bytes);
 
+	g_test_add_func("/bar-ai-assistant/widget/wide-panel",
+	                test_widget_wide_panel);
 	g_test_add_func("/bar-ai-assistant/widget/aliases",
 	                test_widget_aliases);
 	g_test_add_func("/bar-ai-assistant/widget/cli-chat",

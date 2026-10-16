@@ -62,6 +62,9 @@
 #include "barkit/gowl-bar-theme.h"
 #include "barkit/gowl-bar-toast.h"
 #include "barkit/gowl-bar-host.h"
+#include "barkit/gowl-bar-panel-render.h"
+
+#include <pango/pangocairo.h>
 
 #ifndef BAR_HARNESS_MODULE
 #define BAR_HARNESS_MODULE "build/release/modules/bar.so"
@@ -135,10 +138,14 @@ bar_stub_notify(GowlBarHost *host, GowlBarToast *toast)
 {
 	BarStubHost *self = (BarStubHost *)host;
 
-	g_ptr_array_add(self->toasts, g_strdup_printf("%s|%s",
+	/* `summary|body', then `|cmd:COMMAND' when a click runs one. */
+	g_ptr_array_add(self->toasts, g_strdup_printf("%s|%s%s%s",
 		gowl_bar_toast_get_summary(toast),
 		gowl_bar_toast_get_body(toast) != NULL
-			? gowl_bar_toast_get_body(toast) : ""));
+			? gowl_bar_toast_get_body(toast) : "",
+		gowl_bar_toast_get_command(toast) != NULL ? "|cmd:" : "",
+		gowl_bar_toast_get_command(toast) != NULL
+			? gowl_bar_toast_get_command(toast) : ""));
 	/* The host owns the toast it is handed. */
 	gowl_bar_toast_free(toast);
 }
@@ -396,6 +403,82 @@ bar_harness_panel_mentions(GowlBarPanel *panel, const gchar *needle)
 	return FALSE;
 }
 
+/* Paint a canvas through the plugin, as the bar does. */
+static void
+bar_harness_canvas_draw(gpointer user_data, gint item_index,
+                        GowlBarPanelItem *item, cairo_t *cr, gint width,
+                        gint height)
+{
+	BarHarness *h = user_data;
+
+	(void)item_index;
+	gowl_bar_plugin_panel_canvas(h->plugin, gowl_bar_panel_item_get_id(item),
+	                             cr, h->host->theme, width, height);
+}
+
+/*
+ * When GOWL_TEST_DUMP_PANELS names a directory, render @panel there as
+ * @name.png, whole (no height cap), framed as the bar frames it.  For a
+ * human looking at a layout; no test asserts on the picture.  Returns
+ * the content height, or 0 when nothing was written.
+ */
+G_GNUC_UNUSED static gint
+bar_harness_dump_panel(BarHarness *h, GowlBarPanel *panel, const gchar *name)
+{
+	const gchar *dir = g_getenv("GOWL_TEST_DUMP_PANELS");
+	const GowlBarTheme *theme = h->host->theme;
+	g_autofree gchar *file = NULL;
+	g_autofree gchar *path = NULL;
+	GowlBarPanelRenderCtx ctx;
+	PangoFontDescription *font;
+	cairo_surface_t *cs;
+	PangoLayout *layout;
+	cairo_t *cr;
+	gint width, height;
+
+	if (dir == NULL || dir[0] == '\0' || panel == NULL)
+		return 0;
+	width = gowl_bar_panel_get_width(panel);
+	if (width <= 0)
+		width = gowl_bar_theme_metric(theme,
+		                              GOWL_BAR_METRIC_PANEL_WIDTH);
+
+	/* Measure on a scratch surface, then draw at the full height. */
+	cs = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+	cr = cairo_create(cs);
+	layout = pango_cairo_create_layout(cr);
+	font = pango_font_description_from_string(
+		gowl_bar_theme_get_font(theme));
+	pango_layout_set_font_description(layout, font);
+	height = gowl_bar_panel_measure(panel, layout, theme, width);
+	g_object_unref(layout);
+	cairo_destroy(cr);
+	cairo_surface_destroy(cs);
+
+	cs = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width + 48,
+	                                height + 48);
+	cr = cairo_create(cs);
+	gowl_bar_panel_draw_frame(cr, theme, 24, 24, width, height, NULL);
+	cairo_translate(cr, 24, 24);
+	layout = pango_cairo_create_layout(cr);
+	pango_layout_set_font_description(layout, font);
+	gowl_bar_panel_render_ctx_init(&ctx, width);
+	ctx.canvas_draw = bar_harness_canvas_draw;
+	ctx.canvas_data = h;
+	gowl_bar_panel_render(panel, cr, layout, theme, &ctx);
+	g_object_unref(layout);
+	pango_font_description_free(font);
+
+	file = g_strconcat(name, ".png", NULL);
+	path = g_build_filename(dir, file, NULL);
+	g_mkdir_with_parents(dir, 0700);
+	if (cairo_surface_write_to_png(cs, path) != CAIRO_STATUS_SUCCESS)
+		g_test_message("could not write %s", path);
+	cairo_destroy(cr);
+	cairo_surface_destroy(cs);
+	return height;
+}
+
 /* Write an executable script into the scratch dir; returns its path. */
 G_GNUC_UNUSED static gchar *
 bar_harness_script(BarHarness *h, const gchar *name, const gchar *body)
@@ -427,6 +510,13 @@ bar_harness_spawned(BarHarness *h, const gchar *needle)
 		if (strstr(g_ptr_array_index(h->host->spawned, i), needle))
 			return TRUE;
 	return FALSE;
+}
+
+/* Forget the toasts raised so far. */
+G_GNUC_UNUSED static void
+bar_harness_toasts_clear(BarHarness *h)
+{
+	g_ptr_array_set_size(h->host->toasts, 0);
 }
 
 /* Did any toast contain @needle? */

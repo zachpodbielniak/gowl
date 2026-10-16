@@ -1052,6 +1052,22 @@ cores_canvas(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 - It runs on the compositor thread inside a render: draw from state you already have, never block, and use theme roles for colour.
 - A canvas that faults is quarantined *after* the render finishes, so the panel being walked is never freed under the renderer.
 
+**** One-line table rows
+:PROPERTIES:
+:CUSTOM_ID: plugin-row-detail
+:END:
+
+A row's subtitle costs it a second line. For a list that reads as a table --- the cpu widget's processes --- put the middle columns in =GOWL_BAR_ROW_PROP_DETAIL= instead: dimmed text on the title's line, right-aligned just before the value.
+
+#+begin_src C
+item = gowl_bar_panel_add_row(panel, id, NULL, p->name, NULL);
+gowl_bar_panel_item_set_prop(item, GOWL_BAR_ROW_PROP_DETAIL,
+                             "pid 4242 \xc2\xb7 3.1 GB \xc2\xb7 S");
+gowl_bar_panel_item_set_value(item, "12.3%");
+#+end_src
+
+The detail gives way before the title does: it takes at most half of the width the value and badge leave, and is cut short past that. It suits a wide panel; in the default 400 px a subtitle usually reads better.
+
 **** Moving the keyboard
 :PROPERTIES:
 :CUSTOM_ID: plugin-focus

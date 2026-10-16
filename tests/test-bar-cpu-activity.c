@@ -1367,6 +1367,10 @@ test_panel_compact_and_expanded(void)
 	g_assert_cmpstr(view_text, ==, "Expand|");
 	g_assert_cmpstr(tool_text, ==, "Monitor|Processes|Disks|");
 	g_assert_null(find_item(panel, "journal"));
+	/* Wide enough for the die and a process table side by side with
+	   their numbers; GOWL_TEST_DUMP_PANELS=dir writes it out. */
+	g_assert_cmpint(gowl_bar_panel_get_width(panel), >=, 600);
+	bar_harness_dump_panel(&h, panel, "cpu-compact");
 	g_object_unref(panel);
 
 	gowl_bar_plugin_panel_opened(h.plugin);
@@ -1380,6 +1384,10 @@ test_panel_compact_and_expanded(void)
 	g_clear_pointer(&view_text, g_free);
 	view_text = buttons_text(find_item(panel, "view"));
 	g_assert_cmpstr(view_text, ==, "Compact|");
+	bar_harness_poll(&h);
+	g_object_unref(panel);
+	panel = bar_harness_panel(&h);
+	bar_harness_dump_panel(&h, panel, "cpu-expanded");
 	g_object_unref(panel);
 
 	/* Compact again, and it stays compact across polls. */

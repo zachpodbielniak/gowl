@@ -108,7 +108,7 @@ Every key is set as =ai-assistant.<key>= in the bar's configuration (or pushed f
 | =reduced-motion=       | bool          | =false=                         | Draw a static glyph instead of the moving wave                                                            |
 | =show-label=           | bool          | =false=                         | Show =provider/model= after the wave                                                                      |
 | =bars=                 | int, 3--12    | =5=                             | Bars in the wave                                                                                          |
-| =width=                | px, 320--900  | =420=                           | Panel width                                                                                               |
+| =width=                | px, 320--1200 | =680=                           | Panel width. Wide by default: answers are paragraphs and code, and the Models tab is a table              |
 | =ollama-url=           | URL           | =http://127.0.0.1:11434=        | Where ollama listens; =http://= or =https://= only                                                       |
 | =curl=                 | command       | =curl=                          | The curl used to talk to ollama                                                                           |
 | =keep-alive=           | duration      | =30m=                           | How long *Load* keeps a model: =30m=, =2h=, seconds, or =-1= for until unloaded                         |

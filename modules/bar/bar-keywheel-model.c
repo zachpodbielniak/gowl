@@ -1029,10 +1029,14 @@ bar_keywheel_handle_key(const BarKeywheelModel *model,
 			cursor->spoke = (cursor->spoke + 1) % (gint)n;
 		cursor->keysym = 0;
 		return BAR_KEYWHEEL_KEY_MOVED;
+	/* Up/Down reach a focused canvas before the panel's navigation,
+	   so they walk the rings (outward / inward) as Home/End do. */
+	case XKB_KEY_Up:
 	case XKB_KEY_Home:
 		if (cursor->ring > BAR_KEYWHEEL_RING_SUPER)
 			cursor->ring = (BarKeywheelRing)(cursor->ring - 1);
 		return BAR_KEYWHEEL_KEY_MOVED;
+	case XKB_KEY_Down:
 	case XKB_KEY_End:
 		if (cursor->ring < BAR_KEYWHEEL_RING_HUB)
 			cursor->ring = (BarKeywheelRing)(cursor->ring + 1);

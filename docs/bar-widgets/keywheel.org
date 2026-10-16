@@ -170,7 +170,7 @@ From the top:
 3. *The list*: search results, or the Beyond Super / Emacs rows on those faces. Clicking a row runs it.
 4. *◀ Face · Run · Face ▶* --- turn the face, or run the selection.
 
-Mouse: click a cell to select it, click it again to run it (a panel has no double-click). Click a dot to turn to that face; click the centre or the pill to flip Alt. The wheel does not turn with the scroll wheel --- over a panel, the host scrolls the panel and does not pass scroll events to the widget.
+Mouse: click a cell to select it, click it again to run it (a panel has no double-click). Click a dot to turn to that face; click the centre or the pill to flip Alt. The mouse wheel over the wheel turns the faces (over the rest of the panel it scrolls the panel).
 
 Keyboard, while the panel is open:
 
@@ -182,17 +182,15 @@ Keyboard, while the panel is open:
 | =Shift=, =Ctrl= alone        | Preview that ring (both: the hub).                                                                    |
 | =Alt= alone                  | Flip the Alt rings on or off.                                                                         |
 | =←= / =→=                    | Around the ring (on a list face: the previous / next face).                                           |
-| =Home= / =End=               | One ring out, towards the rim / one ring in, towards the hub.                                         |
+| =↑= / =↓=, =Home= / =End=    | One ring out, towards the rim / one ring in, towards the hub.                                         |
 | =Page Up= / =Page Down=      | Previous / next face.                                                                                 |
 | =/=                          | Put the keyboard in the search field.                                                                 |
-| =Return=                     | Run the selection --- once the keyboard is on the wheel (see below).                                  |
+| =Return= / =Space=           | Run the selection.                                                                                    |
+| =Tab= / =Shift+Tab=          | Move the keyboard to search, the list and the buttons, and back.                                      |
 | =Escape=                     | Close.                                                                                                |
 | any =Super= chord            | Not taken: it closes the wheel and reaches the window manager.                                        |
 
-Keys the bar's panel navigation keeps for itself, in every panel, and which therefore never reach the wheel: =Return=, =space=, =Tab=, =j=, =k=, =Up=, =Down=. In practice:
-
-- =j= and =k= cannot be jumped to by typing them; type =Shift+J= (it lands on =j= in the Shift ring) and press =Home=, or click.
-- =Up= / =Down= / =Tab= move the keyboard between the panel's items, and the wheel is the first of them: when the panel opens nothing is focused yet, so the first =Down= (or =Tab=) puts the keyboard on the wheel. From then on =Return= runs the selection. Clicking the wheel focuses it too. (Typing letters works with or without that focus.)
+The keyboard starts on the wheel when the panel opens, and while it is there the wheel hears every key before the panel's own navigation does --- so =j=, =k=, the arrows, =Return= and =Space= all mean what the table says. A key the wheel does not use (=Tab=) still moves through the panel.
 
 * Dependencies
 
@@ -212,8 +210,7 @@ None beyond gowl's own build. Fedora packages, for completeness: =cairo-devel=, 
 | "No keybinds available"                                    | The bar is not running inside gowl, or the config has no keybinds.                                                                                                 |
 | A binding I just added is missing                          | The config is read when the wheel opens. Close it and open it again.                                                                                               |
 | A mode binding (=resize=) is missing                        | Deliberate: mode binds only exist inside their mode.                                                                                                               |
-| =Return= does nothing                                       | The keyboard is not on the wheel yet. Press =Down= once (or click the wheel), or use the =Run= button.                                                             |
-| Typing =j= / =k= moves the panel focus                      | Those keys belong to the panel's navigation. Use =Shift+J= / =Shift+K= then =Home=, or click.                                                                       |
+| =Return= does nothing                                       | The keyboard is on another item (search, a button). =Shift+Tab= back to the wheel, or click it.                                                                     |
 | A symbol key (=Shift+;=) lands on the wrong spoke           | A non-US layout: the symbol-to-key table is US. Use the arrows, or click.                                                                                          |
 | "Key wheel: nothing ran"                                    | A key mode is active (the default-mode bind does not apply), or the config changed since the wheel opened.                                                        |
 | The Emacs face is missing                                   | Nothing has been pushed: call =(cmacs-gowl-bar-keywheel-setup)= in init, or =M-x cmacs-gowl-bar-keywheel-push=.                                                  |
@@ -232,6 +229,6 @@ Threads: there is no worker. Everything --- reading the config, laying out the m
 
 Running: =gowl_compositor_dispatch_keybind()= with the bind's *configured* modifiers and keysym (the compositor matches its configured keysym exactly; a config saying =Super+Shift+Q= stores =Q=, which the wheel's normalised =q= would not match). A bind marked =release= goes through =gowl_compositor_dispatch_key()= with =pressed= false. The panel is closed first, so the bind acts on the desktop.
 
-=/= cannot move the host's keyboard focus into the search field (there is no call for it), so it closes the panel and opens it again with the field marked =AUTOFOCUS=, which the host honours on open; a flag keeps that close from resetting the wheel.
+=/= moves the keyboard into the search field by giving it a new =GOWL_BAR_PANEL_PROP_FOCUS= token (the host moves focus when the token changes); closing the panel drops the token, so the next open starts on the wheel again.
 
 Tests: =tests/test-bar-keywheel.c= (=make build/release/test-bar-keywheel=). The model half runs against gowl's own keybind parser and the shipped =data/default-config.yaml= binds captured in =tests/fixtures/bar/keywheel/default-keybinds.tsv=: ring and face assignment for many chords, the Core face for the shipped config, overflow, geometry at several sizes (every cell hit at its centre, rings disjoint, everything inside the canvas), the key map, the run decision, search, colours (including a drift check of the role table against barkit's) and the Emacs wire format. The widget half drives =bar.so= through the stub host, with no compositor and with a fixture model installed through =bar_keywheel_widget_install()= --- the same call the config snapshot uses: keys, clicks, Enter, search, =/=, the Emacs face (including a hostile command name) and colour overrides read back from painted pixels. cmacs: =test/cmacs/cmacs-gowl-bar-keywheel-tests.el=.

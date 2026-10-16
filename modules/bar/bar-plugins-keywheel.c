@@ -75,8 +75,9 @@ typedef struct {
 	BarKeywheelCursor  cursor;
 	gchar             *query;        /* the search field's text */
 	gboolean           stale;        /* re-read the config at next build */
-	gboolean           focus_search; /* the next open focuses search */
-	gboolean           reopening;    /* closing only to reopen */
+	guint              search_seq;   /* `/' bumps it: a new focus token
+	                                    on the search field moves the
+	                                    keyboard there (0 = none) */
 	gint               painted_w;    /* the canvas as last painted, */
 	gint               painted_h;    /*   for click hit-testing */
 } Keywheel;
@@ -560,9 +561,8 @@ kw_panel(GowlBarPlugin *plugin, gpointer data)
 	wheel = bar_keywheel_face_is_wheel(c.face) &&
 	        bar_keywheel_n_spokes(m, c.face) > 0;
 
-	/* The canvas first, so it is the first stop for the keyboard.
-	   AUTOFOCUS is an entry property today; set here it costs nothing
-	   and starts working the day the host honours it for a canvas. */
+	/* The canvas first, so it is the first stop for the keyboard, and
+	   AUTOFOCUS so the keyboard starts there. */
 	item = gowl_bar_panel_add_canvas(panel, "wheel",
 	                                 wheel ? h : KW_LIST_CANVAS_H);
 	gowl_bar_panel_item_set_prop(item, GOWL_BAR_ENTRY_PROP_AUTOFOCUS,
@@ -575,9 +575,13 @@ kw_panel(GowlBarPlugin *plugin, gpointer data)
 
 	item = gowl_bar_panel_add_entry(panel, "search",
 		"Search keybindings  (press / to jump here)", self->query);
-	if (self->focus_search)
-		gowl_bar_panel_item_set_prop(item,
-			GOWL_BAR_ENTRY_PROP_AUTOFOCUS, "true");
+	if (self->search_seq > 0) {
+		gchar tok[16];
+
+		g_snprintf(tok, sizeof(tok), "%u", self->search_seq);
+		gowl_bar_panel_item_set_prop(item, GOWL_BAR_PANEL_PROP_FOCUS,
+		                             tok);
+	}
 
 	if (self->query != NULL && self->query[0] != '\0') {
 		g_autoptr(GArray) hits_b = g_array_new(FALSE, FALSE,
@@ -635,25 +639,7 @@ kw_panel(GowlBarPlugin *plugin, gpointer data)
 	return panel;
 }
 
-static void
-kw_panel_opened(GowlBarPlugin *plugin, gpointer data)
-{
-	Keywheel *self = data;
-
-	(void)plugin;
-	if (self == NULL)
-		return;
-	g_mutex_lock(&self->lock);
-	/* The open that wanted the search field has had it. */
-	self->focus_search = FALSE;
-	g_mutex_unlock(&self->lock);
-}
-
-/*
- * Closed: next time, read the config again and start from Core.  Not
- * when the close is the first half of the reopen that puts the
- * keyboard in the search field -- that must look like nothing happened.
- */
+/* Closed: next time, read the config again and start from Core. */
 static void
 kw_panel_closed(GowlBarPlugin *plugin, gpointer data)
 {
@@ -663,12 +649,12 @@ kw_panel_closed(GowlBarPlugin *plugin, gpointer data)
 	if (self == NULL)
 		return;
 	g_mutex_lock(&self->lock);
-	if (!self->reopening) {
-		bar_keywheel_cursor_reset(&self->cursor);
-		g_clear_pointer(&self->query, g_free);
-		self->stale = TRUE;
-		self->focus_search = FALSE;
-	}
+	bar_keywheel_cursor_reset(&self->cursor);
+	g_clear_pointer(&self->query, g_free);
+	self->stale = TRUE;
+	/* A token left over would pull the keyboard into search the next
+	   time the panel opens. */
+	self->search_seq = 0;
 	g_mutex_unlock(&self->lock);
 }
 
@@ -742,11 +728,19 @@ kw_action(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 	Keywheel *self = data;
 	guint64 n;
 
-	(void)button;
 	if (self == NULL || item_id == NULL)
 		return;
 
 	if (strcmp(item_id, "wheel") == 0) {
+		/* The mouse wheel over the wheel turns the faces. */
+		if (button == GOWL_BAR_BUTTON_SCROLL_UP ||
+		    button == GOWL_BAR_BUTTON_SCROLL_DOWN) {
+			g_mutex_lock(&self->lock);
+			bar_keywheel_cursor_face(self->model, &self->cursor,
+				button == GOWL_BAR_BUTTON_SCROLL_UP ? -1 : 1);
+			g_mutex_unlock(&self->lock);
+			return;
+		}
 		kw_canvas_click(plugin, self, index, value);
 		return;
 	}
@@ -810,10 +804,8 @@ kw_panel_text(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 
 /*
  * The wheel's keys; see bar_keywheel_handle_key() for the map.  `/'
- * cannot move the host's keyboard focus into the search field from
- * here (there is no call for it), so it closes the panel and opens it
- * again with the field marked AUTOFOCUS -- which the host does honour
- * on open.  `reopening' keeps the close from resetting the wheel.
+ * puts the keyboard in the search field with a new focus token
+ * (GOWL_BAR_PANEL_PROP_FOCUS), obeyed on the rebuild that follows.
  */
 static gboolean
 kw_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
@@ -821,8 +813,6 @@ kw_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
 {
 	Keywheel *self = data;
 	BarKeywheelKeyResult r;
-	GowlBarHost *host;
-
 	(void)focused_item;
 	if (self == NULL)
 		return FALSE;
@@ -830,10 +820,8 @@ kw_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
 	g_mutex_lock(&self->lock);
 	r = bar_keywheel_handle_key(self->model, &self->cursor, keysym,
 	                            modifiers);
-	if (r == BAR_KEYWHEEL_KEY_SEARCH) {
-		self->focus_search = TRUE;
-		self->reopening = TRUE;
-	}
+	if (r == BAR_KEYWHEEL_KEY_SEARCH)
+		self->search_seq++;
 	g_mutex_unlock(&self->lock);
 
 	switch (r) {
@@ -843,15 +831,7 @@ kw_panel_key(GowlBarPlugin *plugin, gpointer data, guint keysym,
 		gowl_bar_plugin_request_panel_refresh(plugin);
 		return TRUE;
 	case BAR_KEYWHEEL_KEY_SEARCH:
-		host = gowl_bar_plugin_get_host(plugin);
-		if (host != NULL) {
-			gowl_bar_host_close_panel(host);
-			gowl_bar_host_open_panel(host,
-				gowl_bar_plugin_get_id(plugin));
-		}
-		g_mutex_lock(&self->lock);
-		self->reopening = FALSE;
-		g_mutex_unlock(&self->lock);
+		gowl_bar_plugin_request_panel_refresh(plugin);
 		return TRUE;
 	case BAR_KEYWHEEL_KEY_CLAIMED:
 	default:
@@ -1262,7 +1242,7 @@ static const GowlBarPluginVTable keywheel_vtable = {
 	NULL, NULL,
 	NULL, NULL,
 	kw_panel, kw_action,
-	kw_panel_opened, kw_panel_closed,
+	NULL, kw_panel_closed,
 	kw_panel_key,
 	NULL,
 	kw_panel_text, kw_canvas

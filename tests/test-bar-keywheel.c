@@ -598,6 +598,11 @@ test_key_jump(void)
 	bar_keywheel_handle_key(m, &c, XKB_KEY_End, 0);
 	bar_keywheel_handle_key(m, &c, XKB_KEY_End, 0);
 	g_assert_cmpint(c.ring, ==, BAR_KEYWHEEL_RING_HUB);
+	/* Up/Down walk the rings too: a focused canvas hears them first. */
+	bar_keywheel_handle_key(m, &c, XKB_KEY_Up, 0);
+	g_assert_cmpint(c.ring, <, BAR_KEYWHEEL_RING_HUB);
+	bar_keywheel_handle_key(m, &c, XKB_KEY_Down, 0);
+	g_assert_cmpint(c.ring, ==, BAR_KEYWHEEL_RING_HUB);
 
 	/* / searches; Shift+/ is the slash KEY on the Shift ring. */
 	g_assert_cmpint(bar_keywheel_handle_key(m, &c, XKB_KEY_slash, 0), ==,
@@ -1096,30 +1101,63 @@ test_widget_search(void)
 	gowl_bar_plugin_panel_text(h.plugin, "search", "terminal", TRUE);
 	g_assert_cmpuint(h.host->closed, ==, closed + 1);
 
-	/* `/': close and reopen, the field marked to take the keyboard,
-	   the wheel's state intact. */
+	/* The mouse wheel over the canvas turns the faces: up from Core
+	   wraps to Beyond Super, a LIST face, whose canvas is shorter. */
+	{
+		g_autoptr(GowlBarPanel) before = NULL;
+		g_autoptr(GowlBarPanel) after = NULL;
+		gint h_wheel, h_list;
+
+		gowl_bar_plugin_panel_closed(h.plugin);   /* back to Core */
+		before = bar_harness_panel(&h);
+		h_wheel = gowl_bar_panel_item_get_height(
+			find_item(before, "wheel"));
+		gowl_bar_plugin_panel_action(h.plugin, "wheel", 5, 5.0,
+		                             GOWL_BAR_BUTTON_SCROLL_UP);
+		after = bar_harness_panel(&h);
+		h_list = gowl_bar_panel_item_get_height(
+			find_item(after, "wheel"));
+		g_assert_cmpint(h_list, <, h_wheel);
+		gowl_bar_plugin_panel_action(h.plugin, "wheel", 5, 5.0,
+		                             GOWL_BAR_BUTTON_SCROLL_DOWN);
+	}
+
+	/* `/': a new focus token on the search field (the host moves the
+	   keyboard when the token changes), the panel neither closed nor
+	   reopened, and the wheel's state intact.  A second `/' is a new
+	   token again.  Closing the panel forgets it, or the next open
+	   would land in search. */
 	gowl_bar_plugin_panel_closed(h.plugin);
 	g_assert_true(gowl_bar_plugin_panel_key(h.plugin, XKB_KEY_Next, 0, 0));
 	closed = h.host->closed;
 	opened = h.host->opened;
 	g_assert_true(gowl_bar_plugin_panel_key(h.plugin, XKB_KEY_slash, 0,
 	                                        0));
-	g_assert_cmpuint(h.host->closed, ==, closed + 1);
-	g_assert_cmpuint(h.host->opened, ==, opened + 1);
+	g_assert_cmpuint(h.host->closed, ==, closed);
+	g_assert_cmpuint(h.host->opened, ==, opened);
 	{
 		g_autoptr(GowlBarPanel) panel = bar_harness_panel(&h);
+		g_autoptr(GowlBarPanel) again = NULL;
+		g_autofree gchar *first = NULL;
 
 		entry = find_item(panel, "search");
+		first = g_strdup(gowl_bar_panel_item_get_prop(entry,
+			GOWL_BAR_PANEL_PROP_FOCUS));
+		g_assert_nonnull(first);
+		g_assert_true(gowl_bar_plugin_panel_key(h.plugin, XKB_KEY_slash,
+		                                        0, 0));
+		again = bar_harness_panel(&h);
+		entry = find_item(again, "search");
 		g_assert_cmpstr(gowl_bar_panel_item_get_prop(entry,
-			GOWL_BAR_ENTRY_PROP_AUTOFOCUS), ==, "true");
+			GOWL_BAR_PANEL_PROP_FOCUS), !=, first);
 	}
-	gowl_bar_plugin_panel_opened(h.plugin);
+	gowl_bar_plugin_panel_closed(h.plugin);
 	{
 		g_autoptr(GowlBarPanel) panel = bar_harness_panel(&h);
 
 		entry = find_item(panel, "search");
 		g_assert_null(gowl_bar_panel_item_get_prop(entry,
-			GOWL_BAR_ENTRY_PROP_AUTOFOCUS));
+			GOWL_BAR_PANEL_PROP_FOCUS));
 	}
 
 	bar_harness_down(&h);

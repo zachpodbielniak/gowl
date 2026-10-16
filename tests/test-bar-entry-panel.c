@@ -163,6 +163,14 @@ static const gchar *probe_source =
 	"          guint modifiers, gint focused)\n"
 	"{\n"
 	"\t(void)plugin; (void)data; (void)focused;\n"
+	"\tif (focused == 2 && keysym == XKB_KEY_Up) {\n"
+	"\t\tnote(\"canvas up\");\n"
+	"\t\treturn TRUE;\n"
+	"\t}\n"
+	"\tif (focused == 2 && keysym == XKB_KEY_j) {\n"
+	"\t\tnote(\"canvas j\");\n"
+	"\t\treturn TRUE;\n"
+	"\t}\n"
 	"\tif (keysym == XKB_KEY_s && (modifiers & GOWL_KEY_MOD_CTRL)) {\n"
 	"\t\tnote(\"key ctrl-s\");\n"
 	"\t\treturn TRUE;\n"
@@ -549,6 +557,37 @@ test_paste_arrives_through_the_loop(void)
 }
 
 /*
+ * A focused canvas gets first refusal: Up and j are the plugin's there
+ * (a remote's D-pad, a wheel's ring), and what it declines -- Tab --
+ * still moves on.
+ */
+static void
+test_a_focused_canvas_hears_keys_first(void)
+{
+	Rig r;
+
+	if (!rig_up(&r))
+		return;
+
+	open_panel(&r);
+	key(&r, 0, XKB_KEY_Tab);      /* q -> pw */
+	key(&r, 0, XKB_KEY_Tab);      /* pw -> canvas */
+	clear_log(&r);
+	g_assert_true(key(&r, 0, XKB_KEY_Up));
+	g_assert_true(key(&r, 0, XKB_KEY_j));
+	g_assert_true(log_has(&r, "canvas up"));
+	g_assert_true(log_has(&r, "canvas j"));
+
+	/* Declined: Tab wraps back to the first field, which types. */
+	g_assert_true(key(&r, 0, XKB_KEY_Tab));
+	clear_log(&r);
+	key(&r, 0, XKB_KEY_x);
+	g_assert_true(log_has(&r, "text q 0 [x]"));
+
+	rig_down(&r);
+}
+
+/*
  * A plugin moves the keyboard by changing an item's focus token, and a
  * token left in place does not pull it back on every rebuild.
  */
@@ -609,6 +648,8 @@ main(int argc, char *argv[])
 	                test_tab_leaves_and_escape_closes);
 	g_test_add_func("/bar-entry-panel/wm-chords-not-eaten",
 	                test_window_manager_chords_are_not_eaten);
+	g_test_add_func("/bar-entry-panel/canvas-keys-first",
+	                test_a_focused_canvas_hears_keys_first);
 	g_test_add_func("/bar-entry-panel/plugin-moves-focus",
 	                test_the_plugin_can_move_focus);
 	g_test_add_func("/bar-entry-panel/paste",

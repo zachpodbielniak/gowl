@@ -1759,6 +1759,23 @@ bar_panel_focused_entry(GowlModuleBar *self, GowlBarPanelItem **out_item)
 	return g_hash_table_lookup(self->panel.entries, id);
 }
 
+/* Whether the keyboard is on a canvas. */
+static gboolean
+bar_panel_focused_canvas(GowlModuleBar *self)
+{
+	GowlBarPanelItem *item;
+
+	if (self->panel.panel == NULL || self->panel.focus_item < 0 ||
+	    self->panel.focus_child >= 0 ||
+	    (guint)self->panel.focus_item >=
+	    gowl_bar_panel_n_items(self->panel.panel))
+		return FALSE;
+	item = gowl_bar_panel_get_item(self->panel.panel,
+	                               (guint)self->panel.focus_item);
+	return item != NULL &&
+	       gowl_bar_panel_item_get_kind(item) == GOWL_BAR_ITEM_CANVAS;
+}
+
 typedef struct {
 	GowlBarPlugin *plugin;
 	const gchar   *item_id;
@@ -1973,7 +1990,7 @@ bar_panel_apply_focus(GowlModuleBar *self)
 	return FALSE;
 }
 
-/* Put the keyboard on the first entry that asked for it. */
+/* Put the keyboard on the first entry or canvas that asked for it. */
 static gboolean
 bar_panel_autofocus(GowlModuleBar *self)
 {
@@ -1988,7 +2005,8 @@ bar_panel_autofocus(GowlModuleBar *self)
 
 		item = gowl_bar_panel_get_item(self->panel.panel, i);
 		if (item == NULL ||
-		    gowl_bar_panel_item_get_kind(item) != GOWL_BAR_ITEM_ENTRY ||
+		    (gowl_bar_panel_item_get_kind(item) != GOWL_BAR_ITEM_ENTRY &&
+		     gowl_bar_panel_item_get_kind(item) != GOWL_BAR_ITEM_CANVAS) ||
 		    gowl_bar_panel_item_get_disabled(item) ||
 		    !bar_item_prop_true(item, GOWL_BAR_ENTRY_PROP_AUTOFOCUS))
 			continue;
@@ -4505,6 +4523,31 @@ bar_handle_axis(GowlBarProvider *provider, gpointer monitor, gint x, gint y,
 	if (self->panel.item != NULL && self->panel.monitor == monitor &&
 	    bar_panel_point(self, x, y, NULL, NULL)) {
 		gint step;
+		gint px = 0, py = 0, hit;
+
+		/* The wheel over a canvas is the canvas's: a wheel of
+		   faces turns, a remote's volume moves.  Anywhere else it
+		   scrolls the panel. */
+		bar_panel_point(self, x, y, &px, &py);
+		hit = (self->panel.hits != NULL)
+			? gowl_bar_hit_find(self->panel.hits, px, py) : -1;
+		if (hit >= 0) {
+			GowlBarHitRect *rect;
+
+			rect = &g_array_index(self->panel.hits,
+			                      GowlBarHitRect, hit);
+			if (rect->kind == GOWL_BAR_ITEM_CANVAS) {
+				gboolean up;
+
+				up = (discrete != 0) ? (discrete < 0)
+				                     : (delta < 0.0);
+				bar_panel_deliver(self, rect->id,
+					px - rect->x, (gdouble)(py - rect->y),
+					up ? GOWL_BAR_BUTTON_SCROLL_UP
+					   : GOWL_BAR_BUTTON_SCROLL_DOWN);
+				return TRUE;
+			}
+		}
 
 		step = gowl_bar_theme_metric(self->panel.bar->theme,
 		                             GOWL_BAR_METRIC_ROW_HEIGHT);
@@ -4686,6 +4729,30 @@ bar_handle_key(GowlKeybindHandler *handler, guint modifiers, guint keysym,
 			/* Not text: the plugin's to claim (Ctrl+S, ...). */
 			goto offer_plugin;
 		}
+	}
+
+	/*
+	 * A focused canvas gets first refusal on every key but Escape.  A
+	 * canvas is a picture the plugin drives itself -- a remote's D-pad,
+	 * a keybinding wheel -- and Up, Return and j mean something there.
+	 * What it declines falls through to the navigation below, so a
+	 * canvas that only wants clicks still lets Tab move on.
+	 */
+	if (keysym != XKB_KEY_Escape && bar_panel_focused_canvas(self)) {
+		gboolean claimed = FALSE;
+
+		if (!pressed)
+			return (modifiers & (GOWL_KEY_MOD_ALT |
+			                     GOWL_KEY_MOD_LOGO)) == 0;
+		if (bar_guard_call_key(self, self->panel.item->plugin, keysym,
+		                       modifiers, self->panel.focus_item,
+		                       &claimed) && claimed) {
+			bar_panel_rebuild(self);
+			bar_redraw_all(self);
+			return TRUE;
+		}
+		if (self->panel.item == NULL)   /* it faulted */
+			return TRUE;
 	}
 
 	switch (keysym) {

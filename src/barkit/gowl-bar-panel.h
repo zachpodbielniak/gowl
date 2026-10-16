@@ -466,6 +466,16 @@ GowlBarPanelItem *gowl_bar_panel_add_entry (GowlBarPanel *self,
                                              const gchar  *text);
 
 /**
+ * GOWL_BAR_BUTTON_SCROLL_UP:
+ *
+ * The @button a canvas's action receives for a wheel step up (towards
+ * the user) over it; %GOWL_BAR_BUTTON_SCROLL_DOWN for a step down.
+ * X11's wheel numbers, which no evdev button code ever uses.
+ */
+#define GOWL_BAR_BUTTON_SCROLL_UP   (4)
+#define GOWL_BAR_BUTTON_SCROLL_DOWN (5)
+
+/**
  * gowl_bar_panel_add_canvas:
  * @self: a #GowlBarPanel
  * @id: the id reported with clicks and passed to the panel_canvas hook
@@ -474,7 +484,11 @@ GowlBarPanelItem *gowl_bar_panel_add_entry (GowlBarPanel *self,
  * Adds a rectangle the plugin paints itself.  The width is the panel's
  * content width.  A click reaches the plugin's action hook with @index
  * set to the canvas x and @value to the canvas y, both in pixels; Return
- * on a focused canvas sends -1 for both.
+ * on a focused canvas sends -1 for both, and a wheel step over it the
+ * pointer position with @button %GOWL_BAR_BUTTON_SCROLL_UP or
+ * %GOWL_BAR_BUTTON_SCROLL_DOWN.  While a canvas has the keyboard it
+ * gets first refusal on every key but Escape (through panel_key);
+ * a canvas with %GOWL_BAR_ENTRY_PROP_AUTOFOCUS starts with it.
  *
  * The host still owns everything around it --- frame, scroll, focus ---
  * so a plugin that needs a picture (a remote control, a radial wheel, a

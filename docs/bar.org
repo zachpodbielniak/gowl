@@ -1037,9 +1037,25 @@ cores_canvas(GowlBarPlugin *plugin, gpointer data, const gchar *item_id,
 }
 #+end_src
 
-- A click reaches the =action= slot with =index= set to the canvas-local x and =value= to the y, both in pixels. =Return= on a focused canvas sends =-1= for both; other keys reach =panel_key= with the canvas focused.
+- A click reaches the =action= slot with =index= set to the canvas-local x and =value= to the y, both in pixels, and =button= the pointer button.  A wheel step over the canvas arrives the same way with =button= =GOWL_BAR_BUTTON_SCROLL_UP= or =GOWL_BAR_BUTTON_SCROLL_DOWN= --- the wheel over a canvas is the canvas's, not the panel's scroll.
+- While a canvas has the keyboard it gets *first refusal on every key but Escape*, through =panel_key= (=Up=, =j=, =Return= and =Space= included: on a D-pad or a wheel they mean something).  A key it declines falls through to the panel's navigation, so =Tab= still moves on and =Return= still sends the =-1, -1= activation.
+- =GOWL_BAR_ENTRY_PROP_AUTOFOCUS= works on a canvas too.
 - It runs on the compositor thread inside a render: draw from state you already have, never block, and use theme roles for colour.
 - A canvas that faults is quarantined *after* the render finishes, so the panel being walked is never freed under the renderer.
+
+**** Moving the keyboard
+:PROPERTIES:
+:CUSTOM_ID: plugin-focus
+:END:
+
+A plugin moves the keyboard by giving an item a =GOWL_BAR_PANEL_PROP_FOCUS= token and *changing* it when it wants the move to happen:
+
+#+begin_src C
+g_snprintf(tok, sizeof(tok), "%u", self->focus_requests);
+gowl_bar_panel_item_set_prop(target_entry, GOWL_BAR_PANEL_PROP_FOCUS, tok);
+#+end_src
+
+A token rather than a flag because the panel is rebuilt after every edit: a flag left set would drag the keyboard back to that item on every keystroke.  The host remembers the last token it obeyed and moves focus only for a different one.  This is how the translator's =Ctrl+1= / =Ctrl+2= pick a pane.
 
 **** Overlay-style panels
 :PROPERTIES:

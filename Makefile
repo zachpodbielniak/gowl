@@ -923,6 +923,8 @@ $(OBJDIR)/tests/test-hints.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath 
 
 $(OUTDIR)/test-bar-monitor: $(OUTDIR)/modules/bar.so
 $(OUTDIR)/test-bar-entry-panel: $(OUTDIR)/modules/bar.so
+$(OUTDIR)/test-bar-ai: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-ai.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"'
 $(OBJDIR)/tests/test-bar-entry-panel.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 $(OBJDIR)/tests/test-bar-monitor.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 

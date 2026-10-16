@@ -1,0 +1,294 @@
+#+title: Meeting notes
+#+description: The meeting-notes bar widget: record what the speakers play and the microphone, transcribe, summarise and file the notes
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+
+=meeting-notes= (aliases =meeting= and =notetaker=) is a microphone in the bar that turns a meeting into notes:
+
+1. *Record.* Left-click starts one recorder per selected source --- by default what the speakers play (the default output's *monitor*, so the other side of a call) and the default microphone (your side) --- each into its own 16 kHz mono WAV in a session directory. The label becomes a red timer, =● 12:03=. Left-click again stops.
+2. *Mix.* Several recordings are mixed into one with ffmpeg (=amix=, without normalisation, so a quiet remote voice is not divided by the number of inputs). One recording needs no mixing.
+3. *Transcribe.* whisper.cpp turns the speech into text. The label reads =transcribing mm:ss= in yellow.
+4. *Summarise.* A language model writes a summary, the decisions, the action items (each =- [ ] OWNER: task=, with the owner when the transcript makes it clear) and the open questions.
+5. *File.* The notes land where you want them: under =cmacs --gowl= a directory, the second brain, the Org inbox, or the second brain plus the directory; standalone, an Org (or Markdown) file in a directory. A toast says where, and clicking it opens the file.
+
+Right-click opens the panel: the meeting's title, which sources to record, where the notes go, the whisper model, the last five notes, and Start/Stop.
+
+It is a generic port inspired by the Omarchy "OmaNotation" plugin, rebuilt around PipeWire, whisper.cpp and the bar's own AI backend, and wired into cmacs-transcribe and the second brain.
+
+What it deliberately does *not* do (yet):
+
+- *Speaker separation (diarisation) and voice recognition.* The transcript is one stream of speech with no "who said what". Both are planned follow-ups: diarisation would split the transcript by speaker (the per-source recordings already separate *you* from *them*, which is the obvious first step --- transcribe each source separately and interleave by timestamp), and voice recognition would put names on the other speakers. Neither is implemented; nothing here pretends otherwise.
+- *Record video or the screen.* That is the =recorder= widget.
+- *Upload anything.* Recording, mixing and transcription are entirely local. Only the summary goes to a model, and only to the provider you configured (which can be a local ollama).
+- *Delete recordings.* Every WAV is kept in its session directory, beside the logs. Cleaning up old sessions is yours to do.
+
+* Quick start --- standalone gowl
+
+Standalone the widget is *off by default* and *needs configuring*: there is no whisper model it could guess.
+
+#+begin_src yaml
+# ~/.config/gowl/config.yaml
+modules:
+  bar:
+    widgets-right-add: "meeting-notes"
+    # Required: a whisper.cpp model.
+    meeting-notes.whisper-model: "~/.local/share/cmacs/whisper-models/ggml-base.en.bin"
+    # Optional, shown with their defaults:
+    meeting-notes.output-dir: "~/Documents/notes/00_inbox"
+    meeting-notes.recordings-dir: "~/Documents/recordings/meetings"
+    meeting-notes.format: org
+    meeting-notes.language: auto
+    # The summary goes through ai-glib's `ai' command:
+    meeting-notes.ai-backend: ai
+    meeting-notes.ai-provider: ollama
+    meeting-notes.ai-model: "qwen3.5:9b"
+keybinds:
+  "Super+Shift+m": { action: ipc_command, arg: "bar-panel meeting-notes", desc: "Meeting notes" }
+#+end_src
+
+The minimum to set is =meeting-notes.whisper-model= (or pick a model in the panel, from the =*.bin= / =*.gguf= files in =whisper-models-dir=), with =whisper-cli= on =PATH=. Without a model the meeting is still recorded, and the error toast says which setting to set and where the recordings are. Without an AI backend the notes are still written, with the transcript and a note saying why there is no summary.
+
+From a shell:
+
+#+begin_src sh
+gowl bar-panel meeting-notes    # open the panel
+gowl bar-panel                  # close it
+#+end_src
+
+* Quick start --- cmacs --gowl
+
+*Under =cmacs --gowl= the widget is on by default*, in the top bar's right region (=cmacs-gowl-bar-default-widgets=). cmacs calls =cmacs-gowl-bar-meeting-push= at startup (through =cmacs-gowl-bar-widgets-setup-functions=), which tells the widget:
+
+- =backend= = =cmacs=: after a recording, the session is handed to cmacs with =emacsctl eval '(cmacs-gowl-bar-meeting-finish ...)'=, and cmacs does the rest --- ffmpeg mixing, =cmacs-transcribe= (the embedded whisper.cpp, with its model management), its =meeting= summary template through cmacs-ai, and the filing;
+- =ai-backend= = =cmacs=;
+- =destination= = =cmacs-gowl-bar-meeting-destination=.
+
+The four destinations, chosen per meeting with the panel's buttons or by default with the defcustom:
+
+| Destination   | Panel button   | What happens                                                                                                                                                                                                                          |
+|---------------+----------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =directory=   | Directory      | cmacs-transcribe's =meeting.txt= and =meeting.org= (summary + transcript) stay in =cmacs-gowl-bar-meeting-directory=, in the session's subdirectory.                                                                                  |
+| =secondbrain= | Second brain   | The summary and transcript go to =cmacs-secondbrain-ingest-run= as text, type =meeting=, titled with the meeting's title, tagged =meeting=. Ingest places it in the PARA tree (or where =cmacs-gowl-bar-meeting-para= says), links it, re-summarises in its own =meeting= shape, and indexes it. |
+| =org-inbox=   | Org inbox      | A notes file in =cmacs-gowl-bar-meeting-inbox= (=~/Documents/notes/00_inbox=), in the notes repository's header convention, ready to triage. *The default.*                                                                          |
+| =both=        | Brain + dir    | The second brain, and the directory copy is kept.                                                                                                                                                                                     |
+
+#+begin_src emacs-lisp
+;; init.el / Doom config.el
+(setq cmacs-gowl-bar-meeting-destination 'secondbrain)   ; directory | secondbrain | org-inbox | both
+(setq cmacs-gowl-bar-meeting-para "areas")               ; nil: let ingest place it
+(setq cmacs-gowl-bar-meeting-inbox "~/Documents/notes/00_inbox")
+(setq cmacs-gowl-bar-meeting-directory "~/Documents/recordings/meetings")
+(cmacs-gowl-bar-meeting-push)                            ; re-send the default to the bar
+(gowl-add-keybind "Super+Shift+m" 'ipc-command "bar-panel meeting-notes" "Meeting notes")
+#+end_src
+
+Bar-side settings work the same way as standalone:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("meeting-notes.recordings-dir" . "~/Documents/recordings/meetings")
+   ("meeting-notes.max-minutes" . "120")))
+#+end_src
+
+To take it off the bar, remove it from =cmacs-gowl-bar-default-widgets=:
+
+#+begin_src emacs-lisp
+(setq cmacs-gowl-bar-default-widgets
+      (assoc-delete-all "meeting-notes" cmacs-gowl-bar-default-widgets))
+#+end_src
+
+The cmacs-side options (=M-x customize-group RET cmacs-gowl-bar=):
+
+| Option                                     | Default                            | Meaning                                                                                       |
+|--------------------------------------------+------------------------------------+-----------------------------------------------------------------------------------------------|
+| =cmacs-gowl-bar-meeting-destination=       | =org-inbox=                        | Where notes go when the bar does not say; see the table above                                 |
+| =cmacs-gowl-bar-meeting-directory=         | =~/Documents/recordings/meetings=  | Where the =directory= destination keeps transcripts                                           |
+| =cmacs-gowl-bar-meeting-inbox=             | =~/Documents/notes/00_inbox=       | Where the =org-inbox= destination writes                                                      |
+| =cmacs-gowl-bar-meeting-para=              | =nil=                              | =:para= for the second brain; nil lets ingest decide                                          |
+| =cmacs-gowl-bar-meeting-tags=              | =("meeting")=                      | Tags for the second brain                                                                     |
+| =cmacs-gowl-bar-meeting-summary-type=      | =meeting=                          | The =cmacs-transcribe-summary-templates= key                                                  |
+| =cmacs-gowl-bar-meeting-summary-template=  | =nil=                              | A system prompt replacing that template, for meetings only                                     |
+| =cmacs-gowl-bar-meeting-ffmpeg=            | =ffmpeg=                           | The ffmpeg used to mix                                                                        |
+| =cmacs-gowl-bar-meeting-timeout=           | =14400=                            | Seconds before a meeting that has not been filed is given up on                               |
+| =cmacs-gowl-bar-meeting-watch-interval=    | =2=                                | Seconds between checks on a running transcription                                             |
+
+The whisper model, language and threads are cmacs-transcribe's own (=cmacs-transcribe-model=, =cmacs-whisper-default-model=, =cmacs-transcribe-language=, =cmacs-transcribe-threads=); the summary provider is =cmacs-transcribe-summary-provider= / =-model=. A missing model is an error toast naming =M-x cmacs-whisper-download-model=, never a prompt.
+
+* Settings
+
+Bar settings, =meeting-notes.<key>= in the bar configuration.
+
+| Key                  | Type    | Default                                                                         | Meaning                                                                                                              |
+|----------------------+---------+---------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------|
+| =backend=            | string  | =local=                                                                         | =cmacs= hands the session to cmacs; anything else (=local=, =auto=) processes it in the bar. cmacs --gowl pushes =cmacs= |
+| =destination=        | string  | (cmacs default)                                                                 | cmacs backend only: =directory=, =secondbrain=, =org-inbox= or =both=; set by the panel buttons                       |
+| =recordings-dir=     | path    | =~/Documents/recordings/meetings=                                               | Where session directories =YYYY-MM-DD_HH-MM-SS/= are created (mode 0700)                                             |
+| =record-command=     | template| =pw-record --target {source} --rate 16000 --channels 1 --format s16 {output}= | The recorder, one per source. Falls back to =ffmpeg -f pulse -i {source} -ac 1 -ar 16000 {output}= when unset and pw-record is missing |
+| =pactl=              | command | =pactl=                                                                         | Lists the sources and the defaults                                                                                    |
+| =max-minutes=        | number  | =240=                                                                           | A recording is stopped (with a toast) after this long; =0= for no limit. Fractions are allowed                       |
+| =stop-grace=         | seconds | =5=                                                                             | How long a recorder has to finish after SIGINT before SIGTERM, then SIGKILL three seconds later                      |
+| =ffmpeg=             | command | =ffmpeg=                                                                        | Local backend: mixes two or more recordings                                                                          |
+| =transcribe-command= | template| =whisper-cli -m {model} -l {language} -t {threads} -otxt -of {output_base} {input}= | Local backend: writes ={output_base}.txt=                                                                    |
+| =whisper-model=      | path    | (none)                                                                          | Local backend: the whisper.cpp model. *Required* standalone; a panel row sets it                                     |
+| =whisper-models-dir= | path    | =~/.local/share/cmacs/whisper-models=                                           | Where the panel looks for =*.bin= / =*.gguf= models (the same directory cmacs-whisper downloads into)                |
+| =language=           | string  | =auto=                                                                          | whisper's language, =auto= to detect                                                                                  |
+| =whisper-threads=    | integer | =4=                                                                             | whisper's CPU threads                                                                                                 |
+| =summary=            | boolean | =true=                                                                          | Local backend: summarise through bar-ai                                                                              |
+| =summary-system=     | string  | (a meeting prompt)                                                              | The summary's system prompt; the default asks for Summary, Decisions, Action items, Open questions in the output format |
+| =output-dir=         | path    | =~/Documents/notes/00_inbox=                                                    | Local backend: where the notes file is written                                                                       |
+| =format=             | string  | =org=                                                                           | =org= or =md=                                                                                                        |
+| =open-command=       | command | =xdg-open=                                                                      | What a click on a toast or a Recent row runs, with the file appended                                                  |
+| =emacsctl=           | command | =emacsctl=                                                                      | cmacs backend: the cmacs control CLI                                                                                 |
+| =color-recording=    | colour  | =red=                                                                           | See [[*Theming][Theming]]                                                                                            |
+| =color-working=      | colour  | =yellow=                                                                        |                                                                                                                      |
+| =color-error=        | colour  | =red=                                                                           |                                                                                                                      |
+| =color-idle=         | colour  | =subtext=                                                                       |                                                                                                                      |
+
+The shared AI keys (=ai-backend=, =ai-provider=, =ai-model=, =ai-command=, =ai-timeout=) apply to the local backend's summary; see [[file:../bar.org::#plugin-ai][Asking a language model]]. Under the cmacs backend the summary is cmacs-transcribe's, and these are not used.
+
+Settings the widget receives from cmacs and you never set by hand: =job-id=, =state=, =result=, =error= (the cmacs backend's progress; see [[*Internals][Internals]]).
+
+** Command templates
+
+=record-command= and =transcribe-command= are split into words with shell *quoting* rules --- single and double quotes work, so ='/opt/my tools/rec' {output}= is two words --- and *never run through a shell*: there are no pipes, redirections, variables or globs. The placeholders are substituted afterwards, inside each word, so a value with spaces or quotes (a source name, a recordings directory under =~/My Meetings=) stays exactly one argument, and a value is never itself searched for placeholders. An unknown ={name}= is left as written.
+
+| Template             | Placeholders                                                         |
+|----------------------+----------------------------------------------------------------------|
+| =record-command=     | ={source}= (the source name), ={output}= (the WAV to write)          |
+| =transcribe-command= | ={model}=, ={language}=, ={threads}=, ={input}= (the WAV), ={output_base}= (write ={output_base}.txt=); ={output}= is an alias of ={output_base}= |
+
+A recorder must finish its file and exit on *SIGINT*. pw-record and ffmpeg both do.
+
+* Theming
+
+| Key               | Default role | When                                                    |
+|-------------------+--------------+---------------------------------------------------------|
+| =color-recording= | =red=        | Recording and stopping: the timer                       |
+| =color-working=   | =yellow=     | Starting, mixing, transcribing, summarising, filing     |
+| =color-error=     | =red=        | The last meeting failed                                 |
+| =color-idle=      | =subtext=    | Idle, and after a meeting was filed                     |
+
+Each accepts a palette role (=peach=, =accent=, =mauve=, ...), which follows the session palette when it changes, or a =#rrggbb= literal, which does not:
+
+#+begin_src yaml
+modules:
+  bar:
+    meeting-notes.color-recording: maroon
+    meeting-notes.color-idle: "#7f849c"
+#+end_src
+
+The panel's hero takes the same roles as their defaults (red, yellow, subtext).
+
+* The panel
+
+Right-click the widget, or =gowl bar-panel meeting-notes=.
+
+- *Hero* --- the state (=Recording 12:03=, =Transcribing=, =Meeting notes=) and where the recordings go. Its switch starts and stops recording.
+- *Title* --- an optional meeting title. It becomes the notes' =#+title= and the file name's slug (=2026-10-16_14-05_meeting_q4_planning.org=). =Return= in the field starts recording. The field clears after a meeting is filed.
+- *Sources* --- every PipeWire/Pulse source as a switch, outputs first (=Output: Monitor of ...=, what that output plays) then inputs (=Mic: ...=). The choice is saved and survives restarts. A saved source that is not plugged in today is shown as =Not present: ...= so it can be turned off; it is skipped when recording. *Refresh sources* re-reads the list. Switches are disabled while a meeting is in progress.
+- *Output* --- the backend. Under cmacs, the four destination buttons (the active one is highlighted; with none highlighted, the defcustom decides). Standalone, the notes directory and format, then *Whisper model*: one row per model in =whisper-models-dir=, the active one marked; clicking one selects it.
+- *Recent* --- the last five meeting notes (from =output-dir=, plus whatever cmacs last filed elsewhere); clicking one opens it.
+- *Start recording* / *Stop* / *Cancel* / *Dismiss* --- Cancel stops the recorders (keeping their files) or abandons the transcription; Dismiss clears an error.
+
+Keys while the panel is open: =r= starts or stops recording; the usual panel keys otherwise.
+
+* Dependencies
+
+Fedora package names, for the image build:
+
+| Package            | Provides                       | Needed for                                                                                                    |
+|--------------------+--------------------------------+---------------------------------------------------------------------------------------------------------------|
+| =pipewire-utils=   | =pw-record=                    | Recording (the default recorder)                                                                              |
+| =pulseaudio-utils= | =pactl=                        | Listing sources and the default output and input. Works against PipeWire's pulse server; no PulseAudio daemon |
+| =ffmpeg-free=      | =ffmpeg=                       | Mixing two or more sources (both backends), and the fallback recorder. Fedora's own build; mixing WAVs needs nothing it leaves out. RPM Fusion's =ffmpeg= replaces it and works the same here |
+| whisper.cpp CLI    | =whisper-cli=                  | Standalone transcription. *Not packaged as a CLI in Fedora*: Fedora 44's =whisper-cpp= ships only the library (=libwhisper.so=), no =whisper-cli= binary. Install it from linuxbrew (=brew install whisper-cpp=) or build it; or point =transcribe-command= elsewhere |
+| ai-glib            | =ai=                           | Standalone summaries (=ai-backend: ai=)                                                                        |
+| cmacs              | =emacsctl=                     | The cmacs backend                                                                                             |
+
+Under cmacs --gowl, transcription is cmacs's embedded whisper (=--with-cmacs-whisper=), so =whisper-cli= is not needed; ffmpeg still is for mixing (=ffmpeg-free=, or cmacs-transcode's podman image for its own conversion).
+
+When something is missing:
+
+- *pactl*: the panel says to install =pulseaudio-utils=; sources cannot be listed, a saved selection is still recorded.
+- *pw-record*: ffmpeg's pulse input is used instead when ffmpeg is installed and =record-command= is unset; the panel says to install =pipewire-utils=. With neither, starting fails with a toast naming both packages.
+- *ffmpeg*: a single-source meeting still works; mixing two or more fails with a toast naming =ffmpeg-free=.
+- *whisper-cli* or the model: the meeting is recorded, and the error says which setting to set and where the recordings are.
+- *ai*: the notes are written without a summary, and say why.
+
+* Security and privacy
+
+- *Recording other people.* This widget records audio. Recording a call can require every participant's consent, depending on where you and they are. That is yours to get.
+- *Nothing leaves the machine except the summary request*, which carries the transcript to the model provider you configured --- choose a local one (ollama) for anything confidential. The transcript travels on the =ai= command's stdin, never in argv, so it is not visible in =ps=.
+- Session directories are created mode =0700=; recorder and transcriber logs (=*.log=) beside the WAVs are =0600=.
+- Commands are never run through a shell (see [[*Command templates][Command templates]]): a source name, title or path cannot inject a command.
+- The title and the session path are passed to cmacs as escaped Elisp string literals; text that is not UTF-8, or that contains a control character, is refused rather than mangled.
+- A source name that starts with =-= is ignored, so a hostile device name cannot be read as a recorder option.
+- Recorders are stopped by the pid the widget started, never by pattern: a =pw-record= you started yourself is never touched.
+
+* Troubleshooting
+
+| Symptom                                                           | Cause and fix                                                                                                                                         |
+|-------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "A recorder stopped early" toast with =target node not found=    | The source was unplugged or renamed. Pick it again in the panel (*Refresh sources* first). The other recorders keep going.                           |
+| Only my voice is in the transcript                                | The output's monitor is not selected, or the call plays through a different output than the default. Turn on the right =Output:= source.              |
+| Every remote sentence appears twice                               | Speakers rather than headphones: the microphone hears the speakers, and the monitor records them too. The widget warns about this once per selection (a heuristic: a monitor and a microphone on the same sound card, or a monitor of something named "Speaker"). Use headphones, or record only the microphone. |
+| Label stuck on =stopping=                                         | A recorder ignores SIGINT; it gets SIGTERM after =stop-grace= seconds and SIGKILL three seconds later.                                                 |
+| "no whisper model is configured"                                  | Set =meeting-notes.whisper-model=, or pick a model in the panel. The recordings are in the session directory the toast names.                         |
+| "could not reach cmacs"                                           | =emacsctl= is not on =PATH=, or cmacs is not running. The recordings are kept; run the finish call yourself once cmacs is up: =(cmacs-gowl-bar-meeting-finish "meeting-notes" "manual" "/path/to/session" (list "01-....wav") nil nil)=. |
+| Under cmacs, stuck on =transcribing= for a long time              | cmacs-transcribe is working (see its log buffer, =*cmacs-transcribe-log*=). It gives up after =cmacs-gowl-bar-meeting-timeout=.                       |
+| Notes have no summary                                             | The notes say why: summaries off, no AI backend, or the model failed. The transcript is always kept.                                                  |
+| Mixing fails with an =amix= option error                         | An old ffmpeg whose amix has no =normalize= option. Fedora's is current.                                                         |
+
+Logs: each session directory holds =NN-<source>.log= (each recorder's stderr), =mix.log= and =transcribe.log= (local backend). An error toast quotes the last line.
+
+* Internals
+
+** Files
+
+| File                                    | What                                                                                     |
+|-----------------------------------------+------------------------------------------------------------------------------------------|
+| =modules/bar/bar-plugins-meeting.c=     | The widget: state machine, spawning, reaping, panel                                      |
+| =modules/bar/bar-meeting-model.[ch]=    | Pure helpers: pactl JSON, templates, mix argv, names, summary split, the notes document, the cmacs form |
+| =tests/test-bar-meeting-notes.c=        | Tests, against =tests/fixtures/bar/meeting-notes/pactl-sources.json= (a real, sanitised capture) |
+| =lisp/cmacs/cmacs-gowl-bar-meeting.el=  | (cmacs) The cmacs half                                                                   |
+| =test/cmacs/cmacs-gowl-bar-meeting-tests.el= | (cmacs) Its tests                                                                    |
+
+State: the source selection is =$XDG_STATE_HOME/gowl/meeting-notes.sources= (the host's state directory), one source name per line.
+
+** Threads and processes
+
+Everything the widget runs is a child process it spawned itself, on a bar worker thread, with =G_SPAWN_DO_NOT_REAP_CHILD=; it is collected with =waitpid(WNOHANG)= from the widget's async poll, which the bar runs once a second while anything is in progress (every thirty seconds when idle). *Nothing waits on a child*: a forty-minute whisper run does not hold one of the bar's four worker threads, and nothing uses GLib's child watches or main-context timers, which under cmacs would fire on Emacs's thread.
+
+- The click, the panel and the keys run on the compositor thread and only change state and send signals (=kill()= is a non-blocking syscall). Starting is handed to a worker; stopping is SIGINT to the pids this widget started, escalated to SIGTERM after =stop-grace= and SIGKILL three seconds later by the async poll. A cancelled or abandoned child is kept on an orphan list and escalated the same way, so nothing outlives its meeting --- including a child that swallowed the first signal.
+- Toasts are raised only from the sync poll (or a click), because the host's toast stack is not thread-safe: a worker queues them.
+- State shared between the worker and the compositor thread is behind one mutex; lists the panel reads (sources, models, recent notes) are rebuilt unlocked on a worker and swapped in. A generation counter, bumped by start and cancel, makes a worker that finishes late drop its result.
+
+The local pipeline: =RECORDING= → =STOPPING= (reaping) → =MIXING= (ffmpeg, only for two or more files) → =TRANSCRIBING= (whisper-cli) → =SUMMARISING= (bar-ai; its CLI route is itself a worker, its cmacs route answers through =ai-*= settings) → =FILING= → =DONE=. The summary is optional and a failed one is noted in the file, never fatal.
+
+** The cmacs contract
+
+After the recorders are reaped the widget runs, on a worker:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-meeting-finish WIDGET JOB-ID SESSION-DIR (list FILE ...) TITLE DESTINATION)
+;; returns t at once, then pushes:
+;;   ("WIDGET.job-id" . JOB-ID)
+;;   ("WIDGET.state"  . "mixing" | "transcribing" | "summarising" | "filing" | "done" | "error")
+;;   ("WIDGET.result" . "/path/to/the/notes")    ; with done
+;;   ("WIDGET.error"  . "why")                   ; with error
+#+end_src
+
+=FILE= names are relative to =SESSION-DIR=; =TITLE= and =DESTINATION= are =nil= when unset. Every push carries all four keys, so a result left from an earlier meeting is never read as this one's; the widget takes a push only when =job-id= is the job it is waiting for, and a push it has already seen (every reconfigure re-delivers the settings) changes nothing.
+
+On the cmacs side the work is asynchronous throughout: ffmpeg runs under =make-process= with a sentinel; transcription runs in a *private* cmacs-transcribe queue buffer, so this meeting's options (output directory, the =meeting= summary type, an optional template override) never leak into the user's own =*cmacs-transcribe*= session, and its =cmacs-transcribe-after-transcription-functions= / =-after-summary-functions= hooks are added buffer-locally there, matched on the input file. cmacs-transcribe has no hook for a failed transcription or a summary that did not happen, so a watchdog timer reads the job's stage every =cmacs-gowl-bar-meeting-watch-interval= seconds and files the transcript without a summary, or pushes the error. Nothing on that side signals: every sentinel, hook and timer body pushes =error= instead.
+
+** Tests
+
+=make build/release/test-bar-meeting-notes && ./build/release/test-bar-meeting-notes= --- offline, with stand-ins written to a scratch directory: a pactl that prints the fixture, a pw-record that writes a WAV and its pid and waits for SIGINT, an ffmpeg, a whisper-cli and an =ai= that write what the real ones would, and an emacsctl that records the form it was given. The recorders are real processes: the lifecycle tests assert each got SIGINT and was reaped (=kill(pid, 0)= fails with =ESRCH= --- a zombie would still answer). Covered: source parsing (the real capture, truncated, hostile, non-UTF-8, oversized, ports before the name), the default selection, the echo heuristic, template splitting with spaces, quotes and injection attempts, the mix argv, file names, the summary split, both document formats, the cmacs form's quoting, the whole local road to an Org file, Markdown with summaries off, an early-dying recorder, the duration limit, a recorder that ignores SIGINT, missing recorder/pactl/model, the cmacs road with foreign and repeated pushes, the panel, the saved selection, colours by state and colour overrides.
+
+cmacs side: =src/emacs -Q --batch -L lisp/cmacs -L lisp -L test/cmacs -l ert -l test/cmacs/cmacs-gowl-bar-meeting-tests.el -f ert-run-tests-batch-and-exit=.

@@ -296,4 +296,19 @@ if [ -f "$clip" ]; then
 		fail "$clip does not guard against its own writes; pasting from history will duplicate the entry"
 fi
 
+# 12. A secret never goes into an argv.
+#
+# Anything in an argv is in /proc/<pid>/cmdline, readable by every user
+# on the machine for as long as the process runs.  The network-shares
+# widget handles passwords; every argv in it is built with
+# g_ptr_array_add(argv, ...), so a line doing that and naming a password
+# or a secret is the leak, caught before it ships.  Passwords travel on
+# stdin or in a 0600 credentials file instead.
+for f in modules/bar/bar-plugins-netshares.c modules/bar/bar-netshares-model.c; do
+	[ -f "$f" ] || continue
+	if grep -n "g_ptr_array_add(argv" "$f" | grep -qiE "password|secret|passwd"; then
+		fail "$f puts a password or secret into an argv; use stdin or a 0600 file"
+	fi
+done
+
 echo "PASS: bar source guards"

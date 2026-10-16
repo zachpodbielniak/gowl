@@ -68,6 +68,45 @@ A pre-regions configuration additionally gets =tags title= put back on its left,
 
 After that first configuration the bar behaves incrementally: a later call setting only =widgets-right= leaves the left and centre alone.
 
+*** Adding and removing one widget
+:PROPERTIES:
+:CUSTOM_ID: amend-regions
+:END:
+
+Setting a region replaces it.  To add or remove ONE widget without restating everything else in that region, use the amendment keys:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "meeting-notes ai-assistant"
+    widgets-right-remove: "tailscale"
+    bottom-widgets-left-add: "wow-gold"
+#+end_src
+
+| Key                      | Does                                                    |
+|--------------------------+---------------------------------------------------------|
+| =widgets-left-add=       | append these widgets to the left region                 |
+| =widgets-left-remove=    | take these widgets out of the left region               |
+| =widgets-center-add=     | append to the centre region (=widgets-centre-add= too)   |
+| =widgets-center-remove=  | take out of the centre region                           |
+| =widgets-right-add=      | append to the right region (which reads outward, so an added widget lands nearest the centre) |
+| =widgets-right-remove=   | take out of the right region                            |
+
+Prefix any of them with =bottom-= for the bottom bar.  Each takes a space-separated list of specs.
+
+- Amendments do *not* count as "a configuration that names a widget list": the shipped layout survives them.  That is the point --- they are how cmacs, a module or a podomation rule adds one widget to a bar it does not own.
+- Removals run before additions, so one configuration can move a widget between regions.  A removal matches the whole spec (=disk= does not remove =disk:/var=), and a name that is not there is not an error.
+- An addition is not deduplicated: send the matching =-remove= in the same configuration first if the code may run more than once.  The cmacs defaults do exactly that.
+- Adding to the centre region forgets the =center-anchor=; re-send it if you rely on one.
+
+From cmacs, the same keys go through =cmacs-gowl-bar-configure-top= / =cmacs-gowl-bar-configure-bottom=:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("widgets-right-remove" . "wow-gold")
+   ("widgets-right-add" . "wow-gold")))
+#+end_src
+
 *** Widget specs
 :PROPERTIES:
 :CUSTOM_ID: widget-specs

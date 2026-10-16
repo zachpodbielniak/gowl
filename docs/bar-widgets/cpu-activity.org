@@ -1,0 +1,225 @@
+#+title: CPU activity
+#+description: The cpu widget's activity mode: a load creature in the bar, a CPU die map, a process list with safe signals, and an optional journal
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-16T00:00:00-05:00
+#+updated: 2026-10-16T00:00:00-05:00
+#+version: 1.0
+
+* What it does
+
+The activity mode is not a new widget: it is the existing =cpu= widget with more it can do, every part of it behind a setting. With no settings the widget is exactly what it always was --- =CPU 23%= in the bar, the shared system panel behind it --- and a configuration that never names one of the settings below sees no change at all. It is also reachable under the alias =activity=.
+
+What it adds:
+
+- *A creature in the bar* (=style: creature=). A small square character, the bar's height. Its *left eye* fills with CPU utilisation and its *right eye* with memory in use; six rows in its belly light from the bottom as the load average climbs past a threshold; above a heat threshold its rows turn red, flames burn over its head, and (unless =motion= is off) it shakes once per sampling tick.
+- *A CPU die* in the panel: one cell per logical core, coloured by that core's load, with a key.
+- *Expand / Compact.* The expanded panel adds the GPU (amdgpu through sysfs, NVIDIA through =nvidia-smi=), every local filesystem, and a filterable list of *your own* processes, busiest first, each of which can be sent =SIGTERM= or (in two clicks) =SIGKILL=.
+- *Sampling speed* (=efficient=, =balanced=, =fast=), the *length* of the processor graph, *Fahrenheit*, and per-core *clock speeds*.
+- *A journal* (off by default): one line per sample of CPU, memory and temperature, kept for seven days or 20 MiB, exportable as CSV from the panel.
+
+What it deliberately does not do:
+
+- It never lists or signals another user's processes, init, or the compositor itself, and it re-reads a process immediately before signalling it --- see [[*Security and privacy][Security and privacy]].
+- It does not read every process when nobody is looking: the process walk, the GPU query and the filesystem sizes run only while the panel is open *and* expanded.
+- It does not replace a process monitor. The panel's *Monitor* and *Processes* buttons still open one (=btop= by default).
+
+It is a generic port inspired by the Omarchy "Loadlet" plugin; the widget keeps gowl's own name and conventions.
+
+* Quick start --- standalone gowl
+
+The =cpu= widget is in the shipped layout already, so turning the activity mode on is a matter of settings. In =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  bar:
+    cpu.style: creature
+    cpu.sampling: balanced
+    cpu.open-expanded: true
+    cpu.show-frequencies: true
+    cpu.journal: true
+keybinds:
+  "Super+Shift+a": { action: ipc_command, arg: "bar-panel cpu", desc: "Activity panel" }
+#+end_src
+
+If your layout has no cpu widget, add it (=activity= is the same widget):
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-right-add: "activity"
+    activity.style: creature
+#+end_src
+
+Open the panel from a shell or a script:
+
+#+begin_src sh
+gowl bar-panel cpu
+#+end_src
+
+Standalone gowl keeps =style: label= unless you set it --- the bar reads =CPU 23%= exactly as before.
+
+* Quick start --- cmacs --gowl
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top
+ '(("cpu.style" . "creature")
+   ("cpu.open-expanded" . "true")
+   ("cpu.show-frequencies" . "true")
+   ("cpu.journal" . "true")))
+(gowl-add-keybind "Super+Shift+a" 'ipc-command "bar-panel cpu" "Activity panel")
+#+end_src
+
+*What cmacs --gowl does by default:* it pushes =cpu.style: creature= and leaves every other setting at its default, so the cmacs desktop shows the creature where standalone gowl shows =CPU 23%=. To get the plain label back under cmacs:
+
+#+begin_src emacs-lisp
+(cmacs-gowl-bar-configure-top '(("cpu.style" . "label")))
+#+end_src
+
+* Settings
+
+Every key is read as =cpu.<key>= (or =activity.<key>=; the alias shares the widget). Settings pushed at runtime take effect within one sampling interval.
+
+| Key                 | Type                               | Default                  | Meaning                                                                                                                                                                                   |
+|---------------------+------------------------------------+--------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =style=             | =label= \vert =creature=           | =label=                  | What the bar shows. =label= is the classic =CPU N%=; anything unrecognised is =label=.                                                                                                     |
+| =sampling=          | =efficient= \vert =balanced= \vert =fast= | =balanced=        | Seconds between samples: 4, 2 or 1. Also sets how often the shared /proc/stat reader samples, which every system widget reads.                                                            |
+| =history-samples=   | integer, 10--600                   | =60=                     | How many samples the Processor graph plots (60 at =balanced= is two minutes).                                                                                                             |
+| =temperature-unit=  | =celsius= \vert =fahrenheit=       | =celsius=                | Unit for every temperature the cpu panel and the creature's tooltip show (=f= is accepted too). The journal and its export always record Celsius.                                          |
+| =show-frequencies=  | boolean                            | =false=                  | Read each core's current clock (=scaling_cur_freq=) while the panel is open: a Clock / Range row in Processor, and the clock in each die cell when the cell is wide enough.                 |
+| =load-threshold=    | percent, 0--99                     | =50=                     | Load (one-minute load average per core, as a percent) under which no belly row is lit. Above it, the six rows divide what is left of the range: at 50, a load of 51% lights one row and 100% all six. |
+| =heat-threshold=    | percent, 1--100                    | =80=                     | CPU utilisation (not temperature) at which the creature runs hot: red rows, flames, and the shake.                                                                                         |
+| =motion=            | boolean                            | =true=                   | Whether a hot creature shakes. It moves one pixel left or right once per sampling tick --- driven by the poll, never a timer.                                                              |
+| =open-expanded=     | boolean                            | =false=                  | Whether the panel starts expanded. Applied when the setting arrives or changes; the Expand / Compact button is then remembered for the rest of the session.                                |
+| =process-count=     | integer, 1--100                    | =15=                     | How many processes the list shows (after the filter).                                                                                                                                      |
+| =journal=           | boolean                            | =false=                  | Append one line per sample to =$XDG_STATE_HOME/gowl/activity.journal=.                                                                                                                     |
+| =nvidia-smi=        | command                            | =nvidia-smi=             | The =nvidia-smi= to run (a name on =PATH= or an absolute path). Run as an argument vector, never through a shell.                                                                          |
+| =color=             | role or =#rrggbb=                  | =text=                   | The label's calm colour (label style), as before. Pressure colours still fire over it.                                                                                                    |
+| =icons=             | boolean                            | =false=                  | The label's Nerd Font glyph, as before. The creature never draws one.                                                                                                                      |
+| =color-body=        | role or =#rrggbb=                  | =subtext=                | See [[*Theming][Theming]].                                                                                                                                                                 |
+| =color-eye=         | role or =#rrggbb=                  | =accent=                 |                                                                                                                                                                                           |
+| =color-load=        | role or =#rrggbb=                  | =green=                  |                                                                                                                                                                                           |
+| =color-hot=         | role or =#rrggbb=                  | =red=                    |                                                                                                                                                                                           |
+| =color-flame=       | role or =#rrggbb=                  | =peach=                  |                                                                                                                                                                                           |
+| =monitor-command=   | command line                       | =btop= in =$TERMINAL=    | The panel's Monitor button, as before.                                                                                                                                                    |
+| =processes-command= | command line                       | =btop= in =$TERMINAL=    | The panel's Processes button, as before.                                                                                                                                                  |
+| =disks-command=     | command line                       | =gdu= in =$TERMINAL=     | The panel's Disks button, as before.                                                                                                                                                      |
+| =param=             | mount point                        | =/= (=/var= on ostree)   | The mount the Storage section leads with, as for every system widget.                                                                                                                     |
+
+* Theming
+
+The creature is painted with five colours, each a setting that takes a palette *role name* (=accent=, =green=, =mauve=, ...) or a =#rrggbb= literal. Anything else falls back to the default role. A role follows the session palette --- switch from Mocha to Latte and the creature follows --- where a literal stays put.
+
+| Key           | Default role | Paints                                              |
+|---------------+--------------+-----------------------------------------------------|
+| =color-body=  | =subtext=    | The outline, the faint belly and the unlit rows     |
+| =color-eye=   | =accent=     | The eye sockets and their fill                      |
+| =color-load=  | =green=      | Lit belly rows while calm                           |
+| =color-hot=   | =red=        | Lit belly rows while hot                            |
+| =color-flame= | =peach=      | The flames over a hot creature                      |
+
+#+begin_src yaml
+modules:
+  bar:
+    cpu.color-eye: mauve        # a palette role: follows the theme
+    cpu.color-load: "#40a02b"   # a literal: stays this green
+#+end_src
+
+The CPU die uses fixed roles so its key means the same everywhere: =overlay= (under 25%), =green= (25%+), =yellow= (50%+), =peach= (75%+), =red= (90%+). The label style's colour is unchanged: =color= is the calm colour, peach past 75% and red past 90% (see [[file:../bar.org::#system-colour][System]]).
+
+* The panel
+
+The panel is the shared system panel every system widget opens --- hero, Processor (graph, load, cores, temperature, GPU), Memory, Storage, Machine --- with the activity sections between it and the tool buttons.
+
+** Compact (always)
+
+- *Processor* graph: =history-samples= long, sampled at the =sampling= speed. With =show-frequencies=, a *Clock* row (the average across cores) and its *Range*.
+- *CPU die*: a grid, one cell per logical core in core-number order (an offline core shows 0), coloured by load, with the core's percent written in it when the cell is wide enough, and the clock too when =show-frequencies= is on and there is room. The key sits under the grid. Up to eight cores is one row; up to 32, eight wide; beyond that, sixteen wide.
+- *Expand* / *Compact*: switches the panel. The choice is remembered while gowl runs.
+- *Export journal* (only with =journal: true=): copies the journal to =~/activity-journal-YYYY-MM-DD.csv= and raises a toast naming the file.
+- *Monitor*, *Processes*, *Disks*: as always.
+
+** Expanded
+
+- *GPU*: an amdgpu card's utilisation (read from sysfs by the shared reader), and one row per NVIDIA board from =nvidia-smi= --- utilisation, memory used / total, temperature in your unit. With neither, it says what to install.
+- *Filesystems*: every mounted local disk filesystem (ext4, xfs, btrfs, f2fs, vfat, exfat, ntfs3, zfs, bcachefs), one per device, named by its most recognisable mount point (=/=, then =/var=, =/home=, =/sysroot=), with used / total. Network filesystems are left out on purpose: a =statvfs= on a hung NFS server blocks for minutes.
+- *Processes*: a filter field, then your processes, busiest first. Each row shows the name, pid, resident memory and state, and CPU as a percent of *one core* (so 250% is two and a half cores, as in =top=). A process seen for the first time shows =--= until the next sample gives it a rate.
+  - Type in the filter to narrow the list by name (case-insensitive) or by pid digits. It filters as you type, before the =process-count= cut.
+  - Click a row to select it; *Terminate* and *Force kill* appear under it. Click it again to deselect.
+  - *Terminate* sends =SIGTERM= at once.
+  - *Force kill* arms on the first click (it changes to *Click again to force kill*) and sends =SIGKILL= on a second click within five seconds.
+  - Every signal is preceded by a fresh check of the process; a refusal raises a toast saying why.
+
+The usual panel keys apply ([[file:../bar.org::#panels][Panels]]): =Escape= closes, =j= / =k= / =Tab= move, =Return= activates. In the filter field every printable key types.
+
+* Dependencies
+
+Everything the widget needs is the kernel's own =/proc= and =/sys=. Optional:
+
+| Package (Fedora)              | Gives                                                | Without it                                                        |
+|-------------------------------+------------------------------------------------------+-------------------------------------------------------------------|
+| =coreutils=                   | =timeout=, which bounds a hung =nvidia-smi= to 5 s   | =nvidia-smi= runs unbounded (on a worker; the bar is unaffected)  |
+| =xorg-x11-drv-nvidia-cuda=    | =nvidia-smi= (RPM Fusion nonfree, with the NVIDIA driver) | No NVIDIA row; the GPU section says what to install         |
+| =btop=                        | The default for the Monitor and Processes buttons    | The button toasts that it is not installed                        |
+| =gdu=                         | The default for the Disks button                     | The button toasts that it is not installed                        |
+
+amdgpu utilisation needs no package: the kernel driver reports it. Per-core clocks need a cpufreq driver (any modern x86 or ARM kernel has one); without one the Clock row reads /not reported/.
+
+* Security and privacy
+
+- *Only your own processes.* The list is filtered to processes whose *real* uid is yours, and a signal is refused unless both the sample and a fresh read say the process is yours.
+- *No signal on a stale pid.* Process ids are reused. The list is up to one interval old, so before any signal the widget re-reads =/proc/PID/stat= and refuses if the process's *start time* has changed (it exited and something else now has its pid) or if it has gone. Each row carries the pid *and* the start time it was sampled with; the pid alone is never trusted.
+- *Never init, never the compositor.* pid 1 and below, and the compositor's own pid --- which under cmacs --gowl is your whole desktop --- are refused before =/proc= is read.
+- *Force kill is two clicks.* =SIGKILL= cannot be caught, so one stray click must not send it.
+- *Untrusted text.* Process names come from the processes themselves: they are made valid UTF-8, stripped of control characters and cut to 64 characters before they reach the panel. =nvidia-smi='s output is treated the same way.
+- *The journal* records only timestamps, CPU, memory and temperature --- no process names --- in a file created mode 0600 in your state directory. The CSV export is also written mode 0600.
+
+* Troubleshooting
+
+- *The creature never moves, though the machine is busy.* Heat is CPU utilisation against =heat-threshold= (default 80), not temperature. The shake also needs =motion: true= (the default).
+- *The belly stays empty under load.* The rows follow the one-minute *load average per core*, not CPU utilisation, and only past =load-threshold= (default 50). A single busy thread on a 24-core machine is about 4% load. Lower the threshold to see more.
+- *The process list says "Sampling your processes..."* It fills on the first sample after the panel opens expanded, and CPU figures need a second sample. At =efficient= that is four seconds.
+- *A process I can see in =top= is missing.* It belongs to another user (only your own are listed), or it is past =process-count= --- use the filter.
+- *"was not signalled" toasts.* The toast body says why: it exited, its pid was reused, it is not yours, or it is init/the compositor.
+- *No NVIDIA row.* Check =nvidia-smi --query-gpu=name --format=csv= in a terminal. If it hangs there, the driver is wedged; with =timeout= installed the widget gives up after five seconds and says the tool did not answer.
+- *Export says "Nothing has been recorded yet."* Turn on =journal= and wait one interval.
+- *Filesystems shows /sysroot rather than /var.* That disk has no =/=, =/var= or =/home= mount; it is named by the next best mount point.
+
+* Internals
+
+** Threads
+
+- *Compositor thread* (poll, measure, draw, signature, panel build, actions, filter text, canvas): reads the shared =BarSysinfo= reader (small =/proc= files), keeps the creature state, the history ring, the expand / select / arm state and the filter. Signals are sent here, after the re-read (two small =/proc= files).
+- *Worker* (=poll_async= every interval, plus one sample queued when the panel opens or expands): the journal write and prune, every =/proc/PID=, the cpufreq reads (each may interrupt the core it asks about), =nvidia-smi= (at most every four seconds) and =statvfs= of the local filesystems (at most every ten). Results are built fresh and swapped in under the widget's mutex; a second mutex serialises the two ways a worker sample can start, so the per-process tick table is never walked twice at once.
+- A worker may not raise a toast, so the export's result is parked under the mutex and raised by the next poll or panel build.
+- No GLib timers anywhere: the shake, the arm timeout and every throttle are monotonic timestamps checked at the next poll or click.
+
+** The creature and the repaint
+
+The creature draws something that is not its label, so it states what it draws in the plugin's =signature= slot (=creature:ROWS:LEFT:RIGHT:HOT:WIGGLE=): the bar skips a repaint when the signature has not moved ([[file:../bar.org::#per-output-signature][Saying so in the signature]]). The wiggle is in the signature, which is what makes a hot creature move once per tick. The label is still set (=CPU N%=), for the tooltip-less label style and anything that reads labels.
+
+** Files
+
+| Path                                          | What                                                                    |
+|-----------------------------------------------+-------------------------------------------------------------------------|
+| =modules/bar/bar-plugins-system.c=            | The cpu widget (its section), and the shared system panel it extends    |
+| =modules/bar/bar-activity-model.{c,h}=        | Pure helpers: parsing, creature maths and geometry, signal check, journal |
+| =modules/bar/bar-sysinfo.{c,h}=               | Per-core load from the same =/proc/stat= read; the configurable CPU period |
+| =$XDG_STATE_HOME/gowl/activity.journal=       | The journal: =EPOCH,CPU,MEM,TEMP_C= per line, mode 0600                  |
+| =~/activity-journal-YYYY-MM-DD.csv=           | An export: =timestamp,cpu_percent,memory_percent,temperature_c=, ISO 8601 times |
+
+The journal is pruned (lines older than seven days, then the oldest lines until it is under 20 MiB, whole lines only, rewritten atomically) at most hourly, or at once if it grows past the cap.
+
+** Tests
+
+=tests/test-bar-cpu-activity.c= (=make test=, or =build/release/test-bar-cpu-activity=), against fake =/proc= and =/sys= trees in =tests/fixtures/bar/cpu-activity/=:
+
+- the default widget is unchanged (label =CPU N%=, no tooltip, nothing added to the signature);
+- creature fill at 0 / 50 / 100% and at the thresholds; geometry inside the square at several bar heights, row 0 at the bottom, eyes filling from the bottom, flames above the body; the wiggle; colour settings (role, literal, garbage);
+- =/proc/stat= aggregate and per-core parse (an offline core keeps its slot), the delta maths, a hostile core number; cpufreq parse;
+- =/proc/PID/stat= with a command named =(foo) bar)=, a negative priority, non-UTF-8 and control bytes; =status= uid and RSS; the uid filter; the per-process CPU delta, including a reused pid;
+- the signal check (reused, gone, another user's, init, self) and the item id parser;
+- =nvidia-smi= argv (a hostile command stays one argument) and CSV (=[N/A]=, a comma in a board name); =/proc/mounts= (network filesystems out, one entry per device, ostree naming, escaped spaces);
+- journal pruning by age and by size, append mode 0600, export header and ISO times;
+- through the widget: sampling speeds, the history length and its bound, the compact and expanded panels, =open-expanded=, Fahrenheit, frequencies, a fake =nvidia-smi=, the journal and its export, the =activity= alias;
+- end to end against a real =sleep= child of the test: a forged start time is refused and the child survives; Terminate delivers =SIGTERM=; Force kill arms on one click and delivers =SIGKILL= on the second; init and the test process itself are refused.

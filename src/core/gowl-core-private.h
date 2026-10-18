@@ -1379,6 +1379,8 @@ gboolean gowl_text_input_grab_key          (GowlCompositor *self, struct wlr_key
 gboolean gowl_text_input_grab_modifiers    (GowlCompositor *self, struct wlr_keyboard *kb);
 
 /* per-device input settings: gowl-input-config.c */
+struct libinput_device;
+void     gowl_input_config_touchpad_defaults(struct libinput_device *li);
 void     gowl_input_config_track_device    (GowlCompositor *self, struct wlr_input_device *dev);
 void     gowl_input_config_apply_device    (GowlCompositor *self, struct wlr_input_device *dev);
 void     gowl_input_config_apply_all       (GowlCompositor *self);

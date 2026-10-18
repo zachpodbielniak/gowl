@@ -9972,33 +9972,10 @@ create_pointer(
 ){
 	struct wlr_input_device *dev = &pointer->base;
 
-	/* Apply GNOME-like touchpad defaults: tap-to-click, tap-and-drag,
-	 * natural (reverse) scrolling, two-finger scroll, and
-	 * disable-while-typing.  A touchpad is told apart from a mouse by
-	 * reporting a tap finger count, so a plain mouse keeps its
-	 * traditional wheel direction and gains nothing it cannot do. */
-	if (wlr_input_device_is_libinput(dev)) {
-		struct libinput_device *li =
-			wlr_libinput_get_device_handle(dev);
-
-		if (li != NULL
-		    && libinput_device_config_tap_get_finger_count(li) > 0) {
-			libinput_device_config_tap_set_enabled(li,
-				LIBINPUT_CONFIG_TAP_ENABLED);
-			libinput_device_config_tap_set_drag_enabled(li,
-				LIBINPUT_CONFIG_DRAG_ENABLED);
-			if (libinput_device_config_scroll_has_natural_scroll(li))
-				libinput_device_config_scroll_set_natural_scroll_enabled(
-					li, 1);
-			if (libinput_device_config_scroll_get_methods(li)
-			    & LIBINPUT_CONFIG_SCROLL_2FG)
-				libinput_device_config_scroll_set_method(li,
-					LIBINPUT_CONFIG_SCROLL_2FG);
-			if (libinput_device_config_dwt_is_available(li))
-				libinput_device_config_dwt_set_enabled(li,
-					LIBINPUT_CONFIG_DWT_ENABLED);
-		}
-	}
+	/* GNOME-like touchpad defaults; see gowl-input-config.c. */
+	if (wlr_input_device_is_libinput(dev))
+		gowl_input_config_touchpad_defaults(
+			wlr_libinput_get_device_handle(dev));
 
 	wlr_cursor_attach_input_device(self->wlr_cursor,
 	                               &pointer->base);

@@ -28,7 +28,8 @@
  *
  * Every setting is optional and only touched when set, on top of the
  * GNOME-like touchpad defaults create_pointer() applies first (tap,
- * tap-drag, natural scroll, two-finger scroll, disable-while-typing).
+ * tap-drag, natural scroll, two-finger scroll, disable-while-typing,
+ * two-finger click), gowl_input_config_touchpad_defaults() below.
  * A setting a device cannot do is skipped with a debug line rather
  * than a warning: a config shared between a laptop and a desktop
  * names touchpad settings the desktop's mouse has no use for.
@@ -75,6 +76,52 @@ device_class(struct wlr_input_device *dev, struct libinput_device *li)
 	default:
 		return "other";
 	}
+}
+
+/**
+ * gowl_input_config_touchpad_defaults:
+ * @li: (nullable): a libinput device
+ *
+ * The defaults every touchpad gets before the `input:' section is
+ * applied, modelled on GNOME's: tap to click, tap and drag, natural
+ * (reverse) scrolling, two-finger scrolling, disable while typing, and
+ * clicking with two fingers for a right click.
+ *
+ * The last is libinput's "clickfinger" method.  Without it a clickpad
+ * -- a touchpad whose whole surface is the button -- stays on
+ * libinput's own default, "button areas", where a right click is a
+ * press in the bottom-right corner and pressing with two fingers
+ * anywhere else is a left click.  Apple touchpads already default to
+ * clickfinger; everything else did not, so a two-finger click never
+ * right-clicked.  `click-method: button-areas' in the `input:' section
+ * brings the corners back.
+ *
+ * A touchpad is told apart from a mouse by reporting a tap finger
+ * count, so a plain mouse keeps its traditional wheel direction and is
+ * not touched.  Each setting is only made when the device offers it.
+ */
+void
+gowl_input_config_touchpad_defaults(struct libinput_device *li)
+{
+	if (li == NULL || libinput_device_config_tap_get_finger_count(li) <= 0)
+		return;
+
+	libinput_device_config_tap_set_enabled(li, LIBINPUT_CONFIG_TAP_ENABLED);
+	libinput_device_config_tap_set_drag_enabled(li,
+		LIBINPUT_CONFIG_DRAG_ENABLED);
+	if (libinput_device_config_scroll_has_natural_scroll(li))
+		libinput_device_config_scroll_set_natural_scroll_enabled(li, 1);
+	if (libinput_device_config_scroll_get_methods(li)
+	    & LIBINPUT_CONFIG_SCROLL_2FG)
+		libinput_device_config_scroll_set_method(li,
+			LIBINPUT_CONFIG_SCROLL_2FG);
+	if (libinput_device_config_dwt_is_available(li))
+		libinput_device_config_dwt_set_enabled(li,
+			LIBINPUT_CONFIG_DWT_ENABLED);
+	if (libinput_device_config_click_get_methods(li)
+	    & LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER)
+		libinput_device_config_click_set_method(li,
+			LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER);
 }
 
 #define LOOKUP(key) \

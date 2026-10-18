@@ -3300,7 +3300,9 @@ Each key is optional; one that is unset falls back to the =XKB_DEFAULT_*= enviro
 :PROPERTIES:
 :CUSTOM_ID: input-devices
 :END:
-The =input= section sets libinput options per device. Each block names what it applies to -- =touchpad=, =pointer= (or =mouse=), =keyboard=, =*=, or a glob on the device name as libinput reports it -- and blocks apply in file order, later ones overriding earlier ones, so a class block followed by a named one refines it. Settings are applied on top of the touchpad defaults gowl always had (tap, tap-drag, natural scrolling, two-finger scroll, disable-while-typing), to devices already plugged in on reload as well as to new ones.
+The =input= section sets libinput options per device. Each block names what it applies to -- =touchpad=, =pointer= (or =mouse=), =keyboard=, =*=, or a glob on the device name as libinput reports it -- and blocks apply in file order, later ones overriding earlier ones, so a class block followed by a named one refines it. Settings are applied on top of gowl's touchpad defaults (tap, tap-drag, natural scrolling, two-finger scroll, disable-while-typing, and two-finger click), to devices already plugged in on reload as well as to new ones.
+
+The two-finger click is libinput's =clickfinger= method: on a clickpad, pressing down with two fingers anywhere is a right click and with three a middle click. libinput's own default for most clickpads is =button-areas=, where the right button is the bottom-right corner and two fingers pressed elsewhere are a left click -- which is why a two-finger click did not right-click before gowl chose clickfinger. Set =click-method: button-areas= on the touchpad to get the corners back.
 
 #+begin_src yaml
 input:

@@ -110,6 +110,13 @@ void        portal_eis_clear_zones (PortalEis *self);
 void        portal_eis_add_zone    (PortalEis *self, int32_t x, int32_t y,
                                     uint32_t width, uint32_t height);
 
+/* Make the zones given since portal_eis_clear_zones() current.  When
+ * they differ from the ones the devices were built from, every live
+ * device is rebuilt with the new regions, so a connected client sees a
+ * rotated or replugged screen without reconnecting.  Returns TRUE when
+ * the zones changed. */
+gboolean    portal_eis_commit_zones (PortalEis *self);
+
 /* Begin/end an emulation sequence around a burst of captured events.
  * Called on portal `activated`/`deactivated`. */
 void        portal_eis_start (PortalEis *self);

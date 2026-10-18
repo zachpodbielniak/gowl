@@ -299,6 +299,10 @@ CRISPY_SRCS := $(filter-out %/main.c %/crispy-repl.c, \
 
 # Test sources
 TEST_SRCS := $(wildcard tests/test-*.c)
+# test-portal-eis-zones compiles the portal's EIS server, which needs libeis.
+ifneq ($(LIBEIS_AVAILABLE),1)
+TEST_SRCS := $(filter-out tests/test-portal-eis-zones.c,$(TEST_SRCS))
+endif
 
 # Source-level guard scripts.  These assert invariants no unit test can
 # reach -- "this wlroots call has exactly one call site", "gowl links no
@@ -537,6 +541,12 @@ $(OUTDIR)/test-input-capture-zones: $(OBJDIR)/tests/gowl-input-capture-v1-protoc
 $(OBJDIR)/tests/test-input-capture-zones.o: gowl-input-capture-v1-client-protocol.h
 $(OUTDIR)/test-input-capture-zones: TEST_LDFLAGS += $(OBJDIR)/tests/gowl-input-capture-v1-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-input-capture-zones.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
+
+# test-portal-eis-zones includes the portal's portal-eis.c directly.
+$(OBJDIR)/tests/test-portal-eis-zones.o: tools/xdg-desktop-portal-gowl/portal-eis.c tools/xdg-desktop-portal-gowl/portal-eis.h
+$(OBJDIR)/tests/test-portal-eis-zones.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags libeis-1.0 xkbcommon gio-unix-2.0) \
+	$(shell $(PKG_CONFIG) --atleast-version=1.6 libeis-1.0 && echo -DGOWL_HAVE_EIS_SEAT_DEVICE_REQUESTED=1)
+$(OUTDIR)/test-portal-eis-zones: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs libeis-1.0 xkbcommon gio-unix-2.0)
 
 # test-pointer-lock is a real pointer-constraints client: it maps a
 # toplevel, locks the pointer and counts what the compositor sends.

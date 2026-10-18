@@ -337,8 +337,17 @@ lid. =on_layout_change= calls =gowl_input_capture_protocol_layout_changed()=,
 which compares each session's zones with the outputs and only announces the
 sessions whose zones actually differ, so a change that leaves the zones as they
 were does not cost a client its barriers. The portal answers by re-reading the
-zones and rebuilding its EIS regions (=on_zones_changed= in =portal-dbus.c=),
-and libei clients such as deskflow take the screen's shape from those regions.
+zones (=on_zones_changed= in =portal-dbus.c=), and libei clients such as
+deskflow take the screen's shape from the regions it builds from them.
+
+A libei region is fixed once its device is added, so new zones only reach a
+client that is already connected as a new device. =portal_eis_commit_zones()=
+compares the zones with the ones the devices were built from and, when they
+differ, removes each live device (capture and injection) and adds a replacement
+with the new regions; the capture device restarts emulation if a capture is
+active, and a sending client starts its own sequence on the new one. Before
+this the portal only changed the zones it would use for the next device, so a
+connected deskflow kept the old screen until it reconnected.
 
 Until 2026-10 the event was defined and answered but never sent, so a session
 kept the zones it started with: after rotating an output, deskflow still moved

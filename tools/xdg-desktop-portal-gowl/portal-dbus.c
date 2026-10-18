@@ -481,6 +481,8 @@ portal_dbus_refresh_zones(PortalDbus *self)
 	for (i = 0; i < n; i++)
 		portal_eis_add_zone(self->eis, zones[i].x, zones[i].y,
 			zones[i].width, zones[i].height);
+	/* Rebuilds a connected client's devices when the screens changed. */
+	portal_eis_commit_zones(self->eis);
 }
 
 /* ---------------------------------------------------------------

@@ -60,6 +60,7 @@ struct _PortalEis {
 	guint              fd_source;     /* g_unix_fd_add id */
 
 	GArray            *zones;         /* struct portal_eis_zone */
+	GArray            *committed;     /* the zones devices are built from */
 
 	/* Capture side: the RECEIVER client (a KVM server sharing this
 	 * machine's input).  We create the device and push at it. */
@@ -499,10 +500,15 @@ handle_event(PortalEis *self, struct eis_event *event)
 		break;
 
 	case EIS_EVENT_DEVICE_CLOSED:
-		if (is_tx_event(self, event))
-			drop_tx_device(self);
-		else
+		/* Only the device the event names: a device we removed to
+		 * rebuild it with new regions may still be closed by the
+		 * client after its replacement exists. */
+		if (is_tx_event(self, event)) {
+			if (eis_event_get_device(event) == self->tx_device)
+				drop_tx_device(self);
+		} else if (eis_event_get_device(event) == self->device) {
 			drop_device(self);
+		}
 		break;
 
 	/*
@@ -633,9 +639,12 @@ portal_eis_new(void)
 
 	self = g_new0(PortalEis, 1);
 	self->zones = g_array_new(FALSE, FALSE, sizeof(struct portal_eis_zone));
+	self->committed = g_array_new(FALSE, FALSE,
+	                              sizeof(struct portal_eis_zone));
 	self->ctx = eis_new(self);
 	if (self->ctx == NULL) {
 		g_array_unref(self->zones);
+		g_array_unref(self->committed);
 		g_free(self);
 		return NULL;
 	}
@@ -649,6 +658,8 @@ portal_eis_new(void)
 
 	if (eis_setup_backend_fd(self->ctx) != 0) {
 		eis_unref(self->ctx);
+		g_array_unref(self->zones);
+		g_array_unref(self->committed);
 		g_free(self);
 		return NULL;
 	}
@@ -672,6 +683,8 @@ portal_eis_free(PortalEis *self)
 		eis_unref(self->ctx);
 	if (self->zones != NULL)
 		g_array_unref(self->zones);
+	if (self->committed != NULL)
+		g_array_unref(self->committed);
 	g_free(self);
 }
 
@@ -705,6 +718,83 @@ portal_eis_add_zone(PortalEis *self, int32_t x, int32_t y,
 	z.w = width;
 	z.h = height;
 	g_array_append_val(self->zones, z);
+}
+
+static gboolean
+zone_arrays_equal(GArray *a, GArray *b)
+{
+	if (a == NULL || b == NULL)
+		return a == b;
+	if (a->len != b->len)
+		return FALSE;
+	return a->len == 0
+	       || memcmp(a->data, b->data,
+	                 a->len * sizeof(struct portal_eis_zone)) == 0;
+}
+
+/*
+ * A device's regions are fixed once it is added -- libeis takes them
+ * only between eis_seat_new_device() and eis_device_add() -- so new
+ * zones reach a connected client only as a new device.  Remove the old
+ * one (the client sees it go) and build a replacement from the current
+ * zones, the same way a fresh bind would.  The capture device restarts
+ * emulation itself if capture is active; a sender client starts its own
+ * sequence on the new device.
+ */
+static void
+rebuild_devices(PortalEis *self)
+{
+	if (self->device != NULL) {
+		struct eis_device *old = self->device;
+
+		if (self->emulating)
+			eis_device_stop_emulating(old);
+		self->device = NULL;
+		self->resumed = FALSE;
+		self->emulating = FALSE;
+		eis_device_remove(old);
+		eis_device_unref(old);
+		create_device(self);
+	}
+	if (self->tx_device != NULL) {
+		struct eis_device *old = self->tx_device;
+
+		self->tx_device = NULL;
+		self->tx_emulating = FALSE;
+		eis_device_remove(old);
+		eis_device_unref(old);
+		create_tx_device(self);
+	}
+}
+
+/**
+ * portal_eis_commit_zones:
+ * @self: the EIS server
+ *
+ * Makes the zones given since the last portal_eis_clear_zones() the
+ * ones the devices use.  When they differ from the zones the devices
+ * were built from -- a rotation swapped a width and height, a monitor
+ * came or went -- every live device is rebuilt with the new regions.
+ *
+ * Without the rebuild a connected deskflow kept the regions of the
+ * screen as it was when it connected: after a rotation it moved the
+ * pointer over the old, unrotated rectangle until it reconnected.
+ *
+ * Returns: %TRUE if the zones changed
+ */
+gboolean
+portal_eis_commit_zones(PortalEis *self)
+{
+	if (self == NULL || self->zones == NULL)
+		return FALSE;
+	if (zone_arrays_equal(self->zones, self->committed))
+		return FALSE;
+
+	g_array_set_size(self->committed, 0);
+	g_array_append_vals(self->committed, self->zones->data,
+	                    self->zones->len);
+	rebuild_devices(self);
+	return TRUE;
 }
 
 /* Events may flow only when the device is resumed and we have an active

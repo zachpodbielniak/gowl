@@ -44,6 +44,9 @@ gowl_input_capture_protocol_register   (gpointer            compositor,
 void
 gowl_input_capture_protocol_unregister (GowlInputCaptureProtocol *self);
 
+void
+gowl_input_capture_protocol_layout_changed (GowlInputCaptureProtocol *self);
+
 G_END_DECLS
 
 #endif /* GOWL_INPUT_CAPTURE_PROTOCOL_H */

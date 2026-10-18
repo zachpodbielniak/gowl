@@ -9472,6 +9472,13 @@ on_layout_change(struct wl_listener *listener, void *data)
 	 * output layout -- without this the ScreenCast picker has no
 	 * outputs to enumerate. */
 	gowl_compositor_publish_output_config(self);
+
+	/* And the InputCapture zones, which the portal turns into the
+	 * libei regions a KVM (deskflow) takes the screen's shape from:
+	 * a rotation or a hotplug that it never hears about leaves the
+	 * remote pointer moving over the old rectangle. */
+	gowl_input_capture_protocol_layout_changed(
+		self->input_capture_protocol);
 }
 
 /*

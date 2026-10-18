@@ -330,6 +330,22 @@ negative). The =zone_set= id increments whenever the layout changes; the
 compositor emits =zones_changed= and drops installed barriers so the client
 re-queries and reinstalls.
 
+"Whenever the layout changes" means any output-layout change that alters a
+zone: a rotation (a 90 or 270 degree turn swaps the zone's width and height),
+a mode or scale change, a monitor moved, plugged in, pulled out or shut by the
+lid. =on_layout_change= calls =gowl_input_capture_protocol_layout_changed()=,
+which compares each session's zones with the outputs and only announces the
+sessions whose zones actually differ, so a change that leaves the zones as they
+were does not cost a client its barriers. The portal answers by re-reading the
+zones and rebuilding its EIS regions (=on_zones_changed= in =portal-dbus.c=),
+and libei clients such as deskflow take the screen's shape from those regions.
+
+Until 2026-10 the event was defined and answered but never sent, so a session
+kept the zones it started with: after rotating an output, deskflow still moved
+the pointer over the unrotated rectangle. =tests/test-input-capture-zones.c=
+drives the protocol from a real client through a rotation, a rotation back and
+a hotplug.
+
 A *barrier* is an axis-aligned segment with a non-zero id and endpoints
 =(x1,y1,x2,y2)=: horizontal barriers have =y1 == y2=, vertical barriers
 =x1 == x2=. A barrier is accepted only if it lies on the *outer boundary of the

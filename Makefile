@@ -531,6 +531,13 @@ $(OBJDIR)/tests/test-lock-input.o: ext-session-lock-v1-client-protocol.h
 $(OUTDIR)/test-lock-input: TEST_LDFLAGS += $(OBJDIR)/tests/ext-session-lock-v1-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-lock-input.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 
+# test-input-capture-zones is the portal's side of the capture protocol:
+# a real client that watches the zones while outputs rotate and hotplug.
+$(OUTDIR)/test-input-capture-zones: $(OBJDIR)/tests/gowl-input-capture-v1-protocol.o
+$(OBJDIR)/tests/test-input-capture-zones.o: gowl-input-capture-v1-client-protocol.h
+$(OUTDIR)/test-input-capture-zones: TEST_LDFLAGS += $(OBJDIR)/tests/gowl-input-capture-v1-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
+$(OBJDIR)/tests/test-input-capture-zones.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
+
 # test-pointer-lock is a real pointer-constraints client: it maps a
 # toplevel, locks the pointer and counts what the compositor sends.
 POINTER_LOCK_PROTO := $(OBJDIR)/tests/pointer-constraints-unstable-v1-protocol.o \

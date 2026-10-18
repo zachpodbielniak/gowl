@@ -51,6 +51,7 @@
 struct _GowlInputCaptureProtocol {
 	gpointer          compositor;   /* GowlCompositor *        */
 	struct wl_global *global;
+	GList            *sessions;     /* GowlCaptureSession *, live */
 };
 
 /* One capture session: owns a GowlInputCapture attached to the
@@ -350,11 +351,17 @@ capture_resource_destroy(struct wl_resource *resource)
 	if (s == NULL)
 		return;
 
-	/* Detach from the compositor before destroying the machine. */
-	if (gowl_compositor_get_input_capture(
-		    (GowlCompositor *)s->proto->compositor) == s->capture)
-		gowl_compositor_set_input_capture(
-			(GowlCompositor *)s->proto->compositor, NULL);
+	/* proto is NULL once the global was unregistered with this
+	 * session still alive (compositor teardown). */
+	if (s->proto != NULL) {
+		s->proto->sessions = g_list_remove(s->proto->sessions, s);
+
+		/* Detach from the compositor before destroying the machine. */
+		if (gowl_compositor_get_input_capture(
+			    (GowlCompositor *)s->proto->compositor) == s->capture)
+			gowl_compositor_set_input_capture(
+				(GowlCompositor *)s->proto->compositor, NULL);
+	}
 
 	g_list_free_full(s->staged, (GDestroyNotify)gowl_input_barrier_free);
 	g_clear_object(&s->capture);
@@ -533,6 +540,7 @@ manager_create_capture(struct wl_client   *client,
 
 	wl_resource_set_implementation(res, &capture_impl, s,
 	                               capture_resource_destroy);
+	proto->sessions = g_list_prepend(proto->sessions, s);
 
 	zgowl_input_capture_v1_send_capabilities(res,
 		gowl_input_capture_get_capabilities(s->capture));
@@ -618,11 +626,77 @@ gowl_input_capture_protocol_register(gpointer            compositor,
 	return self;
 }
 
+/* Whether two zone lists describe the same screens, in order. */
+static gboolean
+zones_equal(GList *a, GList *b)
+{
+	for (; a != NULL && b != NULL; a = a->next, b = b->next) {
+		if (!gowl_input_zone_equals((const GowlInputZone *)a->data,
+		                            (const GowlInputZone *)b->data))
+			return FALSE;
+	}
+	return a == NULL && b == NULL;
+}
+
+/**
+ * gowl_input_capture_protocol_layout_changed:
+ * @self: (nullable): the protocol
+ *
+ * Tells every capture session whose zones no longer describe the
+ * outputs that they changed, with the `zones_changed' event the
+ * protocol has always defined and nothing ever sent.
+ *
+ * Without it the portal kept the zones it was given when the session
+ * started.  Its EIS regions are built from them, and libei clients --
+ * deskflow -- take the screen's shape from the regions: after a
+ * rotation the remote pointer was still confined to the old, unrotated
+ * rectangle, and the same after a monitor was plugged in or out.  The
+ * portal already answers the event (on_zones_changed re-reads the zones
+ * and rebuilds the regions); it just never heard one.
+ *
+ * The new zones are installed before the event goes out, which also
+ * drops the session's barriers: they were validated against edges that
+ * may no longer exist, and the protocol says a client must set them
+ * again.  A session whose zones are unchanged -- a layout change that
+ * only touched another output's mode, say -- is left alone, so its
+ * barriers survive.
+ */
+void
+gowl_input_capture_protocol_layout_changed(GowlInputCaptureProtocol *self)
+{
+	GList *zones, *l;
+
+	if (self == NULL || self->sessions == NULL)
+		return;
+
+	zones = build_zones(self);
+	for (l = self->sessions; l != NULL; l = l->next) {
+		GowlCaptureSession *s = (GowlCaptureSession *)l->data;
+		GList *had = gowl_input_capture_get_zones(s->capture);
+		gboolean same = zones_equal(had, zones);
+
+		g_list_free_full(had, (GDestroyNotify)gowl_input_zone_free);
+		if (same)
+			continue;
+		gowl_input_capture_set_zones(s->capture, zones);
+		zgowl_input_capture_v1_send_zones_changed(s->resource,
+			gowl_input_capture_get_zone_set(s->capture));
+	}
+	g_list_free_full(zones, (GDestroyNotify)gowl_input_zone_free);
+}
+
 void
 gowl_input_capture_protocol_unregister(GowlInputCaptureProtocol *self)
 {
+	GList *l;
+
 	if (self == NULL)
 		return;
+	/* A session outliving the global must not reach back into it. */
+	for (l = self->sessions; l != NULL; l = l->next)
+		((GowlCaptureSession *)l->data)->proto = NULL;
+	g_list_free(self->sessions);
+	self->sessions = NULL;
 	if (self->global != NULL)
 		wl_global_destroy(self->global);
 	g_free(self);

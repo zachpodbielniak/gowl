@@ -154,6 +154,18 @@ $(OBJDIR)/tests/relative-pointer-unstable-v1-protocol.o: relative-pointer-unstab
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(TEST_CFLAGS) -Wno-unused-parameter -c $< -o $@
 
+# gowl's own input-capture protocol, client side: for
+# test-input-capture-zones, which talks to the compositor the way
+# xdg-desktop-portal-gowl does.  libgowl has the private code too, but
+# wayland-scanner makes its interface tables hidden, so the test needs
+# its own copy.
+gowl-input-capture-v1-client-protocol.h: protocols/gowl-input-capture-unstable-v1.xml
+	$(WAYLAND_SCANNER) client-header $< $@
+
+$(OBJDIR)/tests/gowl-input-capture-v1-protocol.o: gowl-input-capture-v1-protocol.c gowl-input-capture-v1-client-protocol.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(TEST_CFLAGS) -Wno-unused-parameter -c $< -o $@
+
 $(OBJDIR)/tests/xdg-shell-protocol.o: xdg-shell-protocol.c xdg-shell-client-protocol.h | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(TEST_CFLAGS) -Wno-unused-parameter -c $< -o $@

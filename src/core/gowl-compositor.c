@@ -9052,8 +9052,11 @@ gowl_compositor_notify_output_resized(GowlCompositor    *self,
 		g_debug("output %s resized to %dx%d; re-arranging layers/bar",
 		        output->name, new_box.width, new_box.height);
 
+		/* Not m->w: arrangelayers below re-tiles only when the
+		 * usable area it computes differs from m->w, so setting the
+		 * two equal here first left the windows in the old shape's
+		 * layout whenever nothing reserved space. */
 		m->m = new_box;
-		m->w = m->m;
 
 		backdrops_sync(self);
 		recording_indicator_sync(self);

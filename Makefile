@@ -988,6 +988,9 @@ $(OBJDIR)/tests/test-layout-orientation.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MOD
 # Defines libinput's configuration calls itself; they must win over
 # libinput.so's for libgowl's calls into it.
 $(OUTDIR)/test-touchpad-defaults: TEST_LDFLAGS += -Wl,--export-dynamic
+$(OUTDIR)/test-layout-hotplug: $(addprefix $(OUTDIR)/modules/,tile.so scrolling.so)
+$(OUTDIR)/test-layout-hotplug: TEST_LDFLAGS += -Wl,--export-dynamic
+$(OBJDIR)/tests/test-layout-hotplug.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 $(OUTDIR)/test-scroll-portrait: $(OUTDIR)/modules/scrolling.so
 $(OUTDIR)/test-scroll-portrait: TEST_LDFLAGS += -Wl,--export-dynamic
 $(OBJDIR)/tests/test-scroll-portrait.o: TEST_CFLAGS += -DGOWL_TEST_LAYOUT_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

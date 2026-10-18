@@ -903,6 +903,18 @@ for placement, gaps, focus visibility and the saved offset (the legacy
 until layer arrangement compares it with the new area, ensuring resize
 and rotation trigger placement even without bars or exclusive zones.
 
+That rule holds for *every* path that writes a monitor's geometry, not
+only the layout listener: =gowl_compositor_notify_output_resized()= and
+the safety nets in =gowl_monitor_set_mode/_scale/_transform/_position=
+set =m->m= and leave =m->w= for =gowl_compositor_arrangelayers()=. Each
+of them used to set =m->w = m->m= first; with nothing reserving space the
+area arrangelayers computes is the whole output, so it compared equal to
+what had just been written and nothing was re-tiled --- a screen that
+had turned tall kept its windows side by side, and a scrolling strip kept
+running left to right. =tests/test-layout-hotplug.c= covers a portrait
+monitor plugged into a landscape session, a rotation with windows already
+tiled, and the resize path on its own.
+
 **** The scrolling layout
 
 A niri-style strip: full-height columns laid left to right on landscape

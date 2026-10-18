@@ -672,10 +672,14 @@ gowl_monitor_set_mode(
 		wlr_output_layout_get_box(
 			self->compositor->output_layout,
 			self->wlr_output, &box);
-		if (!wlr_box_empty(&box)) {
+		if (!wlr_box_empty(&box))
 			self->m = box;
-			self->w = self->m;
-		}
+		/* The window area is arrangelayers' to set: it re-tiles when
+		 * the area it computes differs from the one the windows were
+		 * laid out in, and writing the new area here first made the
+		 * two compare equal whenever no bar reserved space -- the
+		 * windows kept the layout of the old shape. */
+		gowl_compositor_arrangelayers(self->compositor, self);
 		gowl_compositor_arrange(self->compositor, self);
 	}
 
@@ -726,19 +730,18 @@ gowl_monitor_set_position(
 	wlr_output_layout_add(self->compositor->output_layout,
 	                       self->wlr_output, x, y);
 
-	/* Update geometry and re-tile immediately.  on_layout_change
-	 * may not fire synchronously in all backends, and even when
-	 * it does, arrangelayers may skip arrange() if only the
-	 * position changed (same dimensions).  Mirror the pattern
-	 * used by gowl_monitor_set_mode(). */
+	/* Update geometry and re-tile immediately: on_layout_change
+	 * may not fire synchronously in all backends.  arrangelayers
+	 * re-tiles because the usable area it computes has moved (or
+	 * changed shape) relative to the one the windows were laid out
+	 * in -- which is why m->w is left alone here. */
 	{
 		struct wlr_box box;
 		wlr_output_layout_get_box(self->compositor->output_layout,
 		                          self->wlr_output, &box);
-		if (!wlr_box_empty(&box)) {
+		/* Not the window area: see gowl_monitor_set_mode(). */
+		if (!wlr_box_empty(&box))
 			self->m = box;
-			self->w = self->m;
-		}
 	}
 	gowl_compositor_arrangelayers(self->compositor, self);
 
@@ -1330,10 +1333,14 @@ gowl_monitor_set_scale(
 		wlr_output_layout_get_box(
 			self->compositor->output_layout,
 			self->wlr_output, &box);
-		if (!wlr_box_empty(&box)) {
+		if (!wlr_box_empty(&box))
 			self->m = box;
-			self->w = self->m;
-		}
+		/* The window area is arrangelayers' to set: it re-tiles when
+		 * the area it computes differs from the one the windows were
+		 * laid out in, and writing the new area here first made the
+		 * two compare equal whenever no bar reserved space -- the
+		 * windows kept the layout of the old shape. */
+		gowl_compositor_arrangelayers(self->compositor, self);
 		gowl_compositor_arrange(self->compositor, self);
 	}
 
@@ -1387,10 +1394,14 @@ gowl_monitor_set_transform(
 		wlr_output_layout_get_box(
 			self->compositor->output_layout,
 			self->wlr_output, &box);
-		if (!wlr_box_empty(&box)) {
+		if (!wlr_box_empty(&box))
 			self->m = box;
-			self->w = self->m;
-		}
+		/* The window area is arrangelayers' to set: it re-tiles when
+		 * the area it computes differs from the one the windows were
+		 * laid out in, and writing the new area here first made the
+		 * two compare equal whenever no bar reserved space -- the
+		 * windows kept the layout of the old shape. */
+		gowl_compositor_arrangelayers(self->compositor, self);
 		gowl_compositor_arrange(self->compositor, self);
 
 		/*

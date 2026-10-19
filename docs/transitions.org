@@ -74,6 +74,7 @@ In the order Super+: visits them (a module not loaded is skipped):
 | =melt=  | =modules/melt=  | The screen wipe from a certain 1993 shooter: the desktop runs down in 160 dripping columns, each starting at its own moment and falling faster as it goes, the next desktop behind it |
 | =shatter= | =modules/shatter= | The desktop is struck like glass at the pointer: cracks open, pieces break loose in a wave spreading from the impact, and each tumbles away under gravity onto the next desktop |
 | =explode= | =modules/explode= | The desktop blows apart from the pointer: every piece flies outward and towards you at once, slowing, spinning and fading, while the next desktop swells into place behind as though the blast had pushed it there |
+| =implode= | =modules/implode= | The opposite of explode: the desktop breaks up and is pulled into the pointer, nearest pieces first, each accelerating, spinning and shrinking to nothing as it reaches the point, the next desktop settling behind |
 | =zoom=  | =modules/zoom=  | The tags as a stack of desktops: to a higher tag the one you are on sinks away and fades while the next settles from just in front of the glass; back, the one you are on rushes past and the one behind comes forward |
 
 * How it works

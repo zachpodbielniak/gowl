@@ -719,6 +719,7 @@ another.
 | =melt=           | Tag transition: the desktop melts down the screen      |
 | =shatter=        | Tag transition: shatters the desktop like glass        |
 | =explode=        | Tag transition: blows the desktop apart                |
+| =implode=        | Tag transition: pulls the desktop into the pointer     |
 | =expo=           | Every tag at once, as a grid of live thumbnails        |
 | =switcher=       | Alt-tab as a 3D strip of live window previews          |
 | =magnifier=      | Zooms the whole output around the pointer              |

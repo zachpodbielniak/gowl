@@ -3411,6 +3411,31 @@ A bad team or rule --- an unknown key name, a filter that does not parse, an unk
 
 Check the rules of the game before broadcasting: several forbid it outright (see [[file:broadcast.org::#broadcast-game-rules][the table]]).
 
+*** Text expansion (gabbrev)
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-config
+:END:
+The =gabbrev= section configures the opt-in =gabbrev= module, gowl's espanso: type =;today= and it becomes =2026-10-19=.  The section *is a match file shifted under one key* --- espanso's =matches:=, =global_vars:=, =imports:= and options, plus gabbrev's =files:=, =espanso:= and =profiles:= --- so it can move to a file of its own, or an espanso configuration can move into it, unchanged.
+
+#+begin_src yaml
+modules:
+  gabbrev: { enabled: true }
+
+gabbrev:
+  toggle_key: ALT              # double-tap Alt: off / on
+  espanso: true                # also read $XDG_CONFIG_HOME/espanso
+  files: [snippets.yml]        # relative to this file
+  profiles:
+    - {name: games, filter: "fullscreen = true", enable: false}
+  matches:
+    - {trigger: ";sig", replace: "Best,\nAda"}
+    - trigger: ";due"
+      replace: "due {{d}}"
+      vars: [{name: d, type: date, params: {format: "%B %-d%o", offset: 604800}}]
+#+end_src
+
+The section is kept whole and handed to the module, which owns the format; config-load only checks that it is a mapping (anything else is a counted problem).  The module reports its own problems --- unknown keys, regexes that do not compile, missing files --- in =gowl-msg gabbrev-status=, and loads everything else.  Module settings (=builtin=, =deny-filter=, =terminals=, =picker-command=, ...) go under =modules: gabbrev:=.  The full reference --- matching, every variable type, grab-and-rewrite, C variables, filters and profiles, the IPC --- is [[file:gabbrev.org][gabbrev.org]]; =data/example-gabbrev.yaml= and =data/example-gabbrev.c= are complete examples.  In a C config: =gowl_gabbrev_add_file()=, =gowl_gabbrev_add_yaml()=, =gowl_gabbrev_register_func()= and =gowl_gabbrev_register_var_type()= (process-wide: they survive a reload), or =gowl_config_add_gabbrev_yaml()= for a section on the config object.
+
 *** Monitor Configuration
 :PROPERTIES:
 :CUSTOM_ID: monitor-configuration
@@ -4057,6 +4082,27 @@ gowl_macro_register_func("tidy", tidy, NULL, NULL);
 #+end_src
 
 A registered macro runs under the same fault guard and quarantine as a macro file.  See [[file:macros.org::#macros-c-api][Macros]].
+
+**** Text expansion sources and functions
+
+The =gabbrev= module's sources and extensions can come from C.  These are process-wide --- unlike everything set on =gowl_config=, they survive a config reload, which matters because a C config runs once --- and they work before the module loads:
+
+#+begin_src C
+static gchar *
+build_id(GowlGabbrevRequest *req, gpointer data)
+{
+    return g_strdup("1.2.3");
+}
+
+gowl_gabbrev_add_file("~/.config/espanso");     /* espanso, as it is */
+gowl_gabbrev_add_file("~/notes/snippets.yml");
+gowl_gabbrev_add_yaml("matches: [{trigger: ';v', replace: '{{b}}', "
+                      "vars: [{name: b, type: c, params: {func: build-id}}]}]",
+                      NULL);
+gowl_gabbrev_register_func("build-id", build_id, NULL, NULL);
+#+end_src
+
+=gowl_gabbrev_register_var_type()= adds a whole variable type, or replaces a built-in one; a type's function may answer from any thread.  See [[file:gabbrev.org::#gabbrev-extending][gabbrev.org]] and =data/example-gabbrev.c=.
 
 **** Adding Rules
 :PROPERTIES:

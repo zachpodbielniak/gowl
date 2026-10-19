@@ -168,6 +168,7 @@ LIB_SRCS := \
 	src/core/gowl-client-input.c \
 	src/core/gowl-xwayland-sync.c \
 	src/macro/gowl-macro.c \
+	src/gabbrev/gowl-gabbrev.c \
 	src/core/gowl-decor.c \
 	src/core/gowl-static-prefix-key-policy.c \
 	src/core/gowl-session-default.c \
@@ -246,6 +247,7 @@ LIB_HDRS := \
 	src/interfaces/gowl-input-remapper.h \
 	src/interfaces/gowl-input-observer.h \
 	src/macro/gowl-macro.h \
+	src/gabbrev/gowl-gabbrev.h \
 	src/config/gowl-config.h \
 	src/config/gowl-config-compiler.h \
 	src/config/gowl-keybind.h \
@@ -825,6 +827,24 @@ $(OBJDIR)/tests/test-broadcast-config.o: TEST_CFLAGS += -I$(abspath $(BUILDDIR)/
 # The broadcast routing engine is pure too; its test includes it.
 $(OBJDIR)/tests/test-broadcast-engine.o: modules/broadcast/gowl-broadcast-engine.c modules/broadcast/gowl-broadcast-engine.h
 
+# The text expander's pure halves -- the loader, the matcher, the
+# renderer -- are included by their tests, like the broadcast engine.
+GABBREV_PURE := $(wildcard modules/gabbrev/gowl-gabbrev-*.c modules/gabbrev/gowl-gabbrev-*.h)
+$(OBJDIR)/tests/test-gabbrev-model.o $(OBJDIR)/tests/test-gabbrev-engine.o $(OBJDIR)/tests/test-gabbrev-render.o: $(GABBREV_PURE)
+$(OBJDIR)/tests/test-gabbrev-model.o $(OBJDIR)/tests/test-gabbrev-engine.o $(OBJDIR)/tests/test-gabbrev-render.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags json-glib-1.0) -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/gabbrev)"'
+$(OUTDIR)/test-gabbrev-model $(OUTDIR)/test-gabbrev-engine $(OUTDIR)/test-gabbrev-render: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs json-glib-1.0)
+# The config test compiles the shipped C example, which includes
+# <gowl/gowl.h> the way a user's config.c does.
+$(OBJDIR)/tests/test-gabbrev-config.o: data/example-gabbrev.c
+$(OBJDIR)/tests/test-gabbrev-config.o: TEST_CFLAGS += -I$(abspath $(BUILDDIR)/include)
+# The module end to end: the real gabbrev.so in a headless compositor,
+# a keyboard plugged in through the backend, and a client recording
+# every key the expansion types.
+$(OUTDIR)/test-gabbrev-module: $(OBJDIR)/tests/xdg-shell-protocol.o $(OUTDIR)/modules/gabbrev.so
+$(OBJDIR)/tests/test-gabbrev-module.o: xdg-shell-client-protocol.h tests/macro-test-client.h
+$(OUTDIR)/test-gabbrev-module: TEST_LDFLAGS += $(OBJDIR)/tests/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client json-glib-1.0)
+$(OBJDIR)/tests/test-gabbrev-module.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client json-glib-1.0) -DGOWL_TEST_GABBREV_MODULE='"$(abspath $(OUTDIR)/modules/gabbrev.so)"'
+
 # Macros.  The loader test includes the loader directly and compiles
 # real macro files with crispy against this build's headers, so it
 # needs the same dev include dir the module is given.  The runner and
@@ -881,7 +901,9 @@ $(OUTDIR)/modules/menu.so: $(wildcard modules/menu/*.c modules/menu/*.h)
 # json-glib and wayland-server, neither of which the generic rule does.
 $(OUTDIR)/modules/inputremap.so: $(wildcard modules/inputremap/*.c modules/inputremap/*.h)
 $(OUTDIR)/modules/broadcast.so: $(wildcard modules/broadcast/*.c modules/broadcast/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modules/broadcast.so $(OUTDIR)/modules/macro.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+# The text expander: five files, json-glib, crispy for `c' variables.
+$(OUTDIR)/modules/gabbrev.so: $(wildcard modules/gabbrev/*.c modules/gabbrev/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modules/broadcast.so $(OUTDIR)/modules/gabbrev.so $(OUTDIR)/modules/macro.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
@@ -924,7 +946,7 @@ TEARDOWN_MODULES := wallpaper tile monocle float scrolling animation cube \
 	fizz leaves snow hints soapfilm embers submerged dew crt \
 	layout-indicator alpha \
 	vanitygaps roundcorners windowrules dropdown scratchpad screenshot \
-	osd clipboard bar menu $(TRANSITION_MODULES)
+	osd clipboard bar menu gabbrev $(TRANSITION_MODULES)
 $(OUTDIR)/test-compositor-teardown: $(patsubst %,$(OUTDIR)/modules/%.so,$(TEARDOWN_MODULES))
 $(OBJDIR)/tests/test-compositor-teardown.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 

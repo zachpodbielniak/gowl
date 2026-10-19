@@ -1,0 +1,3 @@
+matches:
+  - trigger: ":never"
+    replace: "underscore files load only when imported"

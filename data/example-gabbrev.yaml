@@ -1,0 +1,145 @@
+# gowl - example gabbrev configuration (text expansion)
+#
+# Put this in ~/.config/gowl/config.yaml.  Everything under `gabbrev:'
+# is the gabbrev/espanso match-file format, so it can just as well live
+# in its own file that `gabbrev: files:' names -- or in your espanso
+# configuration directory, which gabbrev reads as it is.
+#
+# Full reference: docs/gabbrev.org.
+
+modules:
+  gabbrev:
+    enabled: true            # opt-in in standalone gowl
+    # builtin: true          # ;today ;htoday ;now ;shrug ... (gabbrev-builtin)
+    # deny-filter: none      # default: password managers, pinentry, polkit
+
+gabbrev:
+  # ---- options (espanso's names) --------------------------------------
+  toggle_key: ALT              # double-tap Alt: expansion off / on
+  search_shortcut: Super+Alt+e # pick any match from a list
+  backend: auto                # type short text, paste the rest
+
+  # ---- more sources ---------------------------------------------------
+  # espanso: true              # $XDG_CONFIG_HOME/espanso, as espanso reads it
+  # files:
+  #   - ~/notes/snippets.yml
+  #   - snippets.d/            # relative to this file
+
+  # ---- app-specific configuration -------------------------------------
+  profiles:
+    # terminals: type rather than paste, so shell history stays clean
+    - name: terminals
+      filter_class: "(?i)^(foot|kitty|gst|alacritty)$"
+      backend: inject
+    # nothing in games, or anything fullscreen
+    - name: games
+      filter: "fullscreen = true or app-id ~ '^steam_app_'"
+      enable: false
+
+  # ---- variables every match can use ----------------------------------
+  global_vars:
+    - name: me
+      type: echo
+      params: {echo: "Ada Lovelace"}
+
+  # ---- matches --------------------------------------------------------
+  matches:
+    # plain text, several lines
+    - trigger: ";sig"
+      replace: |
+        Best regards,
+        {{me}}
+
+    # fix a typo as you go: only as a whole word, keeping your case
+    - trigger: "teh"
+      replace: "the"
+      word: true
+      propagate_case: true
+
+    # the cursor lands where $|$ is
+    - trigger: ";div"
+      replace: "<div>$|$</div>"
+
+    # dates: strftime, plus %o for the ordinal (19th)
+    - trigger: ";due"
+      replace: "due {{d}}"
+      vars:
+        - {name: d, type: date, params: {format: "%A, %B %-d%o", offset: 604800}}
+
+    # a shell command (bash), with the variables before it in its environment
+    - trigger: ";branch"
+      replace: "{{b}}"
+      vars:
+        - name: b
+          type: shell
+          params: {cmd: "git -C ~/source/projects/cmacs branch --show-current"}
+
+    # JSON output gives fields: {{w.temp}}
+    - trigger: ";weather"
+      replace: "{{w.temp}}°C and {{w.sky}}"
+      vars:
+        - name: w
+          type: shell
+          params:
+            json: true
+            cmd: "curl -s 'wttr.in/?format=j1' | yq -o=json '{\"temp\": .current_condition[0].temp_C, \"sky\": .current_condition[0].weatherDesc[0].value}'"
+
+    # a regex trigger; its named groups are variables
+    - regex: ";(?P<n>\\d+)x(?P<m>\\d+)\\."
+      replace: "{{p}}"
+      vars:
+        - {name: p, type: shell, params: {cmd: "echo $((GABBREV_N * GABBREV_M))"}}
+
+    # a choice, and a form
+    - trigger: ";greet"
+      replace: "{{g}}, {{me}} here."
+      vars:
+        - {name: g, type: choice, params: {values: ["Hi", "Hello", "Good morning"]}}
+    - trigger: ";bug"
+      form: |
+        Steps: [[steps]]
+        Expected: [[expected]]
+        Severity: [[severity]]
+      form_fields:
+        severity: {type: choice, values: [low, medium, high]}
+
+    # gowl only: where it may fire, by window, tag, time
+    - trigger: ";standup"
+      replace: "Yesterday: $|$\nToday: \nBlockers: none"
+      filter: "app-id ~ '(?i)slack|element|discord' and hour < 12"
+
+    # gowl only: a fact about the window being typed into
+    - trigger: ";where"
+      replace: "{{w}}"
+      vars:
+        - {name: w, type: window, params: {field: title}}
+
+    # gowl only: C, compiled once and cached
+    - trigger: ";doy"
+      replace: "day {{v}}"
+      vars:
+        - name: v
+          type: c
+          params:
+            code: |
+              GDateTime *now = g_date_time_new_now_local();
+              gchar *out = g_strdup_printf("%d", g_date_time_get_day_of_year(now));
+              g_date_time_unref(now);
+              return out;
+
+    # gowl only: grab the line, rewrite it, paste it back
+    - trigger: ";formal"
+      label: "Make the current line formal"
+      force_mode: clipboard
+      timeout: 120000
+      replace: "{{out}}"
+      vars:
+        - {name: text, type: selection, params: {scope: line}}
+        - name: out
+          type: shell
+          params:
+            timeout: 110000
+            cmd: >-
+              printf '%s' "$GABBREV_TEXT" | ai --no-expand --system
+              'Rewrite the text you are given in a formal register.
+              Reply with the rewritten text only.'

@@ -398,7 +398,7 @@ After changing its rules at runtime, a remapper calls =gowl_compositor_input_rem
 :PROPERTIES:
 :CUSTOM_ID: gowlinputobserver
 :END:
-Watches input on its way to windows.  =filter_key= is offered every key early --- after the lock screen and the pointer-confinement escape, before the KVM diversion, every bind and keyboard-shortcuts-inhibit --- and may consume it (consume a press, consume its release too).  =key_forwarded= hears a key that just reached the focused window, after every bind had its chance; =button_forwarded= a click that reached a window's main surface, with surface-local coordinates and the surface's size.  Every active implementation is called, in priority order, and with none active the core builds no event at all (=gowl_module_manager_has_input_observers()=).  Called on the compositor thread mid-input: answer from memory, and put input into other windows with =gowl_compositor_deliver_key()= / =_deliver_button()=, never the seat.  Implemented by the =broadcast= module; see [[file:broadcast.org][broadcast.org]].
+Watches input on its way to windows.  =filter_key= is offered every key early --- after the lock screen and the pointer-confinement escape, before the KVM diversion, every bind and keyboard-shortcuts-inhibit --- and may consume it (consume a press, consume its release too).  =key_forwarded= hears a key that just reached the focused window, after every bind had its chance; =button_forwarded= a click that reached a window's main surface, with surface-local coordinates and the surface's size.  Every active implementation is called, in priority order, and with none active the core builds no event at all (=gowl_module_manager_has_input_observers()=).  Called on the compositor thread mid-input: answer from memory, and put input into other windows with =gowl_compositor_deliver_key()= / =_deliver_button()=, never the seat.  Implemented by the =broadcast= module (see [[file:broadcast.org][broadcast.org]]) and the =gabbrev= module (see [[file:gabbrev.org][gabbrev.org]]).
 
 #+begin_src C
 struct _GowlInputObserverInterface {
@@ -793,6 +793,24 @@ Input broadcasting for multiboxing: keys --- and, where a rule asks, clicks --- 
 *Settings:* =toggle-key=, =panic-key=, =start-on=, =strict=, =toast=, =log=, =max-targets=, =timeout-ms=.
 
 *Files:* =gowl-module-broadcast.c= (the GObject half: keys, delivery, IPC, config sync) and =gowl-broadcast-engine.c= (the pure routing decisions, tested directly).  The data model is =src/boxed/gowl-broadcast.c=.  Full reference, including which games allow broadcasting: [[file:broadcast.org][broadcast.org]].
+
+*** The gabbrev module
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-module
+:END:
+Text expansion: type =;today= in any window and it becomes =2026-10-19=.  espanso's feature and espanso's configuration format (read unchanged, as a subset of gabbrev's), done in the compositor, which already sees every key on its way to a window and can type into that window without moving focus.  Opt-in in standalone gowl (=modules: gabbrev: {enabled: true}=); =cmacs --gowl= always loads it.
+
+*Interfaces:* =GowlInputObserver= (=key_forwarded= feeds the matcher; =filter_key= takes the toggle and search keys and Backspace-to-undo), =GowlIpcHandler=, =GowlStartupHandler=, =GowlShutdownHandler=
+
+*Matches* come from the built-in set, the top-level =gabbrev:= section, the files it names (espanso configuration directories included), =gowl_gabbrev_add_file()= / =_add_yaml()= in C, and runtime sources over IPC (=gabbrev-add=, =gabbrev-load=) and, under cmacs, Elisp.  A completed trigger becomes a /job/: its variables resolve one at a time --- the pure ones in the renderer, the desktop ones (shell, clipboard, selection grabs, pickers, C) in the module, registered ones through libgowl's registry --- and then /steps/ played on a =wl_event_loop= timer type it: Backspaces, the text as keys or a paste, the separator back, the cursor hint, the clipboard restored.
+
+*Nothing blocks the compositor thread*: subprocesses are =gowl_subprocess_spawn()=, clipboard reads are asynchronous, =c= variables compile on a worker, and an answer from any thread is posted back through an eventfd on the event loop --- never GLib's default context, which under cmacs is Emacs's thread (=tests/test-gabbrev-guard.sh= holds that).
+
+*Extending:* =src/gabbrev/gowl-gabbrev.h= --- =gowl_gabbrev_register_var_type()= (a new or replacement variable type, answered from any thread), =gowl_gabbrev_register_func()= (a C function YAML calls), =gowl_gabbrev_request_return_by_id()=.
+
+*Settings:* =start-on=, =builtin=, =files=, =deny-filter=, =terminals=, =picker-command=, =prompt-command=, =expand-synthetic=, =max-jobs=, =c-timeout-ms=, =cache-dir=, =toast=, =log=.
+
+*Files:* =gowl-module-gabbrev.c= (keys, jobs, typing, desktop variables, IPC), and the pure halves tested directly: =gowl-gabbrev-model.c= (the loader), =gowl-gabbrev-engine.c= (the matcher), =gowl-gabbrev-render.c= (variables), =gowl-gabbrev-cvar.c= (C variables), =gowl-gabbrev-builtin.c=.  Full reference: [[file:gabbrev.org][gabbrev.org]].
 
 *** The floatdesk module
 :PROPERTIES:

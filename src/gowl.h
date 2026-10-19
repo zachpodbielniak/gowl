@@ -80,6 +80,9 @@
 /* Macros (the API a macro script calls) */
 #include "macro/gowl-macro.h"
 
+/* Text expansion (the API the gabbrev module and its extenders share) */
+#include "gabbrev/gowl-gabbrev.h"
+
 /* Boxed types */
 #include "boxed/gowl-capture-result.h"
 #include "boxed/gowl-focus-token.h"

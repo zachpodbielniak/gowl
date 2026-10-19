@@ -1,0 +1,3 @@
+matches:
+  - trigger: ":ll"
+    replace: "ls -la"

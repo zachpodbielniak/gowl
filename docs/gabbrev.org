@@ -1,0 +1,581 @@
+#+title: gabbrev: text expansion
+#+description: The gabbrev module: espanso-compatible text expansion done in the compositor -- triggers, variables, app-specific profiles, grab-and-rewrite, and the C and YAML ways to extend it.
+#+authors: Zach Podbielniak
+#+categories: gowl modules
+#+created: 2026-10-19T14:30:00-04:00
+#+updated: 2026-10-19T14:30:00-04:00
+#+version: 0.1.0
+
+* gabbrev
+:PROPERTIES:
+:CUSTOM_ID: gabbrev
+:END:
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-overview
+:END:
+*gabbrev* is gowl's text expander --- espanso, done in the compositor, named for Emacs's =abbrev-mode=.  Type =;today= in any window and it becomes =2026-10-19=; type =;shrug= and it becomes =¯\_(ツ)_/¯=; type =;reword= at the end of a sentence and a language model rewrites the line in place.
+
+Doing it in the compositor is not a gimmick.  A client-side expander has to read =/dev/input= (root or a group with the keyboard's raw keys), guess which window has focus, and type through a virtual keyboard or =wtype=, and it cannot tell a password prompt from an editor.  gowl already sees every key on its way to a window, knows which window it is going to, can type into that window without moving focus, and knows the window's app-id, title, program, tag and monitor.  So gabbrev is a few thousand lines rather than a daemon, and its filters can say things espanso's cannot ("only on tag 3", "not in fullscreen windows", "only between 9 and 17").
+
+The configuration format is *espanso's, as a superset*.  An espanso configuration directory loads unchanged --- =config/default.yml=, the app-specific =config/*.yml= with =filter_class= and friends, =match/= with its =_=-prefix rule, packages, =imports=, =global_vars=, every variable type espanso has on Linux --- and gabbrev adds more variable types, gowl's filter language, inline profiles, and a way to put the whole thing in gowl's own =config.yaml= under =gabbrev:=.
+
+The feature has two parts:
+
+- *libgowl* --- =src/gabbrev/gowl-gabbrev.h=: variable *requests*, the registries of variable types and C functions, and process-wide sources.  It is what a C config, an embedder (cmacs) or a macro uses to extend gabbrev, and it works whether or not the module is loaded yet.
+- *The =gabbrev= module* --- opt-in in standalone gowl, always loaded by =cmacs --gowl=.  The loader, the matcher, the renderer, the typing, the IPC.
+
+With the module not loaded, nothing watches keys and nothing is typed.
+
+** Quick start
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-quick-start
+:END:
+*1. Enable the module* in =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  gabbrev:
+    enabled: true
+#+end_src
+
+That alone gives you the [[#gabbrev-builtin][built-in matches]]: type =;today=, =;htoday=, =;now=, =;shrug=.
+
+*2. Add your own*, in the same file:
+
+#+begin_src yaml
+gabbrev:
+  matches:
+    - trigger: ";sig"
+      replace: |
+        Best,
+        Zach
+    - trigger: ";addr"
+      replace: "123 Example Street, Springfield"
+    - trigger: "teh"
+      replace: "the"
+      word: true
+      propagate_case: true
+#+end_src
+
+*3. Or keep using your espanso configuration*:
+
+#+begin_src yaml
+gabbrev:
+  espanso: true          # $XDG_CONFIG_HOME/espanso
+  # espanso: ~/dotfiles/espanso
+#+end_src
+
+*4. Reload* after an edit: =gowl-msg gabbrev-reload= (a config reload, =Super+Shift+r=, reloads it too).
+
+** How it works
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-how
+:END:
+*** Watching what is typed
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-watching
+:END:
+gabbrev is an /input observer/ ([[file:modules.org][modules.org]], =GowlInputObserver=).  It is told about every key *after* it reached the focused window --- so a key a keybind took is never part of a trigger --- and turns it into a character: the keysym with the live modifiers applied, so it follows your layout.  Return is =\n=, Tab is =\t=, Backspace takes one character back.
+
+It forgets what was typed whenever the cursor may have gone somewhere it cannot see: a click, an arrow key, Home, Page Up, Escape, any key with Control, Alt or Super held, or a different window getting the key.  So a trigger only fires when it was really typed, in one go, in one place.
+
+*** Matching
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-matching
+:END:
+After every character the matcher asks whether a trigger has just been completed (=modules/gabbrev/gowl-gabbrev-engine.c=).  The rules are espanso's:
+
+- A trigger fires *on its last character* ...
+- ... unless it is a =right_word= (or =word=) trigger, which fires on the *separator typed after it*, and that separator is typed again after the replacement.  =brb,= becomes =be right back,=.
+- A =left_word= (or =word=) trigger only fires at the start of a word: after a separator, or at the start of what was typed.  =word: true= is both.
+- With =propagate_case=, =;Today= and =;TODAY= fire =;today= too, and the replacement is cased the same way (=uppercase_style= chooses how a capitalised trigger is propagated: =capitalize=, =capitalize_words=, =uppercase=).
+- A =regex= trigger is tried against the last =max_regex_buffer_size= characters (30) and must end at the cursor.  Its named groups (=(?P<name>...)=) become variables.
+- When several fire, the *longest* typed text wins; between equals, the match *loaded last* --- which is how your =;today= replaces the built-in one.
+
+Because a trigger fires on its last character, *no trigger should be the start of another*: with =;le= defined, =;lenny= can never be typed.  The built-in set is checked for this by its test.
+
+*** Rendering
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-rendering
+:END:
+A completed trigger becomes a /job/.  The job renders the match (=gowl-gabbrev-render.c=): its variables are resolved *one at a time, in order* --- the global variables the replacement names first, then the match's own, each after whatever it lists in =depends_on= --- and each variable's params see the values before it (=cmd: "echo {{name}}"=).  Then ={{name}}= and ={{name.field}}= in the replacement are replaced, the cursor hint =$|$= is taken out, and the case is propagated.
+
+Variables are /asynchronous/.  A shell command, a picker, a language model, a compile, Lisp under cmacs --- all answer later, and the compositor never waits for any of them: subprocesses are watched on the compositor's own event loop, clipboard reads are asynchronous, C variables compile on a worker thread, and an answer from any thread is /posted/ back (queued, and an eventfd wakes the event loop).  While a job resolves, the window is untouched: the trigger is still there and you can see it.
+
+*** Typing
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-typing
+:END:
+When the text is ready, the job queues /steps/ that a timer on the event loop plays:
+
+1. focus back to the window, if a picker took it (=refocus=);
+2. Backspace, once per character of the trigger (and its separator);
+3. the text --- *as keys*, or *as a paste* (the text is put on the clipboard, the paste chord is pressed in the window, and the clipboard is put back afterwards);
+4. the separator, for a word trigger;
+5. Left, back to the cursor hint;
+6. the old clipboard back.
+
+Keys go to that one window through =gowl_compositor_send_key_to_client()= / =_send_text_to_client()=, which refuse while the session is locked or a launcher holds the keyboard, and reach X11 windows through X focus.  They are /synthetic/: no keybind sees them, the input recorder does not, and gabbrev does not watch its own typing.
+
+The =backend= option chooses between keys and paste.  =auto= (the default) types text that is short (=clipboard_threshold=, 100 characters) and that every character of can be typed with this keyboard layout without AltGr; anything else is pasted --- =¯\_(ツ)_/¯= is pasted, =2026-10-19= is typed.  =keys= (espanso's =inject=) always types, skipping characters the layout cannot produce; =clipboard= always pastes.  A match can force either with =force_mode=.
+
+Terminals paste with Ctrl+Shift+V and copy with Ctrl+Shift+C.  gabbrev knows the usual terminal app-ids (=gst=, =foot=, =kitty=, =alacritty=, =wezterm=, =ghostty=, GNOME Terminal and Console, Konsole, xterm, ...; the module's =terminals= setting changes the list) and uses those chords there --- espanso's one patch every Linux user needs.  =apply_patch: false= turns that off, and =paste_shortcut= sets the chord outright.
+
+The job's typing starts one event-loop turn after the key that completed the trigger, never in the middle of delivering it.
+
+*** Undo
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-undo
+:END:
+*Backspace straight after an expansion undoes it*: the replacement is rubbed out and the trigger typed back (=undo_backspace=, on by default).  The Backspace itself is taken.  Any other key first, a click, or eight seconds, and Backspace is just Backspace again.  An expansion with a cursor hint, a picture or HTML cannot be undone this way, because Backspace no longer lands at its end.
+
+*** When it fails
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-failure
+:END:
+A variable that fails --- a command exiting non-zero, a picker cancelled, a C variable that crashed --- abandons the expansion, says why in a notification and in =gabbrev-status=, and leaves the window as it was: the trigger you typed is still there.  If the trigger had already been rubbed out (=delete_first=, a grab) it is typed back, after collapsing a grab's selection so it does not land on your text.
+
+Typing on into the window before a slow expansion is ready drops it: where it would have gone has moved.  Nothing is typed back in that case --- what you typed is yours.
+
+Every expansion has a time budget (=timeout=, two minutes --- a form or a model takes a while; a match can set its own): past it, it fails like any other.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-configuration
+:END:
+*** Where it comes from
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-sources
+:END:
+Every source is loaded, in this order, into one set.  Options set by a later source override an earlier one; a match with a trigger an earlier match has replaces it.
+
+| Source                                           | How                                                              |
+|--------------------------------------------------+------------------------------------------------------------------|
+| the built-in matches                             | unless =builtin: false= in the module settings                   |
+| gowl's =config.yaml=, the =gabbrev:= section     | a match file shifted under one key                               |
+| ... and the files it names                       | =files:=, =imports:=, =espanso:= in that section                 |
+| the module's =files= setting                     | =modules: gabbrev: files: [...]=                                 |
+| code: =gowl_gabbrev_add_file()= / =_add_yaml()=  | a C config, cmacs; these survive a config reload                 |
+| runtime: =gabbrev-load=, =gabbrev-add=           | IPC, MCP, Lisp; by name, so adding a name again replaces it      |
+
+A *path* may be a match file, a directory, an espanso configuration directory (one with =config/= or =match/=), or a glob.  A plain directory loads every =*.yml= and =*.yaml= in it, recursively, except files whose names start with =_= --- espanso's rule for "only when imported".  =~/= and =$XDG_CONFIG_HOME/= are expanded; a relative path is relative to the file that names it (for the =gabbrev:= section, the directory of =config.yaml=).
+
+*** The =gabbrev:= section
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-section
+:END:
+The section is exactly what a match file holds, under one key --- so you can move it into a file, or a file into it, without changing a line:
+
+#+begin_src yaml
+gabbrev:
+  # espanso options, any of them, here or in a file
+  backend: auto
+  clipboard_threshold: 100
+  toggle_key: ALT              # double-tap Alt switches expansion off and on
+  search_shortcut: Super+Alt+e # pick any match from a list
+
+  # more sources
+  espanso: true                # or a path
+  files:
+    - ~/notes/snippets.yml
+    - snippets.d/              # relative to this config file
+
+  # app-specific configuration, written inline
+  profiles:
+    - name: terminals
+      filter_class: "(?i)(foot|kitty|gst)"
+      backend: inject
+    - name: games
+      filter: "fullscreen = true or app-id ~ '^steam_app_'"
+      enable: false
+
+  global_vars:
+    - name: me
+      type: echo
+      params: {echo: "Zach Podbielniak"}
+
+  matches:
+    - trigger: ";me"
+      replace: "{{me}}"
+#+end_src
+
+Keys may be spelled with =_= or =-= (=left_word=, =left-word=).  Every key not understood is reported (see [[#gabbrev-problems][Problems]]) and everything else still loads.
+
+*** Matches
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-matches
+:END:
+| Key                            | espanso | Meaning                                                                      |
+|--------------------------------+---------+------------------------------------------------------------------------------|
+| =trigger=                      | yes     | the text that fires it                                                       |
+| =triggers=                     | yes     | several texts that all fire it                                               |
+| =regex=                        | yes     | a regular expression (PCRE) ending at the cursor; named groups are variables |
+| =replace=                      | yes     | what it becomes; ={{var}}=, ={{var.field}}=, =$\vert{}$= for the cursor       |
+| =vars=                         | yes     | the match's variables, see [[#gabbrev-variables][Variables]]                                    |
+| =word=, =left_word=, =right_word= | yes  | word boundaries                                                              |
+| =propagate_case=, =uppercase_style= | yes | case                                                                       |
+| =form=, =form_fields=          | yes     | the form shorthand: =Hi [[name]]=                                            |
+| =image_path=                   | yes     | paste a picture (PNG, JPEG, SVG) instead of text                             |
+| =html=                         | yes     | paste rich text (=text/html=)                                                |
+| =markdown=, =paragraph=        | yes     | accepted; the text is typed as written (no Markdown renderer)               |
+| =force_mode=, =force_clipboard= | yes    | =clipboard= or =keys=, whatever the backend says                             |
+| =label=, =search_terms=        | yes     | what the search picker shows                                                 |
+| =passive_only=, =search_only=  | yes     | never fires when typed; only from search or =gabbrev-expand=                |
+| =paste_shortcut=               |         | this match's paste chord                                                     |
+| =filter=                       |         | gowl's filter language: where it may fire (see [[#gabbrev-filters][Filters]])             |
+| =filter_title=, =filter_class=, =filter_exec= |  | espanso's app-specific regexes, on one match                        |
+| =delete_first=                 |         | rub the trigger out before resolving (implied by a =selection= grab)         |
+| =notify=                       |         | a toast once it is typed                                                     |
+| =timeout=                      |         | this match's time budget, in ms                                              |
+| =id= (or =name=)               |         | what =gabbrev-expand=, =gabbrev-render= and the list call it; default: the label, else the first trigger |
+| =description=, =x-...=         |         | notes for you; ignored                                                       |
+
+*** Variables
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-variables
+:END:
+A variable is =name=, =type= and =params=, plus espanso's =inject_vars= (=false= leaves ={{...}}= in its params as written) and =depends_on= (variables to resolve first).  =type: global= in a match's =vars= means "resolve the global variable of this name here", not up front.
+
+| Type        | espanso | Params                                                     | Value                                              |
+|-------------+---------+------------------------------------------------------------+----------------------------------------------------|
+| =echo=      | yes     | =echo=                                                     | the text                                           |
+| =date=      | yes     | =format= (strftime + =%o=), =offset= (seconds), =tz=       | the date                                           |
+| =shell=     | yes     | =cmd=, =shell= (=bash=), =trim= (true), =timeout= (10000), =debug=, =ignore_error= | the command's output                |
+| =script=    | yes     | =args= (a list; =%CONFIG%=, =%HOME%=), =trim=, =timeout=   | the program's output                               |
+| =random=    | yes     | =choices= (a list)                                         | one of them                                        |
+| =clipboard= | yes     |                                                            | the clipboard's text                               |
+| =choice=    | yes     | =values= (texts, or ={label, id}=)                         | the one picked (its id)                            |
+| =form=      | yes     | =layout= (with =[[field]]=), =fields= (=type: text/choice/list=, =values=, =default=) | a JSON object; =form1.name= |
+| =match=     | yes     | =trigger=                                                  | that match, rendered                               |
+| =global=    | yes     |                                                            | the global variable of the same name               |
+| =env=       |         | =name=, =default=                                          | an environment variable                            |
+| =uuid=      |         |                                                            | a random UUID                                      |
+| =selection= |         | =scope= (=primary=, =clipboard=, =line=, =word=, =paragraph=, =all=), =select=, =copy=, =settle=, =allow_empty= | text from the window; see [[#gabbrev-grab][Grab, rewrite, put back]] |
+| =window=    |         | =field= (=app-id=, =title=, =exec=, =pid=, =monitor=, =layout=, =tag=, ...) | a fact about the window being typed into |
+| =file=      |         | =path=, =trim=                                             | a file's text (1 MiB at most)                      |
+| =c=         |         | =func=, or =code=, =source=, =file= (and =cflags=)         | C, see [[#gabbrev-c][C variables]]                       |
+| =search=    |         |                                                            | any match, picked from a list, rendered            |
+| anything registered |  | whatever it wants                                          | see [[#gabbrev-extending][Extending]]                         |
+
+*Dates* use GLib's =g_date_time_format()= --- strftime with =%-d= and friends --- plus =%o=, gabbrev's ordinal suffix (=st=, =nd=, =rd=, =th=), and chrono's =%.3f= (milliseconds), which espanso configs use.  =%B %-d%o, %Y= is =October 19th, 2026=.
+
+*Shell and script* run with every value so far in the environment, under two names: =GABBREV_NAME= and espanso's =ESPANSO_NAME= (upper case, non-alphanumerics as =_=), plus =GABBREV_TRIGGER=, =GABBREV_APP_ID= and =GABBREV_TITLE=.  The default shell is *bash*; =shell: sh=, =zsh=, =fish= or a path change it.  A non-zero exit is a failure with the last line of its stderr, unless =ignore_error: true=.
+
+*A variable whose value is a JSON object* --- a form's, or any with =json: true= in its params --- also has its fields as =name.field=.  A shell variable printing ={"temp": 21, "sky": "clear"}= with =json: true= gives ={{w.temp}}= and ={{w.sky}}=.
+
+*** Grab, rewrite, put back
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-grab
+:END:
+The =selection= type reads text /out of/ the window.  With =scope: primary= (the default) it is the primary selection and nothing is pressed; =clipboard= is the clipboard.  The other scopes *select* text behind the cursor and *copy* it:
+
+| =scope=     | Selects with      | Copies with                          |
+|-------------+-------------------+--------------------------------------|
+| =line=      | Shift+Home        | Ctrl+C (Ctrl+Shift+C in a terminal)  |
+| =word=      | Ctrl+Shift+Left   |                                      |
+| =paragraph= | Ctrl+Shift+Up     |                                      |
+| =all=       | Ctrl+A            |                                      |
+
+=select:= and =copy:= give your own chords (several, space-separated, for =select=).  The text is left selected, so the replacement --- typed or pasted --- goes over it.  The trigger is rubbed out before the grab, and the clipboard is put back at the end.
+
+That is what the built-in =;reword= and =;fix= are: grab the line, hand it to a language model, paste the answer over it:
+
+#+begin_src yaml
+- trigger: ";reword"
+  delete_first: true
+  force_mode: clipboard
+  timeout: 120000
+  replace: "{{out}}"
+  vars:
+    - {name: text, type: selection, params: {scope: line}}
+    - name: out
+      type: shell
+      params:
+        timeout: 110000
+        cmd: >-
+          printf '%s' "$GABBREV_TEXT" | ai --no-expand --system
+          'Reword the text you are given. Reply with the reworded text only.'
+#+end_src
+
+Standalone gowl runs the =ai= command from ai-glib; =cmacs --gowl= replaces both with its own AI.  Any command that reads text and prints text works --- a local model through =ollama run=, =llm=, a translation tool.
+
+*** C variables
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-c
+:END:
+=type: c= runs C, in the compositor, under the fault guard (a crash or a runaway is stopped, reported, and the variable held back until it changes or =gabbrev-reload=; see [[file:macros.org::#macros-containment][Containment]]):
+
+#+begin_src yaml
+matches:
+  # a function body; `req' is the request, PARAM() and VAR() read it
+  - trigger: ";answer"
+    replace: "{{v}}"
+    vars:
+      - name: v
+        type: c
+        params:
+          code: |
+            GDateTime *now = g_date_time_new_now_local();
+            gchar *out = g_strdup_printf("day %d of the year",
+                                         g_date_time_get_day_of_year(now));
+            g_date_time_unref(now);
+            return out;
+
+  # a whole file, exporting gchar *gowl_gabbrev_var(GowlGabbrevRequest *)
+  - trigger: ";weather"
+    replace: "{{w}}"
+    vars:
+      - {name: w, type: c, params: {file: "~/.config/gowl/gabbrev/weather.c"}}
+
+  # a function a C config registered (no compiler)
+  - trigger: ";build"
+    replace: "{{b}}"
+    vars:
+      - {name: b, type: c, params: {func: build-id}}
+#+end_src
+
+=code= and =source= are compiled with crispy the first time they are used, against gowl's headers, and cached in =$XDG_CACHE_HOME/gowl/gabbrev= by the hash of the source (a =file= is rebuilt when it changes).  Compiling happens on a worker thread; the expansion waits for it, the desktop does not.  =cflags= adds compiler flags (=$(pkg-config --cflags libsoup-3.0)=), as does a =#define CRISPY_PARAMS= in the source.  The function runs on the compositor thread with a budget (=c-timeout-ms=, 500 ms): it must be quick, and anything slow belongs in a =shell= variable.
+
+*** Filters
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-filters
+:END:
+Three ways to say where something applies, from the narrowest:
+
+- *=filter:=* on a match or a profile --- gowl's filter language (=src/util/gowl-filter.c=): =and=, =or=, =not=, parentheses; =\==/=!== globs, =~=/=!~= regexes (=(?i)= for case), =<= =>= numbers or strings.  Fields:
+
+  | Field                   | Value                                   |
+  |-------------------------+-----------------------------------------|
+  | =app-id=, =class=       | the window's app-id (X11: its class)    |
+  | =title=                 | its title                               |
+  | =exec=                  | its program, from =/proc/PID/exe=       |
+  | =pid=                   | its process                             |
+  | =xwayland=, =floating=, =fullscreen= | =true= / =false=           |
+  | =monitor=, =layout=     | its output's name, that output's layout |
+  | =tag=, =tags=           | the lowest tag viewed, all of them      |
+  | =time=, =hour=, =weekday= | =14:05=, =14=, =mon=                  |
+  | =trigger=               | the match's first trigger               |
+
+  #+begin_src yaml
+  - trigger: ";standup"
+    replace: "Yesterday: \nToday: \nBlockers: none"
+    filter: "app-id ~ '(?i)slack|element' and weekday != sat and weekday != sun"
+  #+end_src
+
+- *=filter_class=, =filter_title=, =filter_exec=* --- espanso's regexes, on a profile (as espanso has them) or on one match.  Every one given must match.
+
+- *Profiles* --- app-specific configurations: espanso's =config/*.yml= files, or =profiles:= inline.  The first profile whose filters all match the window is in force there: its options override the defaults (=enable: false= switches expansion off in those windows), and its file selection (=includes=, =excludes=, =extra_includes=, =extra_excludes=) decides which match files apply.  A profile with no filter at all applies nowhere.
+
+And one that is not a configuration file's: the module's *deny filter*, windows nothing is ever expanded into.  The default is password managers, pinentry, polkit and anything titled like a password prompt; =deny-filter: "+EXPR"= adds to it, any other expression replaces it, and =none= turns it off.
+
+*** Options
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-options
+:END:
+Options go in any source (a match file, the =gabbrev:= section, espanso's =config/default.yml=) and in profiles.
+
+| Option                      | Default  | Meaning                                                           |
+|-----------------------------+----------+-------------------------------------------------------------------|
+| =enable=                    | true     | expand at all (in a profile: in its windows)                      |
+| =backend=                   | auto     | =auto=, =inject= (=keys=), =clipboard=                            |
+| =clipboard_threshold=       | 100      | =auto= pastes text longer than this                               |
+| =key_delay= / =inject_delay= | 0       | ms between typed keys, for slow applications                      |
+| =paste_shortcut=            | automatic | Ctrl+V, Ctrl+Shift+V in terminals                                |
+| =apply_patch=               | true     | the terminal chords                                               |
+| =preserve_clipboard=        | true     | put the clipboard back after a paste                              |
+| =pre_paste_delay=           | 30       | ms between setting the clipboard and pasting                      |
+| =paste_shortcut_event_delay= / =post_paste_delay= | 80 | ms after the paste before typing more            |
+| =restore_clipboard_delay=   | 300      | ms before the clipboard goes back                                 |
+| =word_separators=           | espanso's | what separates words                                             |
+| =undo_backspace=            | true     | Backspace right after undoes                                      |
+| =max_regex_buffer_size=     | 30       | characters a regex trigger sees                                   |
+| =show_notifications=        | true     | toasts                                                            |
+| =toggle_key=                | none     | a modifier pressed twice (=ALT=, =LEFT_CTRL=, ...) or a chord (=Super+Alt+e=) |
+| =search_shortcut=           | none     | a chord that opens the search picker                              |
+| =search_trigger=            | none     | typed text that opens it                                          |
+| =post_form_delay= / =post_search_delay= | 120 | ms after a picker closes                                  |
+| =refocus=                   | true     | focus the window back after a picker; =false= puts the text on the clipboard instead |
+| =timeout=                   | 120000   | an expansion's whole budget, in ms                                |
+
+espanso options for other platforms (=win32_*=, =x11_*=, =show_icon=, =keyboard_layout=, ...) are accepted and ignored, so one configuration serves both.
+
+*** Module settings
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-module-settings
+:END:
+=modules: gabbrev:= holds settings about the module itself:
+
+#+begin_src yaml
+modules:
+  gabbrev:
+    enabled: true
+    start-on: true          # expand from the start
+    builtin: true           # load the shipped matches
+    files: [~/snippets]     # more sources
+    deny-filter: "+app-id = org.gnome.Calculator"   # `+' adds to the default; or `none'
+    terminals: "+my-term,other-term"   # `+' adds to the built-in list
+    picker-command: "fuzzel --dmenu --prompt \"$GABBREV_PROMPT: \""
+    prompt-command: "fuzzel --dmenu --prompt-only \"$GABBREV_PROMPT: \""
+    expand-synthetic: true  # expand KVM / injected typing too
+    max-jobs: 8
+    c-timeout-ms: 500
+    cache-dir: ~/.cache/gowl/gabbrev
+    toast: true
+    log: false
+#+end_src
+
+*Pickers.*  =choice=, =form= and search show a list or ask for text through a dmenu-style program: the rows on its standard input, one per line, the question in =$GABBREV_PROMPT=, the answer on its standard output.  Without a setting the first of fuzzel, bemenu, wofi, tofi and rofi found is used (zenity too, for free text).  Under =cmacs --gowl= they are Emacs's minibuffer instead.
+
+** The built-in matches
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-builtin
+:END:
+=gowl-msg gabbrev-builtin= prints them as YAML.  Every trigger starts with =;= and none is the start of another.
+
+| Trigger | Becomes | Trigger | Becomes |
+|---------+---------+---------+---------|
+| =;today=    | =2026-10-19=                        | =;shrug=      | =¯\_(ツ)_/¯=      |
+| =;htoday=   | =October 19th, 2026=                | =;tableflip=  | =(╯°□°)╯︵ ┻━┻=   |
+| =;mtoday=   | =20261019=                          | =;unflip=     | =┬─┬ノ( º _ ºノ)=  |
+| =;now=      | =2026-10-19 14:05:09=               | =;lenny=      | =( ͡° ͜ʖ ͡°)=       |
+| =;hnow=     | =October 19th, 2026 at 2:05 PM=     | =;disapprove= | =ಠ_ಠ=             |
+| =;mnow=     | =20261019140509=                    | =;->= =;<-= =;=>= | =→= =←= =⇒=   |
+| =;iso=      | =2026-10-19T14:05:09-04:00=         | =;<== =;>== =;!== | =≤= =≥= =≠=   |
+| =;time=     | =14:05=                             | =;+-= =;inf= =;deg= | =±= =∞= =°= |
+| =;htime=    | =2:05 PM=                           | =;em= =;en= =;...= | =—= =–= =…=  |
+| =;yesterday= =;tomorrow= | the dates either side  | =;bullet= =;check= =;cross= | =•= =✓= =✗= |
+| =;week=     | =2026-W43=                          | =;copy= =;reg= =;tm= =;euro= | =©= =®= =™= =€= |
+| =;dow=      | =Monday=                            | =;uuid=       | a random UUID     |
+| =;month=    | =October 2026=                      | =;user= =;host= | you, this machine |
+| =;epoch=    | Unix time                           | =;clip=       | the clipboard as plain text |
+| =;lorem=    | a paragraph of lorem ipsum          | =;reword= =;fix= | rewrite / correct the current line with AI |
+
+Replace one by giving its trigger again; drop them all with =builtin: false=.
+
+** IPC
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-ipc
+:END:
+| Command                                   | Does                                                         |
+|-------------------------------------------+--------------------------------------------------------------|
+| =gabbrev-status=                          | JSON: on, counts, files, problems, profiles, runtime sources, running expansions, registered types |
+| =gabbrev-list [TEXT]=                     | JSON: every match (or those whose id or label has TEXT)      |
+| =gabbrev-on=, =-off=, =-toggle=           | expand or not                                                |
+| =gabbrev-reload=                          | read every source again (and forgive held-back C variables)  |
+| =gabbrev-load [--name NAME] PATH=         | add a source; the same name replaces                         |
+| =gabbrev-add [--name NAME] YAML=          | add matches; one line, so flow YAML or JSON                  |
+| =gabbrev-remove NAME=, =gabbrev-clear=    | drop runtime sources                                         |
+| =gabbrev-expand ID=                       | type a match into the focused window, as if triggered        |
+| =gabbrev-insert TEXT=                     | type TEXT (keys or paste, by the backend)                    |
+| =gabbrev-search=                          | pick a match from a list and type it                         |
+| =gabbrev-render [--id ID] [--custom FORM -- ] ID= | render only: =EVENT gabbrev rendered ID "TEXT"=; =--custom= also runs FORM with =%r= as the text (cmacs: Lisp) |
+| =gabbrev-test TEXT=                       | JSON: which match TEXT, typed into the focused window, fires --- and whether the window is denied or disabled |
+| =gabbrev-resolve ID JSON-STRING=          | answer variable request ID (an external provider)            |
+| =gabbrev-resolve-error ID MESSAGE=        | fail it                                                      |
+| =gabbrev-cancel=                          | stop every running expansion                                 |
+| =gabbrev-builtin=                         | the built-in matches, as a JSON string of YAML               |
+
+Events: =EVENT gabbrev expanded ID=, =failed ID REASON=, =on WHY=, =off WHY=, =reloaded N=, =undone=, =rendered ID TEXT=, =render-failed ID REASON=.  They are module events, so an embedder hears them through =GowlCompositor::module-event= too.
+
+** Extending it
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-extending
+:END:
+*** From a C config
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-c-config
+:END:
+=<gowl/gowl.h>= brings =gabbrev/gowl-gabbrev.h=.  Everything in it works before the module loads, and survives a config reload (a C config runs once):
+
+#+begin_src c
+static gchar *
+build_id(GowlGabbrevRequest *req, gpointer data)
+{
+	return g_strdup(g_getenv("BUILD_ID") ? g_getenv("BUILD_ID") : "dev");
+}
+
+G_MODULE_EXPORT gboolean
+gowl_config_init(void)
+{
+	/* my espanso configuration, and a snippet file */
+	gowl_gabbrev_add_file("~/.config/espanso");
+	gowl_gabbrev_add_file("~/notes/snippets.yml");
+
+	/* matches written right here */
+	gowl_gabbrev_add_yaml(
+		"matches:\n"
+		"  - {trigger: ';build', replace: '{{b}}',\n"
+		"     vars: [{name: b, type: c, params: {func: build-id}}]}\n",
+		NULL);
+
+	/* a C function YAML can call */
+	gowl_gabbrev_register_func("build-id", build_id, NULL, NULL);
+	return TRUE;
+}
+#+end_src
+
+=gowl_config_add_gabbrev_yaml(gowl_config, ...)= adds a section to the config object instead, like a second =gabbrev:= (it lasts until the config is replaced).  =data/example-gabbrev.c= is a complete example.
+
+*** New variable types
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-var-types
+:END:
+=gowl_gabbrev_register_var_type(TYPE, func, data, destroy)= adds a type --- or *replaces a built-in one*: registered types are looked up first.  The function is handed a =GowlGabbrevRequest= on the compositor thread and must not block: it answers at once with =gowl_gabbrev_request_return()=, or takes a reference and answers later, *from any thread*.  The request carries the variable's name and params (=_get_param()=, =_get_params_json()=), the values so far (=_get_var()=), the trigger as typed, and the window's app-id and title.
+
+#+begin_src c
+static gpointer
+ask_the_oracle(gpointer data)
+{
+	GowlGabbrevRequest *req = data;
+	g_autofree gchar *answer = slow_thing(gowl_gabbrev_request_get_param(req, "q"));
+
+	gowl_gabbrev_request_return(req, answer);   /* from this thread */
+	gowl_gabbrev_request_unref(req);
+	return NULL;
+}
+
+static void
+oracle_type(GowlGabbrevRequest *req, gpointer data)
+{
+	g_thread_unref(g_thread_new("oracle", ask_the_oracle,
+	                            gowl_gabbrev_request_ref(req)));
+}
+
+gowl_gabbrev_register_var_type("oracle", oracle_type, NULL, NULL);
+#+end_src
+
+A request is answered once: the first answer wins.  When the expansion gives up (its timeout, the user typing on), a late answer is ignored --- =gowl_gabbrev_request_is_answered()= lets a long provider stop early.  A provider in another process or language keeps the request's number instead and answers with =gowl_gabbrev_request_return_by_id()= --- or over IPC, =gabbrev-resolve ID "TEXT"=.
+
+cmacs uses exactly this: =elisp= is a registered type whose function hands the request to Lisp, and =choice= and =form= are registered over the built-in ones so that pickers are the minibuffer.
+
+** Problems
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-problems
+:END:
+A configuration problem --- an unknown key, a regex or filter that does not compile, a variable with no type, a file that is not there, an import loop --- costs the one thing that is wrong.  The rest loads.  Each is one line in =gowl-msg gabbrev-status= (=problems=), and the module logs the count and the first after every load.
+
+*Nothing expands.*  =gowl-msg gabbrev-test ;today= says which match would fire in the focused window, whether that window is denied (the deny filter) or disabled (a profile), and which profile it is in.  =gabbrev-status= says whether expansion is =on=.
+
+*It expands, but garbled.*  Something in the text is not on your keyboard layout: =backend: clipboard= (or =force_mode: clipboard= on the match).  An application that drops fast keys: =key_delay: 5=.
+
+*A paste lands in the wrong place, or as the old clipboard.*  The application reads the clipboard slowly: raise =pre_paste_delay= and =post_paste_delay=.
+
+*Every expansion goes into clipboard history.*  The clipboard module keeps every clipboard change, and a paste is one.  Use =backend: keys= where you can.
+
+** Files
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-files
+:END:
+| File                                        | What                                                       |
+|---------------------------------------------+------------------------------------------------------------|
+| =src/gabbrev/gowl-gabbrev.[ch]=             | libgowl: requests, registries, process-wide sources        |
+| =src/config/gowl-config.c=                  | the =gabbrev:= section (kept as YAML for the module)       |
+| =modules/gabbrev/gowl-gabbrev-model.[ch]=   | the loader: espanso and gabbrev files, profiles, options   |
+| =modules/gabbrev/gowl-gabbrev-builtin.c=    | the built-in matches                                       |
+| =modules/gabbrev/gowl-gabbrev-engine.[ch]=  | the matcher                                                |
+| =modules/gabbrev/gowl-gabbrev-render.[ch]=  | variables and the replacement                              |
+| =modules/gabbrev/gowl-gabbrev-cvar.[ch]=    | =c= variables: crispy builds, guarded calls                |
+| =modules/gabbrev/gowl-module-gabbrev.c=     | the module: keys, jobs, typing, desktop variables, IPC     |
+| =tests/test-gabbrev-*.c=, =test-gabbrev-guard.sh= | the tests and the structural guard                   |
+| =data/example-gabbrev.yaml=, =example-gabbrev.c= | complete examples                                     |

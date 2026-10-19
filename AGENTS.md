@@ -247,6 +247,31 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   route misses them (Xwayland routes by X focus), the confirmed activate
   route reaches them, batches, macros' targeted text, and the module
   broadcasting between three real X windows
+- `test-gabbrev-model` -- the text expander's loader: the built-in set
+  (loads clean, and no trigger is a prefix of another), an espanso
+  configuration directory read as espanso reads it (default.yml options,
+  app-specific profiles and their file selections, `_' files only when
+  imported, packages), plain directories, the inline `gabbrev:' section
+  with `files' and gowl-filter profiles, globs, import loops, problems
+- `test-gabbrev-engine` -- which trigger a keystroke completes: word and
+  left-word boundaries with the separator typed back, propagate_case,
+  regex triggers and their groups, longest-then-latest precedence, the
+  module's allow callback, Unicode
+- `test-gabbrev-render` -- variables in order (globals first, depends_on,
+  `type: global'), params seeing earlier values, answers posted back from
+  another thread, failures, nested `match' and its loop limit, JSON
+  fields, the cursor hint, case, `%o' dates, cancellation dropping a late
+  answer, and the libgowl registries
+- `test-gabbrev-config` -- the `gabbrev:' section kept whole with its base
+  directory, a non-mapping counted as a problem, and the shipped C example
+  compiled in
+- `test-gabbrev-module` -- the real gabbrev.so end to end, a keyboard
+  plugged in through the backend and a client recording every key: a
+  trigger becomes Backspaces and the text, word triggers, undo with
+  Backspace, the cursor hint, a paste for what the layout cannot type,
+  shell variables, failures typing nothing, a type registered from C and
+  answered from a thread, `c' variables (registered and compiled by
+  crispy), the deny filter and off, and the IPC surface
 
 `make test` also runs every `tests/*.sh` **source guard** before the compiled
 tests. These assert invariants no unit test can reach:
@@ -306,6 +331,11 @@ tests. These assert invariants no unit test can reach:
   after the lock screen and the confinement escape and BEFORE
   shortcuts-inhibit, the forwarded hook after the forward, and the
   broadcast module never touches the seat or GLib's default context
+- `test-gabbrev-guard.sh` -- the gabbrev module waits on nothing through
+  GLib's default context, never drives the seat itself, types a loop turn
+  after the key that completed a trigger (never inside it), never hands
+  yaml-glib a NULL GError** (it crashes on malformed input), and
+  job_start() returns an id rather than a job a render may have freed
 
 > **A key into a window without focus: Wayland by the seat, X11 by X
 > focus, confirmed.** `gowl_compositor_deliver_key()` is the one way in

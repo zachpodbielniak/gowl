@@ -1,0 +1,8 @@
+# espanso's own defaults file, as espanso writes it
+toggle_key: ALT
+backend: Clipboard
+clipboard_threshold: 50
+search_shortcut: ALT+SPACE
+undo_backspace: false
+auto_restart: true
+show_icon: false

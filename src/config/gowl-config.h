@@ -1187,6 +1187,42 @@ GPtrArray *gowl_config_get_broadcast_rules     (GowlConfig         *self);
 void       gowl_config_clear_broadcast         (GowlConfig         *self);
 
 /**
+ * gowl_config_get_gabbrev_nodes:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type YamlNode): the `gabbrev:' sections
+ */
+GPtrArray   *gowl_config_get_gabbrev_nodes      (GowlConfig         *self);
+
+/**
+ * gowl_config_add_gabbrev_yaml:
+ * @self: a #GowlConfig
+ * @yaml: a `gabbrev:' section's contents
+ * @error: return location for a parse error
+ *
+ * Returns: %TRUE when added
+ */
+gboolean     gowl_config_add_gabbrev_yaml       (GowlConfig         *self,
+                                                 const gchar        *yaml,
+                                                 GError            **error);
+
+/**
+ * gowl_config_get_gabbrev_base_dir:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (nullable): the config file's directory
+ */
+const gchar *gowl_config_get_gabbrev_base_dir   (GowlConfig         *self);
+
+/**
+ * gowl_config_clear_gabbrev:
+ * @self: a #GowlConfig
+ *
+ * Removes every `gabbrev:' section.
+ */
+void         gowl_config_clear_gabbrev          (GowlConfig         *self);
+
+/**
  * gowl_config_get_keybinds:
  * @self: a #GowlConfig
  *

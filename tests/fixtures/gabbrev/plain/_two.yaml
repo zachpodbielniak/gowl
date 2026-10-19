@@ -1,0 +1,3 @@
+matches:
+  - trigger: ";two"
+    replace: "2"

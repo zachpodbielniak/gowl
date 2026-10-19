@@ -80,6 +80,10 @@ static const gchar *const cmacs_modules[] = {
 	"alpha", "vanitygaps", "roundcorners", "windowrules", "dropdown",
 	"scratchpad", "screenshot", "osd", "clipboard",
 	"bar", "menu",
+	/* The text expander: an eventfd watched on the event loop, step and
+	 * job timers on it, and a weak compositor pointer -- all of which
+	 * must be let go when the display goes, not when the module does. */
+	"gabbrev",
 	/* The tag transitions, all loaded by cmacs.  Each holds a host with
 	 * a GL context, captured desktops and a weak reference to the
 	 * compositor it registered with, and withdraws itself from that

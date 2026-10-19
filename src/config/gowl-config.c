@@ -1103,6 +1103,13 @@ struct _GowlConfig {
 	GPtrArray *broadcast_teams;
 	GPtrArray *broadcast_rules;
 
+	/* gabbrev: the text expander's own section, kept as YAML (a ref
+	 * each, in file order) because it is a match file shifted under a
+	 * key, and the opt-in gabbrev module owns that format.  The base
+	 * directory is the config file's, for relative `imports:'. */
+	GPtrArray *gabbrev_nodes;
+	gchar     *gabbrev_base_dir;
+
 	/* Rules - array of GowlRuleEntry* (heap-allocated) */
 	GPtrArray *rules;
 
@@ -1720,6 +1727,8 @@ gowl_config_finalize(GObject *object)
 	g_clear_pointer(&self->input_remap_rules, g_ptr_array_unref);
 	g_clear_pointer(&self->broadcast_teams, g_ptr_array_unref);
 	g_clear_pointer(&self->broadcast_rules, g_ptr_array_unref);
+	g_clear_pointer(&self->gabbrev_nodes, g_ptr_array_unref);
+	g_free(self->gabbrev_base_dir);
 	g_free(self->xkb_layout);
 	g_free(self->xkb_variant);
 	g_free(self->xkb_model);
@@ -2566,6 +2575,8 @@ gowl_config_init(GowlConfig *self)
 		(GDestroyNotify)gowl_broadcast_team_unref);
 	self->broadcast_rules = g_ptr_array_new_with_free_func(
 		(GDestroyNotify)gowl_broadcast_rule_unref);
+	self->gabbrev_nodes = g_ptr_array_new_with_free_func(
+		(GDestroyNotify)yaml_node_unref);
 	gowl_config_add_default_mousebinds(self);
 
 	self->rules = g_ptr_array_new_with_free_func(gowl_rule_entry_free);
@@ -2973,7 +2984,7 @@ static const gchar *const top_level_keys[] = {
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
 	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
 	"lock-command", "lock-on-suspend", "keybinds", "modes",
-	"mousebinds", "gestures", "input", "input-remap", "broadcast", "rules", "dropdowns", "autostart",
+	"mousebinds", "gestures", "input", "input-remap", "broadcast", "gabbrev", "rules", "dropdowns", "autostart",
 	"monitors", "modules", "profiles",
 	NULL
 };
@@ -5660,6 +5671,25 @@ gowl_config_apply_mapping(
 		}
 	}
 
+	/* gabbrev: the text expander (docs/gabbrev.org).  The section is a
+	 * gabbrev/espanso match file shifted under one key -- `matches:',
+	 * `global_vars:', `imports:', the options -- plus gowl's own
+	 * `files:' and `espanso:'.  It is kept whole and handed to the
+	 * opt-in module, which owns the format; with the module not loaded
+	 * it is inert.  Only "is it a mapping" is checked here. */
+	if (yaml_mapping_has_member(mapping, "gabbrev")) {
+		YamlNode *gn;
+
+		gn = yaml_mapping_get_member(mapping, "gabbrev");
+		g_ptr_array_set_size(self->gabbrev_nodes, 0);
+		if (gn == NULL || yaml_node_get_node_type(gn) != YAML_NODE_MAPPING) {
+			g_warning("gowl_config: `gabbrev:' is a mapping of "
+			          "`matches:', `imports:' and options; ignoring it");
+			self->problems++;
+		} else
+			g_ptr_array_add(self->gabbrev_nodes, yaml_node_ref(gn));
+	}
+
 	/* Keybinds: mapping of
 	 *   "Mod+Key": { action: <name>, arg: "<value>", desc: "<text>" }
 	 *
@@ -6218,6 +6248,11 @@ gowl_config_load_yaml(
 			return TRUE;
 		}
 	}
+
+	/* Relative gabbrev `imports:' and `files:' are relative to the
+	 * file that names them. */
+	g_free(self->gabbrev_base_dir);
+	self->gabbrev_base_dir = g_path_get_dirname(path);
 
 	gowl_config_apply_mapping(self, mapping);
 
@@ -7620,6 +7655,93 @@ gowl_config_clear_broadcast(GowlConfig *self)
 	g_return_if_fail(GOWL_IS_CONFIG(self));
 	g_ptr_array_set_size(self->broadcast_teams, 0);
 	g_ptr_array_set_size(self->broadcast_rules, 0);
+}
+
+/**
+ * gowl_config_get_gabbrev_nodes:
+ * @self: a #GowlConfig
+ *
+ * The `gabbrev:' section(s) of the config: each a YAML mapping in the
+ * gabbrev/espanso match-file format, for the gabbrev module to load.
+ *
+ * Returns: (transfer none) (element-type YamlNode): the sections, in
+ *   the order they were added
+ */
+GPtrArray *
+gowl_config_get_gabbrev_nodes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->gabbrev_nodes;
+}
+
+/**
+ * gowl_config_add_gabbrev_yaml:
+ * @self: a #GowlConfig
+ * @yaml: a `gabbrev:' section's contents (a match file's text)
+ * @error: return location for a parse error
+ *
+ * Adds a section as though the YAML config had a second `gabbrev:'.
+ * Like everything else set on a #GowlConfig it lasts until the config
+ * is replaced; gowl_gabbrev_add_yaml() is the process-wide form.
+ *
+ * Returns: %TRUE when @yaml parsed to a mapping and was added
+ */
+gboolean
+gowl_config_add_gabbrev_yaml(
+	GowlConfig   *self,
+	const gchar  *yaml,
+	GError      **error
+){
+	g_autoptr(YamlParser) parser = NULL;
+	YamlNode *root;
+	GError *local = NULL;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	g_return_val_if_fail(yaml != NULL, FALSE);
+
+	/* Always with an error location: yaml-glib dereferences a NULL one
+	   on malformed input */
+	parser = yaml_parser_new();
+	if (!yaml_parser_load_from_data(parser, yaml, -1, &local)) {
+		g_propagate_error(error, local);
+		return FALSE;
+	}
+	root = yaml_parser_get_root(parser);
+	if (root == NULL || yaml_node_get_node_type(root) != YAML_NODE_MAPPING) {
+		g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+		            "a gabbrev section is a mapping");
+		return FALSE;
+	}
+	g_ptr_array_add(self->gabbrev_nodes, yaml_node_ref(root));
+	return TRUE;
+}
+
+/**
+ * gowl_config_get_gabbrev_base_dir:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (nullable): the directory of the YAML file
+ *   the config came from, which relative gabbrev paths are relative to;
+ *   %NULL for a config that was not loaded from a file
+ */
+const gchar *
+gowl_config_get_gabbrev_base_dir(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->gabbrev_base_dir;
+}
+
+/**
+ * gowl_config_clear_gabbrev:
+ * @self: a #GowlConfig
+ *
+ * Removes every `gabbrev:' section.
+ */
+void
+gowl_config_clear_gabbrev(GowlConfig *self)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_ptr_array_set_size(self->gabbrev_nodes, 0);
 }
 
 /* --- XKB --- */

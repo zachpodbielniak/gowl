@@ -1199,6 +1199,17 @@ modules:
     # log: false
     # max-targets: 16
     # timeout-ms: 80             # per step, for X11 (Wine) windows
+  # Text expansion, espanso-style: type `;today', get 2026-10-19.  Your
+  # matches (and espanso's config, with `espanso: true') go in the
+  # top-level `gabbrev:' section; see data/example-gabbrev.yaml and
+  # docs/gabbrev.org.  `gowl-msg gabbrev-builtin' lists the shipped ones.
+  gabbrev:
+    enabled: false
+    # start-on: true
+    # builtin: true              # ;today ;htoday ;now ;shrug ;reword ...
+    # deny-filter: "..."         # never into these windows; `none' for none
+    # picker-command: "fuzzel --dmenu --prompt \"$GABBREV_PROMPT: \""
+    # toast: true
   # Screen recording through ffmpeg: `record-start', `record-stop'.
   recording:
     enabled: false

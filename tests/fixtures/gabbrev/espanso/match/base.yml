@@ -1,0 +1,28 @@
+global_vars:
+  - name: who
+    type: echo
+    params: {echo: "Zach"}
+
+imports:
+  - "_shared.yml"
+
+matches:
+  - trigger: ":hello"
+    replace: "Hello, {{who}}!"
+  - triggers: [":sig", ":signature"]
+    replace: |
+      Best,
+      {{who}}
+  - regex: ":add\\((?P<x>\\d+),(?P<y>\\d+)\\)"
+    replace: "{{x}}+{{y}}"
+  - trigger: ":form"
+    form: "Dear [[name]], [[mood]]"
+    form_fields:
+      mood: {type: choice, values: ["hi", "yo"]}
+  - trigger: ":word"
+    replace: "WORD"
+    word: true
+    propagate_case: true
+  - trigger: ":bad"
+    replace: "x"
+    frobnicate: 1

@@ -259,6 +259,9 @@ GType gowl_client_state_get_type(void) G_GNUC_CONST;
  * @GOWL_ACTION_LOCK: Lock the session via the lock handler module.
  * @GOWL_ACTION_MOVE_STACK: Reorder the focused tiled client.
  * @GOWL_ACTION_CUSTOM: Custom action handled by a module callback.
+ * @GOWL_ACTION_CYCLE_TAG_TRANSITION: Step to the next tag transition
+ *   (cube, slide, fade, ... and last "random"); arg "prev" steps back,
+ *   and an arg naming a transition, "random" or "none" selects it.
  * @GOWL_ACTION_CYCLE_BACKDROP: Cycle what shows through translucent
  *   windows --- rain, snow, leaves, fizz, water, glass, blur, nothing,
  *   and last of all `crt', which is not a backdrop but the whole screen
@@ -342,7 +345,8 @@ typedef enum {
 	GOWL_ACTION_TOGGLE_BELOW_ALL,
 	GOWL_ACTION_TOGGLE_CRT,
 	GOWL_ACTION_FOCUS_CLIENT,
-	GOWL_ACTION_TOGGLE_POINTER_CONFINE
+	GOWL_ACTION_TOGGLE_POINTER_CONFINE,
+	GOWL_ACTION_CYCLE_TAG_TRANSITION
 } GowlAction;
 
 #define GOWL_TYPE_ACTION (gowl_action_get_type())

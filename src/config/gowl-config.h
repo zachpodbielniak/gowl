@@ -1597,6 +1597,33 @@ gdouble gowl_config_get_animation_popin_scale (GowlConfig *self);
  * 2 doubles it. Invalid YAML values leave the previous setting intact. */
 gdouble gowl_config_get_animation_jiggle_strength (GowlConfig *self);
 
+/* --- Tag transitions ---
+ *
+ * What a tag switch looks like.  Every transition module -- the cube,
+ * slide, fade, the sphere and the rest -- registers a name with the
+ * compositor (gowl_compositor_register_tag_transition()), and only the
+ * one this names runs; "random" picks one of the loaded ones at each
+ * switch, and "none" switches instantly.  Super+: (cycle_tag_transition)
+ * steps through them at runtime.  See docs/transitions.org. */
+
+/* The transition's name, lower case.  Default "cube". */
+const gchar *gowl_config_get_tag_transition (GowlConfig *self);
+void gowl_config_set_tag_transition (GowlConfig *self, const gchar *name);
+
+/* How long a transition takes, in ms (the cube keeps cube-duration).
+ * Each transition scales this by what suits it -- a page turn is slower
+ * than a fade.  0 switches instantly.  Default 460. */
+gint gowl_config_get_tag_transition_duration (GowlConfig *self);
+void gowl_config_set_tag_transition_duration (GowlConfig *self, gint ms);
+
+/* The easing curve, from the animation-curve set.  Default
+ * "ease-in-out-cubic". */
+const gchar *gowl_config_get_tag_transition_curve (GowlConfig *self);
+
+/* Also animate outputs other than the focused one.  Default FALSE, as
+ * for the cube. */
+gboolean gowl_config_get_tag_transition_all_monitors (GowlConfig *self);
+
 /* --- Desktop cube (modules/cube) ---
  *
  * A tag switch rotates the desktop as one face of a solid instead of

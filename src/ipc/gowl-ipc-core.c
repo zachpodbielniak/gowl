@@ -275,6 +275,7 @@ static const gchar *const help_text =
 	"crt [on|off|toggle] | hdr-state [OUTPUT] | "
 	"pointer-confine [on|off|toggle|state] | "
 	"tray [list|activate|menu|secondary KEY] | "
+	"tag-transition [NAME|next|prev|random|none|list] | "
 	"lock | unlock | locked | "
 	"reload | version | ping | subscribe | help";
 
@@ -796,6 +797,34 @@ gowl_compositor_ipc_command(
 		return g_strdup_printf("OK %s",
 			gowl_config_backdrop_style_name(
 				gowl_compositor_get_backdrop_style(self)));
+	}
+	if (g_strcmp0(word, "tag-transition") == 0) {
+		/*
+		 * What a tag switch looks like.  No argument reports the
+		 * selection; `list' the loaded transitions as JSON; a name,
+		 * "random", "none", "next" or "prev" selects, which is what
+		 * Super+: does.
+		 */
+		if (args == NULL || *args == '\0')
+			return g_strdup_printf("OK %s",
+				gowl_compositor_get_tag_transition(self));
+		if (g_strcmp0(args, "list") == 0) {
+			g_auto(GStrv) names = gowl_compositor_list_tag_transitions(self);
+			guint i;
+
+			b = json_builder_new();
+			json_builder_begin_array(b);
+			for (i = 0; names != NULL && names[i] != NULL; i++)
+				json_builder_add_string_value(b, names[i]);
+			json_builder_add_string_value(b, "random");
+			json_builder_end_array(b);
+			return json_finish(b);
+		}
+		if (!gowl_compositor_set_tag_transition(self, args))
+			return g_strdup_printf("ERROR no transition '%s' is loaded",
+			                       args);
+		return g_strdup_printf("OK %s",
+			gowl_compositor_get_tag_transition(self));
 	}
 	if (g_strcmp0(word, "lock") == 0) {
 		/* The same call the keybind makes, so `gowl-msg lock' and

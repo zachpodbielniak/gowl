@@ -2595,6 +2595,142 @@ GowlMonitor *gowl_fx_sheet_get_monitor (GowlFxSheet *sheet);
  */
 void gowl_fx_sheet_get_size (GowlFxSheet *sheet, gint *width, gint *height);
 
+/* ── Tag-transition blends ───────────────────────────────────────── */
+
+/**
+ * GowlFxBlendKind:
+ * @GOWL_FX_BLEND_FADE: a crossfade
+ * @GOWL_FX_BLEND_IRIS: a circle opening from @center
+ * @GOWL_FX_BLEND_BURN: the old desktop burning away along a glowing,
+ *   noise-driven edge
+ * @GOWL_FX_BLEND_RIPPLE: a water ripple from @center with the new desktop
+ *   refracted in behind the wavefront
+ * @GOWL_FX_BLEND_PIXELATE: coarsening into blocks, swapping, sharpening
+ * @GOWL_FX_BLEND_GLITCH: channel split, slice tearing, scanline jitter
+ * @GOWL_FX_BLEND_MELT: the old desktop running down in columns, the way
+ *   a certain 1993 shooter changed screens
+ * @GOWL_FX_BLEND_PAGECURL: the old desktop turned like a page, with a lit
+ *   back and a shadow on the new one
+ * @GOWL_FX_BLEND_COUNT: the number of kinds
+ *
+ * The full-screen transitions: each is one fragment shader reading the
+ * old desktop and the new one.  A kind with no shader in this build
+ * makes gowl_fx_pass_blend() return %FALSE.
+ */
+typedef enum {
+	GOWL_FX_BLEND_FADE,
+	GOWL_FX_BLEND_IRIS,
+	GOWL_FX_BLEND_BURN,
+	GOWL_FX_BLEND_RIPPLE,
+	GOWL_FX_BLEND_PIXELATE,
+	GOWL_FX_BLEND_GLITCH,
+	GOWL_FX_BLEND_MELT,
+	GOWL_FX_BLEND_PAGECURL,
+	GOWL_FX_BLEND_COUNT
+} GowlFxBlendKind;
+
+/**
+ * GowlFxBlendParams:
+ * @kind: which transition
+ * @from: the old desktop's #GowlFxTexture name
+ * @to: the new desktop's
+ * @progress: 0 (all @from) to 1 (all @to), already eased.  Every kind
+ *   draws EXACTLY @from at 0 and @to at 1: the first and last frames of a
+ *   transition are the desktop itself, or the switch flashes
+ * @center: where the effect starts, in the output's texture coordinates
+ *   (0..1, v = 0 at the top) -- the pointer, for the iris and the ripple
+ * @dir: +1 when moving to a higher tag, -1 to a lower one
+ * @time: seconds since the transition began, for anything that moves on
+ *   its own (embers, scanlines)
+ * @seed: varies the noise between switches
+ * @strength: a kind's own intensity, 1 for its tuned default
+ *
+ * One frame of a full-screen transition.
+ */
+typedef struct {
+	GowlFxBlendKind kind;
+	guint           from;
+	guint           to;
+	gfloat          progress;
+	gfloat          center[2];
+	gfloat          dir;
+	gfloat          time;
+	gfloat          seed;
+	gfloat          strength;
+} GowlFxBlendParams;
+
+/**
+ * gowl_fx_blend_params_init:
+ * @params: (out): the params to reset
+ *
+ * The centre of the screen, forward, strength 1, progress 0.
+ */
+void gowl_fx_blend_params_init (GowlFxBlendParams *params);
+
+/**
+ * gowl_fx_blend_supported:
+ * @kind: a kind
+ *
+ * Returns: whether this build has a shader for @kind
+ */
+gboolean gowl_fx_blend_supported (GowlFxBlendKind kind);
+
+/**
+ * gowl_fx_pass_blend:
+ * @pass: a pass over the output-sized buffer
+ * @params: the frame
+ *
+ * Draws the whole target from the two desktops.  The shader for @kind is
+ * compiled on first use.
+ *
+ * Returns: %TRUE when it drew
+ */
+gboolean gowl_fx_pass_blend (GowlFxPass              *pass,
+                             const GowlFxBlendParams *params);
+
+/* ── Meshes ──────────────────────────────────────────────────────── */
+
+/**
+ * GOWL_FX_MESH_STRIDE:
+ *
+ * Floats per mesh vertex: x, y, z, u, v, shade, alpha.
+ */
+#define GOWL_FX_MESH_STRIDE (7)
+
+/**
+ * GowlFxMesh:
+ * @mvp: 16 floats, column-major (see gowl_fx_mat4_perspective())
+ * @verts: @n_verts vertices of #GOWL_FX_MESH_STRIDE floats, three per
+ *   triangle.  Shade multiplies the texture's colour (lighting); alpha
+ *   is the vertex's opacity
+ * @n_verts: a multiple of three
+ * @texture: a #GowlFxTexture name
+ * @tint: multiplied into the colour
+ * @alpha: multiplied into every vertex's alpha
+ *
+ * Textured triangles: what an effect that breaks the desktop into pieces,
+ * or bends it onto a surface, draws.  There is no depth buffer (see
+ * gowl_fx_pass_begin()): the caller rejects back faces and orders the
+ * triangles back to front itself.
+ */
+typedef struct {
+	const gfloat *mvp;
+	const gfloat *verts;
+	gint          n_verts;
+	guint         texture;
+	gfloat        tint[3];
+	gfloat        alpha;
+} GowlFxMesh;
+
+/**
+ * gowl_fx_pass_mesh:
+ * @pass: a pass
+ * @mesh: what to draw
+ *
+ * Returns: %TRUE when it drew
+ */
+gboolean gowl_fx_pass_mesh (GowlFxPass *pass, const GowlFxMesh *mesh);
+
 /* ── Small matrix helpers ────────────────────────────────────────── */
 
 /**

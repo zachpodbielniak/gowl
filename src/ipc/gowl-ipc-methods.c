@@ -2691,6 +2691,83 @@ m_spawn(GowlIpc *ipc, const GowlIpcCaller *caller, JsonObject *p,
 	return n;
 }
 
+/* ── transition.* ────────────────────────────────────────────────── */
+
+static JsonNode *
+transition_state(GowlCompositor *self)
+{
+	g_auto(GStrv) names = gowl_compositor_list_tag_transitions(self);
+	const gchar *cur = gowl_compositor_get_tag_transition(self);
+	JsonBuilder *b = json_builder_new();
+	guint i;
+
+	json_builder_begin_object(b);
+	json_builder_set_member_name(b, "current");
+	json_builder_add_string_value(b, cur);
+	json_builder_set_member_name(b, "label");
+	json_builder_add_string_value(b,
+		gowl_compositor_tag_transition_label(self, cur));
+	json_builder_set_member_name(b, "duration");
+	json_builder_add_int_value(b, self->config != NULL
+		? gowl_config_get_tag_transition_duration(self->config) : 0);
+	json_builder_set_member_name(b, "transitions");
+	json_builder_begin_array(b);
+	for (i = 0; names != NULL && names[i] != NULL; i++) {
+		json_builder_begin_object(b);
+		json_builder_set_member_name(b, "name");
+		json_builder_add_string_value(b, names[i]);
+		json_builder_set_member_name(b, "label");
+		json_builder_add_string_value(b,
+			gowl_compositor_tag_transition_label(self, names[i]));
+		json_builder_end_object(b);
+	}
+	json_builder_end_array(b);
+	json_builder_end_object(b);
+	return builder_finish(b);
+}
+
+static JsonNode *
+m_transition_get(GowlIpc *ipc, const GowlIpcCaller *caller, JsonObject *p,
+                 gpointer data, GError **error)
+{
+	g_autoptr(GowlCompositor) self = comp_get(data, error);
+
+	(void)ipc; (void)caller; (void)p;
+	return self != NULL ? transition_state(self) : NULL;
+}
+
+static JsonNode *
+m_transition_set(GowlIpc *ipc, const GowlIpcCaller *caller, JsonObject *p,
+                 gpointer data, GError **error)
+{
+	g_autoptr(GowlCompositor) self = comp_get(data, error);
+	const gchar *name = json_object_get_string_member(p, "name");
+
+	(void)ipc; (void)caller;
+	if (self == NULL)
+		return NULL;
+	if (json_object_has_member(p, "duration")) {
+		gint64 ms = param_int(p, "duration", 0);
+
+		if (ms < 0 || ms > 10000) {
+			g_set_error(error, GOWL_IPC_ERROR,
+			            GOWL_IPC_ERROR_INVALID_PARAMS,
+			            "duration is 0 to 10000 ms");
+			return NULL;
+		}
+		if (self->config != NULL)
+			gowl_config_set_tag_transition_duration(self->config,
+			                                        (gint)ms);
+	}
+	if (!gowl_compositor_set_tag_transition(self, name)) {
+		g_set_error(error, GOWL_IPC_ERROR, GOWL_IPC_ERROR_NOT_FOUND,
+		            "no transition '%s' is loaded (transition.get lists "
+		            "them)", name);
+		return NULL;
+	}
+	return transition_state(self);
+}
+
 /* ── session.* ───────────────────────────────────────────────────── */
 
 static JsonNode *
@@ -2862,6 +2939,11 @@ format_event(GowlIpc *ipc, const gchar *word, const gchar *args,
 	} else if (g_strcmp0(word, "crt") == 0) {
 		*out_name = g_strdup("crt.changed");
 		json_object_set_boolean_member(o, "on", g_strcmp0(args, "on") == 0);
+	} else if (g_strcmp0(word, "transition") == 0) {
+		*out_name = g_strdup("transition.changed");
+		json_object_set_string_member(o, "name", args != NULL ? args : "");
+		json_object_set_string_member(o, "label",
+			gowl_compositor_tag_transition_label(self, args));
 	} else if (g_strcmp0(word, "backdrop") == 0) {
 		*out_name = g_strdup("backdrop.changed");
 		json_object_set_string_member(o, "style", args != NULL ? args : "");
@@ -3140,6 +3222,8 @@ declare_events(GowlIpc *ipc)
 		                      "reason}" },
 		{ "crt.changed",      "the CRT filter switched: {on}" },
 		{ "backdrop.changed", "the translucency backdrop changed: {style}" },
+		{ "transition.changed", "the tag transition was selected: "
+		                        "{name, label}" },
 		{ "command",          "a module command ran, from any source: {line}" },
 		{ "<module>",         "a module's own event (macro, broadcast, "
 		                      "inputremap, screenshot, ...): {args, words[]}" },
@@ -3362,6 +3446,13 @@ static const GowlIpcParam p_spawn[] = {
 	P_END
 };
 static const GowlIpcParam p_power[] = { P_TOGGLE, P_END };
+static const GowlIpcParam p_transition_set[] = {
+	{ "name", GOWL_IPC_PARAM_STRING, TRUE,
+	  "a loaded transition, \"random\", \"none\", \"next\" or \"prev\"" },
+	{ "duration", GOWL_IPC_PARAM_INT, FALSE,
+	  "also set tag-transition-duration, in ms" },
+	P_END
+};
 
 typedef struct {
 	const gchar        *name;
@@ -3487,6 +3578,12 @@ static const MethodDef method_defs[] = {
 
 	{ "spawn", "Start a program and say where its window goes", p_spawn,
 	  "{pid}", m_spawn },
+
+	{ "transition.get", "The tag transition in force and the loaded ones",
+	  p_none, "{current, label, duration, transitions[{name, label}]}",
+	  m_transition_get },
+	{ "transition.set", "Select the tag transition (as Super+: does)",
+	  p_transition_set, "as transition.get", m_transition_set },
 
 	{ "session.lock", "Lock the session", p_none, "{ok}", m_session_lock },
 	{ "session.locked", "Whether the session is locked", p_none, "bool",

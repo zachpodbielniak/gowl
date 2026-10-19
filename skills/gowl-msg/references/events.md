@@ -26,6 +26,7 @@ Subscribe with `events.subscribe {"events": [PATTERNS]}` (glob patterns; absent 
 | `pointer.confine` | confinement changed | `{active, id?, reason}` |
 | `crt.changed` | CRT filter switched | `{on}` |
 | `backdrop.changed` | translucency backdrop changed | `{style}` |
+| `transition.changed` | tag transition selected (Super+:) | `{name, label}` |
 | `command` | a module command ran, from any source | `{line}` |
 | `macro`, `broadcast`, `inputremap`, `screenshot`, ... | a module's own event | `{args, words[]}` |
 

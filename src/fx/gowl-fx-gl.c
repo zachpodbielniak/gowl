@@ -388,6 +388,13 @@ gowl_fx_gl_free(GowlFxGl *self)
 				if (progs[i] != 0)
 					glDeleteProgram(progs[i]);
 			}
+			/* The transition shaders are a table, one per kind. */
+			for (i = 0; i < G_N_ELEMENTS(self->blend); i++) {
+				if (self->blend[i].program != 0)
+					glDeleteProgram(self->blend[i].program);
+			}
+			if (self->mesh.program != 0)
+				glDeleteProgram(self->mesh.program);
 		}
 		gowl_fx_egl_leave(&save);
 	}

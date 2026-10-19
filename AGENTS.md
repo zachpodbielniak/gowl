@@ -124,6 +124,24 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   `ERROR unknown command` for nonsense -- and a subscriber sees `EVENT
   mode` and `EVENT power` lines.  Before the handler existed the socket
   answered nothing at all
+- `test-tag-transition` -- Which tag transition runs: the tour is the
+  fixed canonical order whatever order modules registered in, Super+:
+  steps round the loaded ones and `random` with a toast, an unknown name
+  is refused, `random` is ONE decision per output per switch (every module
+  asking hears the same name, never the same one twice running), and --
+  on a real GLES2 renderer -- of two hosts only the picked one starts,
+  captures, draws and claims the reveal, and it ends on its clock
+- `test-transition-render` -- The transition primitives (blend shaders,
+  ortho desktops, meshes) and EVERY transition module in the build's
+  module directory (found through the `gowl_transition_kind' symbol the
+  module macro exports) held to the seam rule on a real GPU: progress 0 is
+  exactly the desktop left, 1 exactly the one arrived at, halfway neither,
+  both directions. `GOWL_TEST_TRANSITION_DUMP=DIR` writes the frames as
+  PNGs. Skips without a render node
+- `test-transition-guard.sh` -- the transition host claims only the
+  reveal, transitions sort ahead of the animation module, the host asks
+  the arbiter before starting, and every transition module is GL-free,
+  hides no scene node and is in the canonical tour
 - `test-ipc-rpc` -- The wire protocol (JSON-RPC 2.0 on the same socket)
   against two real toplevels: discover, typed errors (unknown method,
   misspelt or mistyped parameter, parse error), batches answering in order
@@ -442,6 +460,20 @@ tests. These assert invariants no unit test can reach:
 > A layout entry's provider is not always a `GowlLayoutProvider` --
 > check `GOWL_IS_LAYOUT_PROVIDER()` before calling its vtable. See
 > `docs/floatdesk.org`.
+
+> **One tag switch, one transition.** Any number of transition modules
+> can be loaded (cmacs loads them all) and each polls every switch; only
+> the one `gowl_compositor_tag_transition_is()` names may start. The pick
+> (`src/core/gowl-tag-transition.c`) is cached per output against the tag
+> set it was made for, which is what makes `random` one decision that
+> every module hears the same way -- never re-pick on a second ask.
+> Transition modules are a `GowlFxTransitionKind` and a draw function
+> behind `GOWL_FX_DEFINE_TRANSITION_MODULE`; the capture, sheet, clock and
+> reveal claim are the shared host's (`src/fx/gowl-fx-transition.c`), the
+> cube's machinery factored out. A draw must be exactly the left desktop
+> at 0 and the arrived one at 1 (`test-transition-render`), and a new
+> name goes in `canonical_order[]` or the guard fails. See
+> `docs/transitions.org`.
 
 > **The IPC socket never waits for a client, and never frees one under its
 > own feet.** `src/ipc/gowl-ipc.c` queues output per connection and drains

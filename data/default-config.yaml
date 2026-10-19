@@ -122,6 +122,19 @@ animation-curve: "ease-out-expo"
 # ease-out-expo, ease-out-back, spring. The last two overshoot.
 # For Omarchy's more restrained entrance: scale 0.87, curve ease-out-quint.
 
+# Tag transitions.  Every transition module -- cube, slide, fade, zoom,
+# iris, flip, pagecurl, carousel, sphere, burn, ripple, pixelate, glitch,
+# melt, shatter, explode, implode -- registers itself, and this picks
+# which one a tag switch uses: a loaded module's name, "random" (a
+# different one each switch) or "none".  Super+: (cycle_tag_transition)
+# steps through the loaded ones at runtime, "random" last.  Standalone
+# gowl loads none of them unless modules.<name>.enabled says so; cmacs
+# loads them all.  See docs/transitions.org.
+tag-transition: cube
+tag-transition-duration: 460      # ms, scaled per transition; the cube uses cube-duration
+tag-transition-curve: "ease-in-out-cubic"
+tag-transition-all-monitors: false
+
 # Desktop cube (modules.cube.enabled).  A tag switch turns the desktop as
 # one side of a solid instead of cutting to it, one turn per tag crossed --
 # tag 1 to tag 4 is three turns and shows tags 2 and 3 on the way past.

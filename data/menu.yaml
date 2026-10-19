@@ -231,6 +231,12 @@ menu:
         desc: the same tour as Super+Shift+apostrophe
         action: cycle-backdrop
         keep-open: true
+      - id: next-transition
+        icon: "󰉦"
+        label: Next tag transition
+        desc: cube, slide, fade, sphere ... the same tour as Super+colon
+        action: cycle-tag-transition
+        keep-open: true
       - id: crt
         icon: "󰠹"
         label: Cathode ray tube

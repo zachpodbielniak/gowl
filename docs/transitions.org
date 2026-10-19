@@ -1,0 +1,139 @@
+#+title: Tag transitions
+#+description: What a tag switch looks like: the transition modules, how one is chosen, and how to write another
+
+* Overview
+
+A tag switch can cut, or it can move: the desktop turns as a cube, slides sideways, curls away like a page, melts, burns or shatters into the next one. Each of those is its own *module* under =modules/=, and any number of them can be loaded at once -- cmacs loads them all. One setting, =tag-transition=, picks which one runs; =random= picks a different one at every switch; =none= switches instantly.
+
+=Super+:= (=Super+Shift+semicolon=, the =cycle_tag_transition= action) steps through the loaded transitions at runtime, with =random= as the last stop before the tour starts again, and a toast names the one you are on. The cube is the default.
+
+| Selection | What a switch does |
+|-----------+--------------------|
+| a module's name (=cube=, =slide=, ...) | that transition, when its module is loaded; an instant switch otherwise |
+| =random= | a loaded transition chosen at each switch, never the same one twice running |
+| =none= | an instant switch |
+
+Every transition needs the GLES2 renderer (the effect layer borrows its context) and sits out under any other renderer, on a rotated output, while the session is locked, and on outputs other than the focused one unless =tag-transition-all-monitors= is set.
+
+* Choosing one
+:PROPERTIES:
+:CUSTOM_ID: choosing
+:END:
+
+#+begin_src yaml
+tag-transition: pagecurl          # or random, or none
+tag-transition-duration: 460      # ms, scaled per transition
+tag-transition-curve: "ease-in-out-cubic"
+tag-transition-all-monitors: false
+modules:
+  slide:    { enabled: true }     # standalone gowl: load the ones you want
+  pagecurl: { enabled: true }
+#+end_src
+
+At runtime:
+
+#+begin_src sh
+gowl-msg tag-transition                 # OK cube
+gowl-msg tag-transition list            # ["cube","slide","pagecurl","random"]
+gowl-msg tag-transition next            # what Super+: does
+gowl-msg tag-transition random
+gowl-msg -c transition.set name=melt duration=900
+gowl-msg -s -j transition.changed
+#+end_src
+
+A key per transition is a keybind with an argument:
+
+#+begin_src yaml
+keybinds:
+  "Super+Shift+semicolon": { action: cycle_tag_transition }
+  "Super+Ctrl+semicolon":  { action: cycle_tag_transition, arg: prev }
+  "Super+Alt+semicolon":   { action: cycle_tag_transition, arg: random }
+#+end_src
+
+* The transitions
+:PROPERTIES:
+:CUSTOM_ID: the-transitions
+:END:
+
+In the order Super+: visits them (a module not loaded is skipped):
+
+| Name    | Module          | What it looks like |
+|---------+-----------------+--------------------|
+| =cube=  | =modules/cube=  | The desktop turns as one side of a solid, one turn per tag crossed. Its own settings (=cube-*=) and a three-finger swipe; see [[file:configuration.org::#cube][the cube]] |
+
+* How it works
+:PROPERTIES:
+:CUSTOM_ID: how-it-works
+:END:
+
+** One arbiter, many modules
+
+Every transition watches every tag switch on its own, and only one may animate it -- two sheets over one output would fight. The arbiter is =src/core/gowl-tag-transition.c=:
+
+- A module *registers* its name and a label for the toast (=gowl_compositor_register_tag_transition()=), from its startup hook and again lazily from any scene-effect hook, and withdraws it when it is deactivated.
+- =tag-transition= *selects* one.
+- For each switch, every module asks =gowl_compositor_tag_transition_is(compositor, output, "slide")=; only the one named runs. The answer comes from =gowl_compositor_tag_transition_pick()=, which is decided *once per output per tag set*: for =random= that is what makes every module hear the same name about the same switch, and the next switch a new draw.
+
+The registry lives in the compositor rather than in a "host" module because modules are separate shared objects and cannot call each other.
+
+The tour order is written out in =canonical_order[]= rather than taken from registration order, which is whatever order the modules loaded in and would make Super+: a different tour on every machine. A third-party transition not in the list follows it, in registration order.
+
+** The shared host
+
+=src/fx/gowl-fx-transition.c= is everything a transition needs except its picture, factored out of the cube:
+
+- switches are noticed by *polling* the output's tags in the frame hook, against a memory kept on the output, rather than by a signal that fires before the scene is rearranged;
+- both desktops (and, for a =multi_step= kind, every desktop crossed, at half size) are *captured up front* in one frame, with the bar, notifications and the recording indicator left out -- they stay live on top;
+- the output is taken with one opaque *sheet*, never by switching off a shared scene layer;
+- the *reveal* fade the switch starts is claimed and dropped, because the first captured frame already shows those windows -- and nothing else is ever claimed (=tests/test-transition-guard.sh=);
+- a switch *mid-flight* ends the run and starts a fresh one from where it was headed;
+- the run ends on its clock, on an output being unplugged, or on a frame that cannot be drawn.
+
+** Drawing
+
+Modules contain no GL (=tests/test-transition-guard.sh=). They draw through three primitives in =src/fx=:
+
+| Primitive | For |
+|-----------+-----|
+| =gowl_fx_transition_pass_desktop()= | a whole desktop as a flat quad, through any MVP -- slide, zoom, flip, carousel |
+| =gowl_fx_pass_blend()= | a full-screen fragment shader reading both desktops -- fade, iris, burn, ripple, pixelate, glitch, melt, page curl |
+| =gowl_fx_pass_mesh()= | textured triangles built on the CPU each frame -- the sphere, shatter, explode, implode |
+
+The one rule every transition keeps is the *seam*: at progress 0 the picture is exactly the desktop being left, and at 1 exactly the one arrived at. Those frames are presented, and anything "nearly" the desktop there flashes on every switch. =gowl_fx_pass_blend()= enforces it for the shaders; =tests/test-transition-render.c= checks every transition against it on a real GPU.
+
+* Writing a transition
+:PROPERTIES:
+:CUSTOM_ID: writing
+:END:
+
+A transition module is a kind and a draw function:
+
+#+begin_src c
+#include "fx/gowl-fx-transition-module.h"
+
+static gboolean
+fade_draw(GowlFxPass *pass, GowlFxTransitionRun *run, gdouble eased,
+          gdouble linear)
+{
+	GowlFxBlendParams p;
+
+	gowl_fx_blend_params_init(&p);
+	p.kind = GOWL_FX_BLEND_FADE;
+	p.from = run->from.tex;
+	p.to = run->to.tex;
+	p.progress = (gfloat)eased;
+	return gowl_fx_pass_blend(pass, &p);
+}
+
+static const GowlFxTransitionKind fade_kind = {
+	.name = "fade", .label = "Fade",
+	.duration_scale = 1.0,
+	.draw = fade_draw,
+};
+
+GOWL_FX_DEFINE_TRANSITION_MODULE(GowlModuleFade, gowl_module_fade,
+                                 &fade_kind, "0.1.0",
+                                 "Crossfades between tags")
+#+end_src
+
+=run= carries both desktops, the direction (=dir=, +1 towards a higher tag), the steps crossed, the pointer's position on the output (=center=, for effects that start where you are looking) and a random =seed= for the switch. =setup= / =teardown= hold per-run state such as shards. Add the name to =canonical_order[]= in =src/core/gowl-tag-transition.c= (the guard fails otherwise) and a row to the table above.

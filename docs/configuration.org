@@ -422,6 +422,22 @@ switches stay instant; nothing else changes. A rotated output works the same as 
 | =cube-all-monitors=    | bool   | =false=               | Also turn outputs that are not the focused one |
 | =cube-gesture=         | bool   | =true=                | Drive the rotation with a three-finger swipe |
 
+The cube is one of the [[file:transitions.org][tag transitions]]: it runs when =tag-transition= is =cube= (the default), or when =random= picks it. The swipe only turns it while it is the selection.
+
+** Tag transitions
+:PROPERTIES:
+:CUSTOM_ID: tag-transitions
+:END:
+
+Every transition module registers itself, and these say which one a tag switch uses and how. =Super+:= (=cycle_tag_transition=) steps through the loaded ones at runtime with a toast naming each, =random= last. The full list, and what each looks like, is in [[file:transitions.org][transitions.org]].
+
+| Property                      | Type   | Default               | Description |
+|-------------------------------+--------+-----------------------+-------------|
+| =tag-transition=              | string | ="cube"=              | A loaded transition's name, =random= (a different one each switch) or =none= |
+| =tag-transition-duration=     | int    | =460=                 | Length in ms, scaled per transition (the cube keeps =cube-duration=); =0= switches instantly |
+| =tag-transition-curve=        | string | ="ease-in-out-cubic"= | Easing, from the same set as =animation-curve= |
+| =tag-transition-all-monitors= | bool   | =false=               | Also animate outputs that are not the focused one (the cube reads =cube-all-monitors=) |
+
 *How far it turns.* The distance is the difference between the two tag
 numbers, with no wrap-around: 9 to 1 is the eight-step trip, because tags
 read as a row in the bar and in the head, not as a ring. A tag view
@@ -3061,6 +3077,7 @@ A bind does not need a modifier. The =XF86*= keysyms that laptop media keys emit
 | =toggle_sticky=     | --                               | Pin the focused window to every tag of its monitor, or unpin it. Only a floating window is pinned: pinning a tile floats it in place, and tiling it again unpins it |
 | =toggle_hdr=        | --, ="on"=, ="off"=, or an output name | Switch an output between HDR and SDR (the focused one by default) |
 | =cycle_backdrop=    | --, ="next"=, ="prev"=, or a style name | Cycle what shows through translucent windows: =glass=, =water=, =blur=, =none= |
+| =cycle_tag_transition= | --, ="prev"=, or a transition name, ="random"= or ="none"= | Step to the next tag transition (bound to Super+: by default), "random" last, with a toast naming it; see [[file:transitions.org][transitions.org]] |
 | =toggle_below=      | --, ="on"=, ="off"=              | Draw the focused FLOATING window behind the tiling instead of over it, or put it back |
 | =toggle_below_all=  | --, ="on"=, ="off"=              | The same for every floating window visible on the focused output |
 | =toggle_crt=        | --, ="on"=, ="off"=              | Put the whole output through a cathode ray tube, or take it back off (needs =modules.crt=) |

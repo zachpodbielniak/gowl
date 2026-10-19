@@ -11262,6 +11262,20 @@ run_keybind_entry(
 	case GOWL_ACTION_FOCUS_LAST:
 		gowl_compositor_focus_last(self);
 		return TRUE;
+	case GOWL_ACTION_CYCLE_TAG_TRANSITION:
+		/*
+		 * No argument steps forward round the loaded transitions, with
+		 * "random" as the last stop; "prev" steps back; anything else
+		 * is a name to select outright, so a config can bind one key
+		 * per transition.
+		 */
+		if (kb->arg == NULL || *kb->arg == '\0')
+			gowl_compositor_cycle_tag_transition(self, 1);
+		else if (!gowl_compositor_set_tag_transition(self, kb->arg))
+			g_warning("cycle_tag_transition: no transition '%s' is "
+			          "loaded; expected one of the transition modules' "
+			          "names, random, none, next or prev", kb->arg);
+		return TRUE;
 	case GOWL_ACTION_CYCLE_BACKDROP: {
 		/*
 		 * No argument cycles.  An argument that names a style sets it

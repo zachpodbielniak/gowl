@@ -1439,6 +1439,40 @@ test_config_cube_defaults(void)
 	g_assert_cmpstr(gowl_config_get_cube_backdrop_color(config), ==,
 	                "#12141f");
 
+	/* The tag transition: the cube unless told otherwise. */
+	g_assert_cmpstr(gowl_config_get_tag_transition(config), ==, "cube");
+	g_assert_cmpint(gowl_config_get_tag_transition_duration(config), ==, 460);
+	g_assert_cmpstr(gowl_config_get_tag_transition_curve(config), ==,
+	                "ease-in-out-cubic");
+	g_assert_false(gowl_config_get_tag_transition_all_monitors(config));
+
+	g_object_unref(config);
+}
+
+static void
+test_config_tag_transition_yaml(void)
+{
+	GowlConfig *config = gowl_config_new();
+	GError *err = NULL;
+	const gchar *yaml =
+		"tag-transition: PageCurl\n"
+		"tag-transition-duration: 700\n"
+		"tag-transition-curve: \"ease-out-expo\"\n"
+		"tag-transition-all-monitors: true\n";
+
+	g_assert_true(load_yaml_from_string(config, yaml, &err));
+	g_assert_no_error(err);
+	/* Names are kept lower case: "random", "none", a module's. */
+	g_assert_cmpstr(gowl_config_get_tag_transition(config), ==, "pagecurl");
+	g_assert_cmpint(gowl_config_get_tag_transition_duration(config), ==, 700);
+	g_assert_cmpstr(gowl_config_get_tag_transition_curve(config), ==,
+	                "ease-out-expo");
+	g_assert_true(gowl_config_get_tag_transition_all_monitors(config));
+
+	/* A negative duration is refused, not run backwards in time. */
+	g_assert_true(load_yaml_from_string(config,
+		"tag-transition-duration: -5\n", &err));
+	g_assert_cmpint(gowl_config_get_tag_transition_duration(config), ==, 700);
 	g_object_unref(config);
 }
 
@@ -1892,6 +1926,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/config/new", test_config_new);
 	g_test_add_func("/config/cube-defaults", test_config_cube_defaults);
 	g_test_add_func("/config/cube-yaml", test_config_cube_yaml);
+	g_test_add_func("/config/tag-transition-yaml",
+	                test_config_tag_transition_yaml);
 	g_test_add_func("/config/cube-clamps", test_config_cube_clamps_nonsense);
 	g_test_add_func("/config/cube-negative-durations",
 	                test_config_cube_rejects_negative_durations);

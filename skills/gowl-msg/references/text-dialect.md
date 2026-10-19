@@ -20,6 +20,7 @@ gowl-msg -s                     # text events: "EVENT focus 12", "EVENT mode res
 | `pointer-confine [on\|off\|toggle\|state]` | JSON, or OK on/off |
 | `tray [list\|activate\|menu\|secondary KEY]` | JSON / OK |
 | `backdrop [STYLE\|next\|prev]` | OK STYLE |
+| `tag-transition [NAME\|next\|prev\|random\|none\|list]` | OK NAME, or the loaded transitions as JSON |
 | `hints [-show\|-hide]`, `hints-select LABEL`, `hints-list` | window hints |
 | `lock`, `unlock`, `locked` | |
 | `reload`, `ping`, `version`, `help`, `subscribe` | |

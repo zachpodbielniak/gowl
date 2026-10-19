@@ -669,6 +669,32 @@ void gowl_compositor_set_backdrop_style (GowlCompositor    *self,
 void gowl_compositor_backdrop_changed (GowlCompositor *self,
                                        GowlMonitor    *monitor);
 
+/* ── Tag transitions (src/core/gowl-tag-transition.c) ──────────────
+ *
+ * Every transition module registers its name; `tag-transition' selects
+ * one (or "random" or "none"); each module asks
+ * gowl_compositor_tag_transition_is() before animating a switch, and
+ * only the one named runs.  Super+: steps the selection. */
+
+void         gowl_compositor_register_tag_transition   (GowlCompositor *self,
+                                                        const gchar    *name,
+                                                        const gchar    *label);
+void         gowl_compositor_unregister_tag_transition (GowlCompositor *self,
+                                                        const gchar    *name);
+gchar      **gowl_compositor_list_tag_transitions      (GowlCompositor *self);
+const gchar *gowl_compositor_tag_transition_label      (GowlCompositor *self,
+                                                        const gchar    *name);
+const gchar *gowl_compositor_get_tag_transition        (GowlCompositor *self);
+gboolean     gowl_compositor_set_tag_transition        (GowlCompositor *self,
+                                                        const gchar    *name);
+void         gowl_compositor_cycle_tag_transition      (GowlCompositor *self,
+                                                        gint            direction);
+const gchar *gowl_compositor_tag_transition_pick       (GowlCompositor *self,
+                                                        GowlMonitor    *monitor);
+gboolean     gowl_compositor_tag_transition_is         (GowlCompositor *self,
+                                                        GowlMonitor    *monitor,
+                                                        const gchar    *name);
+
 /**
  * gowl_compositor_cycle_backdrop_style:
  * @self: a #GowlCompositor

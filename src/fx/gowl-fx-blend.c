@@ -1,0 +1,255 @@
+/*
+ * gowl - GObject Wayland Compositor
+ * Copyright (C) 2026  Zach Podbielniak
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/*
+ * Full-screen tag transitions: one fragment shader per kind, each reading
+ * the old desktop and the new one and writing the whole output.
+ *
+ * Every kind is the same program shape -- the vertex shader below, a
+ * shared preamble of samplers and noise, and a body defining
+ *
+ *     vec4 transition(vec2 uv)
+ *
+ * -- so adding a transition is one string in the table at the bottom.
+ * The one rule each body keeps is the SEAM rule: at u_p == 0 it returns
+ * exactly the old desktop and at u_p == 1 exactly the new one, for every
+ * pixel.  The first and last frames of a switch are presented, and a
+ * body that is "nearly" the desktop there flashes on every tag change.
+ * tests/test-transition-render.c holds every kind to it.
+ *
+ * Texture coordinates have v = 0 at the TOP of the output: captures are
+ * stored upright (gowl_fx_capture()) and the screen quad maps its top
+ * row to the buffer's first row, which wlroots treats as the top.  So
+ * "down" in a body is +v.
+ */
+
+#include "gowl-fx-private.h"
+
+#include <string.h>
+
+static const gchar blend_vert_src[] =
+	"attribute vec2 a_pos;\n"
+	"attribute vec2 a_uv;\n"
+	"varying vec2 v_uv;\n"
+	"void main() {\n"
+	"  v_uv = a_uv;\n"
+	"  gl_Position = vec4(a_pos, 0.0, 1.0);\n"
+	"}\n";
+
+/*
+ * What every body can use.  highp where there is one: the noise hashes
+ * multiply coordinates into the thousands, and at mediump the low bits
+ * that make them look random are gone, leaving visible banding.
+ */
+static const gchar blend_preamble_src[] =
+	"#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+	"precision highp float;\n"
+	"#else\n"
+	"precision mediump float;\n"
+	"#endif\n"
+	"uniform sampler2D u_from;\n"
+	"uniform sampler2D u_to;\n"
+	"uniform float u_p;        /* 0 = all from, 1 = all to */\n"
+	"uniform vec2  u_center;   /* 0..1, v down */\n"
+	"uniform float u_aspect;   /* width / height */\n"
+	"uniform vec2  u_size;     /* output pixels */\n"
+	"uniform float u_dir;      /* +1 forward, -1 back */\n"
+	"uniform float u_time;     /* seconds */\n"
+	"uniform float u_seed;\n"
+	"uniform float u_strength;\n"
+	"varying vec2 v_uv;\n"
+	"const float PI = 3.14159265358979;\n"
+	"vec4 F(vec2 uv) { return texture2D(u_from, clamp(uv, 0.0, 1.0)); }\n"
+	"vec4 T(vec2 uv) { return texture2D(u_to, clamp(uv, 0.0, 1.0)); }\n"
+	"float hash(vec2 p) {\n"
+	"  p = fract(p * vec2(123.34, 456.21) + u_seed);\n"
+	"  p += dot(p, p + 45.32);\n"
+	"  return fract(p.x * p.y);\n"
+	"}\n"
+	"float hash1(float x) { return hash(vec2(x, x * 0.37 + 1.7)); }\n"
+	"float vnoise(vec2 p) {\n"
+	"  vec2 i = floor(p);\n"
+	"  vec2 f = fract(p);\n"
+	"  vec2 w = f * f * (3.0 - 2.0 * f);\n"
+	"  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), w.x),\n"
+	"             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), w.x),\n"
+	"             w.y);\n"
+	"}\n"
+	"float fbm(vec2 p) {\n"
+	"  float v = 0.0;\n"
+	"  float a = 0.5;\n"
+	"  for (int i = 0; i < 5; i++) {\n"
+	"    v += a * vnoise(p);\n"
+	"    p = p * 2.03 + vec2(17.1, 9.4);\n"
+	"    a *= 0.5;\n"
+	"  }\n"
+	"  return v;\n"
+	"}\n"
+	"/* Aspect-correct distance in units of the output's height. */\n"
+	"float adist(vec2 a, vec2 b) {\n"
+	"  vec2 d = (a - b) * vec2(u_aspect, 1.0);\n"
+	"  return length(d);\n"
+	"}\n"
+	"/* The furthest corner from c, in the same units. */\n"
+	"float far_corner(vec2 c) {\n"
+	"  return max(max(adist(c, vec2(0.0, 0.0)), adist(c, vec2(1.0, 0.0))),\n"
+	"             max(adist(c, vec2(0.0, 1.0)), adist(c, vec2(1.0, 1.0))));\n"
+	"}\n";
+
+static const gchar blend_main_src[] =
+	"void main() {\n"
+	"  vec4 c;\n"
+	"  /* The seam, enforced rather than trusted: whatever a body does\n"
+	"     mid-flight, the ends are the desktops themselves. */\n"
+	"  if (u_p <= 0.0) c = F(v_uv);\n"
+	"  else if (u_p >= 1.0) c = T(v_uv);\n"
+	"  else c = transition(v_uv);\n"
+	"  gl_FragColor = vec4(c.rgb, 1.0);\n"
+	"}\n";
+
+/* ── The kinds ───────────────────────────────────────────────────── */
+
+/* A crossfade: the reference body, and the transition for anyone who
+ * would rather the desktop did not move. */
+static const gchar blend_fade_src[] =
+	"vec4 transition(vec2 uv) {\n"
+	"  return mix(F(uv), T(uv), u_p);\n"
+	"}\n";
+
+/*
+ * Indexed by GowlFxBlendKind.  NULL is a kind this build has no shader
+ * for yet; each transition module's commit adds its own.
+ */
+static const gchar *const blend_bodies[GOWL_FX_BLEND_COUNT] = {
+	[GOWL_FX_BLEND_FADE]     = blend_fade_src,
+	[GOWL_FX_BLEND_IRIS]     = NULL,
+	[GOWL_FX_BLEND_BURN]     = NULL,
+	[GOWL_FX_BLEND_RIPPLE]   = NULL,
+	[GOWL_FX_BLEND_PIXELATE] = NULL,
+	[GOWL_FX_BLEND_GLITCH]   = NULL,
+	[GOWL_FX_BLEND_MELT]     = NULL,
+	[GOWL_FX_BLEND_PAGECURL] = NULL,
+};
+
+/* ── Program ─────────────────────────────────────────────────────── */
+
+void
+gowl_fx_blend_params_init(GowlFxBlendParams *params)
+{
+	g_return_if_fail(params != NULL);
+
+	memset(params, 0, sizeof(*params));
+	params->kind      = GOWL_FX_BLEND_FADE;
+	params->center[0] = 0.5f;
+	params->center[1] = 0.5f;
+	params->dir       = 1.0f;
+	params->strength  = 1.0f;
+}
+
+gboolean
+gowl_fx_blend_supported(GowlFxBlendKind kind)
+{
+	return (gint)kind >= 0 && kind < GOWL_FX_BLEND_COUNT
+	       && blend_bodies[kind] != NULL;
+}
+
+/*
+ * Build @kind's program on first use, once: a body that fails to compile
+ * on this driver is a warning and a transition that declines, not one
+ * retried sixty times a second.
+ */
+static GowlFxBlendProg *
+blend_prog(GowlFxGl *self, GowlFxBlendKind kind)
+{
+	GowlFxBlendProg *p = &self->blend[kind];
+	g_autofree gchar *frag = NULL;
+
+	if (self->blend_tried[kind])
+		return p->program != 0 ? p : NULL;
+	self->blend_tried[kind] = TRUE;
+
+	if (blend_bodies[kind] == NULL)
+		return NULL;
+
+	frag = g_strconcat(blend_preamble_src, blend_bodies[kind],
+	                   blend_main_src, NULL);
+	p->program = gowl_fx_link_program(blend_vert_src, frag);
+	if (p->program == 0) {
+		g_warning("fx: transition shader %d did not build; that "
+		          "transition will switch instantly", (gint)kind);
+		return NULL;
+	}
+	p->u_from     = glGetUniformLocation(p->program, "u_from");
+	p->u_to       = glGetUniformLocation(p->program, "u_to");
+	p->u_p        = glGetUniformLocation(p->program, "u_p");
+	p->u_center   = glGetUniformLocation(p->program, "u_center");
+	p->u_aspect   = glGetUniformLocation(p->program, "u_aspect");
+	p->u_size     = glGetUniformLocation(p->program, "u_size");
+	p->u_dir      = glGetUniformLocation(p->program, "u_dir");
+	p->u_time     = glGetUniformLocation(p->program, "u_time");
+	p->u_seed     = glGetUniformLocation(p->program, "u_seed");
+	p->u_strength = glGetUniformLocation(p->program, "u_strength");
+	p->a_pos      = glGetAttribLocation(p->program, "a_pos");
+	p->a_uv       = glGetAttribLocation(p->program, "a_uv");
+	return p;
+}
+
+gboolean
+gowl_fx_pass_blend(GowlFxPass *pass, const GowlFxBlendParams *params)
+{
+	GowlFxBlendProg *p;
+
+	g_return_val_if_fail(pass != NULL, FALSE);
+	g_return_val_if_fail(params != NULL, FALSE);
+
+	if (!gowl_fx_blend_supported(params->kind)
+	    || params->from == 0 || params->to == 0)
+		return FALSE;
+	p = blend_prog(pass->gl, params->kind);
+	if (p == NULL)
+		return FALSE;
+
+	/* Opaque over whatever was there: the shader writes alpha 1. */
+	glDisable(GL_BLEND);
+	glUseProgram(p->program);
+	glUniform1f(p->u_p, CLAMP(params->progress, 0.0f, 1.0f));
+	glUniform2f(p->u_center, params->center[0], params->center[1]);
+	glUniform1f(p->u_aspect, pass->height > 0
+	            ? (gfloat)pass->width / (gfloat)pass->height : 1.0f);
+	glUniform2f(p->u_size, (gfloat)pass->width, (gfloat)pass->height);
+	glUniform1f(p->u_dir, params->dir >= 0.0f ? 1.0f : -1.0f);
+	glUniform1f(p->u_time, params->time);
+	glUniform1f(p->u_seed, params->seed);
+	glUniform1f(p->u_strength, params->strength);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, params->from);
+	glUniform1i(p->u_from, 0);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, params->to);
+	glUniform1i(p->u_to, 1);
+
+	gowl_fx_draw_screen_quad(p->a_pos, p->a_uv);
+
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glUseProgram(0);
+	glEnable(GL_BLEND);
+	return TRUE;
+}

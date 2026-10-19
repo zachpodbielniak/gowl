@@ -143,6 +143,10 @@ cube_bind(GowlModuleCube *mod, GowlCompositor *self)
 	}
 	g_clear_object(&held);
 	g_weak_ref_set(&mod->compositor, self);
+	/* One of the tag transitions: offered to `tag-transition' and
+	 * Super+:, and run only when it is the one picked for a switch. */
+	if (self != NULL)
+		gowl_compositor_register_tag_transition(self, "cube", "Cube");
 }
 
 /*
@@ -502,6 +506,10 @@ cube_poll_tags(GowlModuleCube *mod, GowlCompositor *self, GowlMonitor *m,
 		return;
 	if (!gowl_config_get_cube_all_monitors(self->config) && self->selmon != m)
 		return;
+	/* Several transitions may be loaded; only the one picked for this
+	 * switch runs (src/core/gowl-tag-transition.c). */
+	if (!gowl_compositor_tag_transition_is(self, m, "cube"))
+		return;
 
 	/*
 	 * A tag change arriving mid-rotation ends the one in flight and
@@ -578,6 +586,8 @@ cube_pending(GowlModuleCube *mod, GowlCompositor *self, GowlMonitor *m)
 	if (previous == 0 || previous == m->tagset[m->seltags])
 		return FALSE;
 	if (!gowl_config_get_cube_all_monitors(self->config) && self->selmon != m)
+		return FALSE;
+	if (!gowl_compositor_tag_transition_is(self, m, "cube"))
 		return FALSE;
 
 	return gowl_cube_tag_index(previous)
@@ -684,6 +694,10 @@ cube_gesture_begin(GowlGestureHandler *handler, gpointer compositor,
 
 	if (!cube_enabled(mod, self) || self->selmon == NULL
 	    || !gowl_config_get_cube_gesture(self->config))
+		return FALSE;
+	/* The swipe turns THE CUBE; with another transition selected it is
+	 * not the cube's to take (a scrubbed slide is not a thing yet). */
+	if (g_strcmp0(gowl_compositor_get_tag_transition(self), "cube") != 0)
 		return FALSE;
 
 	/* A rotation already playing is left alone: interrupting it would
@@ -869,7 +883,14 @@ static void
 cube_deactivate(GowlModule *base)
 {
 	GowlModuleCube *mod = GOWL_MODULE_CUBE(base);
+	GowlCompositor *self = g_weak_ref_get(&mod->compositor);
 
+	/* No longer a choice for Super+: once the module is gone. */
+	if (self != NULL) {
+		gowl_compositor_unregister_tag_transition(self, "cube");
+		g_object_unref(self);
+	}
+	g_weak_ref_set(&mod->compositor, NULL);
 	cube_end_all(mod);
 	g_clear_pointer(&mod->gl, gowl_fx_gl_free);
 	mod->gl_tried = FALSE;

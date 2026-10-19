@@ -580,6 +580,35 @@ typedef struct {
 	GLint  a_uv;
 } GowlFxPqProg;
 
+/* A two-texture transition shader (gowl-fx-blend.c); one per kind. */
+typedef struct {
+	GLuint program;
+	GLint  u_from;
+	GLint  u_to;
+	GLint  u_p;
+	GLint  u_center;
+	GLint  u_aspect;
+	GLint  u_size;
+	GLint  u_dir;
+	GLint  u_time;
+	GLint  u_seed;
+	GLint  u_strength;
+	GLint  a_pos;
+	GLint  a_uv;
+} GowlFxBlendProg;
+
+/* Textured triangles with per-vertex shade and alpha (gowl-fx-mesh.c). */
+typedef struct {
+	GLuint program;
+	GLint  u_mvp;
+	GLint  u_tex;
+	GLint  u_tint;
+	GLint  u_alpha;
+	GLint  a_pos;
+	GLint  a_uv;
+	GLint  a_shade;
+} GowlFxMeshProg;
+
 struct _GowlFxGl {
 	struct wlr_renderer *renderer;   /* borrowed */
 	EGLDisplay           display;
@@ -616,6 +645,10 @@ struct _GowlFxGl {
 	gboolean             crt_tried;
 	GowlFxPqProg         pq;         /* likewise */
 	gboolean             pq_tried;
+	GowlFxBlendProg      blend[GOWL_FX_BLEND_COUNT];   /* likewise, per kind */
+	gboolean             blend_tried[GOWL_FX_BLEND_COUNT];
+	GowlFxMeshProg       mesh;       /* likewise */
+	gboolean             mesh_tried;
 
 	GLuint               scratch_fbo;
 	GowlFxTexture        scratch_a;

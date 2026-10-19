@@ -126,11 +126,15 @@ LIB_SRCS := \
 	src/fx/gowl-fx-bokeh.c \
 	src/fx/gowl-fx-crt.c \
 	src/fx/gowl-fx-pq.c \
+	src/fx/gowl-fx-blend.c \
+	src/fx/gowl-fx-mesh.c \
+	src/fx/gowl-fx-transition.c \
 	src/util/gowl-systemd.c \
 	src/util/gowl-wayland-socket.c \
 	src/util/gowl-wallpaper-scale.c \
 	src/util/gowl-capture-scale.c \
 	src/core/gowl-compositor.c \
+	src/core/gowl-tag-transition.c \
 	src/core/gowl-capture-wlroots.c \
 	src/core/gowl-input-capture.c \
 	src/core/gowl-input-recorder.c \
@@ -251,6 +255,7 @@ LIB_HDRS := \
 	src/util/gowl-subprocess.h \
 	src/util/gowl-filter.h \
 	src/fx/gowl-fx.h \
+	src/fx/gowl-fx-transition.h \
 	src/tray/gowl-tray.h \
 	src/menu/gowl-menu.h \
 	src/util/gowl-systemd.h \
@@ -897,6 +902,15 @@ $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abs
 # The tube against the real .so in a headless compositor: a sheet parked
 # over the whole output must not stop the scene below it asking to be
 # drawn, and must not keep the output awake once nothing is moving.
+# The tag transitions.  test-transition-render opens every module in the
+# build's module directory and checks each transition it finds against
+# the seam rule on a real GPU (it skips without a render node); the
+# modules it checks are listed here so they are built first.
+TRANSITION_MODULES :=
+$(OUTDIR)/test-transition-render: $(patsubst %,$(OUTDIR)/modules/%.so,$(TRANSITION_MODULES))
+$(OUTDIR)/test-transition-render: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs cairo gmodule-2.0)
+$(OBJDIR)/tests/test-transition-render.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags cairo) -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+
 $(OUTDIR)/test-crt-frames: $(OUTDIR)/modules/crt.so
 $(OBJDIR)/tests/test-crt-frames.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 

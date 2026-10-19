@@ -90,6 +90,13 @@
 | `key.dispatch` | `key` ("Super+Return") | bool: something was bound |
 | `action.run` | `name` ("tag-view"), `arg?` | bool |
 
+## Tag transitions
+
+| Method | Params | Result |
+|---|---|---|
+| `transition.get` | | `{current, label, duration, transitions[{name, label}]}` |
+| `transition.set` | `name` (a loaded transition, `random`, `none`, `next`, `prev`), `duration?` | as `transition.get` (toasts like Super+:) |
+
 ## Programs and session
 
 | Method | Params | Result |

@@ -69,6 +69,7 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =hints [-show\vert{}-hide]= | Put a letter on every visible window; press it to focus that window. Toggles with no argument |
 | =hints-select LABEL= | Focus the window wearing =LABEL=; replies with its window id |
 | =hints-list= | =LABEL ID TITLE= per line, for whatever the overlay is showing |
+| =tag-transition [NAME\vert{}next\vert{}prev\vert{}random\vert{}none\vert{}list]= | What a tag switch looks like: no argument reports the selection (=OK cube=), =list= the loaded transitions as JSON, anything else selects -- =next= is what Super+: does. See [[file:transitions.org][transitions.org]] |
 | =lock=                        | Locks the screen, by whichever route =lock-command= names |
 | =unlock=                      | Opens the session with no password: the administrative override, for a lock program that is broken |
 | =locked=                      | =locked= or =unlocked=                             |
@@ -112,6 +113,7 @@ A subscriber receives one line per event, =EVENT <name> <args>=:
 | =pointer-confine off REASON= | it let go. REASON is =manual=, =escape=, =focus= (focus moved elsewhere), =unmap=, =destroy=, =workspace=, =lock= or =menu= |
 | =crt on\vert{}off= | the cathode ray tube was switched on or off |
 | =backdrop STYLE= | what shows through translucent windows changed; STYLE is the short name, one of the fourteen |
+| =transition NAME= | the tag transition was selected (a name, =random= or =none=) |
 | =command LINE=                     | a module command ran, from any source          |
 | =screenshot ocr N= / =ocr-failed= / =color #RRGGBB= | text or a colour was put on the clipboard (or OCR failed) |
 
@@ -382,6 +384,13 @@ The monitor object:
 | =key.dispatch=        | =key= (="Super+Return"=)                        | =true= if something was bound to it |
 | =action.run=          | =name= (an action nick, ="tag-view"=), =arg?=    | =true= if it did something |
 
+*** Tag transitions
+
+| Method           | Parameters | Result |
+|------------------+------------+--------|
+| =transition.get= |            | ={current, label, duration, transitions[{name, label}]}=: the selection and the loaded transitions, in Super+:'s order |
+| =transition.set= | =name= (a loaded transition, =random=, =none=, =next=, =prev=), =duration?= (ms) | as =transition.get=; toasts the choice like the key does |
+
 *** Programs and the session
 
 | Method           | Parameters | Result |
@@ -431,6 +440,7 @@ Methods that act on the screen -- focus, typing, keys, screenshots, viewing tags
 | =pointer.confine=  | pointer confinement changed                        | ={active, id?, reason}=                  |
 | =crt.changed=      | the CRT filter was switched                        | ={on}=                                   |
 | =backdrop.changed= | the translucency backdrop changed                  | ={style}=                                |
+| =transition.changed= | the tag transition was selected                  | ={name, label}=                          |
 | =command=          | a module command ran, from any source              | ={line}=                                 |
 | a module's name    | a module's own event: =macro=, =broadcast=, =inputremap=, =screenshot=, ... | ={args, words[]}= |
 

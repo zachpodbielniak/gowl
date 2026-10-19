@@ -70,6 +70,12 @@
 #define GOWL_CONFIG_DEFAULT_CUBE_DURATION       (520)
 #define GOWL_CONFIG_DEFAULT_CUBE_STEP_DURATION  (150)
 #define GOWL_CONFIG_DEFAULT_CUBE_CURVE          "ease-in-out-cubic"
+/* The tag transition every loaded transition module defers to, and how
+ * long the ones that are not the cube take.  The cube keeps its own
+ * timing (cube-duration, cube-step-duration), tuned for a solid. */
+#define GOWL_CONFIG_DEFAULT_TAG_TRANSITION      "cube"
+#define GOWL_CONFIG_DEFAULT_TAG_TRANSITION_DURATION (460)
+#define GOWL_CONFIG_DEFAULT_TAG_TRANSITION_CURVE "ease-in-out-cubic"
 #define GOWL_CONFIG_DEFAULT_CUBE_FACES          (4)
 #define GOWL_CONFIG_DEFAULT_CUBE_ZOOM           (1.45)
 #define GOWL_CONFIG_DEFAULT_CUBE_PITCH          (14.0)
@@ -633,6 +639,11 @@ struct _GowlConfig {
 	gboolean cube_caps;
 	gboolean cube_all_monitors;
 	gboolean cube_gesture;
+
+	gchar   *tag_transition;
+	gint     tag_transition_duration;
+	gchar   *tag_transition_curve;
+	gboolean tag_transition_all_monitors;
 
 	gboolean magnifier;
 	gdouble  magnifier_max;
@@ -1649,6 +1660,8 @@ gowl_config_finalize(GObject *object)
 	g_free(self->animation_curve_close);
 	g_free(self->cube_curve);
 	g_free(self->cube_backdrop_color);
+	g_free(self->tag_transition);
+	g_free(self->tag_transition_curve);
 	g_free(self->magnifier_modifier);
 	g_free(self->expo_curve);
 	g_free(self->expo_backdrop_color);
@@ -2117,6 +2130,11 @@ gowl_config_init(GowlConfig *self)
 	self->animation_curve_close = g_strdup(GOWL_CONFIG_DEFAULT_ANIMATION_CURVE_CLOSE);
 	self->animation_popin_scale = GOWL_CONFIG_DEFAULT_ANIMATION_POPIN_SCALE;
 	self->animation_jiggle_strength = 1.0;
+
+	self->tag_transition      = g_strdup(GOWL_CONFIG_DEFAULT_TAG_TRANSITION);
+	self->tag_transition_duration = GOWL_CONFIG_DEFAULT_TAG_TRANSITION_DURATION;
+	self->tag_transition_curve = g_strdup(GOWL_CONFIG_DEFAULT_TAG_TRANSITION_CURVE);
+	self->tag_transition_all_monitors = FALSE;
 
 	self->cube                = TRUE;
 	self->cube_duration       = GOWL_CONFIG_DEFAULT_CUBE_DURATION;
@@ -2854,6 +2872,8 @@ static const gchar *const top_level_keys[] = {
 	"cube-step-duration", "cube-curve", "cube-faces", "cube-zoom",
 	"cube-pitch", "cube-shading", "cube-reflection", "cube-motion-blur",
 	"cube-backdrop-color", "cube-caps", "cube-all-monitors", "cube-gesture",
+	"tag-transition", "tag-transition-duration", "tag-transition-curve",
+	"tag-transition-all-monitors",
 	"magnifier", "magnifier-max", "magnifier-step", "magnifier-smoothing",
 	"magnifier-follow-cursor", "magnifier-smooth", "magnifier-modifier",
 	"expo", "expo-duration", "expo-curve", "expo-tags", "expo-columns",
@@ -3346,6 +3366,35 @@ gowl_config_apply_mapping(
 	 * backwards in time, so those are rejected outright. */
 	if (yaml_mapping_has_member(mapping, "cube")) {
 		self->cube = yaml_mapping_get_boolean_member(mapping, "cube");
+	}
+	/* Which tag transition runs.  Any name is kept as written: the
+	 * names are the loaded transition modules', and a module loaded
+	 * after the config is read is still a valid choice. */
+	if (yaml_mapping_has_member(mapping, "tag-transition")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "tag-transition");
+		if (v != NULL && *v != '\0') {
+			g_free(self->tag_transition);
+			self->tag_transition = g_ascii_strdown(v, -1);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "tag-transition-duration")) {
+		gint v = (gint)yaml_mapping_get_int_member(mapping,
+		                                           "tag-transition-duration");
+		if (v >= 0)
+			self->tag_transition_duration = MIN(v, 10000);
+	}
+	if (yaml_mapping_has_member(mapping, "tag-transition-curve")) {
+		const gchar *v = yaml_mapping_get_string_member(mapping,
+		                                                "tag-transition-curve");
+		if (v != NULL) {
+			g_free(self->tag_transition_curve);
+			self->tag_transition_curve = g_strdup(v);
+		}
+	}
+	if (yaml_mapping_has_member(mapping, "tag-transition-all-monitors")) {
+		self->tag_transition_all_monitors = yaml_mapping_get_boolean_member(
+			mapping, "tag-transition-all-monitors");
 	}
 	if (yaml_mapping_has_member(mapping, "cube-duration")) {
 		gint v = (gint)yaml_mapping_get_int_member(mapping,
@@ -8477,6 +8526,57 @@ gowl_config_get_animation_jiggle_strength(GowlConfig *self)
 {
 	g_return_val_if_fail(GOWL_IS_CONFIG(self), 1.0);
 	return self->animation_jiggle_strength;
+}
+
+/* --- Tag transitions --- */
+
+const gchar *
+gowl_config_get_tag_transition(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_TAG_TRANSITION);
+	return self->tag_transition;
+}
+
+void
+gowl_config_set_tag_transition(GowlConfig *self, const gchar *name)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+
+	g_free(self->tag_transition);
+	self->tag_transition = g_ascii_strdown(
+		name != NULL && *name != '\0' ? name
+		: GOWL_CONFIG_DEFAULT_TAG_TRANSITION, -1);
+}
+
+gint
+gowl_config_get_tag_transition_duration(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_TAG_TRANSITION_DURATION);
+	return self->tag_transition_duration;
+}
+
+void
+gowl_config_set_tag_transition_duration(GowlConfig *self, gint ms)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->tag_transition_duration = CLAMP(ms, 0, 10000);
+}
+
+const gchar *
+gowl_config_get_tag_transition_curve(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_TAG_TRANSITION_CURVE);
+	return self->tag_transition_curve;
+}
+
+gboolean
+gowl_config_get_tag_transition_all_monitors(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	return self->tag_transition_all_monitors;
 }
 
 /* --- Desktop cube --- */

@@ -711,6 +711,7 @@ another.
 | =flip=           | Tag transition: turns the desktop over like a card     |
 | =pagecurl=       | Tag transition: turns the desktop like a page          |
 | =carousel=       | Tag transition: desktops swinging round a ring         |
+| =sphere=         | Tag transition: wraps the desktop onto a turning globe |
 | =expo=           | Every tag at once, as a grid of live thumbnails        |
 | =switcher=       | Alt-tab as a 3D strip of live window previews          |
 | =magnifier=      | Zooms the whole output around the pointer              |

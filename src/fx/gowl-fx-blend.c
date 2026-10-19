@@ -296,6 +296,23 @@ static const gchar blend_ripple_src[] =
 	"}\n";
 
 /*
+ * Pixelate: the old desktop coarsens into ever bigger blocks, swaps for
+ * the new one while the blocks are at their biggest -- too coarse for the
+ * swap itself to read as anything but a change of colour -- and sharpens
+ * back.  Block sizes are whole pixels, so every block is crisp, and the
+ * size follows a squared hump so most of the time is spent coarse rather
+ * than in the in-between sizes.
+ */
+static const gchar blend_pixelate_src[] =
+	"vec4 transition(vec2 uv) {\n"
+	"  float hump = 1.0 - abs(2.0 * u_p - 1.0);\n"
+	"  float block = floor(mix(1.0, 56.0 * u_strength, hump * hump));\n"
+	"  vec2 cells = u_size / max(block, 1.0);\n"
+	"  vec2 q = (floor(uv * cells) + 0.5) / cells;\n"
+	"  return mix(F(q), T(q), smoothstep(0.40, 0.60, u_p));\n"
+	"}\n";
+
+/*
  * Indexed by GowlFxBlendKind.  NULL is a kind this build has no shader
  * for yet; each transition module's commit adds its own.
  */
@@ -304,7 +321,7 @@ static const gchar *const blend_bodies[GOWL_FX_BLEND_COUNT] = {
 	[GOWL_FX_BLEND_IRIS]     = blend_iris_src,
 	[GOWL_FX_BLEND_BURN]     = blend_burn_src,
 	[GOWL_FX_BLEND_RIPPLE]   = blend_ripple_src,
-	[GOWL_FX_BLEND_PIXELATE] = NULL,
+	[GOWL_FX_BLEND_PIXELATE] = blend_pixelate_src,
 	[GOWL_FX_BLEND_GLITCH]   = NULL,
 	[GOWL_FX_BLEND_MELT]     = NULL,
 	[GOWL_FX_BLEND_PAGECURL] = blend_pagecurl_src,

@@ -132,12 +132,39 @@ static const gchar blend_fade_src[] =
 	"}\n";
 
 /*
+ * An iris: a circle opening from u_center showing the new desktop, with a
+ * soft edge, a faint lit rim, and the old desktop shadowed just outside
+ * it so the opening reads as a hole rather than a paint-over.  Going
+ * back (u_dir < 0) it closes instead: the old desktop shrinks to a point
+ * at the pointer, the new one already all round it.
+ */
+static const gchar blend_iris_src[] =
+	"vec4 transition(vec2 uv) {\n"
+	"  float reach = far_corner(u_center) + 0.06;\n"
+	"  float d = adist(uv, u_center);\n"
+	"  float edge = 0.02;\n"
+	"  bool opening = u_dir > 0.0;\n"
+	"  float r = (opening ? u_p : 1.0 - u_p) * reach;\n"
+	"  /* 0 inside the circle, 1 outside */\n"
+	"  float out_m = smoothstep(r - edge, r, d);\n"
+	"  vec4 inner = opening ? T(uv) : F(uv);\n"
+	"  vec4 outer = opening ? F(uv) : T(uv);\n"
+	"  /* The shadow falls on whichever desktop is underneath: the old one\n"
+	"     when opening, the new one when closing. */\n"
+	"  float shade = 1.0 - 0.45 * exp(-max(d - r, 0.0) / 0.045);\n"
+	"  vec3 c = mix(inner.rgb, outer.rgb * shade, out_m);\n"
+	"  float fade = sin(PI * u_p);\n"
+	"  float rim = exp(-pow((d - r) / 0.006, 2.0)) * 0.30 * fade;\n"
+	"  return vec4(c + vec3(rim), 1.0);\n"
+	"}\n";
+
+/*
  * Indexed by GowlFxBlendKind.  NULL is a kind this build has no shader
  * for yet; each transition module's commit adds its own.
  */
 static const gchar *const blend_bodies[GOWL_FX_BLEND_COUNT] = {
 	[GOWL_FX_BLEND_FADE]     = blend_fade_src,
-	[GOWL_FX_BLEND_IRIS]     = NULL,
+	[GOWL_FX_BLEND_IRIS]     = blend_iris_src,
 	[GOWL_FX_BLEND_BURN]     = NULL,
 	[GOWL_FX_BLEND_RIPPLE]   = NULL,
 	[GOWL_FX_BLEND_PIXELATE] = NULL,

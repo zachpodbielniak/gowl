@@ -906,7 +906,7 @@ $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abs
 # build's module directory and checks each transition it finds against
 # the seam rule on a real GPU (it skips without a render node); the
 # modules it checks are listed here so they are built first.
-TRANSITION_MODULES := slide fade zoom iris
+TRANSITION_MODULES := slide fade zoom iris flip
 $(OUTDIR)/test-transition-render: $(patsubst %,$(OUTDIR)/modules/%.so,$(TRANSITION_MODULES))
 $(OUTDIR)/test-transition-render: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs cairo gmodule-2.0)
 $(OBJDIR)/tests/test-transition-render.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags cairo) -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

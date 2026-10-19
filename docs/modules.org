@@ -709,6 +709,7 @@ another.
 | =zoom=           | Tag transition: zooms through a stack of desktops      |
 | =iris=           | Tag transition: a circle opening from the pointer      |
 | =flip=           | Tag transition: turns the desktop over like a card     |
+| =pagecurl=       | Tag transition: turns the desktop like a page          |
 | =expo=           | Every tag at once, as a grid of live thumbnails        |
 | =switcher=       | Alt-tab as a 3D strip of live window previews          |
 | =magnifier=      | Zooms the whole output around the pointer              |

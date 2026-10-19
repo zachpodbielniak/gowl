@@ -159,6 +159,69 @@ static const gchar blend_iris_src[] =
 	"}\n";
 
 /*
+ * A page turned over: the old desktop is a sheet wrapped round a cylinder
+ * whose axis -- tilted, so the bottom corner lifts first -- sweeps from
+ * the right edge to past the left (the other way going back).  Working in units of the output's height, so the cylinder
+ * is round on screen whatever the aspect:
+ *
+ *   left of the fold   the sheet still lying flat -- unless the part
+ *                      already turned over lies on top of it there, seen
+ *                      from behind (pale, like the back of paper)
+ *   on the cylinder    its top is the back of the sheet, its underside
+ *                      the front curling away, each lit by its slope
+ *   right of it        the new desktop, shadowed where the curl hangs
+ *                      over it
+ *
+ * A sheet coordinate past the page's own edge means there is no paper
+ * there, which is how the turned part stops at the page's length.
+ */
+static const gchar blend_pagecurl_src[] =
+	"float flip_x(float x) { return u_dir > 0.0 ? x : u_aspect - x; }\n"
+	"bool on_page(vec2 q) {\n"
+	"  return q.x >= 0.0 && q.x <= u_aspect && q.y >= 0.0 && q.y <= 1.0;\n"
+	"}\n"
+	"vec4 sheet(vec2 q) {\n"
+	"  return F(vec2(flip_x(q.x) / u_aspect, q.y));\n"
+	"}\n"
+	"vec3 paper_back(vec4 c, float light) {\n"
+	"  /* Printing seen through the back of the sheet: washed out. */\n"
+	"  return mix(c.rgb, vec3(0.93, 0.92, 0.90), 0.72) * light;\n"
+	"}\n"
+	"vec4 transition(vec2 uv) {\n"
+	"  float r = 0.11;\n"
+	"  /* The fold runs at an angle, so the bottom corner lifts first, the\n"
+	"     way a page is taken by its corner. */\n"
+	"  vec2 n = normalize(vec2(1.0, 0.36));\n"
+	"  vec2 P = vec2(flip_x(uv.x * u_aspect), uv.y);\n"
+	"  float s = dot(P, n);\n"
+	"  float s_max = dot(vec2(u_aspect, 1.0), n);\n"
+	"  float pos = mix(s_max + 0.001, -r - 0.02, u_p);\n"
+	"  if (s < pos) {\n"
+	"    /* the turned-over part, lying flat on top, back side up */\n"
+	"    vec2 qo = P + n * (2.0 * pos - 2.0 * s + PI * r);\n"
+	"    if (on_page(qo)) {\n"
+	"      float edge = smoothstep(0.0, 0.05, pos - s);\n"
+	"      return vec4(paper_back(sheet(qo), 0.80 + 0.12 * edge), 1.0);\n"
+	"    }\n"
+	"    /* still flat and face up */\n"
+	"    return F(uv);\n"
+	"  }\n"
+	"  if (s < pos + r) {\n"
+	"    float th = asin(clamp((s - pos) / r, 0.0, 1.0));\n"
+	"    vec2 qb = P + n * (pos + r * (PI - th) - s);\n"
+	"    vec2 qf = P + n * (pos + r * th - s);\n"
+	"    if (on_page(qb))\n"
+	"      return vec4(paper_back(sheet(qb), 0.68 + 0.30 * cos(th)), 1.0);\n"
+	"    if (on_page(qf))\n"
+	"      return vec4(sheet(qf).rgb * (0.55 + 0.45 * cos(th)), 1.0);\n"
+	"  }\n"
+	"  /* the new desktop, in the curl's shadow near the cylinder */\n"
+	"  float d = max(s - pos - r, 0.0);\n"
+	"  float shade = 1.0 - 0.55 * (1.0 - u_p) * exp(-d / 0.07);\n"
+	"  return vec4(T(uv).rgb * shade, 1.0);\n"
+	"}\n";
+
+/*
  * Indexed by GowlFxBlendKind.  NULL is a kind this build has no shader
  * for yet; each transition module's commit adds its own.
  */
@@ -170,7 +233,7 @@ static const gchar *const blend_bodies[GOWL_FX_BLEND_COUNT] = {
 	[GOWL_FX_BLEND_PIXELATE] = NULL,
 	[GOWL_FX_BLEND_GLITCH]   = NULL,
 	[GOWL_FX_BLEND_MELT]     = NULL,
-	[GOWL_FX_BLEND_PAGECURL] = NULL,
+	[GOWL_FX_BLEND_PAGECURL] = blend_pagecurl_src,
 };
 
 /* ── Program ─────────────────────────────────────────────────────── */

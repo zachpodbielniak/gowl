@@ -64,6 +64,7 @@ In the order Super+: visits them (a module not loaded is skipped):
 | =fade=  | =modules/fade=  | A plain crossfade; nothing moves.  The quickest of them (0.8x the duration), for anyone who would rather the desktop stayed still |
 | =iris=  | =modules/iris=  | The next desktop opens out of a soft-edged circle at the pointer (the output's centre when the pointer is elsewhere), the old one shadowed round the hole; back to a lower tag it closes into the pointer instead |
 | =flip=  | =modules/flip=  | The desktop is a card with the next tag on its back: half a turn about its vertical axis in perspective, the camera easing back so the near edge is never clipped, each side darkening as it turns from the light |
+| =pagecurl= | =modules/pagecurl= | Turned like a page taken by its bottom corner -- from the right for a higher tag, the left for a lower -- its back showing pale as it comes over, the next desktop underneath in its shadow. 1.45x the duration |
 | =zoom=  | =modules/zoom=  | The tags as a stack of desktops: to a higher tag the one you are on sinks away and fades while the next settles from just in front of the glass; back, the one you are on rushes past and the one behind comes forward |
 
 * How it works

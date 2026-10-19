@@ -41,6 +41,8 @@ gowl-msg -c transition.set name=melt duration=900
 gowl-msg -s -j transition.changed
 #+end_src
 
+Under cmacs, =cmacs-gowl-tag-transition= is the setting (pushed at every =cmacs-gowl-mode=, quietly when it is already in force) and =M-x cmacs-gowl-cycle-tag-transition= / =M-x cmacs-gowl-set-tag-transition= the commands; from Lisp, =gowl-set-tag-transition=, =gowl-tag-transition= and =gowl-tag-transitions=.
+
 A key per transition is a keybind with an argument:
 
 #+begin_src yaml

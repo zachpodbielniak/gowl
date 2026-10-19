@@ -704,6 +704,7 @@ another.
 | =dropdown=       | Fixed, toggleable shell overlay                       |
 | =animation=      | Window pops, focus wiggles, settling and overlay slides |
 | =cube=           | Turns the desktop as a solid when the tag changes      |
+| =slide=          | Tag transition: slides the desktop sideways            |
 | =expo=           | Every tag at once, as a grid of live thumbnails        |
 | =switcher=       | Alt-tab as a 3D strip of live window previews          |
 | =magnifier=      | Zooms the whole output around the pointer              |

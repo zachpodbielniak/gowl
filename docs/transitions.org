@@ -70,6 +70,7 @@ In the order Super+: visits them (a module not loaded is skipped):
 | =burn=  | =modules/burn=  | The desktop catches near the pointer and burns away along a ragged, flickering edge -- scorched ahead of the flames, charred behind -- the next desktop showing through the ash; a different fire every switch. Goes with the =embers= backdrop |
 | =ripple= | =modules/ripple= | A drop falls at the pointer: the next desktop spreads out behind the wavefront, both desktops refracted through decaying rings whose crests catch the light, the swell calming as it lands. Goes with the =water= backdrop |
 | =pixelate= | =modules/pixelate= | The desktop coarsens into a mosaic, changes while the blocks are biggest (56 px on a 1080-row output, scaled with the output), and sharpens into the next one |
+| =glitch= | =modules/glitch= | A bad signal: torn slices re-dealt 24 times a second, each flipping to the next desktop at its own moment, split colour, scanlines, grain and the odd block from the wrong place. Quick on purpose (0.75x) |
 | =zoom=  | =modules/zoom=  | The tags as a stack of desktops: to a higher tag the one you are on sinks away and fades while the next settles from just in front of the glass; back, the one you are on rushes past and the one behind comes forward |
 
 * How it works

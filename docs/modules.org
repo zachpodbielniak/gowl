@@ -715,6 +715,7 @@ another.
 | =burn=           | Tag transition: burns the desktop away                 |
 | =ripple=         | Tag transition: a ripple out from the pointer          |
 | =pixelate=       | Tag transition: dissolves through a mosaic             |
+| =glitch=         | Tag transition: glitches through a broken signal       |
 | =expo=           | Every tag at once, as a grid of live thumbnails        |
 | =switcher=       | Alt-tab as a 3D strip of live window previews          |
 | =magnifier=      | Zooms the whole output around the pointer              |

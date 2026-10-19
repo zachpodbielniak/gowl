@@ -313,6 +313,41 @@ static const gchar blend_pixelate_src[] =
 	"}\n";
 
 /*
+ * Glitch: a bad signal for a third of a second.  The screen is cut into
+ * horizontal slices of random height, re-dealt 24 times a second; some
+ * slices are torn sideways, each shows the old or the new desktop by its
+ * own coin toss weighted by progress (so the change arrives in slices,
+ * not all at once), the colour channels split apart, scanlines and grain
+ * come up, and now and then a block reads from the wrong place
+ * altogether.  All of it rides an envelope that is zero at both ends.
+ */
+static const gchar blend_glitch_src[] =
+	"vec4 transition(vec2 uv) {\n"
+	"  float k = pow(sin(PI * u_p), 0.6);\n"
+	"  float tq = floor(u_time * 24.0);\n"
+	"  float rows = 14.0 + floor(26.0 * hash1(tq + 3.0));\n"
+	"  float row = floor(uv.y * rows);\n"
+	"  float r = hash(vec2(row, tq));\n"
+	"  float tear = r > 0.55 ? (hash(vec2(row + 7.0, tq)) - 0.5) * 0.28 * k\n"
+	"                        : 0.0;\n"
+	"  vec2 p = vec2(uv.x + tear, uv.y);\n"
+	"  /* a corrupted block, reading from somewhere else */\n"
+	"  vec2 blk = floor(uv * vec2(12.0, 8.0));\n"
+	"  if (hash(blk + tq * 1.37) > 1.0 - 0.07 * k)\n"
+	"    p += (vec2(hash(blk + 2.0), hash(blk + 5.0)) - 0.5) * 0.3;\n"
+	"  float coin = hash(vec2(row * 3.1, floor(u_time * 12.0)));\n"
+	"  bool new_side = u_p > 0.5 + (coin - 0.5) * 0.7 * k;\n"
+	"  vec2 sp = vec2(0.014 * k, 0.0);\n"
+	"  vec3 c = new_side\n"
+	"    ? vec3(T(p + sp).r, T(p).g, T(p - sp).b)\n"
+	"    : vec3(F(p + sp).r, F(p).g, F(p - sp).b);\n"
+	"  float scan = 0.82 + 0.18 * sin(uv.y * u_size.y * PI);\n"
+	"  c *= mix(1.0, scan, k);\n"
+	"  c += (hash(floor(uv * u_size) + tq) - 0.5) * 0.14 * k;\n"
+	"  return vec4(clamp(c, 0.0, 1.0), 1.0);\n"
+	"}\n";
+
+/*
  * Indexed by GowlFxBlendKind.  NULL is a kind this build has no shader
  * for yet; each transition module's commit adds its own.
  */
@@ -322,7 +357,7 @@ static const gchar *const blend_bodies[GOWL_FX_BLEND_COUNT] = {
 	[GOWL_FX_BLEND_BURN]     = blend_burn_src,
 	[GOWL_FX_BLEND_RIPPLE]   = blend_ripple_src,
 	[GOWL_FX_BLEND_PIXELATE] = blend_pixelate_src,
-	[GOWL_FX_BLEND_GLITCH]   = NULL,
+	[GOWL_FX_BLEND_GLITCH]   = blend_glitch_src,
 	[GOWL_FX_BLEND_MELT]     = NULL,
 	[GOWL_FX_BLEND_PAGECURL] = blend_pagecurl_src,
 };

@@ -222,13 +222,56 @@ static const gchar blend_pagecurl_src[] =
 	"}\n";
 
 /*
+ * Burn: the old desktop catches near the pointer and burns away along a
+ * ragged, glowing edge.  Each pixel's moment to burn is fractal noise
+ * blended with its distance from u_center, so the fire spreads out from
+ * where you were looking but never as a circle; a threshold sweeping
+ * past every value is the fire's front.  Ahead of it the old desktop
+ * scorches brown, in the band it glows white-yellow to deep red, and
+ * behind it the new desktop shows through, charred dark near the edge.
+ * The noise drifts slowly with u_time so the edge flickers rather than
+ * sliding.
+ */
+static const gchar blend_burn_src[] =
+	"vec4 transition(vec2 uv) {\n"
+	"  vec2 q = uv * vec2(u_aspect, 1.0) * 3.4;\n"
+	"  float n = fbm(q + vec2(0.0, u_time * 0.12));\n"
+	"  float d = adist(uv, u_center) / far_corner(u_center);\n"
+	"  float v = n * 0.62 + d * 0.38;\n"
+	"  /* The values bunch between about 0.25 and 0.75 (fbm's spread plus\n"
+	"     the distance term); sweeping that range, not 0..1, is what\n"
+	"     keeps the fire moving for the whole transition. */\n"
+	"  float t = mix(0.16, 0.84, u_p);\n"
+	"  float band = 0.045;\n"
+	"  if (v < t) {\n"
+	"    /* burnt through: the new desktop, charred near the edge */\n"
+	"    float c = smoothstep(0.0, 0.06, t - v);\n"
+	"    return vec4(T(uv).rgb * (0.25 + 0.75 * c), 1.0);\n"
+	"  }\n"
+	"  if (v < t + band) {\n"
+	"    /* the fire's front: hottest on the burnt side */\n"
+	"    float f = (v - t) / band;\n"
+	"    float flick = 0.85 + 0.3 * vnoise(q * 6.0 + u_time * 9.0);\n"
+	"    vec3 hot = mix(vec3(1.0, 0.93, 0.62), vec3(0.95, 0.30, 0.03),\n"
+	"                   smoothstep(0.0, 0.7, f));\n"
+	"    vec3 glow = hot * (1.5 - f) * flick;\n"
+	"    vec3 under = F(uv).rgb * 0.3;\n"
+	"    return vec4(mix(glow, under, smoothstep(0.75, 1.0, f)), 1.0);\n"
+	"  }\n"
+	"  /* not yet: scorching brown just ahead of the flames */\n"
+	"  float sc = 1.0 - smoothstep(0.0, 0.10, v - t - band);\n"
+	"  vec3 col = mix(F(uv).rgb, F(uv).rgb * vec3(0.55, 0.38, 0.22), sc * 0.85);\n"
+	"  return vec4(col, 1.0);\n"
+	"}\n";
+
+/*
  * Indexed by GowlFxBlendKind.  NULL is a kind this build has no shader
  * for yet; each transition module's commit adds its own.
  */
 static const gchar *const blend_bodies[GOWL_FX_BLEND_COUNT] = {
 	[GOWL_FX_BLEND_FADE]     = blend_fade_src,
 	[GOWL_FX_BLEND_IRIS]     = blend_iris_src,
-	[GOWL_FX_BLEND_BURN]     = NULL,
+	[GOWL_FX_BLEND_BURN]     = blend_burn_src,
 	[GOWL_FX_BLEND_RIPPLE]   = NULL,
 	[GOWL_FX_BLEND_PIXELATE] = NULL,
 	[GOWL_FX_BLEND_GLITCH]   = NULL,

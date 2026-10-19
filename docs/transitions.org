@@ -67,6 +67,7 @@ In the order Super+: visits them (a module not loaded is skipped):
 | =pagecurl= | =modules/pagecurl= | Turned like a page taken by its bottom corner -- from the right for a higher tag, the left for a lower -- its back showing pale as it comes over, the next desktop underneath in its shadow. 1.45x the duration |
 | =carousel= | =modules/carousel= | The desktops stand round a large ring facing out, a gap between each; the ring swings round to the next tag and shows every tag it passes, the camera easing back so the neighbours come into view. Grows with the distance (=step_scale=) |
 | =sphere= | =modules/sphere= | The desktop bends onto the front of a lit globe, the globe turns half a revolution, and the next desktop -- mapped onto its far side -- unwraps flat. Three acts, so 2x the duration |
+| =burn=  | =modules/burn=  | The desktop catches near the pointer and burns away along a ragged, flickering edge -- scorched ahead of the flames, charred behind -- the next desktop showing through the ash; a different fire every switch. Goes with the =embers= backdrop |
 | =zoom=  | =modules/zoom=  | The tags as a stack of desktops: to a higher tag the one you are on sinks away and fades while the next settles from just in front of the glass; back, the one you are on rushes past and the one behind comes forward |
 
 * How it works

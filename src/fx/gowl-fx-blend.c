@@ -348,6 +348,32 @@ static const gchar blend_glitch_src[] =
 	"}\n";
 
 /*
+ * Melt: the screen wipe from a certain 1993 shooter.  The old desktop is
+ * cut into 160 columns that each start sliding down at their own moment
+ * -- neighbours roughly together, smooth noise along the row plus a
+ * little jitter, which is what gives the edge its dripping look -- and
+ * fall faster as they go, uncovering the new desktop above them.  A
+ * column is gone when it has fallen a whole screen; the latest one
+ * starts at 18% of the way through, so every column has gone by the end.
+ */
+static const gchar blend_melt_src[] =
+	"vec4 transition(vec2 uv) {\n"
+	"  float cols = 160.0;\n"
+	"  float c = floor(uv.x * cols);\n"
+	"  float late = 0.18;\n"
+	"  float delay = late * (0.72 * vnoise(vec2(c * 0.13, 4.0))\n"
+	"                        + 0.28 * hash1(c));\n"
+	"  float t = clamp((u_p - delay) / (1.0 - late), 0.0, 1.0);\n"
+	"  float drop = t * t * 1.02;\n"
+	"  if (uv.y < drop) {\n"
+	"    /* uncovered: the new desktop, a soft shadow under the drip */\n"
+	"    float sh = 1.0 - 0.35 * exp(-(drop - uv.y) / 0.02) * (1.0 - u_p);\n"
+	"    return vec4(T(uv).rgb * sh, 1.0);\n"
+	"  }\n"
+	"  return F(vec2(uv.x, uv.y - drop));\n"
+	"}\n";
+
+/*
  * Indexed by GowlFxBlendKind.  NULL is a kind this build has no shader
  * for yet; each transition module's commit adds its own.
  */
@@ -358,7 +384,7 @@ static const gchar *const blend_bodies[GOWL_FX_BLEND_COUNT] = {
 	[GOWL_FX_BLEND_RIPPLE]   = blend_ripple_src,
 	[GOWL_FX_BLEND_PIXELATE] = blend_pixelate_src,
 	[GOWL_FX_BLEND_GLITCH]   = blend_glitch_src,
-	[GOWL_FX_BLEND_MELT]     = NULL,
+	[GOWL_FX_BLEND_MELT]     = blend_melt_src,
 	[GOWL_FX_BLEND_PAGECURL] = blend_pagecurl_src,
 };
 

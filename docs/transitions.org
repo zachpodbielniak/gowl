@@ -71,6 +71,7 @@ In the order Super+: visits them (a module not loaded is skipped):
 | =ripple= | =modules/ripple= | A drop falls at the pointer: the next desktop spreads out behind the wavefront, both desktops refracted through decaying rings whose crests catch the light, the swell calming as it lands. Goes with the =water= backdrop |
 | =pixelate= | =modules/pixelate= | The desktop coarsens into a mosaic, changes while the blocks are biggest (56 px on a 1080-row output, scaled with the output), and sharpens into the next one |
 | =glitch= | =modules/glitch= | A bad signal: torn slices re-dealt 24 times a second, each flipping to the next desktop at its own moment, split colour, scanlines, grain and the odd block from the wrong place. Quick on purpose (0.75x) |
+| =melt=  | =modules/melt=  | The screen wipe from a certain 1993 shooter: the desktop runs down in 160 dripping columns, each starting at its own moment and falling faster as it goes, the next desktop behind it |
 | =zoom=  | =modules/zoom=  | The tags as a stack of desktops: to a higher tag the one you are on sinks away and fades while the next settles from just in front of the glass; back, the one you are on rushes past and the one behind comes forward |
 
 * How it works

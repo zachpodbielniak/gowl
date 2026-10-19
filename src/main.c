@@ -1590,6 +1590,13 @@ main(int argc, char *argv[])
 		g_clear_object(&ipc);
 	} else {
 		gowl_compositor_set_ipc(compositor, ipc);
+		/* Where the socket is, for everything the session starts
+		 * from here on -- the same way WAYLAND_DISPLAY says where the
+		 * display is.  Set before autostart and the config's ready
+		 * callback spawn anything, alongside the compositor's own
+		 * WAYLAND_DISPLAY, and read by gowl-msg and any client
+		 * library ahead of the default path. */
+		g_setenv("GOWL_SOCKET", gowl_ipc_get_socket_path(ipc), TRUE);
 	}
 
 	/* Dispatch C config ready callback (spawning, one-time setup) */

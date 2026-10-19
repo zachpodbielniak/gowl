@@ -1,7 +1,7 @@
 CC ?= gcc
 CSTD = -std=gnu89
 
-PKG_DEPS = glib-2.0 gio-2.0 gio-unix-2.0
+PKG_DEPS = glib-2.0 gio-2.0 gio-unix-2.0 json-glib-1.0
 PKG_CFLAGS = $(shell pkg-config --cflags $(PKG_DEPS))
 PKG_LIBS = $(shell pkg-config --libs $(PKG_DEPS))
 
@@ -13,7 +13,7 @@ OUT = $(OUTDIR)/gowl-msg
 all: $(OUT)
 
 $(OUT): $(SRC)
-	$(CC) $(CSTD) -Wall -Wextra -Wno-unused-parameter $(PKG_CFLAGS) \
+	$(CC) $(CSTD) -Wall -Wextra -Wno-unused-parameter -pthread $(PKG_CFLAGS) \
 	    -o $@ $(SRC) $(PKG_LIBS)
 
 clean:

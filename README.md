@@ -74,6 +74,9 @@ gowl --generate-yaml-config > ~/.config/gowl/config.yaml
 gowl --check-config            # unknown keys and bad values, exit 1 on any
 gowl --supervise               # restart the compositor after a crash, keep the session
 gowl-msg clients | jq .        # the IPC socket; see docs/ipc.org
+gowl-msg -d                    # the wire protocol (JSON-RPC) for programs
+gowl-msg -c windows.list mine=true
+make install-skills            # the /gowl-msg agent skill, to ~/.claude/skills
 
 # Generate a default C config
 gowl --generate-c-config > ~/.config/gowl/config.c

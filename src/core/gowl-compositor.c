@@ -1536,11 +1536,19 @@ gowl_compositor_set_ipc(
 ){
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
+	/* A server being replaced stops hearing about this compositor. */
+	if (self->ipc != NULL && self->ipc != ipc)
+		gowl_compositor_ipc_uninstall_methods(self, self->ipc);
 	self->ipc = ipc;
 	/* The socket answers with the compositor's commands from here on:
-	 * core queries and actions, then every module command. */
-	if (ipc != NULL)
+	 * core queries and actions, then every module command -- and in
+	 * the JSON-RPC dialect, the wire protocol's methods.  Both launch
+	 * paths (gowl's main() and cmacs's `gowl-start-ipc') come through
+	 * here, so both speak the same protocol. */
+	if (ipc != NULL) {
 		gowl_ipc_set_command_handler(ipc, ipc_command_handler, self);
+		gowl_compositor_ipc_install_methods(self, ipc);
+	}
 }
 
 static gchar *

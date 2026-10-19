@@ -1,0 +1,105 @@
+/*
+ * A minimal gowl wire-protocol client in C (GIO + json-glib).
+ *
+ *   gcc -std=gnu89 -Wall -Wextra -o gowl-client gowl-client.c \
+ *       $(pkg-config --cflags --libs gio-unix-2.0 json-glib-1.0)
+ *
+ * Connects to $GOWL_SOCKET (else $XDG_RUNTIME_DIR/gowl.sock), calls
+ * METHOD with the JSON params given (or none) and prints the result.
+ * Adapt rpc_call() for your program; it already skips event lines.
+ */
+
+#include <gio/gio.h>
+#include <gio/gunixsocketaddress.h>
+#include <json-glib/json-glib.h>
+#include <string.h>
+
+/* Sends one request, returns the response object with id @id. */
+static JsonObject *
+rpc_call(
+	GOutputStream    *out,
+	GDataInputStream *in,
+	gint64            id,
+	const gchar      *method,
+	const gchar      *params_json,
+	GError          **error
+){
+	g_autofree gchar *req = NULL;
+
+	req = g_strdup_printf("{\"jsonrpc\":\"2.0\",\"id\":%" G_GINT64_FORMAT
+	                      ",\"method\":\"%s\",\"params\":%s}\n", id, method,
+	                      params_json != NULL ? params_json : "{}");
+	if (!g_output_stream_write_all(out, req, strlen(req), NULL, NULL, error))
+		return NULL;
+
+	for (;;) {
+		g_autofree gchar *line = NULL;
+		g_autoptr(JsonParser) parser = NULL;
+		JsonObject *o;
+
+		line = g_data_input_stream_read_line_utf8(in, NULL, NULL, error);
+		if (line == NULL)
+			return NULL;
+		parser = json_parser_new_immutable();
+		if (!json_parser_load_from_data(parser, line, -1, error))
+			return NULL;
+		if (!JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser)))
+			continue;
+		o = json_node_get_object(json_parser_get_root(parser));
+		/* Events (no id) can arrive first: a request's own events are
+		 * sent before its response. */
+		if (json_object_has_member(o, "id")
+		    && json_object_get_int_member(o, "id") == id)
+			return json_object_ref(o);
+	}
+}
+
+int
+main(int argc, char *argv[])
+{
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GSocketClient) client = NULL;
+	g_autoptr(GSocketAddress) addr = NULL;
+	g_autoptr(GSocketConnection) conn = NULL;
+	g_autoptr(GDataInputStream) in = NULL;
+	g_autoptr(JsonObject) resp = NULL;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *text = NULL;
+
+	if (argc < 2) {
+		g_printerr("usage: %s METHOD [PARAMS-JSON]\n", argv[0]);
+		return 2;
+	}
+	path = g_getenv("GOWL_SOCKET") != NULL
+		? g_strdup(g_getenv("GOWL_SOCKET"))
+		: g_build_filename(g_get_user_runtime_dir(), "gowl.sock", NULL);
+
+	client = g_socket_client_new();
+	addr = g_unix_socket_address_new(path);
+	conn = g_socket_client_connect(client, G_SOCKET_CONNECTABLE(addr), NULL,
+	                               &error);
+	if (conn == NULL) {
+		g_printerr("connect %s: %s\n", path, error->message);
+		return 3;
+	}
+	in = g_data_input_stream_new(
+		g_io_stream_get_input_stream(G_IO_STREAM(conn)));
+
+	resp = rpc_call(g_io_stream_get_output_stream(G_IO_STREAM(conn)), in,
+	                1, argv[1], argc > 2 ? argv[2] : NULL, &error);
+	if (resp == NULL) {
+		g_printerr("%s\n", error->message);
+		return 3;
+	}
+	if (json_object_has_member(resp, "error")) {
+		JsonObject *e = json_object_get_object_member(resp, "error");
+
+		g_printerr("error %" G_GINT64_FORMAT ": %s\n",
+		           json_object_get_int_member(e, "code"),
+		           json_object_get_string_member(e, "message"));
+		return 1;
+	}
+	text = json_to_string(json_object_get_member(resp, "result"), TRUE);
+	g_print("%s\n", text);
+	return 0;
+}

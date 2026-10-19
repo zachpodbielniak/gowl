@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# arrange -- lay out windows of one app id as columns on an output.
+# A template: adapt the layout in build_request() to your own.
+#
+#   arrange org.example.app            # columns on the focused output
+#   arrange org.example.app DP-2 0.5   # on DP-2, first column half wide
+#
+# Needs gowl-msg and yq.  One layout.apply call: every window is checked
+# before any moves, and all of them land in the same frame.
+
+set -euo pipefail
+
+usage () {
+	echo 'arrange <app-id> [output] [first-column-fraction]'
+	echo 'e.g. arrange foot DP-1 0.4'
+	exit 2
+}
+
+build_request () {
+	if [[ $# -lt 3 ]]
+	then
+		echo 'build_request() requires 3+ positional arguments' >&2
+		exit 2
+	fi
+
+	local output="${1}"
+	local first="${2}"
+	shift 2
+	local -a ids=("$@")
+	local n="${#ids[@]}"
+	local rest_w x w entries="" i
+
+	rest_w=$(awk -v f="${first}" -v n="${n}" \
+		'BEGIN { if (n > 1) printf "%.6f", (1 - f) / (n - 1); else print 1 }')
+	for (( i = 0; i < n; i++ ))
+	do
+		if (( i == 0 ))
+		then
+			x=0
+			w="${first}"
+			(( n == 1 )) && w=1
+		else
+			x=$(awk -v f="${first}" -v r="${rest_w}" -v i="${i}" \
+				'BEGIN { printf "%.6f", f + (i - 1) * r }')
+			w="${rest_w}"
+		fi
+		entries+="${entries:+,}{\"id\":${ids[i]},\"x\":${x},\"y\":0,\"width\":${w},\"height\":1}"
+	done
+	printf '{"monitor":"%s","units":"fraction","relative_to":"area","windows":[%s]}' \
+		"${output}" "${entries}"
+}
+
+main () {
+	if [[ $# -lt 1 || $# -gt 3 ]]
+	then
+		usage
+	fi
+
+	local app_id="${1}"
+	local output="${2:-focused}"
+	local first="${3:-0.5}"
+	local -a ids
+
+	mapfile -t ids < <(gowl-msg -c windows.list app_id="${app_id}" \
+		embedded=false | yq -p json '.[].id')
+	if (( ${#ids[@]} == 0 ))
+	then
+		echo "no windows with app id ${app_id}" >&2
+		exit 1
+	fi
+	gowl-msg -c layout.apply "$(build_request "${output}" "${first}" "${ids[@]}")" \
+		| yq -p json '.[] | [.id, .x, .y, .width, .height]' -o json -I0
+}
+
+main "$@"

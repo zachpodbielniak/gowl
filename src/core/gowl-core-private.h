@@ -1313,6 +1313,9 @@ void gowl_compositor_activate_client (GowlCompositor *self, GowlClient *c);
 /* The socket's commands (gowl-ipc-core.c) and two entry points it
  * needs from gowl-compositor.c. */
 gchar   *gowl_compositor_ipc_command       (GowlCompositor *self, const gchar *line);
+/* The wire protocol's JSON-RPC methods (src/ipc/gowl-ipc-methods.c). */
+void     gowl_compositor_ipc_install_methods  (GowlCompositor *self, GowlIpc *ipc);
+void     gowl_compositor_ipc_uninstall_methods(GowlCompositor *self, GowlIpc *ipc);
 gboolean gowl_compositor_run_keybind_entry (GowlCompositor *self,
                                             const GowlKeybindEntry *kb);
 GowlClient *focustop_public                (GowlCompositor *self, GowlMonitor *m);

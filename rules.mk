@@ -610,6 +610,49 @@ install-bar-configs:
 		$(INSTALL_DATA) "$$f" $(DESTDIR)$(DATADIR)/gowl/macros/ || exit 1; \
 	done
 
+# Agent skills: skills/<name>/SKILL.md bundles teaching an agent to use
+# gowl (`/gowl-msg': the IPC socket and the wire protocol).  Per-user, so
+# not part of `install' and needing neither a build nor root.  Copied by
+# default, so the installed skill survives this checkout moving; with
+# SKILLS_LINK=1 each is a symlink to the checkout, so an edit here is live.
+# A skill directory already there is replaced only if it is ours: one
+# with the same SKILL.md name, or a symlink into this tree.
+SKILLS_SRC_DIR := skills
+SKILLS := $(notdir $(patsubst %/,%,$(dir $(wildcard $(SKILLS_SRC_DIR)/*/SKILL.md))))
+
+.PHONY: install-skills uninstall-skills
+install-skills:
+	@test -n "$(SKILLS)" || { echo "no skills under $(SKILLS_SRC_DIR)/"; exit 1; }
+	$(MKDIR_P) $(DESTDIR)$(SKILLS_DIR)
+	@for s in $(SKILLS); do \
+		dst="$(DESTDIR)$(SKILLS_DIR)/$$s"; \
+		if [ -L "$$dst" ]; then \
+			rm -f "$$dst" || exit 1; \
+		elif [ -e "$$dst" ]; then \
+			if ! grep -qx "name: $$s" "$$dst/SKILL.md" 2>/dev/null; then \
+				echo "$$dst exists and is not this skill; leaving it"; \
+				exit 1; \
+			fi; \
+			rm -rf "$$dst" || exit 1; \
+		fi; \
+		if [ "$(SKILLS_LINK)" = "1" ]; then \
+			ln -s "$(abspath $(SKILLS_SRC_DIR))/$$s" "$$dst" || exit 1; \
+			echo "  linked    $$dst -> $(abspath $(SKILLS_SRC_DIR))/$$s"; \
+		else \
+			cp -R "$(SKILLS_SRC_DIR)/$$s" "$$dst" || exit 1; \
+			chmod -R u+rwX,go+rX "$$dst" || exit 1; \
+			echo "  installed $$dst"; \
+		fi; \
+	done
+
+uninstall-skills:
+	@for s in $(SKILLS); do \
+		dst="$(DESTDIR)$(SKILLS_DIR)/$$s"; \
+		if [ -L "$$dst" ] || grep -qx "name: $$s" "$$dst/SKILL.md" 2>/dev/null; then \
+			rm -rf "$$dst" && echo "  removed   $$dst" || exit 1; \
+		fi; \
+	done
+
 # Uninstall
 .PHONY: uninstall
 uninstall:

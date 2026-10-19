@@ -20,6 +20,7 @@ make show-config        # Print current build configuration
 make gir                # Generate GObject Introspection data
 make modules            # Build only the modules
 make help               # Show all available targets
+make install-skills     # Install the agent skills (skills/*) to SKILLS_DIR
 ```
 
 ## Test Commands
@@ -123,6 +124,14 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   `ERROR unknown command` for nonsense -- and a subscriber sees `EVENT
   mode` and `EVENT power` lines.  Before the handler existed the socket
   answered nothing at all
+- `test-ipc-rpc` -- The wire protocol (JSON-RPC 2.0 on the same socket)
+  against two real toplevels: discover, typed errors (unknown method,
+  misspelt or mistyped parameter, parse error), batches answering in order
+  without their notifications, a half-closed client still getting every
+  reply, `mine` really being the caller's windows, fraction/area geometry
+  landing where it says, `layout.apply` all-or-nothing, embedded windows
+  refused, `tags.changed`/`window.changed`/text-derived events arriving,
+  and a stalled reader dropped instead of stalling the compositor
 - `test-config-keys.sh` -- every top-level key the YAML parser reads is
   in the validator's known-key list, or a valid config would warn about
   its own keys and `gowl --check-config` would fail on it
@@ -433,6 +442,22 @@ tests. These assert invariants no unit test can reach:
 > A layout entry's provider is not always a `GowlLayoutProvider` --
 > check `GOWL_IS_LAYOUT_PROVIDER()` before calling its vtable. See
 > `docs/floatdesk.org`.
+
+> **The IPC socket never waits for a client, and never frees one under its
+> own feet.** `src/ipc/gowl-ipc.c` queues output per connection and drains
+> it on `WL_EVENT_WRITABLE`; a connection past `GOWL_IPC_MAX_PENDING`
+> unread is dropped. The old `send_line()` spun on `EAGAIN`, so one paused
+> `gowl-msg -s | less` froze the desktop. A failed write only marks the
+> connection dead; `reap_dead()` frees it when no callback of the server
+> is on the stack (`depth`), because a reply or an event fan-out can find
+> it dead in the middle of a line. The wire protocol's methods live in
+> `src/ipc/gowl-ipc-methods.c`, installed by `gowl_compositor_set_ipc()`
+> on both launch paths; they run on the compositor thread (under cmacs,
+> the dispatch thread with the gowl lock) and must neither block nor
+> touch Lisp. Every method's parameters are declared and checked by the
+> transport -- add a method with `gowl_ipc_register_method()`, never by
+> parsing text. Methods that move a window refuse `isembedded` ones:
+> cmacs owns their place. See *The wire protocol* in `docs/ipc.org`.
 
 > **Route every client close through `gowl_client_close()`, and every focus
 > change through `gowl_compositor_focus_client()`.** An X11 client's

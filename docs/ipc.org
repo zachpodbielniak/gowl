@@ -2,9 +2,18 @@
 
 * The socket
 
-gowl listens on =$XDG_RUNTIME_DIR/gowl.sock= (a Unix stream socket, created by =main()= and, under =cmacs --gowl=, by cmacs).  The protocol is lines: a client sends one command line and reads one reply line.  Queries reply with JSON on a single line; everything else replies =OK ...= or =ERROR ...=.  Until 2026-09 the socket read commands and answered none -- the signal it emitted had no listener -- so every command sent to it was dropped; =tests/test-ipc.c= now speaks to it end to end.
+gowl listens on =$XDG_RUNTIME_DIR/gowl.sock= (a Unix stream socket, created by =main()= and, under =cmacs --gowl=, by cmacs). The path is exported to the session as =GOWL_SOCKET=, and every client should look there first: cmacs can put the socket elsewhere (=cmacs-gowl-ipc= set to a path).
 
-=gowl-msg= is the command-line client:
+One connection speaks two dialects, told apart line by line by the first non-blank byte:
+
+| Dialect      | A line starting with                | For                                    | Reply                                             |
+|--------------+-------------------------------------+----------------------------------------+---------------------------------------------------|
+| text         | anything but ={= or =[=               | a person at a shell, a bar script      | one line: JSON for a query, =OK ...= / =ERROR ...= |
+| wire protocol | ={= (one request) or =[= (a batch) | a program: layout tools, launchers, agents, bridges | one JSON-RPC 2.0 response line (none for a notification) |
+
+Both reach the same compositor through the same functions, so a change made from either is seen by the other and announced to both kinds of subscriber. Until 2026-09 the socket read commands and answered none -- the signal it emitted had no listener -- so every command sent to it was dropped; =tests/test-ipc.c= speaks the text dialect to it end to end and =tests/test-ipc-rpc.c= the wire protocol, against real windows.
+
+=gowl-msg= is the command-line client for both:
 
 #+begin_src sh
 gowl-msg clients | jq .
@@ -19,13 +28,17 @@ gowl-msg hints                   # what Super+q runs: label every window
 gowl-msg lock                    # what Super+Shift+l runs
 gowl-msg expo                    # a module's command, by name
 gowl-msg -s                      # subscribe; print events until killed
+
+gowl-msg -d                      # the wire protocol: every method and event
+gowl-msg -c windows.list mine=true
+gowl-msg -s -j 'window.*'        # structured events, one JSON object a line
 #+end_src
 
-It exits non-zero on an =ERROR= reply or when nothing answers; =--socket PATH= names another socket.  It links only GLib, so it installs anywhere.
+It exits 0 on success, 1 when the compositor answered with an error (an =ERROR= line, a JSON-RPC error), 2 on a usage error and 3 when nothing answered; =--socket PATH= names another socket. It links only GLib and json-glib, so it installs anywhere. See [[#wire-protocol-gowl-msg][gowl-msg and the wire protocol]] for its JSON modes.
 
-Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cmacs-gowl-ipc= turns it off or moves it; every command below works the same against an embedded session.
+Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cmacs-gowl-ipc= turns it off or moves it; every command and method below works the same against an embedded session -- see [[#wire-protocol-cmacs][Under cmacs --gowl]] for the one difference.
 
-* Commands
+* Text commands
 
 | Command                       | Reply                                              |
 |-------------------------------+----------------------------------------------------|
@@ -76,7 +89,7 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 
 A tag argument is a bitmask, as everywhere in gowl: tag 1 is =1=, tag 3 is =4=, all nine =511=.
 
-* Events
+* Text events
 
 A subscriber receives one line per event, =EVENT <name> <args>=:
 
@@ -146,3 +159,405 @@ gowl-msg macro-run sort-windows reverse
 * From a module
 
 A module implementing =GowlIpcHandler= answers its own command names; =gowl_compositor_run_command()= is the shared entry point for the =ipc-command= keybind action, cmacs's =gowl-run-command=, MCP and this socket, so a command means the same thing from each.  Core commands are answered first (=src/ipc/gowl-ipc-core.c=), then the modules.  =gowl_ipc_push_event()= adds an event.
+
+A module can also add JSON-RPC methods to the wire protocol with =gowl_ipc_register_method()= -- see [[#wire-protocol-modules][Adding methods from a module]].
+
+* The wire protocol
+:PROPERTIES:
+:CUSTOM_ID: wire-protocol
+:END:
+
+The wire protocol is how a *program* drives gowl: a layout tool tiling its own windows, a launcher placing what it starts, an agent arranging a workspace, a bridge to another window manager's IPC. It is [[https://www.jsonrpc.org/specification][JSON-RPC 2.0]], newline-delimited, on the same socket and connection as the text dialect. Its name is =gowl-wire=, version =1= (=GOWL_IPC_PROTOCOL_VERSION=); the version is bumped only when an existing method, parameter or event changes meaning, never for an addition, so a client checks =rpc.discover= for what it needs rather than comparing versions.
+
+The text dialect is for people: replies are =OK=/=ERROR= lines to pattern-match, arguments are positional and loosely parsed, and its events are the few the compositor's key paths happen to push. The wire protocol is for code:
+
+- Every target is named explicitly (a window id, an output name) and every answer is typed: a result object, or an error with a code that says which kind of failure it was.
+- Parameters are named and checked against the method's declaration before it runs. ={"widht": 800}= is an error naming the parameters the method takes, not a silently ignored key.
+- A batch runs inside one event-loop callback, so no frame is drawn between its requests: six windows moved by one batch land in one picture.
+- The caller is known (=SO_PEERCRED=), so "the windows of this process and everything it started" is a filter (=mine=) -- what a program managing its own child windows needs.
+- Events are structured and filterable, and include the ones a layout program needs that the text dialect never had: =window.changed= when any window moves or changes state, and =tags.changed= / =layout.changed= / =monitor.changed= from *every* path that changes them (the text =tags= event is pushed only from a few keybind paths, so a tag view from IPC or Elisp never produced one).
+- The protocol describes itself: =rpc.discover= returns every method with its parameters, types and return shape, and every event.
+
+** Framing
+
+One JSON value per line, UTF-8, terminated by =\n= (a trailing =\r= is dropped). A line may be up to 1 MiB (=GOWL_IPC_MAX_LINE=); a longer one is answered with an =invalid request= error and discarded. Replies never contain a raw newline -- strings in them are JSON-escaped -- so a client reads a line and parses it.
+
+#+begin_src json
+{"jsonrpc":"2.0","id":1,"method":"window.set_geometry","params":{"id":12,"x":0,"y":0,"width":960,"height":1080}}
+#+end_src
+
+- =jsonrpc= may be left out (it is noise in a shell one-liner); when present it must be ="2.0"=. Responses always carry it.
+- =id= is a string, an integer or null, and comes back unchanged in the response. A request without =id= is a *notification*: it runs, and nothing is sent back -- not even an error.
+- =params= is an object (named parameters) or absent. An array is refused: every parameter has a name.
+- A member whose value is =null= is the same as leaving it out, for clients whose serializer writes every field.
+
+A response:
+
+#+begin_src json
+{"jsonrpc":"2.0","id":1,"result":{"id":12,"app_id":"foot","x":0,"y":0,"width":960,"height":1080,"floating":true}}
+{"jsonrpc":"2.0","id":2,"error":{"code":-32001,"message":"no window 99","data":{"method":"window.get"}}}
+#+end_src
+
+*Ordering.* Requests on one connection are answered in the order they were sent. A request's own events are pushed *while it runs*, so on a subscribed connection they arrive *before* its response: read lines until the one with your =id=, keeping any =event= notifications you pass. Two connections are independent: a subscriber on one connection and a controller on another is the simplest arrangement for a long-running program.
+
+*Half-close.* A client that sends its requests and shuts down its writing side (=shutdown(fd, SHUT_WR)=, what =socat= does at end of input) still gets every reply: they were queued as each line was read, the server finishes sending them and then closes. A *subscribed* connection that half-closes stays open for its events until it hangs up.
+
+*Back-pressure.* The compositor never waits for a client. Output to a connection that is not reading is queued; past 16 MiB (=GOWL_IPC_MAX_PENDING=) the connection is dropped and a message logged. Before the queue, one write to a paused =gowl-msg -s | less= spun the compositor's event loop -- the whole desktop -- until the pager scrolled.
+
+** Batches
+
+A line that is a JSON array is a batch. Its requests run in order, in one callback; the reply is one line holding an array of the responses, in request order, with notifications left out. A batch of only notifications is answered with nothing; an empty batch is an =invalid request=. One request failing does not stop the rest: atomicity, where a method needs it, is the method's (=layout.apply= checks every entry before moving any).
+
+#+begin_src json
+[{"id":"a","method":"tags.view","params":{"tag":2}},
+ {"method":"layout.set","params":{"name":"monocle"}},
+ {"id":"b","method":"window.focus","params":{"id":12}}]
+#+end_src
+
+(shown on three lines for reading; on the wire it is one) is answered with =[{"id":"a",...},{"id":"b",...}]=.
+
+** Errors
+
+| Code   | Name                | Meaning                                                                         |
+|--------+---------------------+---------------------------------------------------------------------------------|
+| -32700 | parse error         | the line is not JSON (the response's =id= is null)                               |
+| -32600 | invalid request     | JSON, but not a request: no =method=, a bad =id=, an empty batch, too long        |
+| -32601 | method not found    | no such method; =rpc.discover= lists them                                        |
+| -32602 | invalid params      | a parameter unknown, missing, of the wrong type or out of range; the message names it |
+| -32603 | internal error      | the compositor's fault (it is shutting down, say)                                |
+| -32000 | failed              | the operation did not succeed: a spawn that could not exec, a key that could not be delivered |
+| -32001 | not found           | a window, output, layout or action the request named does not exist             |
+| -32002 | refused             | not now: the session is locked, the window is embedded in an Emacs buffer, the output cannot do HDR, an overlay belongs to its module |
+| -32003 | unsupported         | not in this build, or the module that provides it is not loaded                  |
+
+=error.data.method= names the method that failed, which matters in a batch.
+
+** Parameter types
+
+What =rpc.discover= calls each type, and what it accepts:
+
+| Type      | Accepts                                                        |
+|-----------+----------------------------------------------------------------|
+| =int=     | a whole number (=3= or =3.0=)                                  |
+| =number=  | any number                                                     |
+| =bool=    | =true= or =false=                                              |
+| =string=  | a string                                                       |
+| =array=, =object= | an array, an object                                    |
+| =toggle=  | =true=, =false= or ="toggle"=; absent means toggle             |
+| =window=  | a window id (=int=) or ="focused"=                             |
+| =monitor= | an output name (="DP-1"=) or ="focused"=                        |
+
+Where a method takes a window as =id= and it is optional, absent means the focused window; where it is required (=window.focus=, =window.close=), it must be said -- closing "whatever has focus" by omission is not something a program should be able to do by accident. Tags are taken two ways everywhere: =tags=, a bitmask as in the rest of gowl (tag 1 is =1=, tag 3 is =4=), or =tag=, one tag counted from 1.
+
+** Geometry: =relative_to= and =units=
+
+Methods that place windows (=window.set_geometry=, =layout.apply=, =spawn=) take a rectangle =x=, =y=, =width=, =height= -- the frame, border included, as =windows.list= reports it -- and two modifiers:
+
+- =relative_to=: ="layout"= (absolute layout coordinates, across all outputs), ="monitor"= (from the window's output's top-left) or ="area"= (from the top-left of the output's *window area*, the output less its bars and other exclusive layer surfaces -- where 0,0 never sits under a bar). =window.set_geometry= defaults to ="layout"=; =layout.apply= and =spawn=, which are about laying things out, default to ="area"=.
+- =units=: ="px"= or ="fraction"=, a fraction of the monitor or area box: ={"x":0.5,"y":0,"width":0.5,"height":1,"units":"fraction"}= is the right half. With ="layout"= a fraction is of the window's own output.
+
+A member left out keeps its current value, so ={"x":0}= moves a window to the left edge and leaves its size. Placing a window floats it -- a tiled window's place belongs to the layout, and the next arrange would put it back -- and takes it out of fullscreen.
+
+** Methods
+:PROPERTIES:
+:CUSTOM_ID: wire-protocol-methods
+:END:
+
+Every method below is also described by the running compositor: =gowl-msg -d METHOD=. A /window/ in a result is the object =windows.list= returns; a /monitor/ is the object =monitors.list= returns.
+
+*** The protocol
+
+| Method               | Parameters                       | Result                                             |
+|----------------------+----------------------------------+----------------------------------------------------|
+| =rpc.discover=       | =method?=                        | ={protocol, version, server, caller{pid,uid,connection}, methods[{name, summary, params[{name,type,required,doc}], result}], events[{name,doc}]}= |
+| =rpc.ping=           |                                  | ="pong"=                                           |
+| =events.subscribe=   | =events?= (glob patterns), =add?= | ={subscribed, events[]}=; events follow on this connection |
+| =events.unsubscribe= |                                  | ={subscribed:false, events:[]}=                    |
+| =events.list=        |                                  | =[{name, doc}]=                                    |
+
+*** The compositor
+
+| Method         | Parameters | Result                                                                  |
+|----------------+------------+-------------------------------------------------------------------------|
+| =gowl.version= |            | ={version, protocol, protocol_version, wlroots, xwayland}=              |
+| =gowl.state=   |            | ={version, focused_monitor, focused_window, locked, keymode, keyboard_layout, monitors[], windows[]}= -- everything a program needs to start, in one round trip |
+| =gowl.command= | =line=     | ={ok, reply, json?}=: any *text* command, module commands included (=expo=, =scratchpad-toggle=, =macro-run ...=); a query's JSON reply comes back parsed in =json= |
+| =gowl.reload=  |            | ={problems}=: reloads the config; =problems= is what the validator found |
+
+*** Windows
+
+The window object:
+
+#+begin_src json
+{"id":12, "app_id":"foot", "title":"~", "pid":4242,
+ "monitor":"DP-1", "tags":4, "x":0, "y":30, "width":960, "height":1050,
+ "border":2, "focused":true, "visible":true,
+ "floating":false, "fullscreen":false, "urgent":false,
+ "sticky":false, "pinned":false, "below":false, "minimized":false,
+ "embedded":false, "overlay":false, "xwayland":false, "opacity":1.0,
+ "parent":null, "mine":true}
+#+end_src
+
+=tags= is the window's tags, the ones it returns to while =minimized=. =pinned= is =sticky= *and* floating (the state that actually shows it on every tag). =parent= is the window this one is a dialog of (xdg =set_parent=, X11 =WM_TRANSIENT_FOR=), or null. =mine= is whether the window's process is the caller or descends from it. =embedded= windows live inside Emacs buffers under =cmacs --gowl=; =overlay= windows belong to the scratchpad or dropdown.
+
+| Method                   | Parameters                                                               | Result          |
+|--------------------------+--------------------------------------------------------------------------+-----------------|
+| =windows.list=           | =app_id?= (exact), =title?= (contains), =pid?=, =descendants_of?= (a pid), =mine?=, =monitor?=, =tags?=/=tag?=, =visible?=, =floating?=, =embedded?= (default true) | =[window]=      |
+| =window.get=             | =id?=                                                                    | window          |
+| =window.focused=         |                                                                          | window or null  |
+| =window.focus=           | =id=                                                                     | window: switches to its tag and output, restores it if minimized |
+| =window.close=           | =id=                                                                     | ={ok}=: asks it to close, as the close key does |
+| =window.set_geometry=    | =id?=, =x?=, =y?=, =width?=, =height?=, =relative_to?=, =units?=          | window          |
+| =window.move_by=         | =id?=, =dx?=, =dy?=, =dwidth?=, =dheight?=                                | window          |
+| =window.center=          | =id?=, =width?=, =height?=                                               | window: floated, centred on its output's window area |
+| =window.set_floating=    | =id?=, =value?= (toggle)                                                 | window          |
+| =window.set_fullscreen=  | =id?=, =value?=                                                          | window          |
+| =window.set_sticky=      | =id?=, =value?=: pinning floats the window too, since pinned means floating | window       |
+| =window.set_below=       | =id?=, =value?=: floating, but behind the tiles                          | window          |
+| =window.set_minimized=   | =id?=, =value?=, =monitor?=, =tags?=/=tag?= (where a restore lands)       | window          |
+| =window.set_urgent=      | =id?=, =value?=                                                          | window          |
+| =window.set_opacity=     | =id?=, =opacity= (0.0 -- 1.0)                                            | window          |
+| =window.set_tags=        | =id?=, =tags=/=tag=: tags of its own output                              | window          |
+| =window.send_to_monitor= | =id?=, =monitor=, =tags?=/=tag?= (default: what that output shows)        | window          |
+| =window.swap=            | =id?=, =with=: two windows trade tiling slots                            | ={ok}=          |
+| =window.promote=         | =id?=: the master                                                        | window          |
+| =window.at=              | =x=, =y= (layout coordinates)                                            | window or null  |
+| =window.neighbour=       | =id?=, =direction= (left, right, up, down)                               | window or null  |
+| =window.children=        | =id?=, =recursive?=: its dialogs                                         | =[window]=      |
+| =window.process=         | =id?=                                                                    | ={pid, ppid, comm, cmdline, cwd}= |
+| =window.type_text=       | =id?=, =text=                                                            | ={sent}=        |
+| =window.send_key=        | =id?=, =key= (="Ctrl+c"=, ="Return"=)                                     | ={ok}=          |
+| =window.screenshot=      | =id?=, =path= (absolute)                                                 | ={path, width, height}= |
+
+*** Layout
+
+| Method               | Parameters                                                       | Result |
+|----------------------+------------------------------------------------------------------+--------|
+| =layout.list=        |                                                                  | =[{name, symbol}]= |
+| =layout.get=         | =monitor?=                                                       | ={monitor, name, symbol, mfact, nmaster}= |
+| =layout.set=         | =monitor?=, =name=                                               | as =layout.get= |
+| =layout.set_mfact=   | =monitor?=, =value= (0.05 -- 0.95), =relative?=                   | as =layout.get= |
+| =layout.set_nmaster= | =monitor?=, =value=, =relative?=                                  | as =layout.get= |
+| =layout.order=       | =ids= (window ids), =tile?=                                      | ={ok}=: deals those windows back into the tiling slots they occupy, in this order, so the first lands in the earliest of them (the master when one of them holds it); =tile= un-floats them first |
+| =layout.apply=       | =windows= (=[{id, x, y, width, height, monitor?}]=), =monitor?=, =relative_to?= (default area), =units?= | =[window]=: places every window, or -- if any entry is wrong -- none |
+
+=layout.apply= is the method for a program that does its own layout. Every entry is resolved and checked first (an unknown member such as =widht= is an error, as for declared parameters); only then is anything moved, so a mistake in the fifth entry does not leave four windows moved. An entry whose rectangle centre is on another output is sent there, onto the tags that output shows.
+
+*** Outputs and tags
+
+The monitor object:
+
+#+begin_src json
+{"name":"DP-1", "make":"Dell", "model":"U2723QE", "serial":"...",
+ "focused":true, "enabled":true, "powered_off":false,
+ "x":0, "y":0, "width":3840, "height":2160,
+ "area":{"x":0, "y":30, "width":3840, "height":2130},
+ "scale":1.5, "transform":0, "refresh":60.0, "hdr":false,
+ "tags":1, "occupied":5, "urgent":0,
+ "layout":"tile", "layout_symbol":"[]=", "mfact":0.55, "nmaster":1}
+#+end_src
+
+| Method               | Parameters                                                              | Result |
+|----------------------+-------------------------------------------------------------------------+--------|
+| =monitors.list=      |                                                                         | =[monitor]= |
+| =monitor.get=        | =monitor?=                                                              | monitor |
+| =monitor.focus=      | =monitor?=, =warp?= (move the pointer there)                            | monitor |
+| =monitor.configure=  | =monitor?=, =enabled?=, =scale?= (0.25 -- 8), =transform?= (0 -- 7), =x?=, =y?=, =power?=, =hdr?= | monitor: each change applied in turn, the first refusal stops there and says which |
+| =monitor.screenshot= | =monitor?=, =path= (absolute)                                           | ={path, width, height}= |
+| =tags.get=           | =monitor?=                                                              | ={monitor, active, previous, occupied, urgent}= |
+| =tags.view=          | =monitor?=, =tags=/=tag=                                                | as =tags.get= |
+| =tags.toggle=        | =monitor?=, =tags=/=tag=: added to or removed from the view; the last one is never removed | as =tags.get= |
+
+*** Input, keys and actions
+
+| Method                | Parameters                                     | Result |
+|-----------------------+------------------------------------------------+--------|
+| =pointer.get=         |                                                | ={x, y, window, confined}= |
+| =pointer.warp=        | =x?=, =y?=, =window?= (into a window: its centre, or x/y from its corner) | as =pointer.get= |
+| =keyboard.get_layout= |                                                | ={name, index}= |
+| =keyboard.set_layout= | =layout= (="next"=, ="prev"= or an index)       | ={name, index}= |
+| =keymode.get=         |                                                | the mode's name |
+| =keymode.set=         | =mode= (="default"= leaves)                     | the mode now in force |
+| =keybinds.list=       |                                                | =[{key, action, arg, desc, mode}]= |
+| =key.dispatch=        | =key= (="Super+Return"=)                        | =true= if something was bound to it |
+| =action.run=          | =name= (an action nick, ="tag-view"=), =arg?=    | =true= if it did something |
+
+*** Programs and the session
+
+| Method           | Parameters | Result |
+|------------------+------------+--------|
+| =spawn=          | =argv= (array) or =command= (split like a shell, without one unless =shell=), =shell?=, =cwd?=, =env?= (a null value unsets), =monitor?=, =tags?=/=tag?=, =floating?=, =x?=, =y?=, =width?=, =height?=, =relative_to?= (default area), =units?= | ={pid}= |
+| =session.lock=   |            | ={ok}=: the same lock Super+Shift+l takes |
+| =session.locked= |            | =true= or =false= |
+| =outputs.power=  | =value?= (toggle) | whether the outputs are now on |
+
+=spawn= starts the program from the compositor and registers where its first window goes -- tags, output, floating geometry -- keyed by the pid it started, because a window is matched to a pid when it maps. A program that hands its window to an already-running instance (a browser's remote, most flatpaks, =emacsclient=) maps it under another pid and the placement does not apply; subscribe to =window.added= and place it then. Without a placement the window goes where any new window goes.
+
+Methods that act on the screen -- focus, typing, keys, screenshots, viewing tags, the pointer -- answer =refused= while the session is locked.
+
+** Events
+:PROPERTIES:
+:CUSTOM_ID: wire-protocol-events
+:END:
+
+=events.subscribe= makes the connection a JSON subscriber; events then arrive as notifications:
+
+#+begin_src json
+{"jsonrpc":"2.0","method":"event","params":{"event":"window.focus","seq":17,"time":1792366904270,
+ "data":{"id":12,"window":{...}},"text":"EVENT focus 12"}}
+#+end_src
+
+=seq= counts up across the server's lifetime, so a gap means a missed event (the connection was dropped and reconnected); =time= is wall-clock milliseconds; =text= is the text dialect's line when the event has one. =events= is a list of [[https://docs.gtk.org/glib/glob-patterns.html][glob patterns]] over event names -- =["window.*", "tags.changed"]= -- and absent or =["*"]= takes everything; =add= adds patterns instead of replacing them.
+
+| Event              | When                                               | =data=                                   |
+|--------------------+----------------------------------------------------+------------------------------------------|
+| =window.added=     | a window mapped and was placed                     | ={id, window}=                           |
+| =window.removed=   | a window unmapped                                  | ={id}=                                   |
+| =window.focus=     | keyboard focus moved                               | ={id, window}=, =id= null for nothing    |
+| =window.title=     | the focused window's title changed (also on focus) | ={id, title}=                            |
+| =window.changed=   | a window's geometry or state changed               | ={id, changed[], window}=                |
+| =window.minimized= | a window was minimized                             | ={id}=                                   |
+| =window.restored=  | a minimized window came back                       | ={id}=                                   |
+| =tags.changed=     | an output views other tags, from any source        | ={monitor, active, previous, occupied, urgent}= |
+| =layout.changed=   | an output's layout changed                         | ={monitor, layout, symbol, previous}=    |
+| =monitor.changed=  | an output's geometry, window area, scale, transform, enabled, mfact or nmaster changed | ={name, monitor}= |
+| =monitor.added=    | an output appeared                                 | ={name, monitor}=                        |
+| =monitor.removed=  | an output went                                     | ={name}=                                 |
+| =monitor.power=    | an output powered on or off                        | ={monitor, on}=                          |
+| =keymode.changed=  | a key mode was entered or left                     | ={mode}=                                 |
+| =keyboard.layout=  | the keyboard layout changed                        | ={index, name}=                          |
+| =profile.changed=  | a different output profile matches                 | ={profile}=, null for none               |
+| =session.lock=     | the session locked or unlocked                     | ={locked}=                               |
+| =pointer.confine=  | pointer confinement changed                        | ={active, id?, reason}=                  |
+| =crt.changed=      | the CRT filter was switched                        | ={on}=                                   |
+| =backdrop.changed= | the translucency backdrop changed                  | ={style}=                                |
+| =command=          | a module command ran, from any source              | ={line}=                                 |
+| a module's name    | a module's own event: =macro=, =broadcast=, =inputremap=, =screenshot=, ... | ={args, words[]}= |
+
+=window.changed= names what changed in =changed=: any of =geometry=, =tags=, =monitor=, =floating=, =fullscreen=, =minimized=, =sticky=, =below=, =urgent=, =visible=. It is computed by comparing each window against what was last announced -- after every arrange, and after every frame while somebody is subscribed to it, because a floating window dragged with the mouse is drawn but never arranged -- so one user action can produce several (floating a window re-tiles its neighbours, each announced). A window's first appearance is =window.added=, never a =window.changed=. =tags.changed=, =layout.changed= and =monitor.changed= are computed the same way after every arrange, which every one of those changes ends in, whichever path made it; the text events =tags= and =layout= therefore have no JSON form of their own.
+
+** gowl-msg and the wire protocol
+:PROPERTIES:
+:CUSTOM_ID: wire-protocol-gowl-msg
+:END:
+
+#+begin_src sh
+gowl-msg -d                                    # methods and events of the running compositor
+gowl-msg -d layout.apply                       # one method's parameters
+gowl-msg -c gowl.state | jq '.windows[] | {id, app_id}'
+gowl-msg -c windows.list app_id=foot
+gowl-msg -c window.set_geometry id=12 x=0 y=0 width=0.5 height=1 \
+         relative_to=area units=fraction
+gowl-msg -c layout.apply '{"windows":[{"id":3,"x":0,"y":0,"width":0.5,"height":1},
+                                      {"id":7,"x":0.5,"y":0,"width":0.5,"height":1}],
+                           "units":"fraction"}'
+gowl-msg -c spawn argv='["foot","-e","htop"]' tag=2 floating=true width=900 height=600
+gowl-msg -c tags.view tag=3
+gowl-msg -r -c window.get id=99                # the whole response, error included
+gowl-msg -s -j 'window.*' tags.changed         # one event's params per line
+printf '%s\n' '{"id":1,"method":"gowl.state"}' 'clients' | gowl-msg --pipe
+#+end_src
+
+- =-c METHOD [ARGS]=: a call. Each argument is =KEY=VALUE= -- the value read as JSON when it is JSON (=12=, =true=, =null=, =[1,2]=, ={"a":1}=, ="quoted"=), as a string otherwise, so =id=focused= is a string and =command='"true"'= forces one -- or a whole JSON object of params; both may be mixed, later ones winning. The result is printed as one line of JSON (=-p= indents it); an error goes to stderr with its code and exits 1. =-r= prints the whole response instead.
+- =-s -j [PATTERN...]=: subscribe to structured events and print each event's =params= object, one per line, ready for =jq=.
+- =-d [METHOD]=: =rpc.discover=, readable (=-r= for the raw JSON).
+- =--pipe=: every line of stdin to the socket, every line from it to stdout, in either dialect, until stdin ends and the compositor has answered. For a program in a language with no Unix socket library handy, or a shell script holding one connection.
+
+** Recipes
+
+*** A program arranges its own windows
+
+A program that opened several windows -- an IDE with tool windows, a game launcher, a dashboard -- lays them out itself. =mine= finds them whatever their app ids; one =layout.apply= places them all in one frame.
+
+#+begin_src sh
+#!/usr/bin/env bash
+# Two of my windows side by side on the focused output's window area.
+mapfile -t ids < <(gowl-msg -c windows.list mine=true | yq -p json '.[].id')
+(( ${#ids[@]} >= 2 )) || exit 0
+gowl-msg -c layout.apply "$(printf '{"units":"fraction","windows":[
+  {"id":%d,"x":0,"y":0,"width":0.62,"height":1},
+  {"id":%d,"x":0.62,"y":0,"width":0.38,"height":1}]}' "${ids[0]}" "${ids[1]}")"
+#+end_src
+
+Run as a child of the program (or by it), =mine= is the program's process tree. From outside, =descendants_of=PID= says whose.
+
+*** Keeping a window where it belongs
+
+A daemon that pins a dialog to the corner of its parent whenever either moves: subscribe to =window.changed= on one connection, answer with =window.set_geometry= on another.
+
+#+begin_src sh
+#!/usr/bin/env bash
+gowl-msg -s -j window.changed window.added |
+while read -r ev; do
+	id=$(yq -p json '.data.id' <<<"$ev")
+	parent=$(yq -p json '.data.window.parent // ""' <<<"$ev")
+	[[ -n "$parent" && "$parent" != null ]] || continue
+	mapfile -t pos < <(gowl-msg -c window.get id="$parent" | yq -p json '.x, .y')
+	gowl-msg -c window.set_geometry id="$id" \
+	         x=$((pos[0] + 20)) y=$((pos[1] + 20)) >/dev/null
+done
+#+end_src
+
+*** Launching onto a workspace
+
+#+begin_src sh
+gowl-msg -c spawn argv='["foot","--app-id","scratch-notes"]' tag=9 \
+         floating=true x=0.6 y=0.05 width=0.38 height=0.5 units=fraction
+#+end_src
+
+*** From C
+
+The protocol needs nothing but a Unix socket and a JSON library; with GIO and json-glib:
+
+#+begin_src c
+g_autoptr(GSocketClient) client = g_socket_client_new();
+g_autoptr(GSocketAddress) addr = g_unix_socket_address_new(
+	g_getenv("GOWL_SOCKET") != NULL ? g_getenv("GOWL_SOCKET")
+	: g_build_filename(g_get_user_runtime_dir(), "gowl.sock", NULL));
+g_autoptr(GSocketConnection) conn = g_socket_client_connect(
+	client, G_SOCKET_CONNECTABLE(addr), NULL, &error);
+GOutputStream *out = g_io_stream_get_output_stream(G_IO_STREAM(conn));
+g_autoptr(GDataInputStream) in = g_data_input_stream_new(
+	g_io_stream_get_input_stream(G_IO_STREAM(conn)));
+const gchar *req =
+	"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tags.view\",\"params\":{\"tag\":3}}\n";
+
+g_output_stream_write_all(out, req, strlen(req), NULL, NULL, &error);
+/* Read lines until the one whose id is 1; events may come first. */
+reply = g_data_input_stream_read_line_utf8(in, NULL, NULL, &error);
+#+end_src
+
+=tools/gowl-msg/gowl-msg.c= is a complete client in two hundred lines.
+
+** Under =cmacs --gowl=
+:PROPERTIES:
+:CUSTOM_ID: wire-protocol-cmacs
+:END:
+
+The protocol is installed by =gowl_compositor_set_ipc()=, which both launch paths call -- gowl's =main()= and cmacs's =gowl-start-ipc= -- so an embedded session speaks it exactly as a standalone one does, on the same default path, and exports =GOWL_SOCKET= to the processes Emacs starts. Methods run on the compositor's dispatch thread under the gowl lock, never on Emacs's thread, and run no Lisp: a =key.dispatch= or =action.run= that reaches a cmacs Lisp keybind is deferred to Emacs's main loop by cmacs, as it is for a real key.
+
+The one difference is *embedded* windows. cmacs shows applications inside Emacs buffers (=embedded: true=); Emacs owns their geometry, tags and stacking and reconciles them on every redisplay, so moving one from here would be undone a moment later. Every method that would change their place or state answers =refused= and says why; queries, focus, close, typing, keys, screenshots and opacity work on them as on any window. Non-embedded windows under cmacs (floating ones, X11 popups, anything on a tag Emacs does not show) behave exactly as under standalone gowl. To arrange an embedded application, arrange the Emacs windows that show it, or un-embed it first.
+
+=test/cmacs/cmacs-gowl-tests.el= (=cmacs-gowl-test-ipc-and-profiles-headless=) drives the protocol against a headless embedded compositor in a child cmacs.
+
+** Adding methods from a module
+:PROPERTIES:
+:CUSTOM_ID: wire-protocol-modules
+:END:
+
+The core methods are registered by =src/ipc/gowl-ipc-methods.c=; a module adds its own the same way, so they are checked and listed alike:
+
+#+begin_src c
+static const GowlIpcParam park_params[] = {
+	{ "id", GOWL_IPC_PARAM_WINDOW, TRUE, "the window to park" },
+	{ "slot", GOWL_IPC_PARAM_INT, FALSE, "which parking slot, from 1" },
+	{ NULL, 0, FALSE, NULL }
+};
+
+gowl_ipc_register_method(gowl_compositor_get_ipc(compositor),
+                         "parking.park", "Park a window in a slot",
+                         park_params, "{slot}",
+                         park_method, self, NULL);
+#+end_src
+
+The method receives its params already checked -- every member declared, of its declared type, nulls removed -- and returns a =JsonNode= (transfer full) or sets a =GOWL_IPC_ERROR= error, whose code goes on the wire as is. =gowl_ipc_push_json_event()= sends an event to JSON subscribers only; =gowl_ipc_wants_event()= says whether anybody would receive one, for an event that costs something to compute; =gowl_ipc_declare_event()= lists it in =rpc.discover=; =gowl_ipc_call()= runs a method in process, through the same check, for tests and embedders. Name methods =namespace.verb=, take windows as =id= and outputs as =monitor=, and unregister them (=gowl_ipc_unregister_method()=) when the module deactivates.

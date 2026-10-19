@@ -20,7 +20,7 @@
 include config.mk
 
 # Check dependencies before anything else (skip for bootstrap targets)
-SKIP_DEP_CHECK_GOALS := install-deps install-debug-session help show-config check-deps clean
+SKIP_DEP_CHECK_GOALS := install-deps install-debug-session help show-config check-deps clean install-skills uninstall-skills
 ifeq ($(filter $(SKIP_DEP_CHECK_GOALS),$(MAKECMDGOALS)),)
 $(foreach dep,$(DEPS_REQUIRED),$(call check_dep,$(dep)))
 $(foreach dep,$(BAR_DEPS),$(call check_dep,$(dep)))
@@ -99,6 +99,7 @@ LIB_SRCS := \
 	src/config/gowl-keybind.c \
 	src/ipc/gowl-ipc.c \
 	src/ipc/gowl-ipc-core.c \
+	src/ipc/gowl-ipc-methods.c \
 	src/util/gowl-log.c \
 	src/util/gowl-easing.c \
 	src/util/gowl-backdrop-plan.c \
@@ -397,7 +398,7 @@ $(OUTDIR)/gowl-lock: tools/gowl-lock/main.c \
 		echo "skipping gowl-lock: pam-devel is not installed"; \
 	fi
 
-# gowl-msg: the socket's command-line client.  GLib only; links no
+# gowl-msg: the socket's command-line client.  GLib and json-glib only; links no
 # libgowl, so it can be installed on a machine that only drives gowl
 # from outside.
 .PHONY: gowl-msg
@@ -583,6 +584,12 @@ $(OUTDIR)/test-broadcast-delivery: $(OBJDIR)/tests/xdg-shell-protocol.o $(OUTDIR
 $(OBJDIR)/tests/test-broadcast-delivery.o: xdg-shell-client-protocol.h tests/macro-test-client.h
 $(OUTDIR)/test-broadcast-delivery: TEST_LDFLAGS += $(OBJDIR)/tests/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-broadcast-delivery.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client) -DGOWL_TEST_BROADCAST_MODULE='"$(abspath $(OUTDIR)/modules/broadcast.so)"'
+# test-ipc-rpc: the wire protocol against two real toplevels (the macro
+# rig's client) and a socket connection from the test process.
+$(OUTDIR)/test-ipc-rpc: $(OBJDIR)/tests/xdg-shell-protocol.o
+$(OBJDIR)/tests/test-ipc-rpc.o: xdg-shell-client-protocol.h tests/macro-test-client.h
+$(OUTDIR)/test-ipc-rpc: TEST_LDFLAGS += $(OBJDIR)/tests/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client gio-unix-2.0 json-glib-1.0)
+$(OBJDIR)/tests/test-ipc-rpc.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client gio-unix-2.0 json-glib-1.0)
 $(OUTDIR)/test-protocols: TEST_LDFLAGS += $(OBJDIR)/bar/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client)
 $(OBJDIR)/tests/test-protocols.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client)
 
@@ -701,6 +708,9 @@ help:
 	@echo "  test         - Build and run the test suite"
 	@echo "  install      - Install to PREFIX ($(PREFIX))"
 	@echo "  uninstall    - Remove installed files"
+	@echo "  install-skills   - Install the agent skills (skills/*) to SKILLS_DIR"
+	@echo "                     ($(SKILLS_DIR)); SKILLS_LINK=1 symlinks instead"
+	@echo "  uninstall-skills - Remove them again"
 	@echo "  clean        - Remove build artifacts"
 	@echo "  clean-all    - Remove all build directories"
 	@echo ""

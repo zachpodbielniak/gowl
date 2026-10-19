@@ -37,6 +37,10 @@ INCLUDEDIR ?= $(PREFIX)/include
 HEADER_SUBDIRS := core boxed config menu module interfaces ipc tray util \
                   barkit fx protocols macro
 DATADIR ?= $(PREFIX)/share
+# Where `make install-skills' puts the agent skills under skills/: the
+# per-user skills directory Claude Code (and anything reading the same
+# layout) loads from.
+SKILLS_DIR ?= $(HOME)/.claude/skills
 PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig
 GIRDIR ?= $(DATADIR)/gir-1.0
 TYPELIBDIR ?= $(LIBDIR)/girepository-1.0
@@ -307,7 +311,7 @@ CRISPY_DIR   ?= deps/crispy
 # used to stop on `yaml-glib.h: No such file or directory' -- which reads
 # as a missing system package, not a missing make variable.  Goals that
 # compile nothing (clean, help) are let through.
-GOWL_NO_SOURCE_GOALS := clean distclean help
+GOWL_NO_SOURCE_GOALS := clean distclean help install-skills uninstall-skills
 ifneq ($(filter-out $(GOWL_NO_SOURCE_GOALS),$(or $(MAKECMDGOALS),all)),)
 ifeq ($(wildcard $(YAMLGLIB_DIR)/src/yaml-glib.h),)
 $(error YAMLGLIB_DIR=$(YAMLGLIB_DIR) has no src/yaml-glib.h: run `git submodule update --init deps/yaml-glib deps/crispy', or pass YAMLGLIB_DIR=... CRISPY_DIR=... (inside cmacs: `just gowl-modules'))

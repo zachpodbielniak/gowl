@@ -924,7 +924,7 @@ TEARDOWN_MODULES := wallpaper tile monocle float scrolling animation cube \
 	fizz leaves snow hints soapfilm embers submerged dew crt \
 	layout-indicator alpha \
 	vanitygaps roundcorners windowrules dropdown scratchpad screenshot \
-	osd clipboard bar menu
+	osd clipboard bar menu $(TRANSITION_MODULES)
 $(OUTDIR)/test-compositor-teardown: $(patsubst %,$(OUTDIR)/modules/%.so,$(TEARDOWN_MODULES))
 $(OBJDIR)/tests/test-compositor-teardown.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 

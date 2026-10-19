@@ -79,7 +79,15 @@ static const gchar *const cmacs_modules[] = {
 	"layout-indicator",
 	"alpha", "vanitygaps", "roundcorners", "windowrules", "dropdown",
 	"scratchpad", "screenshot", "osd", "clipboard",
-	"bar", "menu"
+	"bar", "menu",
+	/* The tag transitions, all loaded by cmacs.  Each holds a host with
+	 * a GL context, captured desktops and a weak reference to the
+	 * compositor it registered with, and withdraws itself from that
+	 * compositor on deactivate -- which runs after the compositor has
+	 * gone (see the top of this file). */
+	"slide", "fade", "zoom", "iris", "flip", "pagecurl", "carousel",
+	"sphere", "burn", "ripple", "pixelate", "glitch", "melt",
+	"shatter", "explode", "implode"
 };
 
 /* How a module case tears down. */

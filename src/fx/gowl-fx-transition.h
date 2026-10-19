@@ -276,6 +276,147 @@ void gowl_fx_transition_pass_desktop (GowlFxPass          *pass,
                                       gfloat               alpha,
                                       gfloat               shade);
 
+/* ── Shards ──────────────────────────────────────────────────────── */
+
+/**
+ * GowlFxShard:
+ * @x: the three corners' x, in output pixels
+ * @y: the three corners' y, in output pixels, down
+ * @cx: the centroid's x
+ * @cy: the centroid's y
+ * @r: four random numbers in [0, 1), the shard's own, for its spin, its
+ *   speed, its delay -- whatever the transition wants to vary
+ *
+ * One triangle of a desktop broken into pieces.
+ */
+typedef struct {
+	gfloat x[3];
+	gfloat y[3];
+	gfloat cx;
+	gfloat cy;
+	gfloat r[4];
+} GowlFxShard;
+
+/**
+ * gowl_fx_shards_new:
+ * @width: the output's width in pixels
+ * @height: its height
+ * @cols: grid columns
+ * @rows: grid rows
+ * @seed: makes each switch break differently
+ * @n_out: (out): how many shards
+ *
+ * Breaks the output into triangles: a grid whose inner points are
+ * jittered, each cell cut along a random diagonal.  Neighbouring shards
+ * share their corners exactly, so at rest they cover the output with no
+ * crack -- which is the seam for a transition built of them.
+ *
+ * Returns: (transfer full) (array length=n_out): the shards; g_free()
+ */
+GowlFxShard *gowl_fx_shards_new (gint     width,
+                                 gint     height,
+                                 gint     cols,
+                                 gint     rows,
+                                 guint32  seed,
+                                 gint    *n_out);
+
+/**
+ * gowl_fx_shard_emit:
+ * @dst: (out caller-allocates) (array fixed-size=21): three mesh vertices
+ *   (#GOWL_FX_MESH_STRIDE floats each)
+ * @shard: the shard
+ * @width: the output's width
+ * @height: its height
+ * @offset: (array fixed-size=3): how far its centroid has moved, in world
+ *   units (pixels, +Y up)
+ * @axis: (array fixed-size=3): the unit axis it spins about, through its
+ *   centroid
+ * @angle: how far it has spun, radians
+ * @scale: its size, 1 at rest
+ * @shade: multiplied into its colour
+ * @alpha: its opacity
+ *
+ * Places a shard in the world a transition draws in: the output centred
+ * on the origin, +Y up, one unit a pixel (what
+ * gowl_fx_mat4_perspective() and gowl_fx_mat4_view() at the distance that
+ * fills the view face-on expect).  Texture coordinates are the shard's
+ * own patch of the desktop, wherever it has flown.
+ */
+void gowl_fx_shard_emit (gfloat            *dst,
+                         const GowlFxShard *shard,
+                         gint               width,
+                         gint               height,
+                         const gfloat      *offset,
+                         const gfloat      *axis,
+                         gfloat             angle,
+                         gfloat             scale,
+                         gfloat             shade,
+                         gfloat             alpha);
+
+/**
+ * GowlFxShardPlaceFunc:
+ * @shard: the shard
+ * @index: its index
+ * @run: the run
+ * @eased: progress after the curve
+ * @linear: progress before it
+ * @offset: (out caller-allocates) (array fixed-size=3): centroid motion
+ * @axis: (out caller-allocates) (array fixed-size=3): unit spin axis
+ * @angle: (out): spin, radians
+ * @scale: (out): size, 1 at rest
+ * @shade: (out): colour multiplier
+ * @alpha: (out): opacity
+ * @user_data: what was given to gowl_fx_transition_draw_shards()
+ *
+ * Where one shard of the desktop being left is on this frame.  The out
+ * values start at rest (no offset, no spin, scale/shade/alpha 1).
+ *
+ * Returns: %FALSE to leave the shard out of this frame
+ */
+typedef gboolean (*GowlFxShardPlaceFunc) (const GowlFxShard         *shard,
+                                          gint                       index,
+                                          const GowlFxTransitionRun *run,
+                                          gdouble                    eased,
+                                          gdouble                    linear,
+                                          gfloat                    *offset,
+                                          gfloat                    *axis,
+                                          gfloat                    *angle,
+                                          gfloat                    *scale,
+                                          gfloat                    *shade,
+                                          gfloat                    *alpha,
+                                          gpointer                   user_data);
+
+/**
+ * gowl_fx_transition_draw_shards:
+ * @pass: a pass over the output
+ * @run: the run; @run->from is what the shards show
+ * @shards: (array length=n): the shards, from gowl_fx_shards_new()
+ * @n: how many
+ * @place: (scope call): where each one is this frame
+ * @user_data: passed to @place
+ * @eased: progress after the curve
+ * @linear: progress before it
+ * @to_scale: the desktop arrived at, behind them, scaled about the centre
+ * @to_shade: and its colour multiplier
+ *
+ * One frame of a transition that breaks the desktop into pieces: the
+ * camera at the distance that fills the view face-on, the new desktop
+ * flat behind, then every shard @place keeps, furthest first, in one
+ * mesh draw.  A shard that has flown behind the camera is left out.
+ *
+ * Returns: %TRUE when it drew
+ */
+gboolean gowl_fx_transition_draw_shards (GowlFxPass                *pass,
+                                         const GowlFxTransitionRun *run,
+                                         const GowlFxShard         *shards,
+                                         gint                       n,
+                                         GowlFxShardPlaceFunc       place,
+                                         gpointer                   user_data,
+                                         gdouble                    eased,
+                                         gdouble                    linear,
+                                         gfloat                     to_scale,
+                                         gfloat                     to_shade);
+
 G_END_DECLS
 
 #endif /* GOWL_FX_TRANSITION_H */

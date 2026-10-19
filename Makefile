@@ -129,6 +129,7 @@ LIB_SRCS := \
 	src/fx/gowl-fx-blend.c \
 	src/fx/gowl-fx-mesh.c \
 	src/fx/gowl-fx-transition.c \
+	src/fx/gowl-fx-shards.c \
 	src/util/gowl-systemd.c \
 	src/util/gowl-wayland-socket.c \
 	src/util/gowl-wallpaper-scale.c \
@@ -906,7 +907,7 @@ $(OBJDIR)/tests/test-blur-nodes.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abs
 # build's module directory and checks each transition it finds against
 # the seam rule on a real GPU (it skips without a render node); the
 # modules it checks are listed here so they are built first.
-TRANSITION_MODULES := slide fade zoom iris flip pagecurl carousel sphere burn ripple pixelate glitch melt
+TRANSITION_MODULES := slide fade zoom iris flip pagecurl carousel sphere burn ripple pixelate glitch melt shatter
 $(OUTDIR)/test-transition-render: $(patsubst %,$(OUTDIR)/modules/%.so,$(TRANSITION_MODULES))
 $(OUTDIR)/test-transition-render: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs cairo gmodule-2.0)
 $(OBJDIR)/tests/test-transition-render.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags cairo) -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'

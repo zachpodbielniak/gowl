@@ -72,6 +72,7 @@ In the order Super+: visits them (a module not loaded is skipped):
 | =pixelate= | =modules/pixelate= | The desktop coarsens into a mosaic, changes while the blocks are biggest (56 px on a 1080-row output, scaled with the output), and sharpens into the next one |
 | =glitch= | =modules/glitch= | A bad signal: torn slices re-dealt 24 times a second, each flipping to the next desktop at its own moment, split colour, scanlines, grain and the odd block from the wrong place. Quick on purpose (0.75x) |
 | =melt=  | =modules/melt=  | The screen wipe from a certain 1993 shooter: the desktop runs down in 160 dripping columns, each starting at its own moment and falling faster as it goes, the next desktop behind it |
+| =shatter= | =modules/shatter= | The desktop is struck like glass at the pointer: cracks open, pieces break loose in a wave spreading from the impact, and each tumbles away under gravity onto the next desktop |
 | =zoom=  | =modules/zoom=  | The tags as a stack of desktops: to a higher tag the one you are on sinks away and fades while the next settles from just in front of the glass; back, the one you are on rushes past and the one behind comes forward |
 
 * How it works
@@ -110,7 +111,7 @@ Modules contain no GL (=tests/test-transition-guard.sh=). They draw through thre
 |-----------+-----|
 | =gowl_fx_transition_pass_desktop()= | a whole desktop as a flat quad, through any MVP -- slide, zoom, flip, carousel |
 | =gowl_fx_pass_blend()= | a full-screen fragment shader reading both desktops -- fade, iris, burn, ripple, pixelate, glitch, melt, page curl |
-| =gowl_fx_pass_mesh()= | textured triangles built on the CPU each frame -- the sphere, shatter, explode, implode |
+| =gowl_fx_pass_mesh()= | textured triangles built on the CPU each frame -- the sphere, shatter, explode, implode; the last three through =gowl_fx_shards_new()= and =gowl_fx_transition_draw_shards()=, which break the desktop into crack-free triangles and draw them over the new one |
 
 The one rule every transition keeps is the *seam*: at progress 0 the picture is exactly the desktop being left, and at 1 exactly the one arrived at. Those frames are presented, and anything "nearly" the desktop there flashes on every switch. =gowl_fx_pass_blend()= enforces it for the shaders; =tests/test-transition-render.c= checks every transition against it on a real GPU.
 

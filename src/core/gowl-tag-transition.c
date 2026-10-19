@@ -407,6 +407,12 @@ gowl_compositor_set_tag_transition(GowlCompositor *self, const gchar *name)
 	    && registry_find(registry_get(self), want) == NULL)
 		return FALSE;
 
+	/* Already in force: accepted, and quiet.  An embedder pushing its
+	 * setting at every session start (cmacs does) must not toast
+	 * "Transition: Cube" at every login. */
+	if (g_strcmp0(want, gowl_compositor_get_tag_transition(self)) == 0)
+		return TRUE;
+
 	gowl_config_set_tag_transition(self->config, want);
 	picks_forget(self);
 	announce(self, want);

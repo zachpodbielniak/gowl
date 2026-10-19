@@ -184,6 +184,15 @@ test_tour_and_toast(void)
 	g_assert_cmpstr(gowl_compositor_get_tag_transition(f.compositor), ==,
 	                "random");
 
+	/* Selecting what is already in force is quiet: no toast. */
+	{
+		gint before = f.toasts;
+
+		g_assert_true(gowl_compositor_set_tag_transition(f.compositor,
+		                                                 "random"));
+		g_assert_cmpint(f.toasts, ==, before);
+	}
+
 	/* A name nothing provides is refused, not silently instant. */
 	g_assert_false(gowl_compositor_set_tag_transition(f.compositor, "nope"));
 	g_assert_cmpstr(gowl_compositor_get_tag_transition(f.compositor), ==,

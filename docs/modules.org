@@ -713,6 +713,7 @@ another.
 | =carousel=       | Tag transition: desktops swinging round a ring         |
 | =sphere=         | Tag transition: wraps the desktop onto a turning globe |
 | =burn=           | Tag transition: burns the desktop away                 |
+| =ripple=         | Tag transition: a ripple out from the pointer          |
 | =expo=           | Every tag at once, as a grid of live thumbnails        |
 | =switcher=       | Alt-tab as a 3D strip of live window previews          |
 | =magnifier=      | Zooms the whole output around the pointer              |

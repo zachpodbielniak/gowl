@@ -265,6 +265,37 @@ static const gchar blend_burn_src[] =
 	"}\n";
 
 /*
+ * Ripple: a drop falls where the pointer is.  A wavefront runs out from
+ * u_center to past the furthest corner; behind it the new desktop, ahead
+ * of it the old, and both seen through the water's surface -- every
+ * pixel displaced along the radius by a wave that is tallest at the
+ * front, decays in rings behind it and dies away ahead of it.  Crests
+ * catch a little light.  The whole swell calms as the transition ends,
+ * so the last frames settle on the desktop rather than snapping flat.
+ */
+static const gchar blend_ripple_src[] =
+	"vec4 transition(vec2 uv) {\n"
+	"  float reach = far_corner(u_center) + 0.12;\n"
+	"  float R = u_p * reach;\n"
+	"  vec2 dv = (uv - u_center) * vec2(u_aspect, 1.0);\n"
+	"  float d = length(dv);\n"
+	"  vec2 rad = d > 1e-4 ? dv / d : vec2(0.0);\n"
+	"  float x = d - R;\n"
+	"  float calm = 1.0 - u_p;\n"
+	"  /* rings trailing behind the front, a short skirt ahead of it */\n"
+	"  float env = x < 0.0 ? exp(x / 0.11) : exp(-x / 0.018);\n"
+	"  float amp = 0.022 * calm * env;\n"
+	"  float k = 42.0;\n"
+	"  float wave = sin(x * k - u_time * 6.0);\n"
+	"  vec2 off = rad * wave * amp / vec2(u_aspect, 1.0);\n"
+	"  float inside = smoothstep(0.0, 0.03, -x);\n"
+	"  vec3 c = mix(F(uv + off).rgb, T(uv + off).rgb, inside);\n"
+	"  float crest = max(cos(x * k - u_time * 6.0), 0.0);\n"
+	"  c += vec3(0.20) * crest * crest * env * calm;\n"
+	"  return vec4(c, 1.0);\n"
+	"}\n";
+
+/*
  * Indexed by GowlFxBlendKind.  NULL is a kind this build has no shader
  * for yet; each transition module's commit adds its own.
  */
@@ -272,7 +303,7 @@ static const gchar *const blend_bodies[GOWL_FX_BLEND_COUNT] = {
 	[GOWL_FX_BLEND_FADE]     = blend_fade_src,
 	[GOWL_FX_BLEND_IRIS]     = blend_iris_src,
 	[GOWL_FX_BLEND_BURN]     = blend_burn_src,
-	[GOWL_FX_BLEND_RIPPLE]   = NULL,
+	[GOWL_FX_BLEND_RIPPLE]   = blend_ripple_src,
 	[GOWL_FX_BLEND_PIXELATE] = NULL,
 	[GOWL_FX_BLEND_GLITCH]   = NULL,
 	[GOWL_FX_BLEND_MELT]     = NULL,

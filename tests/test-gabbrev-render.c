@@ -486,6 +486,39 @@ test_cancel(void)
 	host_clear(&h);
 }
 
+/* The built-in days either side, all three spellings, against dates
+   worked out here */
+static void
+test_builtin_days(void)
+{
+	static const struct {
+		const gchar *trigger;
+		gint         days;
+		const gchar *format;
+	} cases[] = {
+		{ ";yesterday",  -1, "%Y-%m-%d" },
+		{ ";hyesterday", -1, "%B %-d%o, %Y" },
+		{ ";myesterday", -1, "%Y%m%d" },
+		{ ";tomorrow",    1, "%Y-%m-%d" },
+		{ ";htomorrow",   1, "%B %-d%o, %Y" },
+		{ ";mtomorrow",   1, "%Y%m%d" },
+	};
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+		g_autoptr(GDateTime) now = g_date_time_new_now_local();
+		g_autoptr(GDateTime) day = g_date_time_add_days(now, cases[i].days);
+		g_autofree gchar *want = gabbrev_format_date(cases[i].format, day);
+		Host h;
+		g_autoptr(GabbrevRender) r = render_full(gabbrev_builtin_yaml(),
+		                                         cases[i].trigger, NULL, &h);
+
+		g_assert_null(gabbrev_render_get_error(r));
+		g_assert_cmpstr(gabbrev_render_get_text(r), ==, want);
+		host_clear(&h);
+	}
+}
+
 /* The libgowl registry and answering by id */
 static gchar *
 registered_func(
@@ -560,5 +593,6 @@ main(int argc, char **argv)
 	                test_captures_case_cursor_form);
 	g_test_add_func("/gabbrev/render/cancel", test_cancel);
 	g_test_add_func("/gabbrev/render/registry", test_registry);
+	g_test_add_func("/gabbrev/render/builtin-days", test_builtin_days);
 	return g_test_run();
 }

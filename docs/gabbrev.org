@@ -455,7 +455,7 @@ modules:
 | =;iso=      | =2026-10-19T14:05:09-04:00=         | =;<== =;>== =;!== | =≤= =≥= =≠=   |
 | =;time=     | =14:05=                             | =;+-= =;inf= =;deg= | =±= =∞= =°= |
 | =;htime=    | =2:05 PM=                           | =;em= =;en= =;...= | =—= =–= =…=  |
-| =;yesterday= =;tomorrow= | the dates either side  | =;bullet= =;check= =;cross= | =•= =✓= =✗= |
+| =;yesterday= =;tomorrow= (and =;h...=, =;m...=) | the dates either side, three ways | =;bullet= =;check= =;cross= | =•= =✓= =✗= |
 | =;week=     | =2026-W43=                          | =;copy= =;reg= =;tm= =;euro= | =©= =®= =™= =€= |
 | =;dow=      | =Monday=                            | =;uuid=       | a random UUID     |
 | =;month=    | =October 2026=                      | =;user= =;host= | you, this machine |

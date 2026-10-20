@@ -99,21 +99,31 @@ test_builtin(void)
 	g_assert_cmpstr(gabbrev_set_find_trigger(set, ";shrug")->replace, ==,
 	                "\xc2\xaf\\_(\xe3\x83\x84)_/\xc2\xaf");
 
-	for (i = 0; i < set->matches->len; i++) {
-		GabbrevMatch *a = g_ptr_array_index(set->matches, i);
-		const gchar *ta = g_ptr_array_index(a->triggers, 0);
+	/* Every trigger of every match, aliases (;date) included */
+	{
+		g_autoptr(GPtrArray) all = g_ptr_array_new();
+		guint k;
 
-		g_assert_true(g_str_has_prefix(ta, ";"));
-		for (j = 0; j < set->matches->len; j++) {
-			GabbrevMatch *b = g_ptr_array_index(set->matches, j);
-			const gchar *tb = g_ptr_array_index(b->triggers, 0);
+		for (i = 0; i < set->matches->len; i++) {
+			GabbrevMatch *m = g_ptr_array_index(set->matches, i);
 
-			if (i == j)
-				continue;
-			if (g_str_has_prefix(tb, ta))
-				g_error("built-in `%s' is a prefix of `%s'", ta, tb);
+			for (k = 0; k < m->triggers->len; k++)
+				g_ptr_array_add(all, g_ptr_array_index(m->triggers, k));
+		}
+		for (i = 0; i < all->len; i++) {
+			const gchar *ta = g_ptr_array_index(all, i);
+
+			g_assert_true(g_str_has_prefix(ta, ";"));
+			for (j = 0; j < all->len; j++) {
+				const gchar *tb = g_ptr_array_index(all, j);
+
+				if (i != j && g_str_has_prefix(tb, ta))
+					g_error("built-in `%s' is a prefix of `%s'", ta, tb);
+			}
 		}
 	}
+	g_assert_true(gabbrev_set_find_trigger(set, ";date")
+	              == gabbrev_set_find_trigger(set, ";today"));
 }
 
 /* An espanso configuration directory, read as espanso reads it. */

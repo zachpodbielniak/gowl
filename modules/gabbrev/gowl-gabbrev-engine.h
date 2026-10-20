@@ -96,6 +96,10 @@ GabbrevHit    *gabbrev_engine_feed           (GabbrevEngine       *engine,
                                               gunichar             c,
                                               GabbrevAllowFunc     allow,
                                               gpointer             user_data);
+GabbrevHit    *gabbrev_engine_complete       (GabbrevEngine       *engine,
+                                              GabbrevAllowFunc     allow,
+                                              gpointer             user_data);
+gchar         *gabbrev_engine_last_word      (GabbrevEngine       *engine);
 gchar         *gabbrev_engine_get_text       (GabbrevEngine       *engine);
 guint          gabbrev_engine_get_length     (GabbrevEngine       *engine);
 

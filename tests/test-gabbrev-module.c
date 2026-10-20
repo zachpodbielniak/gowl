@@ -281,6 +281,27 @@ test_expand(
 	assert_typed(b, 5, want, G_N_ELEMENTS(want));
 }
 
+/* The expand key: `brb' typed with no separator yet expands at once */
+static void
+test_expand_key(
+	Bench         *b,
+	gconstpointer  data
+){
+	static const guint32 want[] = {
+		KEY_BACKSPACE, KEY_BACKSPACE, KEY_BACKSPACE,
+		KEY_B, KEY_E, KEY_SPACE, KEY_R, KEY_I, KEY_G, KEY_H, KEY_T,
+		KEY_SPACE, KEY_B, KEY_A, KEY_C, KEY_K
+	};
+	g_autofree gchar *reply = NULL;
+
+	(void)data;
+	BENCH_UP(b);
+	type(b, "ok brb");
+	reply = command(b, "gabbrev-search");
+	g_assert_true(g_str_has_prefix(reply, "OK expanded"));
+	assert_typed(b, 6, want, G_N_ELEMENTS(want));
+}
+
 /* A word trigger fires on the separator and types it back */
 static void
 test_word(
@@ -561,6 +582,7 @@ main(int argc, char **argv)
 	g_test_init(&argc, &argv, NULL);
 	ADD("/gabbrev/module/expand", test_expand);
 	ADD("/gabbrev/module/word", test_word);
+	ADD("/gabbrev/module/expand-key", test_expand_key);
 	ADD("/gabbrev/module/undo", test_undo);
 	ADD("/gabbrev/module/cursor-hint", test_cursor_hint);
 	ADD("/gabbrev/module/paste", test_paste);

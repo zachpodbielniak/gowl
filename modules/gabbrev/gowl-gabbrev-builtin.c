@@ -43,7 +43,7 @@ static const gchar builtin_yaml[] =
 "# gabbrev built-in matches.  Override one by giving its trigger again.\n"
 "matches:\n"
 "  # --- dates and times -------------------------------------------\n"
-"  - trigger: \";today\"\n"
+"  - triggers: [\";today\", \";date\"]\n"
 "    label: \"Today's date, ISO 8601 (2026-10-19)\"\n"
 "    replace: \"{{d}}\"\n"
 "    vars: [{name: d, type: date, params: {format: \"%Y-%m-%d\"}}]\n"

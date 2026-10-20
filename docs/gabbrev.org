@@ -124,6 +124,17 @@ Terminals paste with Ctrl+Shift+V and copy with Ctrl+Shift+C.  gabbrev knows the
 
 The job's typing starts one event-loop turn after the key that completed the trigger, never in the middle of delivering it.
 
+*** The expand key
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-expand-key
+:END:
+Bind =gabbrev-search= to a key (=search_shortcut=, or a keybind with =action: ipc-command=; =cmacs --gowl= binds *Super+Alt+e*) and it does what you meant by pressing it:
+
+- the text typed into the window *ends with a trigger* --- expand it now, whatever its word rules say (pressing the key is the separator): =brb= then the key is =be right back=;
+- otherwise *search*, starting from the word being typed: the rows containing it come first (in the minibuffer under cmacs, it is the initial input), and the match picked *replaces* that word.  =;dat= then the key offers =;date= first.
+
+=gabbrev-search-all= is the plain picker, replacing nothing.
+
 *** Undo
 :PROPERTIES:
 :CUSTOM_ID: gabbrev-undo
@@ -435,7 +446,7 @@ modules:
 
 | Trigger | Becomes | Trigger | Becomes |
 |---------+---------+---------+---------|
-| =;today=    | =2026-10-19=                        | =;shrug=      | =¯\_(ツ)_/¯=      |
+| =;today= =;date= | =2026-10-19=                   | =;shrug=      | =¯\_(ツ)_/¯=      |
 | =;htoday=   | =October 19th, 2026=                | =;tableflip=  | =(╯°□°)╯︵ ┻━┻=   |
 | =;mtoday=   | =20261019=                          | =;unflip=     | =┬─┬ノ( º _ ºノ)=  |
 | =;now=      | =2026-10-19 14:05:09=               | =;lenny=      | =( ͡° ͜ʖ ͡°)=       |
@@ -468,7 +479,8 @@ Replace one by giving its trigger again; drop them all with =builtin: false=.
 | =gabbrev-remove NAME=, =gabbrev-clear=    | drop runtime sources                                         |
 | =gabbrev-expand ID=                       | type a match into the focused window, as if triggered        |
 | =gabbrev-insert TEXT=                     | type TEXT (keys or paste, by the backend)                    |
-| =gabbrev-search=                          | pick a match from a list and type it                         |
+| =gabbrev-search=                          | the expand key: expand the trigger just typed (word rules waived); else pick a match, starting from the word being typed, which the pick replaces |
+| =gabbrev-search-all=                      | pick from every match and type it                            |
 | =gabbrev-render [--id ID] [--custom FORM -- ] ID= | render only: =EVENT gabbrev rendered ID "TEXT"=; =--custom= also runs FORM with =%r= as the text (cmacs: Lisp) |
 | =gabbrev-test TEXT=                       | JSON: which match TEXT, typed into the focused window, fires --- and whether the window is denied or disabled |
 | =gabbrev-resolve ID JSON-STRING=          | answer variable request ID (an external provider)            |

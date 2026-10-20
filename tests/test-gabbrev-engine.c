@@ -287,6 +287,34 @@ test_builtin_triggers(void)
 	gabbrev_hit_free(h);
 }
 
+/* The expand key: the trigger the text ends with, word rules waived */
+static void
+test_complete(void)
+{
+	g_autoptr(GabbrevSet) set = NULL;
+	g_autoptr(GabbrevEngine) e = engine_for(
+		"matches:\n"
+		"  - {trigger: 'brb', replace: 'be right back', word: true}\n"
+		"  - {trigger: ';date', replace: d}\n", &set);
+	g_autoptr(GabbrevHit) h = NULL;
+	g_autofree gchar *word = NULL;
+
+	/* `brb' typed, no separator: the key fires it */
+	g_assert_null(type(e, "say brb"));
+	h = gabbrev_engine_complete(e, NULL, NULL);
+	g_assert_nonnull(h);
+	g_assert_cmpstr(h->typed, ==, "brb");
+	g_assert_cmpuint(h->n_delete, ==, 3);
+	g_assert_null(h->trailing);
+	g_assert_cmpuint(gabbrev_engine_get_length(e), ==, 0);
+
+	/* nothing to complete: the word being typed, `;' kept */
+	g_assert_null(type(e, "see ;dat"));
+	g_assert_null(gabbrev_engine_complete(e, NULL, NULL));
+	word = gabbrev_engine_last_word(e);
+	g_assert_cmpstr(word, ==, ";dat");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -301,5 +329,6 @@ main(int argc, char **argv)
 	g_test_add_func("/gabbrev/engine/allow", test_allow);
 	g_test_add_func("/gabbrev/engine/unicode", test_unicode);
 	g_test_add_func("/gabbrev/engine/builtin-triggers", test_builtin_triggers);
+	g_test_add_func("/gabbrev/engine/complete", test_complete);
 	return g_test_run();
 }

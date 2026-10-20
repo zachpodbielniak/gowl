@@ -611,3 +611,85 @@ gabbrev_apply_case(
 		return g_strdup(text);
 	}
 }
+
+/* ── Asked for, not typed ────────────────────────────────────────────── */
+
+/**
+ * gabbrev_engine_complete: (skip)
+ * @engine: an engine
+ * @allow: (nullable): asked about every textual candidate
+ * @user_data: for @allow
+ *
+ * The expand key: the longest trigger the text typed so far ENDS with,
+ * whatever its word rules say -- asking is the separator.  The engine
+ * forgets what was typed when there is a hit.
+ *
+ * Returns: (transfer full) (nullable): the hit, or %NULL
+ */
+GabbrevHit *
+gabbrev_engine_complete(
+	GabbrevEngine    *engine,
+	GabbrevAllowFunc  allow,
+	gpointer          user_data
+){
+	const gunichar *buf = (const gunichar *)engine->buffer->data;
+	glong n = (glong)engine->buffer->len;
+	const Entry *best = NULL;
+	GabbrevHit *hit;
+	guint i;
+
+	for (i = 0; i < engine->entries->len; i++) {
+		const Entry *e = g_ptr_array_index(engine->entries, i);
+		gboolean ci = e->match->propagate_case;
+		glong start = n - e->len;
+		glong k;
+
+		if (start < 0)
+			continue;
+		for (k = 0; k < e->len; k++) {
+			gunichar b = buf[start + k];
+
+			if (ci ? g_unichar_tolower(b) != e->lower[k] : b != e->chars[k])
+				break;
+		}
+		if (k < e->len)
+			continue;
+		if (best != NULL && !better(e->len, e->match, best->len, best->match))
+			continue;
+		if (allow != NULL && !allow(e->match, user_data))
+			continue;
+		best = e;
+	}
+	if (best == NULL)
+		return NULL;
+	hit = g_new0(GabbrevHit, 1);
+	hit->match = gabbrev_match_ref(best->match);
+	hit->typed = slice(engine, n - best->len, n);
+	hit->n_delete = (guint)best->len;
+	if (best->match->propagate_case)
+		hit->typed_case = gabbrev_typed_case(hit->typed);
+	gabbrev_engine_reset(engine);
+	return hit;
+}
+
+/**
+ * gabbrev_engine_last_word: (skip)
+ * @engine: an engine
+ *
+ * Returns: (transfer full): what was typed since the last separator
+ *   (empty when nothing was)
+ */
+gchar *
+gabbrev_engine_last_word(GabbrevEngine *engine)
+{
+	const gunichar *buf = (const gunichar *)engine->buffer->data;
+	glong n = (glong)engine->buffer->len;
+	glong start = n;
+
+	while (start > 0 && !gabbrev_engine_is_separator(engine, buf[start - 1]))
+		start--;
+	/* `;' starts every shipped trigger and separates words: keep it */
+	if (start > 0 && buf[start - 1] == ';')
+		start--;
+	return slice(engine, start, n);
+}

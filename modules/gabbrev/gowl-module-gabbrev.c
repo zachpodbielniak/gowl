@@ -70,7 +70,9 @@
  *                                  render only: the result goes to the
  *                                  event stream (and a custom action)
  *   gabbrev-test TEXT              which match TEXT would fire (JSON)
- *   gabbrev-search                 pick a match and type it
+ *   gabbrev-search                 expand what was just typed, else pick a
+ *                                  match (starting from the typed word)
+ *   gabbrev-search-all             pick from every match
  *   gabbrev-resolve ID JSON        answer variable request ID
  *   gabbrev-resolve-error ID TEXT  fail variable request ID
  *   gabbrev-cancel                 drop every running expansion
@@ -2946,16 +2948,24 @@ resolve_search(
 	Job                *job,
 	GowlGabbrevRequest *req
 ){
+	const gchar *query = gowl_gabbrev_request_get_param(req, "query");
+	g_autofree gchar *needle = query != NULL && *query != '\0'
+		? g_utf8_casefold(query, -1) : NULL;
 	Picker *p;
+	guint pass;
 	guint i;
 
 	if (job == NULL) {
 		gowl_gabbrev_request_return_error(req, "search: no expansion");
 		return;
 	}
+
 	p = picker_new(self, job, req, PICK_SEARCH);
 	p->matches = g_ptr_array_new_with_free_func(
 		(GDestroyNotify)gabbrev_match_unref);
+	/* With a query (the word being typed), the rows containing it come
+	   first: a dmenu-style picker has no initial text to filter by */
+	for (pass = needle != NULL ? 0 : 1; pass < 2; pass++)
 	for (i = 0; i < job->set->matches->len; i++) {
 		GabbrevMatch *m = g_ptr_array_index(job->set->matches, i);
 		g_autofree gchar *what = NULL;
@@ -2972,6 +2982,15 @@ resolve_search(
 		} else {
 			what = g_strndup(m->replace != NULL ? m->replace : "", 60);
 			g_strdelimit(what, "\n\t", ' ');
+		}
+		if (needle != NULL) {
+			g_autofree gchar *row = g_strdup_printf("%s %s", trigger, what);
+			g_autofree gchar *folded = g_utf8_casefold(row, -1);
+			gboolean hit = strstr(folded, needle) != NULL;
+
+			/* pass 0: the rows with it; pass 1: the rest */
+			if ((pass == 0) != hit)
+				continue;
 		}
 		g_ptr_array_add(p->labels, g_strdup_printf("%s \xe2\x80\x94 %s",
 		                trigger, what));
@@ -3181,13 +3200,22 @@ plain_match(
 	return m;
 }
 
+/* The search, as a match: one `search' variable, given @query (what
+   was being typed) to start from when there is one. */
 static GabbrevMatch *
-search_match(void)
+search_match(const gchar *query)
 {
 	GabbrevMatch *m = plain_match("<search>", "{{picked}}");
+	g_autoptr(YamlNode) params = NULL;
 
 	m->label = g_strdup("Search the matches");
-	g_ptr_array_add(m->vars, gabbrev_var_new("picked", "search", NULL));
+	if (query != NULL && *query != '\0') {
+		g_autoptr(YamlMapping) map = yaml_mapping_new();
+
+		yaml_mapping_set_string_member(map, "query", query);
+		params = yaml_node_new_mapping(map);
+	}
+	g_ptr_array_add(m->vars, gabbrev_var_new("picked", "search", params));
 	return m;
 }
 
@@ -3223,6 +3251,69 @@ expand_now(
 	if (id == 0)
 		return g_strdup("ERROR too many expansions running");
 	return g_strdup_printf("OK started %u %s", id, m->id);
+}
+
+/*
+ * The expand key (and `gabbrev-search').  What was typed into the
+ * focused window ends with a trigger: expand it now, whatever its word
+ * rules -- pressing the key is the separator.  Otherwise the search,
+ * starting from the word being typed, which the pick then replaces:
+ * `;dat' and the key offer `;date' and friends first.
+ */
+static gchar *
+expand_typed_or_search(GowlModuleGabbrev *self)
+{
+	GowlClient *c = focused_client(self);
+	g_autofree gchar *word = NULL;
+	g_autoptr(GabbrevMatch) search = NULL;
+	GabbrevHit *hit = NULL;
+	Context ctx;
+	guint id;
+	gboolean typed_here;
+
+	if (c == NULL)
+		return g_strdup("ERROR no window has focus");
+	context_init(self, &ctx, c);
+	if (ctx.denied || ctx.disabled) {
+		context_clear(&ctx);
+		return g_strdup("ERROR expansion is off in the focused window");
+	}
+	typed_here = gowl_client_get_id(c) == self->typing_target;
+	/* Reached from a keybind: the chord is still held.  Type a loop
+	   turn later, as after a typed trigger. */
+	self->in_key = TRUE;
+	if (typed_here)
+		hit = gabbrev_engine_complete(self->engine, match_allowed, &ctx);
+	if (hit != NULL) {
+		id = job_start(self, hit->match, hit, c, &ctx, ORIGIN_TYPED,
+		               NULL, NULL);
+		self->in_key = FALSE;
+		context_clear(&ctx);
+		gabbrev_hit_free(hit);
+		return id != 0 ? g_strdup_printf("OK expanded %u", id)
+		       : g_strdup("ERROR too many expansions running");
+	}
+
+	/* No trigger: search, from the word being typed */
+	word = typed_here ? gabbrev_engine_last_word(self->engine) : g_strdup("");
+	search = search_match(word);
+	if (*word != '\0') {
+		GabbrevHit fake;
+
+		/* The pick replaces the word: a typed job rubs it out */
+		memset(&fake, 0, sizeof fake);
+		fake.match = search;
+		fake.typed = word;
+		fake.n_delete = (guint)g_utf8_strlen(word, -1);
+		gabbrev_engine_reset(self->engine);
+		id = job_start(self, search, &fake, c, &ctx, ORIGIN_TYPED, NULL, NULL);
+	} else {
+		id = job_start(self, search, NULL, c, &ctx, ORIGIN_EXPAND, NULL, NULL);
+	}
+	self->in_key = FALSE;
+	context_clear(&ctx);
+	return id != 0 ? g_strdup_printf("OK searching %u", id)
+	       : g_strdup("ERROR too many expansions running");
 }
 
 static void
@@ -3350,11 +3441,10 @@ gab_filter_key(
 		return TRUE;
 	}
 	if (self->on && key_is(key, self->search_mods, self->search_sym)) {
-		g_autoptr(GabbrevMatch) m = search_match();
 		g_autofree gchar *r = NULL;
 
 		g_hash_table_add(self->swallowed, kc);
-		r = expand_now(self, m, ORIGIN_EXPAND, NULL, NULL);
+		r = expand_typed_or_search(self);
 		if (!g_str_has_prefix(r, "OK"))
 			gab_notify(self, "Search", r);
 		return TRUE;
@@ -3948,8 +4038,10 @@ gab_handle_command(
 
 		return expand_now(self, m, ORIGIN_EXPAND, NULL, NULL);
 	}
-	if (g_strcmp0(verb, "search") == 0) {
-		g_autoptr(GabbrevMatch) m = search_match();
+	if (g_strcmp0(verb, "search") == 0)
+		return expand_typed_or_search(self);
+	if (g_strcmp0(verb, "search-all") == 0) {
+		g_autoptr(GabbrevMatch) m = search_match(NULL);
 
 		return expand_now(self, m, ORIGIN_EXPAND, NULL, NULL);
 	}
@@ -3992,7 +4084,7 @@ gab_handle_command(
 	return g_strdup_printf("ERROR unknown command %s: gabbrev-status, -list, "
 	                       "-on, -off, -toggle, -reload, -load, -add, "
 	                       "-remove, -clear, -expand, -insert, -render, "
-	                       "-test, -search, -resolve, -resolve-error, "
+	                       "-test, -search, -search-all, -resolve, -resolve-error, "
 	                       "-cancel, -builtin", command);
 }
 

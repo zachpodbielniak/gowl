@@ -146,6 +146,20 @@ relative-pointer-unstable-v1-protocol.c:
 	$(WAYLAND_SCANNER) private-code \
 		$(WAYLAND_PROTOCOLS_DIR)/unstable/relative-pointer/relative-pointer-unstable-v1.xml $@
 
+# text-input-v3, client side: the gabbrev test's always-focused text
+# field, which sees what an expansion commits through the protocol.
+text-input-unstable-v3-client-protocol.h:
+	$(WAYLAND_SCANNER) client-header \
+		$(WAYLAND_PROTOCOLS_DIR)/unstable/text-input/text-input-unstable-v3.xml $@
+
+text-input-unstable-v3-protocol.c:
+	$(WAYLAND_SCANNER) private-code \
+		$(WAYLAND_PROTOCOLS_DIR)/unstable/text-input/text-input-unstable-v3.xml $@
+
+$(OBJDIR)/tests/text-input-unstable-v3-protocol.o: text-input-unstable-v3-protocol.c text-input-unstable-v3-client-protocol.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(TEST_CFLAGS) -Wno-unused-parameter -c $< -o $@
+
 $(OBJDIR)/tests/pointer-constraints-unstable-v1-protocol.o: pointer-constraints-unstable-v1-protocol.c pointer-constraints-unstable-v1-client-protocol.h | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(TEST_CFLAGS) -Wno-unused-parameter -c $< -o $@

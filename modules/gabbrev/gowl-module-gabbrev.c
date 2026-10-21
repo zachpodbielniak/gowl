@@ -75,11 +75,19 @@
  *   gabbrev-search-all             pick from every match
  *   gabbrev-resolve ID JSON        answer variable request ID
  *   gabbrev-resolve-error ID TEXT  fail variable request ID
- *   gabbrev-cancel                 drop every running expansion
+ *   gabbrev-cancel [JOB]           drop one running expansion, or all
  *   gabbrev-builtin                the built-in matches, as YAML
+ *   gabbrev-stats [--unused]       uses per match (JSON)
+ *   gabbrev-stats-reset [ID]       forget the counts (of one match)
+ *   gabbrev-suggestions [N]        phrases typed often (JSON; learning)
+ *   gabbrev-accept [--trigger T] PHRASE
+ *                                  a suggestion becomes a match
+ *   gabbrev-dismiss PHRASE         never suggest it again (this session)
+ *   gabbrev-learn [on|off|clear]   learning repeated phrases
  *
  * Events: EVENT gabbrev expanded ID, failed ID REASON, on, off,
- * reloaded N, rendered ID JSON.
+ * reloaded N, rendered ID JSON, pending JOB ID TYPE, suggestion
+ * TRIGGER JSON, accepted TRIGGER JSON.
  */
 
 #undef G_LOG_DOMAIN
@@ -92,6 +100,7 @@
 #include <linux/input-event-codes.h>
 #include <string.h>
 #include <sys/eventfd.h>
+#include <sys/inotify.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
 #include <xkbcommon/xkbcommon.h>
@@ -117,6 +126,8 @@
 #include "gowl-gabbrev-engine.h"
 #include "gowl-gabbrev-render.h"
 #include "gowl-gabbrev-cvar.h"
+#include "gowl-gabbrev-stats.h"
+#include "gowl-gabbrev-learn.h"
 
 #define GABBREV_PREFIX            "gabbrev-"
 #define GABBREV_MAX_JOBS          (8)
@@ -127,6 +138,10 @@
 #define GABBREV_C_TIMEOUT_MS      (500)
 #define GABBREV_GRAB_SETTLE_MS    (150)
 #define GABBREV_MAX_FILE_BYTES    (1024 * 1024)
+#define GABBREV_STATS_SAVE_MS     (5000)
+#define GABBREV_WATCH_SETTLE_MS   (300)
+#define GABBREV_PENDING_TOAST_MS  (1500)
+#define GABBREV_SUGGEST_LIMIT     (20)
 
 /* Never expanded into, unless the deny filter is changed: password
    managers, pinentry, polkit, and any window that says it wants a
@@ -161,7 +176,8 @@ typedef enum {
 	STEP_RESTORE_CLIPBOARD,
 	STEP_WAIT,
 	STEP_FOCUS,         /* give the target keyboard focus */
-	STEP_CALL           /* a function, in sequence (may pause) */
+	STEP_CALL,          /* a function, in sequence (may pause) */
+	STEP_COMMIT         /* text-input-v3: delete before, commit text */
 } StepKind;
 
 typedef gboolean (*StepFunc) (GowlModuleGabbrev *self, Job *job,
@@ -177,6 +193,8 @@ typedef struct {
 	GBytes   *bytes;
 	gchar    *mime;
 	guint     ms;
+	guint     bytes_before; /* STEP_COMMIT: bytes to delete first */
+	guint     chars_before; /* STEP_COMMIT: the same, in characters */
 	StepFunc  func;       /* STEP_CALL: FALSE pauses the player */
 	gpointer  data;
 	GDestroyNotify destroy;
@@ -218,6 +236,7 @@ struct _Job {
 	gchar              *saved_clipboard;
 	gint64              started_us;
 	struct wl_event_source *timeout;
+	struct wl_event_source *pending_timer; /* the "still waiting" toast */
 	gchar              *render_id;    /* ORIGIN_RENDER: the caller's id */
 	gchar              *custom_form;  /* ORIGIN_RENDER: %r gets the text */
 };
@@ -332,6 +351,33 @@ struct _GowlModuleGabbrev {
 	GHashTable         *macro_waits;     /* run id -> GowlGabbrevRequest ref */
 	guint               macro_listener;
 
+	/* usage statistics (gowl-gabbrev-stats.c) */
+	gboolean            stats_on;
+	gchar              *stats_file;      /* NULL: the default; "": memory */
+	GabbrevStats       *stats;
+	gboolean            stats_loaded;
+	struct wl_event_source *stats_timer; /* the debounced save */
+
+	/* learning repeated phrases (gowl-gabbrev-learn.c), opt-in */
+	gboolean            learn;
+	gboolean            learn_terminals;
+	gboolean            learn_toast;
+	guint               learn_min_count;
+	gchar              *learned_file;    /* NULL: the default */
+	GabbrevLearner     *learner;         /* NULL until learning is on */
+	GHashTable         *dismissed;       /* casefolded phrases */
+
+	/* reloading when a source changes */
+	gboolean            watch;
+	gint                watch_fd;
+	struct wl_event_source *watch_source;
+	struct wl_event_source *watch_timer;
+	GHashTable         *watch_dirs;      /* path -> wd */
+
+	/* what the clipboard history sees */
+	gboolean            clipboard_history;
+	guint               pending_toast_ms;
+
 	/* counters */
 	guint64             n_expanded;
 	guint64             n_failed;
@@ -353,6 +399,7 @@ G_DEFINE_TYPE_WITH_CODE(GowlModuleGabbrev, gowl_module_gabbrev,
 	G_IMPLEMENT_INTERFACE(GOWL_TYPE_SHUTDOWN_HANDLER, gab_shutdown_init))
 
 static void job_fail       (GowlModuleGabbrev *self, Job *job, const gchar *why);
+static gchar *json_quote   (const gchar *s);
 static void job_unref      (Job *job);
 static void play_steps     (GowlModuleGabbrev *self);
 static void reload         (GowlModuleGabbrev *self);
@@ -419,11 +466,14 @@ gab_event(
 
 /* A notification: the bar's toast (when it is loaded) and the
    compositor's toast signal. */
+/* A toast, naming the bar panel that acts on it (NULL for none): the
+   bar opens that panel when the toast is clicked. */
 static void
-gab_notify(
+gab_notify_panel(
 	GowlModuleGabbrev *self,
 	const gchar       *summary,
-	const gchar       *body
+	const gchar       *body,
+	const gchar       *panel
 ){
 	g_autofree gchar *s = NULL;
 	g_autofree gchar *b = NULL;
@@ -435,11 +485,22 @@ gab_notify(
 		return;
 	s = g_strdelimit(g_strdup(summary), "|\n", ' ');
 	b = g_strdelimit(g_strdup(body != NULL ? body : ""), "|\n", ' ');
-	line = g_strdup_printf("bar-notify %s|%s", s, b);
+	line = panel != NULL
+		? g_strdup_printf("bar-notify %s|%s|%s", s, b, panel)
+		: g_strdup_printf("bar-notify %s|%s", s, b);
 	g_free(gowl_compositor_run_command(self->compositor, line));
 	g_signal_emit_by_name(self->compositor, "toast-requested",
 	                      gowl_compositor_get_selected_monitor(self->compositor),
 	                      s);
+}
+
+static void
+gab_notify(
+	GowlModuleGabbrev *self,
+	const gchar       *summary,
+	const gchar       *body
+){
+	gab_notify_panel(self, summary, body, NULL);
 }
 
 static GowlClient *
@@ -923,6 +984,460 @@ post_close(GowlModuleGabbrev *self)
 	g_mutex_unlock(&self->post_lock);
 }
 
+/* ── Usage statistics ──────────────────────────────────────────────── */
+
+/* An XDG base directory, read from the environment every time (GLib
+   caches its answer for the life of the process) */
+static gchar *
+xdg_dir(
+	const gchar *env,
+	const gchar *fallback
+){
+	const gchar *v = g_getenv(env);
+
+	if (v != NULL && g_path_is_absolute(v))
+		return g_strdup(v);
+	return g_build_filename(g_get_home_dir(), fallback, NULL);
+}
+
+/* Where the counts live, or NULL to keep them in memory only */
+static gchar *
+stats_path(GowlModuleGabbrev *self)
+{
+	g_autofree gchar *dir = NULL;
+
+	if (self->stats_file != NULL)
+		return *self->stats_file != '\0'
+			? gabbrev_expand_path(self->stats_file, NULL) : NULL;
+	dir = xdg_dir("XDG_STATE_HOME", ".local/state");
+	return g_build_filename(dir, "gowl", "gabbrev-stats.tsv", NULL);
+}
+
+/* Read the file once, on first need: counts from earlier sessions add
+   to this one's */
+static void
+stats_load(GowlModuleGabbrev *self)
+{
+	g_autofree gchar *path = NULL;
+	g_autoptr(GError) error = NULL;
+
+	if (self->stats_loaded)
+		return;
+	self->stats_loaded = TRUE;
+	path = stats_path(self);
+	if (path != NULL && !gabbrev_stats_load(self->stats, path, &error))
+		g_message("gabbrev: usage counts not read: %s", error->message);
+}
+
+static void
+stats_save_now(GowlModuleGabbrev *self)
+{
+	g_autofree gchar *path = NULL;
+	g_autoptr(GError) error = NULL;
+
+	if (self->stats_timer != NULL)
+		wl_event_source_timer_update(self->stats_timer, 0);
+	if (!self->stats_loaded || !gabbrev_stats_is_dirty(self->stats))
+		return;
+	path = stats_path(self);
+	if (path == NULL)
+		return;
+	if (!gabbrev_stats_save(self->stats, path, &error))
+		g_message("gabbrev: usage counts not saved: %s", error->message);
+}
+
+static gint
+on_stats_timer(gpointer data)
+{
+	stats_save_now(GOWL_MODULE_GABBREV(data));
+	return 0;
+}
+
+/* One use of @m: counted now, written a few seconds later (a burst of
+   expansions is one write, and a keystroke never waits on the disk) */
+static void
+stats_note(
+	GowlModuleGabbrev *self,
+	GabbrevMatch      *m
+){
+	if (!self->stats_on || m == NULL || m->id == NULL || m->id[0] == '<')
+		return;
+	stats_load(self);
+	gabbrev_stats_record(self->stats, m->id,
+	                     g_get_real_time() / G_USEC_PER_SEC);
+	if (self->compositor == NULL) {
+		stats_save_now(self);
+		return;
+	}
+	if (self->stats_timer == NULL)
+		self->stats_timer = wl_event_loop_add_timer(
+			gowl_compositor_get_event_loop(self->compositor),
+			(wl_event_loop_timer_func_t)on_stats_timer, self);
+	if (self->stats_timer != NULL)
+		wl_event_source_timer_update(self->stats_timer,
+		                             GABBREV_STATS_SAVE_MS);
+}
+
+/* ── Learning repeated phrases ─────────────────────────────────────── */
+
+/* Every trigger loaded, for collision checks */
+static GHashTable *
+trigger_set(GowlModuleGabbrev *self)
+{
+	GHashTable *h = g_hash_table_new(g_str_hash, g_str_equal);
+	guint i, j;
+
+	for (i = 0; self->set != NULL && i < self->set->matches->len; i++) {
+		GabbrevMatch *m = g_ptr_array_index(self->set->matches, i);
+
+		for (j = 0; j < m->triggers->len; j++)
+			g_hash_table_add(h, g_ptr_array_index(m->triggers, j));
+	}
+	return h;
+}
+
+/* What is already expanded to (casefolded), and what the user said no
+   to: neither is suggested */
+static GHashTable *
+known_phrases(GowlModuleGabbrev *self)
+{
+	GHashTable *h = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+	                                      NULL);
+	GHashTableIter it;
+	gpointer key;
+	guint i;
+
+	for (i = 0; self->set != NULL && i < self->set->matches->len; i++) {
+		GabbrevMatch *m = g_ptr_array_index(self->set->matches, i);
+
+		if (m->replace != NULL && m->vars->len == 0)
+			g_hash_table_add(h, g_utf8_casefold(m->replace, -1));
+	}
+	g_hash_table_iter_init(&it, self->dismissed);
+	while (g_hash_table_iter_next(&it, &key, NULL))
+		g_hash_table_add(h, g_strdup(key));
+	return h;
+}
+
+/* The path suggestions are accepted into; loaded like any other file */
+static gchar *
+learned_path(GowlModuleGabbrev *self)
+{
+	g_autofree gchar *dir = NULL;
+
+	if (self->learned_file != NULL && *self->learned_file != '\0')
+		return gabbrev_expand_path(self->learned_file, NULL);
+	dir = xdg_dir("XDG_CONFIG_HOME", ".config");
+	return g_build_filename(dir, "gowl", "gabbrev-learned.yml", NULL);
+}
+
+static void
+learn_set(
+	GowlModuleGabbrev *self,
+	gboolean           on
+){
+	self->learn = on;
+	if (on && self->learner == NULL)
+		self->learner = gabbrev_learner_new();
+	if (self->learner != NULL)
+		gabbrev_learner_set_limits(self->learner, 0, 0, 0,
+		                           self->learn_min_count, 0);
+	if (!on && self->learner != NULL)
+		gabbrev_learner_break(self->learner);
+}
+
+static void
+learn_break(GowlModuleGabbrev *self)
+{
+	if (self->learner != NULL)
+		gabbrev_learner_break(self->learner);
+}
+
+/* What was typed stops meaning anything: the matcher and the learner */
+static void
+typing_reset(GowlModuleGabbrev *self)
+{
+	gabbrev_engine_reset(self->engine);
+	learn_break(self);
+}
+
+/* A phrase just reached the threshold: say so, once, with a trigger */
+static void
+learn_announce(GowlModuleGabbrev *self)
+{
+	g_autoptr(GPtrArray) ready = gabbrev_learner_take_ready(self->learner);
+	g_autoptr(GHashTable) known = NULL;
+	g_autoptr(GHashTable) triggers = NULL;
+	guint i;
+
+	if (ready->len == 0)
+		return;
+	known = known_phrases(self);
+	triggers = trigger_set(self);
+	for (i = 0; i < ready->len; i++) {
+		const gchar *phrase = g_ptr_array_index(ready, i);
+		g_autofree gchar *key = g_utf8_casefold(phrase, -1);
+		g_autofree gchar *trigger = NULL;
+		g_autofree gchar *q = NULL;
+		g_autofree gchar *body = NULL;
+
+		if (g_hash_table_contains(known, key))
+			continue;
+		trigger = gabbrev_learner_propose_trigger(phrase, triggers);
+		q = json_quote(phrase);
+		gab_event(self, "suggestion %s %s", trigger != NULL ? trigger : "-",
+		          q);
+		if (self->learn_toast) {
+			body = trigger != NULL
+				? g_strdup_printf("\xe2\x80\x9c%s\xe2\x80\x9d -- accept it as %s from the "
+				                  "gabbrev panel", phrase, trigger)
+				: g_strdup_printf("\xe2\x80\x9c%s\xe2\x80\x9d -- see gabbrev-suggestions",
+				                  phrase);
+			gab_notify_panel(self, "Typed often", body, "gabbrev");
+		}
+		/* The longest phrase of a batch is the one worth a toast */
+		break;
+	}
+}
+
+/* One typed character, if learning is on and this window may teach */
+static void
+learn_feed(
+	GowlModuleGabbrev          *self,
+	const Context              *ctx,
+	const GowlInputObserverKey *key,
+	gunichar                    ch
+){
+	if (!self->learn || self->learner == NULL)
+		return;
+	if (key->synthetic || ctx->denied || ctx->disabled
+	    || (!self->learn_terminals && is_terminal(self, ctx->window.app_id))) {
+		gabbrev_learner_break(self->learner);
+		return;
+	}
+	gabbrev_learner_feed(self->learner, ch,
+	                     g_get_real_time() / G_USEC_PER_SEC);
+	if (!g_unichar_isalpha(ch))
+		learn_announce(self);
+}
+
+/* ── Reloading when a source changes ──────────────────────────────── */
+
+static void
+watch_close(GowlModuleGabbrev *self)
+{
+	if (self->watch_timer != NULL) {
+		wl_event_source_remove(self->watch_timer);
+		self->watch_timer = NULL;
+	}
+	if (self->watch_source != NULL) {
+		wl_event_source_remove(self->watch_source);
+		self->watch_source = NULL;
+	}
+	if (self->watch_fd >= 0) {
+		close(self->watch_fd);
+		self->watch_fd = -1;
+	}
+	g_hash_table_remove_all(self->watch_dirs);
+}
+
+static gint
+on_watch_timer(gpointer data)
+{
+	GowlModuleGabbrev *self = GOWL_MODULE_GABBREV(data);
+
+	gab_log(self, "a source changed: reloading");
+	g_hash_table_remove_all(self->cvar_faulted);
+	reload(self);
+	if (self->set != NULL && self->set->problems->len > 0)
+		gab_notify(self, "Text expansion reloaded with problems",
+		           g_ptr_array_index(self->set->problems, 0));
+	return 0;
+}
+
+/* Is a change to @name in a watched directory a change to a source?
+   YAML, a directory (a new folder of matches), or a file loaded by
+   name; not an editor's swap or backup file. */
+static gboolean
+watch_relevant(
+	GowlModuleGabbrev          *self,
+	const struct inotify_event *ev,
+	const gchar                *dir
+){
+	g_autofree gchar *path = NULL;
+	guint i;
+
+	if ((ev->mask & (IN_DELETE_SELF | IN_MOVE_SELF)) != 0)
+		return TRUE;
+	if (ev->len == 0 || ev->name[0] == '\0')
+		return FALSE;
+	if ((ev->mask & IN_ISDIR) != 0)
+		return ev->name[0] != '.';
+	path = g_build_filename(dir != NULL ? dir : "", ev->name, NULL);
+	for (i = 0; self->set != NULL && i < self->set->files->len; i++)
+		if (g_strcmp0(g_ptr_array_index(self->set->files, i), path) == 0)
+			return TRUE;
+	if (ev->name[0] == '.' || ev->name[0] == '#'
+	    || g_str_has_suffix(ev->name, "~"))
+		return FALSE;
+	return g_str_has_suffix(ev->name, ".yml")
+	       || g_str_has_suffix(ev->name, ".yaml");
+}
+
+static gint
+on_watch_fd(
+	gint     fd,
+	guint32  mask,
+	gpointer data
+){
+	GowlModuleGabbrev *self = GOWL_MODULE_GABBREV(data);
+	gchar buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+	gboolean relevant = FALSE;
+	ssize_t n;
+
+	(void)mask;
+	while ((n = read(fd, buf, sizeof buf)) > 0) {
+		gchar *p;
+
+		for (p = buf; p < buf + n; ) {
+			const struct inotify_event *ev = (const struct inotify_event *)p;
+			const gchar *dir = NULL;
+			GHashTableIter it;
+			gpointer key, value;
+
+			p += sizeof(struct inotify_event) + ev->len;
+			if ((ev->mask & IN_IGNORED) != 0)
+				continue;
+			g_hash_table_iter_init(&it, self->watch_dirs);
+			while (g_hash_table_iter_next(&it, &key, &value))
+				if (GPOINTER_TO_INT(value) == ev->wd)
+					dir = key;
+			if (watch_relevant(self, ev, dir))
+				relevant = TRUE;
+		}
+	}
+	/* Editors write a file in several steps: one reload once they stop */
+	if (relevant && self->compositor != NULL) {
+		if (self->watch_timer == NULL)
+			self->watch_timer = wl_event_loop_add_timer(
+				gowl_compositor_get_event_loop(self->compositor),
+				(wl_event_loop_timer_func_t)on_watch_timer, self);
+		if (self->watch_timer != NULL)
+			wl_event_source_timer_update(self->watch_timer,
+			                             GABBREV_WATCH_SETTLE_MS);
+	}
+	return 0;
+}
+
+static void
+watch_dir(
+	GowlModuleGabbrev *self,
+	const gchar       *dir
+){
+	gint wd;
+
+	if (dir == NULL || g_hash_table_contains(self->watch_dirs, dir)
+	    || !g_file_test(dir, G_FILE_TEST_IS_DIR))
+		return;
+	wd = inotify_add_watch(self->watch_fd, dir,
+	                       IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM
+	                       | IN_CREATE | IN_DELETE | IN_DELETE_SELF
+	                       | IN_MOVE_SELF | IN_ONLYDIR);
+	if (wd < 0) {
+		gab_log(self, "cannot watch %s: %s", dir, g_strerror(errno));
+		return;
+	}
+	g_hash_table_insert(self->watch_dirs, g_strdup(dir), GINT_TO_POINTER(wd));
+}
+
+/* A source as given: a directory is watched, a file's directory is,
+   and a glob's fixed leading directories are. */
+static void
+watch_source_path(
+	GowlModuleGabbrev *self,
+	const gchar       *given,
+	const gchar       *base
+){
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *dir = NULL;
+	const gchar *glob;
+
+	if (given == NULL || *given == '\0')
+		return;
+	path = gabbrev_expand_path(given, base);
+	glob = strpbrk(path, "*?[");
+	if (glob != NULL) {
+		g_autofree gchar *head = g_strndup(path, (gsize)(glob - path));
+
+		dir = g_path_get_dirname(head);
+	} else if (g_file_test(path, G_FILE_TEST_IS_DIR)) {
+		dir = g_strdup(path);
+	} else {
+		dir = g_path_get_dirname(path);
+	}
+	watch_dir(self, dir);
+}
+
+/* After every load: watch the directories of what was read, and of
+   every source named, so a new file in a match folder is noticed too. */
+static void
+watch_rebuild(GowlModuleGabbrev *self)
+{
+	g_autoptr(GPtrArray) code = NULL;
+	g_autofree gchar *learned = NULL;
+	const gchar *base = NULL;
+	GHashTableIter it;
+	gpointer value;
+	guint i;
+
+	if (!self->watch || self->compositor == NULL || self->set == NULL
+	    || !self->set->options.auto_restart || !self->active) {
+		watch_close(self);
+		return;
+	}
+	if (self->watch_fd < 0) {
+		self->watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+		if (self->watch_fd < 0) {
+			gab_log(self, "no inotify: %s", g_strerror(errno));
+			return;
+		}
+		self->watch_source = wl_event_loop_add_fd(
+			gowl_compositor_get_event_loop(self->compositor),
+			self->watch_fd, WL_EVENT_READABLE, on_watch_fd, self);
+	}
+	g_hash_table_iter_init(&it, self->watch_dirs);
+	while (g_hash_table_iter_next(&it, NULL, &value))
+		inotify_rm_watch(self->watch_fd, GPOINTER_TO_INT(value));
+	g_hash_table_remove_all(self->watch_dirs);
+
+	for (i = 0; i < self->set->files->len; i++) {
+		g_autofree gchar *dir =
+			g_path_get_dirname(g_ptr_array_index(self->set->files, i));
+
+		watch_dir(self, dir);
+	}
+	if (self->config != NULL)
+		base = gowl_config_get_gabbrev_base_dir(self->config);
+	for (i = 0; self->setting_files != NULL && self->setting_files[i] != NULL;
+	     i++)
+		watch_source_path(self, self->setting_files[i], base);
+	code = gowl_gabbrev_dup_sources();
+	for (i = 0; i < code->len; i++) {
+		GowlGabbrevSource *src = g_ptr_array_index(code, i);
+
+		if (src->is_file)
+			watch_source_path(self, src->text, NULL);
+	}
+	for (i = 0; i < self->runtime->len; i++) {
+		RuntimeSource *r = g_ptr_array_index(self->runtime, i);
+
+		if (r->is_file)
+			watch_source_path(self, r->text, NULL);
+	}
+	learned = learned_path(self);
+	watch_source_path(self, learned, NULL);
+}
+
 /* ── Loading ───────────────────────────────────────────────────────── */
 
 /* espanso's search_trigger: typing it opens the search picker. */
@@ -977,6 +1492,13 @@ reload(GowlModuleGabbrev *self)
 	     i++)
 		if (*self->setting_files[i] != '\0')
 			gabbrev_loader_add_path(loader, self->setting_files[i], base);
+	/* Accepted suggestions (gabbrev-accept), when there are any */
+	{
+		g_autofree gchar *learned = learned_path(self);
+
+		if (g_file_test(learned, G_FILE_TEST_IS_REGULAR))
+			gabbrev_loader_add_path(loader, learned, NULL);
+	}
 
 	code = gowl_gabbrev_dup_sources();
 	for (i = 0; i < code->len; i++) {
@@ -1015,6 +1537,7 @@ reload(GowlModuleGabbrev *self)
 		          "(gowl-msg gabbrev-status lists them)",
 		          set->problems->len,
 		          (gchar *)g_ptr_array_index(set->problems, 0));
+	watch_rebuild(self);
 	gab_event(self, "reloaded %u", set->matches->len);
 }
 
@@ -1343,6 +1866,78 @@ on_clipboard_saved(
 	g_free(c);
 }
 
+/* --- text-input-v3 commits --- */
+
+typedef struct {
+	GowlModuleGabbrev *self;
+	Job               *job;
+	gchar             *text;
+	guint              chars_before;
+	gboolean           delivered;
+} CommitCtx;
+
+static void
+commit_ctx_free(CommitCtx *c)
+{
+	job_unref(c->job);
+	g_free(c->text);
+	g_free(c);
+}
+
+/* No text field took it: rub out and type, as the keys backend does */
+static void
+commit_fallback(
+	GowlModuleGabbrev *self,
+	CommitCtx         *ctx
+){
+	Job *job = ctx->job;
+	GowlClient *c = client_by_id(self, job->target_id);
+	guint i;
+
+	if (job->finished)
+		return;
+	if (c == NULL) {
+		job_fail(self, job, "the window closed");
+		return;
+	}
+	gab_log(self, "%s: no text field took the commit; typing it",
+	        job->match->id);
+	for (i = 0; i < ctx->chars_before; i++)
+		gowl_compositor_send_key_to_client(self->compositor, c,
+		                                   KEY_BACKSPACE, 0);
+	if (ctx->text != NULL && *ctx->text != '\0'
+	    && gowl_compositor_send_text_to_client(self->compositor, c,
+	                                           ctx->text) < 0)
+		job_fail(self, job, "the keyboard is not available (locked, or "
+		         "a launcher holds it)");
+}
+
+static void
+commit_resume(
+	GowlModuleGabbrev *self,
+	gpointer           data
+){
+	CommitCtx *ctx = data;
+
+	if (!ctx->delivered)
+		commit_fallback(self, ctx);
+	resume_steps(self);
+}
+
+/* The client enabled the text input it was entered for, or never did:
+   back on the loop through the post queue, never re-entering the player
+   from inside the relay's handler */
+static void
+on_text_committed(
+	gboolean delivered,
+	gpointer data
+){
+	CommitCtx *ctx = data;
+
+	ctx->delivered = delivered;
+	post(ctx->self, commit_resume, ctx, (GDestroyNotify)commit_ctx_free);
+}
+
 static GowlSeat *
 seat_of(GowlModuleGabbrev *self)
 {
@@ -1405,10 +2000,20 @@ play_one(
 
 		if (seat == NULL)
 			return TRUE;
-		if (s->bytes != NULL)
-			gowl_seat_set_clipboard_bytes(seat, s->bytes, s->mime);
-		else
+		/* On the clipboard only to be pasted: marked so histories (and
+		   cmacs's kill ring) leave it out, unless asked to keep it */
+		if (s->bytes != NULL) {
+			if (self->clipboard_history)
+				gowl_seat_set_clipboard_bytes(seat, s->bytes, s->mime);
+			else
+				gowl_seat_set_clipboard_bytes_transient(seat, s->bytes,
+				                                        s->mime);
+		} else if (self->clipboard_history) {
 			gowl_seat_set_clipboard(seat, s->text != NULL ? s->text : "");
+		} else {
+			gowl_seat_set_clipboard_transient(seat,
+				s->text != NULL ? s->text : "");
+		}
 		return TRUE;
 	}
 	case STEP_SAVE_CLIPBOARD: {
@@ -1434,9 +2039,42 @@ play_one(
 	case STEP_RESTORE_CLIPBOARD: {
 		GowlSeat *seat = seat_of(self);
 
-		if (job != NULL && job->saved_clipboard != NULL && seat != NULL)
-			gowl_seat_set_clipboard(seat, job->saved_clipboard);
+		/* The user's own clipboard, back: it is in the history already,
+		   so putting it back must not add it a second time */
+		if (job != NULL && job->saved_clipboard != NULL && seat != NULL) {
+			if (self->clipboard_history)
+				gowl_seat_set_clipboard(seat, job->saved_clipboard);
+			else
+				gowl_seat_set_clipboard_transient(seat, job->saved_clipboard);
+		}
 		return TRUE;
+	}
+	case STEP_COMMIT: {
+		CommitCtx *ctx;
+
+		if (c == NULL) {
+			job_fail(self, job, "the window closed");
+			return TRUE;
+		}
+		ctx = g_new0(CommitCtx, 1);
+		ctx->self = self;
+		ctx->job = job_ref(job);
+		ctx->text = g_strdup(s->text);
+		ctx->chars_before = s->chars_before;
+		switch (gowl_compositor_commit_text(self->compositor, c,
+		                                    s->bytes_before, s->text,
+		                                    on_text_committed, ctx)) {
+		case GOWL_TEXT_COMMIT_SENT:
+			commit_ctx_free(ctx);
+			return TRUE;
+		case GOWL_TEXT_COMMIT_PENDING:
+			return FALSE;     /* on_text_committed resumes */
+		case GOWL_TEXT_COMMIT_UNAVAILABLE:
+		default:
+			commit_fallback(self, ctx);
+			commit_ctx_free(ctx);
+			return TRUE;
+		}
 	}
 	case STEP_FOCUS:
 		if (c != NULL
@@ -1516,6 +2154,8 @@ job_unref(Job *job)
 	}
 	if (job->timeout != NULL)
 		wl_event_source_remove(job->timeout);
+	if (job->pending_timer != NULL)
+		wl_event_source_remove(job->pending_timer);
 	if (job->set != NULL)
 		gabbrev_set_unref(job->set);
 	if (job->match != NULL)
@@ -1545,6 +2185,10 @@ job_retire(
 	if (job->timeout != NULL) {
 		wl_event_source_remove(job->timeout);
 		job->timeout = NULL;
+	}
+	if (job->pending_timer != NULL) {
+		wl_event_source_remove(job->pending_timer);
+		job->pending_timer = NULL;
 	}
 	if (job->render != NULL)
 		gabbrev_render_cancel(job->render);
@@ -1660,6 +2304,40 @@ on_job_timeout(gpointer data)
 	return 0;
 }
 
+/*
+ * Still resolving after a moment (a slow command, a model, a macro):
+ * a toast says what it waits for and how to stop it, and names the
+ * gabbrev bar panel, which lists it with a cancel button.  Not for a
+ * picker or a form -- those are on screen already.
+ */
+static gint
+on_job_pending(gpointer data)
+{
+	Job *job = data;
+	GowlModuleGabbrev *self = job->self;
+	const gchar *what = job->render != NULL
+		? gabbrev_render_get_pending_type(job->render) : NULL;
+	g_autofree gchar *summary = NULL;
+	g_autofree gchar *body = NULL;
+
+	if (job->finished || job->injecting)
+		return 0;
+	gab_event(self, "pending %u %s %s", job->id, job->match->id,
+	          what != NULL ? what : "-");
+	if (g_strcmp0(what, "choice") == 0 || g_strcmp0(what, "form") == 0
+	    || g_strcmp0(what, "search") == 0)
+		return 0;
+	summary = g_strdup_printf("Expanding %s", job->match->label != NULL
+	                          ? job->match->label : job->match->id);
+	body = g_strdup_printf("waiting for %s%s%s -- cancel it from the "
+	                       "gabbrev panel (gabbrev-cancel %u)",
+	                       what != NULL ? "a `" : "the expansion",
+	                       what != NULL ? what : "",
+	                       what != NULL ? "' variable" : "", job->id);
+	gab_notify_panel(self, summary, body, "gabbrev");
+	return 0;
+}
+
 /* --- after the text is in --- */
 
 static gboolean
@@ -1673,6 +2351,7 @@ step_job_done(
 	if (job->finished)
 		return TRUE;
 	self->n_expanded++;
+	stats_note(self, job->match);
 	gab_event(self, "expanded %s", job->match->id);
 	if (job->match->notify)
 		gab_notify(self, "Expanded", job->match->label != NULL
@@ -1760,11 +2439,53 @@ job_inject(
 		push_wait(self, job, job->opts.post_picker_delay_ms);
 	}
 
+	mode = job->match->force_mode >= 0 ? (GabbrevBackend)job->match->force_mode
+	       : job->opts.backend;
+
+	/* text-input-v3: the trigger out and the text in as one edit, like
+	   an input method -- when the window has a text field that takes it
+	   and the text is plain.  Anything else falls through to auto. */
+	if (mode == GABBREV_BACKEND_TEXT_INPUT && job->match->image_path == NULL
+	    && html == NULL
+	    && gowl_compositor_client_has_text_input(self->compositor, c)) {
+		g_autofree gchar *rubbed = NULL;
+		Step *commit = step_new(STEP_COMMIT, job);
+
+		/* What the trigger was, to say how many bytes go */
+		if (!job->deleted && job->n_delete > 0) {
+			rubbed = g_strconcat(job->typed != NULL ? job->typed : "",
+			                     job->trailing, NULL);
+			if ((guint)g_utf8_strlen(rubbed, -1) == job->n_delete) {
+				commit->bytes_before = (guint)strlen(rubbed);
+				commit->chars_before = job->n_delete;
+			} else {
+				/* typos fixed inside the trigger: count by keys */
+				push_key(self, job, KEY_BACKSPACE, 0, 0, job->n_delete);
+			}
+		}
+		commit->text = g_strconcat(text, job->trailing, NULL);
+		push_step(self, commit);
+		if (cursor_back > 0) {
+			guint back = (guint)cursor_back
+			             + (job->trailing != NULL
+			                ? (guint)g_utf8_strlen(job->trailing, -1) : 0);
+
+			push_key(self, job, KEY_LEFT, 0, 0, back);
+		}
+		if (job->have_saved)
+			push_step(self, step_new(STEP_RESTORE_CLIPBOARD, job));
+		n_typed = cursor_back < 0
+			? (guint)g_utf8_strlen(commit->text, -1) : 0;
+		push_call(self, job, step_job_done, GUINT_TO_POINTER(n_typed), NULL);
+		kick_steps(self);
+		return;
+	}
+	if (mode == GABBREV_BACKEND_TEXT_INPUT)
+		mode = GABBREV_BACKEND_AUTO;
+
 	if (!job->deleted && job->n_delete > 0)
 		push_key(self, job, KEY_BACKSPACE, 0, 0, job->n_delete);
 
-	mode = job->match->force_mode >= 0 ? (GabbrevBackend)job->match->force_mode
-	       : job->opts.backend;
 	if (job->match->image_path != NULL || html != NULL)
 		paste = TRUE;
 	else if (mode == GABBREV_BACKEND_CLIPBOARD)
@@ -1871,6 +2592,7 @@ on_render_done(
 			gowl_compositor_run_keybind_entry(self->compositor, &kb);
 		}
 		self->n_expanded++;
+		stats_note(self, job->match);
 		job_retire(self, job);
 		return;
 	}
@@ -2014,6 +2736,16 @@ job_start(
 	job->custom_form = g_strdup(custom_form);
 	id = job->id;
 	g_ptr_array_add(self->jobs, job);
+
+	if (origin != ORIGIN_RENDER && self->pending_toast_ms > 0
+	    && self->compositor != NULL) {
+		job->pending_timer = wl_event_loop_add_timer(
+			gowl_compositor_get_event_loop(self->compositor),
+			(wl_event_loop_timer_func_t)on_job_pending, job);
+		if (job->pending_timer != NULL)
+			wl_event_source_timer_update(job->pending_timer,
+			                             (gint)self->pending_toast_ms);
+	}
 
 	{
 		guint ms = match->timeout_ms > 0 ? match->timeout_ms
@@ -3424,7 +4156,7 @@ expand_typed_or_search(GowlModuleGabbrev *self)
 		fake.match = search;
 		fake.typed = word;
 		fake.n_delete = (guint)g_utf8_strlen(word, -1);
-		gabbrev_engine_reset(self->engine);
+		typing_reset(self);
 		id = job_start(self, search, &fake, c, &ctx, ORIGIN_TYPED, NULL, NULL);
 	} else {
 		id = job_start(self, search, NULL, c, &ctx, ORIGIN_EXPAND, NULL, NULL);
@@ -3444,7 +4176,7 @@ set_on(
 	if (self->on == on)
 		return;
 	self->on = on;
-	gabbrev_engine_reset(self->engine);
+	typing_reset(self);
 	self->last.valid = FALSE;
 	gab_event(self, "%s %s", on ? "on" : "off", why);
 	gab_notify(self, on ? "Text expansion on" : "Text expansion off", NULL);
@@ -3504,7 +4236,7 @@ do_undo(
 	push_call(self, job, step_retire, NULL, NULL);
 	g_free(self->last.restore);
 	memset(&self->last, 0, sizeof self->last);
-	gabbrev_engine_reset(self->engine);
+	typing_reset(self);
 	gab_event(self, "undone");
 	kick_steps(self);
 }
@@ -3614,13 +4346,13 @@ gab_key_forwarded(
 
 	c = key->focused != NULL ? GOWL_CLIENT(key->focused) : NULL;
 	if (c == NULL) {
-		gabbrev_engine_reset(self->engine);
+		typing_reset(self);
 		self->typing_target = 0;
 		return;
 	}
 	id = gowl_client_get_id(c);
 	if (id != self->typing_target) {
-		gabbrev_engine_reset(self->engine);
+		typing_reset(self);
 		self->typing_target = id;
 	}
 
@@ -3647,11 +4379,13 @@ gab_key_forwarded(
 
 	if ((key->modifiers & (GOWL_KEY_MOD_CTRL | GOWL_KEY_MOD_ALT
 	                       | GOWL_KEY_MOD_LOGO)) != 0) {
-		gabbrev_engine_reset(self->engine);
+		typing_reset(self);
 		return;
 	}
 	if (sym == XKB_KEY_BackSpace) {
 		gabbrev_engine_backspace(self->engine);
+		if (self->learner != NULL)
+			gabbrev_learner_backspace(self->learner);
 		return;
 	}
 	if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter)
@@ -3662,13 +4396,13 @@ gab_key_forwarded(
 		ch = xkb_keysym_to_utf32(sym);
 	if (ch == 0 || (ch < 0x20 && ch != '\n' && ch != '\t') || ch == 0x7f) {
 		/* arrows, Home, F-keys, Escape: the cursor went elsewhere */
-		gabbrev_engine_reset(self->engine);
+		typing_reset(self);
 		return;
 	}
 
 	context_init(self, &ctx, c);
 	if (ctx.denied || ctx.disabled) {
-		gabbrev_engine_reset(self->engine);
+		typing_reset(self);
 		context_clear(&ctx);
 		return;
 	}
@@ -3679,8 +4413,11 @@ gab_key_forwarded(
 	else
 		gabbrev_engine_set_separators(self->engine,
 		                              self->set->options.word_separators);
+	learn_feed(self, &ctx, key, ch);
 	hit = gabbrev_engine_feed(self->engine, ch, match_allowed, &ctx);
 	if (hit != NULL) {
+		/* A trigger is not part of a phrase */
+		learn_break(self);
 		gab_log(self, "`%s' completes %s in %s", hit->typed, hit->match->id,
 		        gowl_client_get_app_id(c) ? gowl_client_get_app_id(c) : "?");
 		self->in_key = TRUE;
@@ -3700,7 +4437,7 @@ gab_button_forwarded(
 	GowlModuleGabbrev *self = GOWL_MODULE_GABBREV(observer);
 
 	if (button->pressed) {
-		gabbrev_engine_reset(self->engine);
+		typing_reset(self);
 		self->last.valid = FALSE;
 	}
 }
@@ -3843,8 +4580,295 @@ cmd_status(GowlModuleGabbrev *self)
 	        ? self->set->options.search_trigger : NULL);
 	add_strv(b, "registered-types", types);
 	add_strv(b, "registered-funcs", funcs);
+
+	/* What it keeps and watches */
+	json_builder_set_member_name(b, "stats");
+	json_builder_begin_object(b);
+	json_builder_set_member_name(b, "on");
+	json_builder_add_boolean_value(b, self->stats_on);
+	{
+		g_autofree gchar *path = stats_path(self);
+
+		add_str(b, "file", path);
+	}
+	if (self->stats_on)
+		stats_load(self);
+	json_builder_set_member_name(b, "tracked");
+	json_builder_add_int_value(b, gabbrev_stats_size(self->stats));
+	json_builder_set_member_name(b, "top");
+	json_builder_begin_array(b);
+	{
+		g_auto(GStrv) ids = gabbrev_stats_ids(self->stats);
+
+		for (i = 0; ids[i] != NULL && i < 5; i++) {
+			const GabbrevStat *st = gabbrev_stats_lookup(self->stats, ids[i]);
+
+			json_builder_begin_object(b);
+			add_str(b, "id", ids[i]);
+			json_builder_set_member_name(b, "uses");
+			json_builder_add_int_value(b, (gint64)st->count);
+			json_builder_set_member_name(b, "last-used");
+			json_builder_add_int_value(b, st->last);
+			json_builder_end_object(b);
+		}
+	}
+	json_builder_end_array(b);
+	json_builder_set_member_name(b, "never-used");
+	{
+		guint unused = 0;
+
+		for (i = 0; self->set != NULL && i < self->set->matches->len; i++) {
+			GabbrevMatch *m = g_ptr_array_index(self->set->matches, i);
+
+			if (m->id[0] != '<'
+			    && gabbrev_stats_lookup(self->stats, m->id) == NULL)
+				unused++;
+		}
+		json_builder_add_int_value(b, unused);
+	}
+	json_builder_end_object(b);
+
+	json_builder_set_member_name(b, "learning");
+	json_builder_begin_object(b);
+	json_builder_set_member_name(b, "on");
+	json_builder_add_boolean_value(b, self->learn);
+	json_builder_set_member_name(b, "phrases");
+	json_builder_add_int_value(b, self->learner != NULL
+	                           ? gabbrev_learner_size(self->learner) : 0);
+	json_builder_set_member_name(b, "suggestions");
+	if (self->learner != NULL) {
+		g_autoptr(GHashTable) known = known_phrases(self);
+		g_autoptr(GPtrArray) sug = gabbrev_learner_suggest(self->learner,
+			GABBREV_SUGGEST_LIMIT, NULL, known);
+
+		json_builder_add_int_value(b, sug->len);
+	} else {
+		json_builder_add_int_value(b, 0);
+	}
+	{
+		g_autofree gchar *learned = learned_path(self);
+
+		add_str(b, "learned-file", learned);
+	}
+	json_builder_end_object(b);
+
+	json_builder_set_member_name(b, "watching");
+	json_builder_begin_array(b);
+	{
+		g_autoptr(GList) dirs = g_hash_table_get_keys(self->watch_dirs);
+		GList *l;
+
+		dirs = g_list_sort(dirs, (GCompareFunc)strcmp);
+		for (l = dirs; l != NULL; l = l->next)
+			json_builder_add_string_value(b, l->data);
+	}
+	json_builder_end_array(b);
+	json_builder_set_member_name(b, "clipboard-history");
+	json_builder_add_boolean_value(b, self->clipboard_history);
+	{
+		GowlClient *fc = focused_client(self);
+
+		json_builder_set_member_name(b, "focused-text-input");
+		json_builder_add_boolean_value(b, fc != NULL && self->compositor != NULL
+			&& gowl_compositor_client_has_text_input(self->compositor, fc));
+	}
 	json_builder_end_object(b);
 	return json_reply(b);
+}
+
+/* Usage per match: every loaded match (--unused: only those never used),
+   most used first, with what was used but is no longer loaded marked */
+static gchar *
+cmd_stats(
+	GowlModuleGabbrev *self,
+	const gchar       *arg
+){
+	g_autoptr(JsonBuilder) b = json_builder_new();
+	g_autoptr(GHashTable) seen = g_hash_table_new(g_str_hash, g_str_equal);
+	g_auto(GStrv) ids = NULL;
+	gboolean unused_only = g_strcmp0(arg, "--unused") == 0;
+	guint i;
+
+	if (*arg != '\0' && !unused_only)
+		return g_strdup("ERROR usage: gabbrev-stats [--unused]");
+	stats_load(self);
+	ids = gabbrev_stats_ids(self->stats);
+	json_builder_begin_array(b);
+	if (!unused_only) {
+		for (i = 0; ids[i] != NULL; i++) {
+			const GabbrevStat *st = gabbrev_stats_lookup(self->stats, ids[i]);
+
+			json_builder_begin_object(b);
+			add_str(b, "id", ids[i]);
+			json_builder_set_member_name(b, "uses");
+			json_builder_add_int_value(b, (gint64)st->count);
+			json_builder_set_member_name(b, "first-used");
+			json_builder_add_int_value(b, st->first);
+			json_builder_set_member_name(b, "last-used");
+			json_builder_add_int_value(b, st->last);
+			json_builder_set_member_name(b, "loaded");
+			json_builder_add_boolean_value(b, self->set != NULL
+				&& gabbrev_set_find_id(self->set, ids[i]) != NULL);
+			json_builder_end_object(b);
+		}
+	}
+	for (i = 0; self->set != NULL && i < self->set->matches->len; i++) {
+		GabbrevMatch *m = g_ptr_array_index(self->set->matches, i);
+
+		if (m->id[0] == '<' || gabbrev_stats_lookup(self->stats, m->id) != NULL
+		    || g_hash_table_contains(seen, m->id))
+			continue;
+		g_hash_table_add(seen, m->id);
+		json_builder_begin_object(b);
+		add_str(b, "id", m->id);
+		json_builder_set_member_name(b, "uses");
+		json_builder_add_int_value(b, 0);
+		add_str(b, "source", m->source);
+		json_builder_set_member_name(b, "loaded");
+		json_builder_add_boolean_value(b, TRUE);
+		json_builder_end_object(b);
+	}
+	json_builder_end_array(b);
+	return json_reply(b);
+}
+
+/* The phrases worth a trigger, best first */
+static gchar *
+cmd_suggestions(
+	GowlModuleGabbrev *self,
+	const gchar       *arg
+){
+	g_autoptr(JsonBuilder) b = json_builder_new();
+	g_autoptr(GHashTable) known = NULL;
+	g_autoptr(GHashTable) triggers = NULL;
+	g_autoptr(GPtrArray) sug = NULL;
+	guint64 limit = GABBREV_SUGGEST_LIMIT;
+	guint i;
+
+	if (*arg != '\0'
+	    && !g_ascii_string_to_unsigned(arg, 10, 1, 1000, &limit, NULL))
+		return g_strdup("ERROR usage: gabbrev-suggestions [N]");
+	json_builder_begin_array(b);
+	if (self->learner != NULL) {
+		known = known_phrases(self);
+		triggers = trigger_set(self);
+		sug = gabbrev_learner_suggest(self->learner, (guint)limit, triggers,
+		                              known);
+		for (i = 0; i < sug->len; i++) {
+			GabbrevSuggestion *g = g_ptr_array_index(sug, i);
+
+			json_builder_begin_object(b);
+			add_str(b, "phrase", g->phrase);
+			add_str(b, "trigger", g->trigger);
+			json_builder_set_member_name(b, "count");
+			json_builder_add_int_value(b, g->count);
+			json_builder_set_member_name(b, "words");
+			json_builder_add_int_value(b, g->n_words);
+			json_builder_set_member_name(b, "last");
+			json_builder_add_int_value(b, g->last);
+			json_builder_end_object(b);
+		}
+	}
+	json_builder_end_array(b);
+	return json_reply(b);
+}
+
+/* Does @trigger shadow, or is it shadowed by, a loaded one? */
+static const gchar *
+trigger_collision(
+	GowlModuleGabbrev *self,
+	const gchar       *trigger
+){
+	guint i, j;
+
+	for (i = 0; self->set != NULL && i < self->set->matches->len; i++) {
+		GabbrevMatch *m = g_ptr_array_index(self->set->matches, i);
+
+		for (j = 0; j < m->triggers->len; j++) {
+			const gchar *t = g_ptr_array_index(m->triggers, j);
+
+			if (g_str_has_prefix(t, trigger) || g_str_has_prefix(trigger, t))
+				return t;
+		}
+	}
+	return NULL;
+}
+
+/*
+ * gabbrev-accept [--trigger T] PHRASE: a suggestion becomes a match.
+ * Appended to the learned file (YAML, loaded like any other), so it
+ * survives a restart and can be edited or deleted like any snippet.
+ */
+static gchar *
+cmd_accept(
+	GowlModuleGabbrev *self,
+	const gchar       *arg
+){
+	g_autofree gchar *trigger = NULL;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *dir = NULL;
+	g_autofree gchar *qt = NULL;
+	g_autofree gchar *qp = NULL;
+	g_autofree gchar *entry = NULL;
+	g_autoptr(GError) error = NULL;
+	const gchar *phrase = arg;
+	const gchar *clash;
+	FILE *f;
+
+	if (g_str_has_prefix(phrase, "--trigger ")) {
+		const gchar *v = phrase + 10;
+		const gchar *sp = strchr(v, ' ');
+
+		if (sp == NULL)
+			return g_strdup("ERROR usage: gabbrev-accept [--trigger T] PHRASE");
+		trigger = g_strndup(v, (gsize)(sp - v));
+		phrase = sp + 1;
+		while (*phrase == ' ')
+			phrase++;
+	}
+	if (*phrase == '\0' || !g_utf8_validate(phrase, -1, NULL)
+	    || strchr(phrase, '\n') != NULL)
+		return g_strdup("ERROR usage: gabbrev-accept [--trigger T] PHRASE");
+	if (trigger == NULL) {
+		g_autoptr(GHashTable) triggers = trigger_set(self);
+
+		trigger = gabbrev_learner_propose_trigger(phrase, triggers);
+		if (trigger == NULL)
+			return g_strdup("ERROR no free trigger for it: give one with "
+			                "--trigger");
+	}
+	clash = trigger_collision(self, trigger);
+	if (clash != NULL)
+		return g_strdup_printf("ERROR `%s' collides with the trigger `%s'",
+		                       trigger, clash);
+
+	/* Appended, header first when the file is new.  JSON strings are
+	   YAML double-quoted scalars, so quoting is json-glib's. */
+	path = learned_path(self);
+	dir = g_path_get_dirname(path);
+	if (g_mkdir_with_parents(dir, 0755) != 0)
+		return g_strdup_printf("ERROR cannot make %s: %s", dir,
+		                       g_strerror(errno));
+	qt = json_quote(trigger);
+	qp = json_quote(phrase);
+	entry = g_strdup_printf("  - trigger: %s\n    replace: %s\n", qt, qp);
+	f = fopen(path, "a");
+	if (f == NULL)
+		return g_strdup_printf("ERROR cannot write %s: %s", path,
+		                       g_strerror(errno));
+	if (ftell(f) == 0)
+		fputs("# Phrases accepted from gowl gabbrev's suggestions "
+		      "(gabbrev-accept).\n# An ordinary match file: edit or "
+		      "delete entries freely.\nmatches:\n", f);
+	fputs(entry, f);
+	if (fclose(f) != 0)
+		return g_strdup_printf("ERROR cannot write %s: %s", path,
+		                       g_strerror(errno));
+	if (self->learner != NULL)
+		gabbrev_learner_forget(self->learner, phrase);
+	reload(self);
+	gab_event(self, "accepted %s %s", trigger, qp);
+	return g_strdup_printf("OK %s", trigger);
 }
 
 static gchar *
@@ -3855,6 +4879,7 @@ cmd_list(
 	g_autoptr(JsonBuilder) b = json_builder_new();
 	guint i;
 
+	stats_load(self);
 	json_builder_begin_array(b);
 	for (i = 0; self->set != NULL && i < self->set->matches->len; i++) {
 		GabbrevMatch *m = g_ptr_array_index(self->set->matches, i);
@@ -3878,6 +4903,17 @@ cmd_list(
 		add_str(b, "replace", preview);
 		add_str(b, "source", m->source);
 		add_str(b, "filter", m->filter_text);
+		{
+			const GabbrevStat *st = gabbrev_stats_lookup(self->stats, m->id);
+
+			json_builder_set_member_name(b, "uses");
+			json_builder_add_int_value(b, st != NULL ? (gint64)st->count : 0);
+			json_builder_set_member_name(b, "last-used");
+			if (st != NULL)
+				json_builder_add_int_value(b, st->last);
+			else
+				json_builder_add_null_value(b);
+		}
 		json_builder_set_member_name(b, "word");
 		json_builder_add_boolean_value(b, m->left_word && m->right_word);
 		json_builder_set_member_name(b, "propagate-case");
@@ -4139,9 +5175,67 @@ gab_handle_command(
 	}
 	if (g_strcmp0(verb, "cancel") == 0) {
 		guint n = self->jobs->len;
+		guint64 want;
+		guint i;
 
-		cancel_all(self);
-		return g_strdup_printf("OK cancelled %u", n);
+		if (*arg == '\0') {
+			cancel_all(self);
+			return g_strdup_printf("OK cancelled %u", n);
+		}
+		if (!g_ascii_string_to_unsigned(arg, 10, 1, G_MAXUINT, &want, NULL))
+			return g_strdup("ERROR usage: gabbrev-cancel [JOB-ID]");
+		/* One job, failed the ordinary way: a trigger already rubbed
+		   out is typed back, a saved clipboard goes back */
+		for (i = 0; i < self->jobs->len; i++) {
+			Job *j = g_ptr_array_index(self->jobs, i);
+
+			if (j->id == (guint)want && !j->finished) {
+				job_fail(self, j, "cancelled");
+				return g_strdup_printf("OK cancelled %u", (guint)want);
+			}
+		}
+		return g_strdup_printf("ERROR no running expansion %u", (guint)want);
+	}
+	if (g_strcmp0(verb, "stats") == 0)
+		return cmd_stats(self, arg);
+	if (g_strcmp0(verb, "stats-reset") == 0) {
+		stats_load(self);
+		if (*arg == '\0') {
+			gabbrev_stats_clear(self->stats);
+			stats_save_now(self);
+			return g_strdup("OK reset");
+		}
+		if (!gabbrev_stats_forget(self->stats, arg))
+			return g_strdup_printf("ERROR no usage recorded for `%s'", arg);
+		stats_save_now(self);
+		return g_strdup_printf("OK reset %s", arg);
+	}
+	if (g_strcmp0(verb, "suggestions") == 0)
+		return cmd_suggestions(self, arg);
+	if (g_strcmp0(verb, "accept") == 0)
+		return cmd_accept(self, arg);
+	if (g_strcmp0(verb, "dismiss") == 0) {
+		if (*arg == '\0')
+			return g_strdup("ERROR usage: gabbrev-dismiss PHRASE");
+		g_hash_table_add(self->dismissed, g_utf8_casefold(arg, -1));
+		if (self->learner != NULL)
+			gabbrev_learner_forget(self->learner, arg);
+		return g_strdup("OK dismissed");
+	}
+	if (g_strcmp0(verb, "learn") == 0) {
+		if (g_strcmp0(arg, "on") == 0)
+			learn_set(self, TRUE);
+		else if (g_strcmp0(arg, "off") == 0)
+			learn_set(self, FALSE);
+		else if (g_strcmp0(arg, "clear") == 0) {
+			if (self->learner != NULL)
+				gabbrev_learner_clear(self->learner);
+			g_hash_table_remove_all(self->dismissed);
+		} else if (*arg != '\0')
+			return g_strdup("ERROR usage: gabbrev-learn [on|off|clear]");
+		return g_strdup_printf("OK %s, %u phrase(s)", self->learn ? "on" : "off",
+		                       self->learner != NULL
+		                       ? gabbrev_learner_size(self->learner) : 0);
 	}
 	if (!self->active)
 		return g_strdup("ERROR the gabbrev module is not active");
@@ -4204,7 +5298,8 @@ gab_handle_command(
 	                       "-on, -off, -toggle, -reload, -load, -add, "
 	                       "-remove, -clear, -expand, -insert, -render, "
 	                       "-test, -search, -search-all, -resolve, -resolve-error, "
-	                       "-cancel, -builtin", command);
+	                       "-cancel, -builtin, -stats, -stats-reset, "
+	                       "-suggestions, -accept, -dismiss, -learn", command);
 }
 
 static void
@@ -4288,7 +5383,44 @@ gab_configure(
 	BOOL_SETTING("toast", toast)
 	BOOL_SETTING("log", log)
 	BOOL_SETTING("expand-synthetic", expand_synthetic)
+	BOOL_SETTING("stats", stats_on)
+	BOOL_SETTING("learn-terminals", learn_terminals)
+	BOOL_SETTING("learn-toast", learn_toast)
+	BOOL_SETTING("watch", watch)
+	BOOL_SETTING("clipboard-history", clipboard_history)
 #undef BOOL_SETTING
+	if ((v = g_hash_table_lookup(settings, "learn-min-count")) != NULL) {
+		if (g_ascii_string_to_unsigned(v, 10, 2, 1000, &n, NULL))
+			self->learn_min_count = (guint)n;
+		else
+			g_warning("gabbrev: learn-min-count `%s' -- 2..1000", v);
+	}
+	if ((v = g_hash_table_lookup(settings, "learn")) != NULL) {
+		if (parse_bool_setting(v, &b))
+			learn_set(self, b);
+		else
+			g_warning("gabbrev: learn `%s' is no yes/no", v);
+	} else if (self->learner != NULL) {
+		learn_set(self, self->learn);    /* a new min count */
+	}
+	if ((v = g_hash_table_lookup(settings, "pending-toast-ms")) != NULL) {
+		if (g_ascii_string_to_unsigned(v, 10, 0, 600000, &n, NULL))
+			self->pending_toast_ms = (guint)n;
+		else
+			g_warning("gabbrev: pending-toast-ms `%s' -- 0 (off)..600000", v);
+	}
+	if ((v = g_hash_table_lookup(settings, "stats-file")) != NULL) {
+		/* A different file: what is counted so far goes to the old one */
+		stats_save_now(self);
+		g_free(self->stats_file);
+		self->stats_file = g_strdup(v);
+		self->stats_loaded = FALSE;
+		gabbrev_stats_clear(self->stats);
+	}
+	if ((v = g_hash_table_lookup(settings, "learned-file")) != NULL) {
+		g_free(self->learned_file);
+		self->learned_file = *v != '\0' ? g_strdup(v) : NULL;
+	}
 
 	if ((v = g_hash_table_lookup(settings, "files")) != NULL) {
 		g_strfreev(self->setting_files);
@@ -4346,6 +5478,7 @@ gab_activate(GowlModule *mod)
 	if (self->compositor != NULL) {
 		post_open(self);
 		sync_config(self);
+		watch_rebuild(self);
 	}
 	return TRUE;
 }
@@ -4356,9 +5489,11 @@ gab_deactivate(GowlModule *mod)
 	GowlModuleGabbrev *self = GOWL_MODULE_GABBREV(mod);
 
 	cancel_all(self);
-	gabbrev_engine_reset(self->engine);
+	typing_reset(self);
+	stats_save_now(self);
 	self->active = FALSE;
 	self->on = FALSE;
+	watch_close(self);
 }
 
 static const gchar *
@@ -4398,6 +5533,12 @@ gab_display_destroyed(
 		wl_event_source_remove(self->step_timer);
 		self->step_timer = NULL;
 	}
+	stats_save_now(self);
+	if (self->stats_timer != NULL) {
+		wl_event_source_remove(self->stats_timer);
+		self->stats_timer = NULL;
+	}
+	watch_close(self);
 	post_close(self);
 	wl_list_remove(&self->display_destroy.link);
 	wl_list_init(&self->display_destroy.link);
@@ -4441,6 +5582,7 @@ gab_on_shutdown(
 
 	(void)compositor;
 	cancel_all(self);
+	stats_save_now(self);
 	self->on = FALSE;
 }
 
@@ -4459,6 +5601,16 @@ gowl_module_gabbrev_finalize(GObject *object)
 	wl_list_remove(&self->display_destroy.link);
 	if (self->step_timer != NULL)
 		wl_event_source_remove(self->step_timer);
+	stats_save_now(self);
+	if (self->stats_timer != NULL)
+		wl_event_source_remove(self->stats_timer);
+	watch_close(self);
+	g_hash_table_unref(self->watch_dirs);
+	gabbrev_stats_free(self->stats);
+	gabbrev_learner_free(self->learner);
+	g_hash_table_unref(self->dismissed);
+	g_free(self->stats_file);
+	g_free(self->learned_file);
 	post_close(self);
 	g_queue_free(self->steps);
 	g_queue_free(self->posted);
@@ -4534,6 +5686,17 @@ gowl_module_gabbrev_init(GowlModuleGabbrev *self)
 	                                          (GDestroyNotify)gowl_gabbrev_request_unref);
 	self->macro_listener = gowl_macro_add_finished_listener(on_macro_finished,
 	                                                        self, NULL);
+	self->stats = gabbrev_stats_new();
+	self->stats_on = TRUE;
+	self->dismissed = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+	                                        NULL);
+	self->learn_toast = TRUE;
+	self->learn_min_count = GABBREV_LEARN_MIN_COUNT;
+	self->watch = TRUE;
+	self->watch_fd = -1;
+	self->watch_dirs = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+	                                         NULL);
+	self->pending_toast_ms = GABBREV_PENDING_TOAST_MS;
 	self->start_on = TRUE;
 	self->builtin = TRUE;
 	self->toast = TRUE;

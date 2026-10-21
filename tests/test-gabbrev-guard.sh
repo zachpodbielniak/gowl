@@ -22,7 +22,16 @@
 #   4. yaml-glib is never handed a NULL GError**: it dereferences one on
 #      malformed input (a crash on a user's typo);
 #   5. job_start() hands back a number, not the job: a job whose render
-#      needs nothing finishes, and is freed, inside it.
+#      needs nothing finishes, and is freed, inside it;
+#   6. the phrase learner never touches the disk: what it sees is
+#      ordinary typing, kept in memory only (accepted phrases are
+#      written by the module's gabbrev-accept, which writes the phrase
+#      the user chose and nothing else);
+#   7. what a paste puts on the clipboard, and the user's clipboard put
+#      back after it, go through the transient setters, so clipboard
+#      histories and cmacs's kill ring leave them out;
+#   8. the learner is fed in exactly one place, learn_feed(), and that
+#      place refuses synthetic input, denied windows and terminals.
 
 set -e
 CDPATH=
@@ -76,6 +85,36 @@ if ! grep -qE '^static guint$' "$mod" || ! awk '/^job_start\(/ { print prev } { 
 	echo "FAIL: job_start() must return the job's id, not the job (rule 5)"
 	fail=1
 fi
+
+# 6
+if code "$dir/gowl-gabbrev-learn.c" \
+     | grep -nE 'fopen|g_file_(set|get)_contents|g_key_file|g_output_stream|g_file_new|[^_]open\(|[^_]write\(|g_mkdir' ; then
+	echo "FAIL: the phrase learner touches the disk (rule 6)"
+	fail=1
+fi
+
+# 7
+for step in STEP_SET_CLIPBOARD STEP_RESTORE_CLIPBOARD; do
+	block=$(awk -v s="case $step:" 'index($0, s) { inside = 1 } inside { print } inside && /return TRUE;/ && ++n == 1 && s != "case STEP_SET_CLIPBOARD:" { exit } inside && /^\t}$/ { exit }' "$mod")
+	if ! printf '%s\n' "$block" | grep -q '_transient('; then
+		echo "FAIL: $step does not mark the clipboard transient (rule 7)"
+		fail=1
+	fi
+done
+
+# 8
+feeds=$(code "$mod" | grep -c 'gabbrev_learner_feed(' || true)
+learn=$(awk '/^learn_feed\(/ { inside = 1 } inside { print } inside && /^}/ { exit }' "$mod")
+if [ "$feeds" -ne 1 ] || ! printf '%s\n' "$learn" | grep -q 'gabbrev_learner_feed('; then
+	echo "FAIL: the learner is fed outside learn_feed() (rule 8)"
+	fail=1
+fi
+for check in 'key->synthetic' 'ctx->denied' 'is_terminal('; do
+	if ! printf '%s\n' "$learn" | grep -qF "$check"; then
+		echo "FAIL: learn_feed() does not check $check (rule 8)"
+		fail=1
+	fi
+done
 
 if [ "$fail" -ne 0 ]; then
 	exit 1

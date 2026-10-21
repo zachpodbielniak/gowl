@@ -29,6 +29,9 @@
 #include <wlr/types/wlr_seat.h>
 
 #include "xdg-shell-client-protocol.h"
+#ifdef RIG_TEXT_INPUT
+#include "text-input-unstable-v3-client-protocol.h"
+#endif
 
 #include "gowl.h"
 #include "core/gowl-core-private.h"
@@ -95,7 +98,23 @@ typedef struct {
 	gint       n_buttons;
 	gint     stop;
 	gint     ready;
+
+	/* text-input-v3 (RIG_TEXT_INPUT, and rig_text_input set): every
+	   `done' the compositor sent, as "del=B,A commit=TEXT;" */
+	gpointer   ti_manager;
+	gpointer   text_input;
+	gint       ti_enabled;       /* window the text input is enabled on */
+	guint      ti_del_before;
+	guint      ti_del_after;
+	gchar     *ti_commit;
+	GString   *ti_log;
 } Client;
+
+/* Set before rig_up() for a client whose seat has a text input that
+   enables itself on whichever window gets keyboard focus */
+G_GNUC_UNUSED static gboolean rig_text_input;
+/* ...that never enables it: a window with no text field focused */
+G_GNUC_UNUSED static gint rig_text_input_refuse;
 
 G_GNUC_UNUSED static struct wl_buffer *
 make_buffer(
@@ -339,6 +358,96 @@ static const struct xdg_wm_base_listener wm_base_listener = {
 	.ping = wm_base_ping,
 };
 
+#ifdef RIG_TEXT_INPUT
+/* ── text-input-v3: a text field that is always focused ──────────── */
+
+static void
+ti_enter(void *data, struct zwp_text_input_v3 *ti, struct wl_surface *surface)
+{
+	Client *c = data;
+
+	if (g_atomic_int_get(&rig_text_input_refuse))
+		return;
+	g_mutex_lock(&c->lock);
+	c->ti_enabled = window_of(c, surface);
+	g_mutex_unlock(&c->lock);
+	zwp_text_input_v3_enable(ti);
+	zwp_text_input_v3_set_content_type(ti,
+		ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
+		ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NORMAL);
+	zwp_text_input_v3_commit(ti);
+}
+
+static void
+ti_leave(void *data, struct zwp_text_input_v3 *ti, struct wl_surface *surface)
+{
+	Client *c = data;
+
+	(void)surface;
+	g_mutex_lock(&c->lock);
+	c->ti_enabled = -1;
+	g_mutex_unlock(&c->lock);
+	zwp_text_input_v3_disable(ti);
+	zwp_text_input_v3_commit(ti);
+}
+
+static void
+ti_preedit(void *data, struct zwp_text_input_v3 *ti, const char *text,
+           int32_t begin, int32_t end)
+{ (void)data; (void)ti; (void)text; (void)begin; (void)end; }
+
+static void
+ti_commit_string(void *data, struct zwp_text_input_v3 *ti, const char *text)
+{
+	Client *c = data;
+
+	(void)ti;
+	g_mutex_lock(&c->lock);
+	g_free(c->ti_commit);
+	c->ti_commit = g_strdup(text != NULL ? text : "");
+	g_mutex_unlock(&c->lock);
+}
+
+static void
+ti_delete(void *data, struct zwp_text_input_v3 *ti, uint32_t before,
+          uint32_t after)
+{
+	Client *c = data;
+
+	(void)ti;
+	g_mutex_lock(&c->lock);
+	c->ti_del_before = before;
+	c->ti_del_after = after;
+	g_mutex_unlock(&c->lock);
+}
+
+static void
+ti_done(void *data, struct zwp_text_input_v3 *ti, uint32_t serial)
+{
+	Client *c = data;
+
+	(void)ti;
+	(void)serial;
+	g_mutex_lock(&c->lock);
+	if (c->ti_commit != NULL || c->ti_del_before != 0 || c->ti_del_after != 0)
+		g_string_append_printf(c->ti_log, "del=%u,%u commit=%s;",
+		                       c->ti_del_before, c->ti_del_after,
+		                       c->ti_commit != NULL ? c->ti_commit : "");
+	g_clear_pointer(&c->ti_commit, g_free);
+	c->ti_del_before = c->ti_del_after = 0;
+	g_mutex_unlock(&c->lock);
+}
+
+static const struct zwp_text_input_v3_listener ti_listener = {
+	.enter = ti_enter,
+	.leave = ti_leave,
+	.preedit_string = ti_preedit,
+	.commit_string = ti_commit_string,
+	.delete_surrounding_text = ti_delete,
+	.done = ti_done,
+};
+#endif
+
 G_GNUC_UNUSED static void
 registry_global(void *data, struct wl_registry *reg, uint32_t name,
                 const char *iface, uint32_t version)
@@ -356,6 +465,12 @@ registry_global(void *data, struct wl_registry *reg, uint32_t name,
 	else if (g_strcmp0(iface, xdg_wm_base_interface.name) == 0)
 		c->wm_base = wl_registry_bind(reg, name,
 			&xdg_wm_base_interface, 1);
+#ifdef RIG_TEXT_INPUT
+	else if (rig_text_input
+	         && g_strcmp0(iface, zwp_text_input_manager_v3_interface.name) == 0)
+		c->ti_manager = wl_registry_bind(reg, name,
+			&zwp_text_input_manager_v3_interface, 1);
+#endif
 }
 
 static void registry_remove(void *d, struct wl_registry *r, uint32_t n)
@@ -390,6 +505,13 @@ client_thread(gpointer data)
 	wl_keyboard_add_listener(c->keyboard, &keyboard_listener, c);
 	c->pointer = wl_seat_get_pointer(c->seat);
 	wl_pointer_add_listener(c->pointer, &pointer_listener, c);
+#ifdef RIG_TEXT_INPUT
+	if (c->ti_manager != NULL) {
+		c->text_input = zwp_text_input_manager_v3_get_text_input(
+			c->ti_manager, c->seat);
+		zwp_text_input_v3_add_listener(c->text_input, &ti_listener, c);
+	}
+#endif
 
 	for (i = 0; i < c->n_windows; i++) {
 		Window *w = &c->windows[i];
@@ -525,6 +647,8 @@ rig_up(
 
 	g_mutex_init(&r->client.lock);
 	r->client.focused = -1;
+	r->client.ti_enabled = -1;
+	r->client.ti_log = g_string_new(NULL);
 	r->client.pointer_window = -1;
 	r->client.socket = gowl_compositor_get_socket_name(r->compositor);
 	for (i = 0; titles[i] != NULL && i < N_WINDOWS; i++) {
@@ -580,6 +704,9 @@ rig_down(Rig *r)
 	if (r->runtime != NULL)
 		g_rmdir(r->runtime);
 	g_free(r->runtime);
+	if (r->client.ti_log != NULL)
+		g_string_free(r->client.ti_log, TRUE);
+	g_free(r->client.ti_commit);
 	g_mutex_clear(&r->client.lock);
 }
 

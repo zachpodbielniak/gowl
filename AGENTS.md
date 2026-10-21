@@ -273,7 +273,29 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   answered from a thread, `c' variables (registered and compiled by
   crispy), the deny filter and off, the IPC surface, and `macro' variables
   against the real macro.so -- a result given at once, one given after a
-  queued step (waited for), arguments, and an unknown macro
+  queued step (waited for), arguments, and an unknown macro; usage counts
+  in the list, the stats and their file; a paste never reaching the real
+  clipboard.so history (and the user's clipboard put back once); a loaded
+  file edited, and a new file in a loaded directory, reloading by
+  themselves (an editor's swap file not); learning -- nothing while off,
+  nothing from a denied window, a suggestion with its trigger, accepting
+  it into the learned file and expanding it, a colliding trigger refused;
+  a slow expansion announced, listed and cancelled by id; and
+  text-input-v3 commits against a real text field, borrowed with no input
+  method, falling back to keys when the field never enables
+- `test-gabbrev-stats` -- usage counts: count/first/last (a clock going
+  back), most-used-first order, a round trip with ids that would break a
+  naive format, a load merging into this session's counts, bad lines
+  skipped, forgetting
+- `test-gabbrev-learn` -- repeated phrases: counted at the threshold and
+  announced once, the longer phrase preferred over its parts, a run with
+  a digit or a symbol never a word, short phrases ignored, Backspace in a
+  word and past it, phrases already matched or triggers taken respected,
+  proposals that never shadow (prefix either way), a bounded table
+- `test-bar-gabbrev` -- the bar's gabbrev widget fed the module's replies:
+  muted when off or absent, a count while expansions resolve, rows that
+  cancel a job or accept a suggestion, `x' dismissing only a suggestion,
+  hostile replies (wrong types, not JSON) never crashing it
 
 `make test` also runs every `tests/*.sh` **source guard** before the compiled
 tests. These assert invariants no unit test can reach:
@@ -336,8 +358,12 @@ tests. These assert invariants no unit test can reach:
 - `test-gabbrev-guard.sh` -- the gabbrev module waits on nothing through
   GLib's default context, never drives the seat itself, types a loop turn
   after the key that completed a trigger (never inside it), never hands
-  yaml-glib a NULL GError** (it crashes on malformed input), and
-  job_start() returns an id rather than a job a render may have freed
+  yaml-glib a NULL GError** (it crashes on malformed input),
+  job_start() returns an id rather than a job a render may have freed,
+  the phrase learner never touches the disk, paste and put-back
+  clipboards go through the transient setters, and the learner is fed
+  only by learn_feed(), which refuses synthetic input, denied windows
+  and terminals
 
 > **A key into a window without focus: Wayland by the seat, X11 by X
 > focus, confirmed.** `gowl_compositor_deliver_key()` is the one way in

@@ -61,7 +61,9 @@ G_BEGIN_DECLS
 typedef enum {
 	GABBREV_BACKEND_AUTO = 0,   /* keys when typeable and short, else paste */
 	GABBREV_BACKEND_KEYS,       /* espanso's `inject' */
-	GABBREV_BACKEND_CLIPBOARD
+	GABBREV_BACKEND_CLIPBOARD,
+	GABBREV_BACKEND_TEXT_INPUT  /* commit through text-input-v3 where the
+	                               window has it enabled, else auto */
 } GabbrevBackend;
 
 typedef enum {
@@ -93,7 +95,8 @@ typedef enum {
 	GABBREV_OPT_POST_PASTE_DELAY    = 1 << 17,
 	GABBREV_OPT_POST_PICKER_DELAY   = 1 << 18,
 	GABBREV_OPT_REFOCUS             = 1 << 19,
-	GABBREV_OPT_TIMEOUT             = 1 << 20
+	GABBREV_OPT_TIMEOUT             = 1 << 20,
+	GABBREV_OPT_AUTO_RESTART        = 1 << 21
 } GabbrevOptionBits;
 
 typedef struct {
@@ -119,6 +122,7 @@ typedef struct {
 	guint           post_picker_delay_ms; /* after a picker or form closes */
 	gboolean        refocus;              /* focus the target back before typing */
 	guint           timeout_ms;           /* an expansion's whole budget */
+	gboolean        auto_restart;         /* reload when a source changes */
 } GabbrevOptions;
 
 void     gabbrev_options_init_defaults (GabbrevOptions       *opts);

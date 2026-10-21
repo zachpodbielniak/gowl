@@ -27,6 +27,8 @@ The feature has two parts:
 
 With the module not loaded, nothing watches keys and nothing is typed.
 
+Beyond espanso: it counts how often each match is used, so a snippet file can be pruned ([[#gabbrev-usage][Usage counts]]); it can notice phrases you type again and again and propose a trigger for each ([[#gabbrev-learning][Learning]]); it reloads by itself when a match file changes ([[#gabbrev-reloading][Reloading]]); its pastes never reach a clipboard history; it can commit text the way an input method does, through text-input-v3, with no keys and no clipboard ([[#gabbrev-typing][Typing]]); and a bar widget shows expansions still resolving, with a cancel for each ([[#gabbrev-bar][The bar widget]]).
+
 ** Quick start
 :PROPERTIES:
 :CUSTOM_ID: gabbrev-quick-start
@@ -121,6 +123,10 @@ Keys go to that one window through =gowl_compositor_send_key_to_client()= / =_se
 The =backend= option chooses between keys and paste.  =auto= (the default) types text that is short (=clipboard_threshold=, 100 characters) and that every character of can be typed with this keyboard layout without AltGr; anything else is pasted --- =¯\_(ツ)_/¯= is pasted, =2026-10-19= is typed.  =keys= (espanso's =inject=) always types, skipping characters the layout cannot produce; =clipboard= always pastes.  A match can force either with =force_mode=.
 
 Terminals paste with Ctrl+Shift+V and copy with Ctrl+Shift+C.  gabbrev knows the usual terminal app-ids (=gst=, =foot=, =kitty=, =alacritty=, =wezterm=, =ghostty=, GNOME Terminal and Console, Konsole, xterm, ...; the module's =terminals= setting changes the list) and uses those chords there --- espanso's one patch every Linux user needs.  =apply_patch: false= turns that off, and =paste_shortcut= sets the chord outright.
+
+*text-input-v3.*  =backend: text-input= (or =force_mode: text-input= on one match) replaces the trigger the way an input method does: one =delete_surrounding_text= for the trigger's bytes and one =commit_string= for the text, applied by the application on =done= as a single edit.  No keymap is involved, so =café →= arrives intact without a paste, nothing touches the clipboard, and the application can undo the expansion as one step.  It needs the window to have a text field that speaks text-input-v3 (GTK, Qt, Firefox, Chromium with Wayland IME on).  When an input method (fcitx5, ibus) is running, gowl's relay has already entered and enabled the field; when none is, gowl enters the window's text input for the length of the edit and leaves it again --- the application enables it if a text field has focus, and if it does not within 250 ms the expansion is typed with keys instead.  A window with no text-input-v3 at all gets =auto=.  Images and HTML are always pasted.
+
+*The clipboard history.*  A paste puts the text on the clipboard only to paste it, so the source is marked the way password managers mark a copied password: it also offers =x-kde-passwordManagerHint= (=secret=).  gowl's clipboard module skips such a source, so does cmacs's kill-ring sync, and so do Klipper, CopyQ and the =wl-paste= history tools.  The user's own clipboard, put back afterwards, is marked too, so it is not added a second time.  The module setting =clipboard-history: true= turns the marking off.
 
 The job's typing starts one event-loop turn after the key that completed the trigger, never in the middle of delivering it.
 
@@ -426,7 +432,7 @@ Options go in any source (a match file, the =gabbrev:= section, espanso's =confi
 | Option                      | Default  | Meaning                                                           |
 |-----------------------------+----------+-------------------------------------------------------------------|
 | =enable=                    | true     | expand at all (in a profile: in its windows)                      |
-| =backend=                   | auto     | =auto=, =inject= (=keys=), =clipboard=                            |
+| =backend=                   | auto     | =auto=, =inject= (=keys=), =clipboard=, =text-input=              |
 | =clipboard_threshold=       | 100      | =auto= pastes text longer than this                               |
 | =key_delay= / =inject_delay= | 0       | ms between typed keys, for slow applications                      |
 | =paste_shortcut=            | automatic | Ctrl+V, Ctrl+Shift+V in terminals                                |
@@ -445,6 +451,7 @@ Options go in any source (a match file, the =gabbrev:= section, espanso's =confi
 | =post_form_delay= / =post_search_delay= | 120 | ms after a picker closes                                  |
 | =refocus=                   | true     | focus the window back after a picker; =false= puts the text on the clipboard instead |
 | =timeout=                   | 120000   | an expansion's whole budget, in ms                                |
+| =auto_restart= / =auto_reload= | true  | reload when a source file changes ([[#gabbrev-reloading][Reloading]]) |
 
 espanso options for other platforms (=win32_*=, =x11_*=, =show_icon=, =keyboard_layout=, ...) are accepted and ignored, so one configuration serves both.
 
@@ -471,9 +478,77 @@ modules:
     cache-dir: ~/.cache/gowl/gabbrev
     toast: true
     log: false
+    stats: true             # count uses per match
+    stats-file: ~/.local/state/gowl/gabbrev-stats.tsv   # "" keeps them in memory
+    learn: false            # notice repeated phrases (opt-in)
+    learn-min-count: 3      # how often before a phrase is suggested
+    learn-terminals: false  # learn in terminals too
+    learn-toast: true       # say so when a phrase gets there
+    learned-file: ~/.config/gowl/gabbrev-learned.yml    # where accepted phrases go
+    watch: true             # reload when a source changes
+    clipboard-history: false   # let paste expansions into clipboard histories
+    pending-toast-ms: 1500  # a toast for an expansion still resolving; 0: never
 #+end_src
 
 *Pickers.*  =choice=, =form= and search show a list or ask for text through a dmenu-style program: the rows on its standard input, one per line, the question in =$GABBREV_PROMPT=, the answer on its standard output.  Without a setting the first of fuzzel, bemenu, wofi, tofi and rofi found is used (zenity too, for free text).  Under =cmacs --gowl= they are Emacs's minibuffer instead.
+
+** Usage, learning and the bar
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-extras
+:END:
+*** Usage counts
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-usage
+:END:
+Every expansion is counted against its match's id: how many times, and when first and last.  A snippet file grows for years and nobody remembers which half of it is dead; the counts are how to find out.
+
+- =gabbrev-list= gives every match =uses= and =last-used= (Unix seconds, =null= for never).
+- =gabbrev-stats= lists every counted match, most used first, with =first-used=, =last-used= and whether it is still =loaded= (a match since deleted keeps its record until reset).  =gabbrev-stats --unused= lists the loaded matches that never fired.
+- =gabbrev-status= has a =stats= object: whether counting is on, the file, how many are tracked, the five most used, and =never-used=.
+- =gabbrev-stats-reset [ID]= forgets the counts, of one match or all.
+
+The counts are kept in =$XDG_STATE_HOME/gowl/gabbrev-stats.tsv= (the =stats-file= setting; empty keeps them in memory only), one line per match: =COUNT=, =FIRST=, =LAST=, =ID= separated by tabs, the id C-escaped so a tab or newline in a trigger cannot split a record.  The file is read on first need and written five seconds after a use --- a burst of expansions is one write, and a keystroke never waits on the disk --- and again at shutdown, atomically.  A line that does not parse is skipped rather than costing the rest.  =stats: false= stops counting.
+
+What counts as a use: an expansion that finished typing, and a =gabbrev-render= that rendered (cmacs's in-buffer expansion is one).  A failed or cancelled expansion is not one, and neither are =gabbrev-insert= and the search picker itself (the match picked from it is).
+
+*** Learning
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-learning
+:END:
+With =learn: true= (or =gabbrev-learn on=), gabbrev notices phrases you type again and again and proposes a trigger for each: type "thank you very much" three times and it suggests =;tyvm=.
+
+What it counts: runs of two to eight /words/ of at least ten characters, completed by a space or punctuation.  A word is letters, apostrophes and hyphens only: a run with a digit or a symbol in it is not a word, and it breaks the phrase on both sides, so a password, a code, an address or a number never becomes part of a phrase.  Counting is case-insensitive; a phrase is shown as you last typed it.  A phrase typed almost always as part of a longer one ("thank you" inside "thank you very much") is left out in favour of the longer one.
+
+Where it does not count: a denied window (password managers and prompts), a window whose profile disables expansion, a terminal (=learn-terminals= changes that), and synthetic input (a KVM, a macro, gabbrev's own typing).  A click, an arrow or another window ends the phrase being typed, as it ends a trigger.
+
+What it keeps: phrases in memory only --- never on disk --- and at most four thousand of them, forgetting those seen once, and longest ago, first.  =gabbrev-learn clear= forgets everything.
+
+When a phrase reaches =learn-min-count= (3), the module says so once: =EVENT gabbrev suggestion TRIGGER "PHRASE"= and, with =learn-toast=, a toast that opens the bar widget.  =gabbrev-suggestions [N]= lists them, best first (what saves the most typing), with the proposed trigger.  A proposal is =;= and the initials (=;tyvm=); then the initials with more of the last word; then two letters of every word --- whichever first does not collide with a loaded trigger, where a collision is a prefix either way (=;ty= would shadow =;tyvm=, because a trigger fires on its last character).
+
+=gabbrev-accept [--trigger T] PHRASE= makes a suggestion a match: it is appended to =~/.config/gowl/gabbrev-learned.yml= (the =learned-file= setting), an ordinary match file that is always loaded when it exists and that you can edit or delete like any other.  A trigger that collides is refused.  =gabbrev-dismiss PHRASE= drops a suggestion for the session.
+
+*** Reloading
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-reloading
+:END:
+When a file it loaded changes, gabbrev reloads by itself, the way espanso restarts on =auto_restart=.  It watches (inotify, on the compositor's event loop) the directory of every file it read, every directory and glob it was given, and the learned-matches file's directory --- so an edited file, a new file in an espanso =match/= folder and a deleted one are all noticed.  Editors save in several steps, so the reload waits until changes stop for 300 ms.  Only YAML files, directories and files loaded by name count: an editor's swap or backup file (=.a.yml.swp=, =a.yml~=, =#a.yml#=) does not.  A reload with problems says so in a toast.  =gabbrev-status= lists what is =watching=.
+
+=auto_restart: false= in any source (espanso spells it that way), or the module setting =watch: false=, turns it off.  The gowl config file itself is reloaded by gowl (Super+Shift+r), which reloads gabbrev too.
+
+*** Pending expansions and the bar widget
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-bar
+:END:
+An expansion waiting on something slow --- a shell command, a model, a macro --- says so: after =pending-toast-ms= (1.5 s) a toast names what it waits for, and =EVENT gabbrev pending JOB ID TYPE= is announced.  Pickers and forms are on screen already and get no toast.  =gabbrev-cancel JOB= stops that one expansion the way a failure does (a trigger already rubbed out is typed back, a saved clipboard goes back); =gabbrev-cancel= alone stops them all.
+
+The bar's =gabbrev= widget is where those toasts lead.  It shows a keyboard --- muted while expansion is off, yellow with a count while expansions are resolving --- and its panel lists the expansions with a cancel for each, the phrases learning noticed (select or =a= accepts, =x= dismisses), the most used matches, and how many have never fired.  Middle-click toggles expansion.  Add it to a bar region like any widget:
+
+#+begin_src yaml
+bar:
+  widgets-right: "gabbrev clipboard audio clock"
+#+end_src
+
+See [[file:bar-widgets/gabbrev.org][bar-widgets/gabbrev.org]].
 
 ** The built-in matches
 :PROPERTIES:
@@ -560,10 +635,16 @@ Replace one by giving its trigger again; drop them all with =builtin: false=.
 | =gabbrev-test TEXT=                       | JSON: which match TEXT, typed into the focused window, fires --- and whether the window is denied or disabled |
 | =gabbrev-resolve ID JSON-STRING=          | answer variable request ID (an external provider)            |
 | =gabbrev-resolve-error ID MESSAGE=        | fail it                                                      |
-| =gabbrev-cancel=                          | stop every running expansion                                 |
+| =gabbrev-cancel [JOB]=                    | stop one running expansion (an id from =gabbrev-status=), or all |
 | =gabbrev-builtin=                         | the built-in matches, as a JSON string of YAML               |
+| =gabbrev-stats [--unused]=                | JSON: uses per match, most used first; or the never-used     |
+| =gabbrev-stats-reset [ID]=                | forget the counts, of one match or all                       |
+| =gabbrev-suggestions [N]=                 | JSON: phrases typed often, with a proposed trigger           |
+| =gabbrev-accept [--trigger T] PHRASE=     | a phrase becomes a match in the learned file; answers the trigger |
+| =gabbrev-dismiss PHRASE=                  | never suggest it again (this session)                        |
+| =gabbrev-learn [on\vert{}off\vert{}clear]=  | learning repeated phrases                                    |
 
-Events: =EVENT gabbrev expanded ID=, =failed ID REASON=, =on WHY=, =off WHY=, =reloaded N=, =undone=, =rendered ID TEXT=, =render-failed ID REASON=.  They are module events, so an embedder hears them through =GowlCompositor::module-event= too.
+Events: =EVENT gabbrev expanded ID=, =failed ID REASON=, =on WHY=, =off WHY=, =reloaded N=, =undone=, =rendered ID TEXT=, =render-failed ID REASON=, =pending JOB ID TYPE=, =suggestion TRIGGER "PHRASE"= (=-= when no trigger was free), =accepted TRIGGER "PHRASE"=.  They are module events, so an embedder hears them through =GowlCompositor::module-event= too.
 
 ** Extending it
 :PROPERTIES:
@@ -648,7 +729,11 @@ A configuration problem --- an unknown key, a regex or filter that does not comp
 
 *A paste lands in the wrong place, or as the old clipboard.*  The application reads the clipboard slowly: raise =pre_paste_delay= and =post_paste_delay=.
 
-*Every expansion goes into clipboard history.*  The clipboard module keeps every clipboard change, and a paste is one.  Use =backend: keys= where you can.
+*Expansions show up in a clipboard history.*  gabbrev marks its pastes as not worth keeping (=x-kde-passwordManagerHint=); a history tool that ignores the mark keeps them anyway.  Use =backend: keys= or =text-input= where you can.  If you /want/ them kept, =clipboard-history: true=.
+
+*An edit does not reload.*  =gabbrev-status= lists what is =watching=; a file outside those directories (a source added later by a path the loader resolved elsewhere) needs =gabbrev-reload=.  =auto_restart: false= somewhere in your configuration turns watching off.
+
+*text-input does nothing.*  The application does not speak text-input-v3, or had no text field focused: the expansion is typed after 250 ms.  =gabbrev-status= shows =focused-text-input= for the focused window.
 
 ** Files
 :PROPERTIES:
@@ -663,6 +748,11 @@ A configuration problem --- an unknown key, a regex or filter that does not comp
 | =modules/gabbrev/gowl-gabbrev-engine.[ch]=  | the matcher                                                |
 | =modules/gabbrev/gowl-gabbrev-render.[ch]=  | variables and the replacement                              |
 | =modules/gabbrev/gowl-gabbrev-cvar.[ch]=    | =c= variables: crispy builds, guarded calls                |
-| =modules/gabbrev/gowl-module-gabbrev.c=     | the module: keys, jobs, typing, desktop variables, IPC     |
+| =modules/gabbrev/gowl-gabbrev-stats.[ch]=   | usage counts and their file                                |
+| =modules/gabbrev/gowl-gabbrev-learn.[ch]=   | repeated phrases and proposed triggers                     |
+| =modules/gabbrev/gowl-module-gabbrev.c=     | the module: keys, jobs, typing, desktop variables, watching, IPC |
+| =src/core/gowl-text-input.c=                | =gowl_compositor_commit_text()=: text-input-v3 commits     |
+| =src/core/gowl-seat.c=                      | =gowl_seat_set_clipboard_transient()= and the history mark |
+| =modules/bar/bar-plugins-gabbrev.c=         | the bar widget                                             |
 | =tests/test-gabbrev-*.c=, =test-gabbrev-guard.sh= | the tests and the structural guard                   |
 | =data/example-gabbrev.yaml=, =example-gabbrev.c= | complete examples                                     |

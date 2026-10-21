@@ -17,7 +17,9 @@ gabbrev:
   # ---- options (espanso's names) --------------------------------------
   toggle_key: ALT              # double-tap Alt: expansion off / on
   search_shortcut: Super+Alt+e # pick any match from a list
-  backend: auto                # type short text, paste the rest
+  backend: auto                # type short text, paste the rest;
+                               # text-input: commit like an input method
+  # auto_restart: false        # do not reload when a file changes
 
   # ---- more sources ---------------------------------------------------
   # espanso: true              # $XDG_CONFIG_HOME/espanso, as espanso reads it

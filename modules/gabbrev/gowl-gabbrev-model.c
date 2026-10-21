@@ -87,6 +87,7 @@ gabbrev_options_init_defaults(GabbrevOptions *opts)
 	opts->post_picker_delay_ms = 120;
 	opts->refocus = TRUE;
 	opts->timeout_ms = 120000;
+	opts->auto_restart = TRUE;
 }
 
 /**
@@ -146,6 +147,7 @@ gabbrev_options_merge(
 	if (s & GABBREV_OPT_POST_PICKER_DELAY)   into->post_picker_delay_ms = over->post_picker_delay_ms;
 	if (s & GABBREV_OPT_REFOCUS)             into->refocus = over->refocus;
 	if (s & GABBREV_OPT_TIMEOUT)             into->timeout_ms = over->timeout_ms;
+	if (s & GABBREV_OPT_AUTO_RESTART)        into->auto_restart = over->auto_restart;
 	into->set |= s;
 }
 
@@ -969,7 +971,7 @@ parse_option(
 	GabbrevOptions *opts
 ){
 	static const gchar * const ignored[] = {
-		"auto_restart", "show_icon", "keyboard_layout",
+		"show_icon", "keyboard_layout",
 		"evdev_modifier_delay", "disable_x11_fast_inject",
 		"x11_use_xclip_backend", "x11_use_xdotool_backend",
 		"win32_exclude_orphan_events",
@@ -999,9 +1001,12 @@ parse_option(
 			opts->backend = GABBREV_BACKEND_KEYS;
 		else if (s != NULL && g_ascii_strcasecmp(s, "clipboard") == 0)
 			opts->backend = GABBREV_BACKEND_CLIPBOARD;
+		else if (s != NULL && (g_ascii_strcasecmp(s, "text-input") == 0
+		                       || g_ascii_strcasecmp(s, "text_input") == 0))
+			opts->backend = GABBREV_BACKEND_TEXT_INPUT;
 		else {
-			gabbrev_loader_problem(l, "%s: backend is auto, inject or "
-			                       "clipboard", where);
+			gabbrev_loader_problem(l, "%s: backend is auto, inject, "
+			                       "clipboard or text-input", where);
 			return TRUE;
 		}
 		opts->set |= GABBREV_OPT_BACKEND;
@@ -1139,6 +1144,15 @@ parse_option(
 		if (get_uint(l, where, key, val, 3600000, &n)) {
 			opts->timeout_ms = n;
 			opts->set |= GABBREV_OPT_TIMEOUT;
+		}
+		return TRUE;
+	}
+	/* espanso restarts itself when a config file changes; gowl reloads
+	   in place -- the same switch turns either off */
+	if (g_strcmp0(key, "auto_restart") == 0 || g_strcmp0(key, "auto_reload") == 0) {
+		if (get_bool(l, where, key, val, &b)) {
+			opts->auto_restart = b;
+			opts->set |= GABBREV_OPT_AUTO_RESTART;
 		}
 		return TRUE;
 	}
@@ -1378,9 +1392,12 @@ parse_match(
 				m->force_mode = GABBREV_BACKEND_CLIPBOARD;
 			else if (g_strcmp0(s, "keys") == 0 || g_strcmp0(s, "inject") == 0)
 				m->force_mode = GABBREV_BACKEND_KEYS;
+			else if (g_strcmp0(s, "text-input") == 0
+			         || g_strcmp0(s, "text_input") == 0)
+				m->force_mode = GABBREV_BACKEND_TEXT_INPUT;
 			else
-				gabbrev_loader_problem(l, "%s: force_mode is clipboard "
-				                       "or keys", where);
+				gabbrev_loader_problem(l, "%s: force_mode is clipboard, "
+				                       "keys or text-input", where);
 		} else if (g_strcmp0(key, "force_clipboard") == 0) {
 			if (get_bool(l, where, key, val, &b) && b)
 				m->force_mode = GABBREV_BACKEND_CLIPBOARD;

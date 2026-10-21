@@ -808,9 +808,11 @@ Text expansion: type =;today= in any window and it becomes =2026-10-19=.  espans
 
 *Extending:* =src/gabbrev/gowl-gabbrev.h= --- =gowl_gabbrev_register_var_type()= (a new or replacement variable type, answered from any thread), =gowl_gabbrev_register_func()= (a C function YAML calls), =gowl_gabbrev_request_return_by_id()=.  A =macro= variable runs a gowl macro by name and waits for its result through =gowl_macro_add_finished_listener()=, which the macro module fires as every run ends.
 
-*Settings:* =start-on=, =builtin=, =files=, =deny-filter=, =terminals=, =picker-command=, =prompt-command=, =expand-synthetic=, =max-jobs=, =c-timeout-ms=, =cache-dir=, =toast=, =log=.
+*Beyond typing:* every use is counted per match and kept in =$XDG_STATE_HOME/gowl/gabbrev-stats.tsv= (=gabbrev-stats=, and =uses= in =gabbrev-list=), to prune what never fires; opt-in learning notices phrases typed again and again and proposes triggers (=gabbrev-suggestions=, =gabbrev-accept=), in memory only and never in denied windows, terminals or synthetic input; sources reload by themselves when a file changes (inotify on the event loop, debounced); a paste's clipboard is marked transient (=gowl_seat_set_clipboard_transient()=) so clipboard histories skip it; =backend: text-input= commits through text-input-v3 (=gowl_compositor_commit_text()=), borrowing the window's text input for one edit when no input method runs; and an expansion still resolving after a moment raises a toast that opens the bar's =gabbrev= widget, which cancels it.
 
-*Files:* =gowl-module-gabbrev.c= (keys, jobs, typing, desktop variables, IPC), and the pure halves tested directly: =gowl-gabbrev-model.c= (the loader), =gowl-gabbrev-engine.c= (the matcher), =gowl-gabbrev-render.c= (variables), =gowl-gabbrev-cvar.c= (C variables), =gowl-gabbrev-builtin.c=.  Full reference: [[file:gabbrev.org][gabbrev.org]].
+*Settings:* =start-on=, =builtin=, =files=, =deny-filter=, =terminals=, =picker-command=, =prompt-command=, =expand-synthetic=, =max-jobs=, =c-timeout-ms=, =cache-dir=, =toast=, =log=, =stats=, =stats-file=, =learn=, =learn-min-count=, =learn-terminals=, =learn-toast=, =learned-file=, =watch=, =clipboard-history=, =pending-toast-ms=.
+
+*Files:* =gowl-module-gabbrev.c= (keys, jobs, typing, desktop variables, watching, IPC), and the pure halves tested directly: =gowl-gabbrev-model.c= (the loader), =gowl-gabbrev-engine.c= (the matcher), =gowl-gabbrev-render.c= (variables), =gowl-gabbrev-cvar.c= (C variables), =gowl-gabbrev-stats.c= (usage counts), =gowl-gabbrev-learn.c= (repeated phrases), =gowl-gabbrev-builtin.c=.  The bar widget is =modules/bar/bar-plugins-gabbrev.c=.  Full reference: [[file:gabbrev.org][gabbrev.org]].
 
 *** The floatdesk module
 :PROPERTIES:

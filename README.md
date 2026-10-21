@@ -182,7 +182,7 @@ Or do not write one: **Super+Alt+r** records what you do next and writes it out 
 - [docs/macros.org](docs/macros.org) -- Macros: writing them, running them, containment, triggers, examples and use cases.
 - [docs/input-remap.org](docs/input-remap.org) -- Per-device key, button and wheel remapping.
 - [docs/broadcast.org](docs/broadcast.org) -- Input broadcasting for multiboxing: keys and clicks repeated into the other windows of a team (opt-in).
-- [docs/gabbrev.org](docs/gabbrev.org) -- Text expansion: espanso-compatible triggers, variables, app-specific profiles, grab-and-rewrite (opt-in).
+- [docs/gabbrev.org](docs/gabbrev.org) -- Text expansion: espanso-compatible triggers, variables, app-specific profiles, grab-and-rewrite, usage counts, phrase learning, live reload, text-input-v3 commits (opt-in).
 
 ## License
 

@@ -830,7 +830,7 @@ $(OBJDIR)/tests/test-broadcast-engine.o: modules/broadcast/gowl-broadcast-engine
 # The text expander's pure halves -- the loader, the matcher, the
 # renderer -- are included by their tests, like the broadcast engine.
 GABBREV_PURE := $(wildcard modules/gabbrev/gowl-gabbrev-*.c modules/gabbrev/gowl-gabbrev-*.h)
-$(OBJDIR)/tests/test-gabbrev-model.o $(OBJDIR)/tests/test-gabbrev-engine.o $(OBJDIR)/tests/test-gabbrev-render.o: $(GABBREV_PURE)
+$(OBJDIR)/tests/test-gabbrev-model.o $(OBJDIR)/tests/test-gabbrev-engine.o $(OBJDIR)/tests/test-gabbrev-render.o $(OBJDIR)/tests/test-gabbrev-stats.o $(OBJDIR)/tests/test-gabbrev-learn.o: $(GABBREV_PURE)
 $(OBJDIR)/tests/test-gabbrev-model.o $(OBJDIR)/tests/test-gabbrev-engine.o $(OBJDIR)/tests/test-gabbrev-render.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags json-glib-1.0) -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/gabbrev)"'
 $(OUTDIR)/test-gabbrev-model $(OUTDIR)/test-gabbrev-engine $(OUTDIR)/test-gabbrev-render: TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs json-glib-1.0)
 # The config test compiles the shipped C example, which includes
@@ -840,10 +840,14 @@ $(OBJDIR)/tests/test-gabbrev-config.o: TEST_CFLAGS += -I$(abspath $(BUILDDIR)/in
 # The module end to end: the real gabbrev.so in a headless compositor,
 # a keyboard plugged in through the backend, and a client recording
 # every key the expansion types.
-$(OUTDIR)/test-gabbrev-module: $(OBJDIR)/tests/xdg-shell-protocol.o $(OUTDIR)/modules/gabbrev.so $(OUTDIR)/modules/macro.so
-$(OBJDIR)/tests/test-gabbrev-module.o: xdg-shell-client-protocol.h tests/macro-test-client.h
-$(OUTDIR)/test-gabbrev-module: TEST_LDFLAGS += $(OBJDIR)/tests/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client json-glib-1.0)
-$(OBJDIR)/tests/test-gabbrev-module.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client json-glib-1.0) -DGOWL_TEST_GABBREV_MODULE='"$(abspath $(OUTDIR)/modules/gabbrev.so)"' -DGOWL_TEST_MACRO_MODULE='"$(abspath $(OUTDIR)/modules/macro.so)"'
+# The text-input-v3 client half is a text field that is always focused,
+# for the commit backend; the clipboard module is there to prove an
+# expansion's paste never reaches the history.
+GABBREV_TEST_PROTO := $(OBJDIR)/tests/xdg-shell-protocol.o $(OBJDIR)/tests/text-input-unstable-v3-protocol.o
+$(OUTDIR)/test-gabbrev-module: $(GABBREV_TEST_PROTO) $(OUTDIR)/modules/gabbrev.so $(OUTDIR)/modules/macro.so $(OUTDIR)/modules/clipboard.so
+$(OBJDIR)/tests/test-gabbrev-module.o: xdg-shell-client-protocol.h text-input-unstable-v3-client-protocol.h tests/macro-test-client.h
+$(OUTDIR)/test-gabbrev-module: TEST_LDFLAGS += $(GABBREV_TEST_PROTO) $(shell $(PKG_CONFIG) --libs wayland-client json-glib-1.0)
+$(OBJDIR)/tests/test-gabbrev-module.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client json-glib-1.0) -DGOWL_TEST_GABBREV_MODULE='"$(abspath $(OUTDIR)/modules/gabbrev.so)"' -DGOWL_TEST_MACRO_MODULE='"$(abspath $(OUTDIR)/modules/macro.so)"' -DGOWL_TEST_CLIPBOARD_MODULE='"$(abspath $(OUTDIR)/modules/clipboard.so)"'
 
 # Macros.  The loader test includes the loader directly and compiles
 # real macro files with crispy against this build's headers, so it
@@ -1009,6 +1013,9 @@ $(OBJDIR)/tests/test-bar-netshares.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(
 $(OUTDIR)/test-bar-ai-assistant: $(OUTDIR)/modules/bar.so
 $(OBJDIR)/tests/test-bar-ai-assistant.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
 $(OUTDIR)/test-bar-wow-gold: $(OUTDIR)/modules/bar.so
+# The text-expansion widget, fed the gabbrev module's replies as JSON.
+$(OUTDIR)/test-bar-gabbrev: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-gabbrev.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"'
 $(OBJDIR)/tests/test-bar-wow-gold.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'
 $(OUTDIR)/test-bar-cpu-activity: $(OUTDIR)/modules/bar.so
 $(OBJDIR)/tests/test-bar-cpu-activity.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"' -DGOWL_TEST_FIXTURES='"$(abspath tests/fixtures/bar)"'

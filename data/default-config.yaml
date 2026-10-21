@@ -1210,6 +1210,11 @@ modules:
     # deny-filter: "..."         # never into these windows; `none' for none
     # picker-command: "fuzzel --dmenu --prompt \"$GABBREV_PROMPT: \""
     # toast: true
+    # stats: true                # count uses per match (gabbrev-stats)
+    # learn: false               # suggest triggers for phrases typed often
+    # watch: true                # reload when a match file changes
+    # clipboard-history: false   # keep paste expansions out of histories
+    # pending-toast-ms: 1500     # "still waiting" toast; 0 for never
   # Screen recording through ffmpeg: `record-start', `record-stop'.
   recording:
     enabled: false

@@ -720,6 +720,23 @@ The macro sees trigger =REMAP= and detail =RULE INPUT= (=pedals KEY_B=). =args= 
 
 *This is outside the remapper's one-press-one-output guarantee*, deliberately and visibly: a macro is code and can do anything. Games with "one keypress, one action" rules (World of Warcraft among them) treat a pedal that plays a sequence as automation; keep macro targets for things that are not the game --- focusing it, arranging windows around it, a push-to-talk command.
 
+*** From a text expansion
+:PROPERTIES:
+:CUSTOM_ID: macros-gabbrev
+:END:
+gabbrev, the text expander ([[file:gabbrev.org][gabbrev.org]]), runs a macro from a match through a =macro= variable, and types what the macro gave =gowl_macro_set_result()=:
+
+#+begin_src yaml
+gabbrev:
+  matches:
+    - trigger: ";wins"
+      replace: "{{n}} windows open"
+      vars:
+        - {name: n, type: macro, params: {name: count-windows, args: [visible]}}
+#+end_src
+
+The macro sees trigger =ipc= and detail =gabbrev:;wins= (what was typed).  A timeline or threaded macro is waited for: its result arrives when it finishes.  =wait: false= starts the macro and types nothing.  The other direction is IPC: =gowl_macro_command(ctx, "gabbrev-insert text")= types text into the focused window, and =gabbrev-expand ID= expands a match.
+
 *** From C
 :PROPERTIES:
 :CUSTOM_ID: macros-c-api
@@ -742,6 +759,8 @@ gowl_macro_register_func("tidy", tidy, NULL, NULL);
 #+end_src
 
 A registered macro runs under the same guard and the same quarantine as a file, in the default (timeline) mode.
+
+*Hearing that a run ended.*  =gowl_macro_run_by_name()= replies =OK started NAME id=N= for a macro that finishes later.  =gowl_macro_add_finished_listener(func, data, destroy)= is told when any run ends --- its id, its name, its result, and an error when it was stopped, crashed or ran out of time --- on the compositor thread; =gowl_macro_remove_finished_listener()= stops it.  gabbrev's =macro= variables wait this way.
 
 *** Defined macros
 :PROPERTIES:

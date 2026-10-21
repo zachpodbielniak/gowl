@@ -266,6 +266,7 @@ A variable is =name=, =type= and =params=, plus espanso's =inject_vars= (=false=
 | =window=    |         | =field= (=app-id=, =title=, =exec=, =pid=, =monitor=, =layout=, =tag=, ...) | a fact about the window being typed into |
 | =file=      |         | =path=, =trim=                                             | a file's text (1 MiB at most)                      |
 | =c=         |         | =func=, or =code=, =source=, =file= (and =cflags=)         | C, see [[#gabbrev-c][C variables]]                       |
+| =macro=     |         | =name=, =args= (a list, substituted), =wait= (true) | what the gowl macro gave =gowl_macro_set_result()=; see [[#gabbrev-macros][Calling gowl macros]] |
 | =search=    |         |                                                            | any match, picked from a list, rendered            |
 | anything registered |  | whatever it wants                                          | see [[#gabbrev-extending][Extending]]                         |
 
@@ -347,6 +348,42 @@ matches:
 #+end_src
 
 =code= and =source= are compiled with crispy the first time they are used, against gowl's headers, and cached in =$XDG_CACHE_HOME/gowl/gabbrev= by the hash of the source (a =file= is rebuilt when it changes).  Compiling happens on a worker thread; the expansion waits for it, the desktop does not.  =cflags= adds compiler flags (=$(pkg-config --cflags libsoup-3.0)=), as does a =#define CRISPY_PARAMS= in the source.  The function runs on the compositor thread with a budget (=c-timeout-ms=, 500 ms): it must be quick, and anything slow belongs in a =shell= variable.
+
+*** Calling gowl macros
+:PROPERTIES:
+:CUSTOM_ID: gabbrev-macros
+:END:
+A =macro= variable runs a gowl macro ([[file:macros.org][macros.org]]) by name and takes what it gave =gowl_macro_set_result()= as its value --- so a snippet can be a macro's answer, and a trigger can be a way to run a macro:
+
+#+begin_src yaml
+matches:
+  # the macro's result, typed in
+  - trigger: ";wins"
+    replace: "{{n}} windows open"
+    vars:
+      - {name: n, type: macro, params: {name: count-windows}}
+
+  # arguments: a list, with {{var}}s substituted
+  - trigger: ";pip"
+    replace: ""
+    vars:
+      - {name: size, type: choice, params: {values: ["20", "30", "40"]}}
+      - {name: m, type: macro, params: {name: pip-corner, args: ["{{size}}"]}}
+
+  # fire and forget: the macro runs, the trigger is rubbed out, nothing typed
+  - trigger: ";tidy"
+    replace: ""
+    vars:
+      - {name: m, type: macro, params: {name: sort-windows, wait: false}}
+#+end_src
+
+The macro is run as =macro-run= runs it --- found by name on the macro path, under the fault guard, held back if it crashes --- with trigger =ipc= and detail =gabbrev:= followed by what was typed (=gowl_macro_get_trigger_detail()=), so it can tell a text expansion started it.
+
+*It waits for the macro to finish.*  A macro that queues steps (timeline mode) or runs threaded replies =OK started= and finishes later; the variable waits for that end --- heard through =gowl_macro_add_finished_listener()= --- and takes the result then, within the expansion's =timeout=.  A macro that is stopped, crashes or runs past its budget fails the variable, and the expansion types nothing.  =wait: false= takes the value as empty at once and lets the macro carry on.
+
+The macro module must be loaded (=modules: macro: {enabled: true}=); otherwise the variable fails and says so.  Under =cmacs --gowl= it is loaded for you when any match has a =macro= variable.  A macro defined from Elisp (=cmacs-gowl-macro-define=) runs but gives no value --- for Elisp that computes text, use =type: elisp=.
+
+*The other way round*, a macro types through gabbrev with the IPC: =gowl_macro_command(ctx, "gabbrev-insert text")= types text into the focused window (keys or a paste, by the backend), and =gowl_macro_command(ctx, "gabbrev-expand ;sig")= expands a match as if its trigger had been typed.
 
 *** Filters
 :PROPERTIES:

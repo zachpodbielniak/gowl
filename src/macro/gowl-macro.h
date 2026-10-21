@@ -215,6 +215,31 @@ gchar              *gowl_macro_run_by_name         (GowlCompositor   *compositor
                                                     const gchar      *name,
                                                     const gchar * const *argv);
 
+/**
+ * GowlMacroFinishedFunc:
+ * @id: the run's id (the `id=N' of `macro-run''s `OK started' reply)
+ * @name: the macro's name
+ * @result: (nullable): what it gave gowl_macro_set_result(), if anything
+ * @error: (nullable): why it did not finish: stopped, crashed, timed out
+ * @user_data: the data given to gowl_macro_add_finished_listener()
+ *
+ * Told when any macro run ends, on the compositor thread.
+ */
+typedef void (*GowlMacroFinishedFunc) (guint        id,
+                                       const gchar *name,
+                                       const gchar *result,
+                                       const gchar *error,
+                                       gpointer     user_data);
+
+guint               gowl_macro_add_finished_listener    (GowlMacroFinishedFunc func,
+                                                         gpointer              user_data,
+                                                         GDestroyNotify        destroy);
+void                gowl_macro_remove_finished_listener (guint                 listener_id);
+void                gowl_macro_emit_finished            (guint                 id,
+                                                         const gchar          *name,
+                                                         const gchar          *result,
+                                                         const gchar          *error);
+
 G_END_DECLS
 
 #endif /* GOWL_MACRO_H */

@@ -806,7 +806,7 @@ Text expansion: type =;today= in any window and it becomes =2026-10-19=.  espans
 
 *Nothing blocks the compositor thread*: subprocesses are =gowl_subprocess_spawn()=, clipboard reads are asynchronous, =c= variables compile on a worker, and an answer from any thread is posted back through an eventfd on the event loop --- never GLib's default context, which under cmacs is Emacs's thread (=tests/test-gabbrev-guard.sh= holds that).
 
-*Extending:* =src/gabbrev/gowl-gabbrev.h= --- =gowl_gabbrev_register_var_type()= (a new or replacement variable type, answered from any thread), =gowl_gabbrev_register_func()= (a C function YAML calls), =gowl_gabbrev_request_return_by_id()=.
+*Extending:* =src/gabbrev/gowl-gabbrev.h= --- =gowl_gabbrev_register_var_type()= (a new or replacement variable type, answered from any thread), =gowl_gabbrev_register_func()= (a C function YAML calls), =gowl_gabbrev_request_return_by_id()=.  A =macro= variable runs a gowl macro by name and waits for its result through =gowl_macro_add_finished_listener()=, which the macro module fires as every run ends.
 
 *Settings:* =start-on=, =builtin=, =files=, =deny-filter=, =terminals=, =picker-command=, =prompt-command=, =expand-synthetic=, =max-jobs=, =c-timeout-ms=, =cache-dir=, =toast=, =log=.
 

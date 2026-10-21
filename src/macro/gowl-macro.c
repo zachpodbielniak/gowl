@@ -1549,3 +1549,129 @@ gowl_macro_run_by_name(
 	}
 	return gowl_compositor_run_command(compositor, line->str);
 }
+
+/* --- hearing that a run ended --- */
+
+typedef struct {
+	guint                 id;
+	GowlMacroFinishedFunc func;
+	gpointer              data;
+	GDestroyNotify        destroy;
+} FinishedListener;
+
+static GMutex     finished_lock;
+static GPtrArray *finished_listeners;   /* FinishedListener* */
+static guint      next_listener_id = 1;
+
+static void
+finished_listener_free(gpointer p)
+{
+	FinishedListener *l = p;
+
+	if (l->destroy != NULL && l->data != NULL)
+		l->destroy(l->data);
+	g_free(l);
+}
+
+/**
+ * gowl_macro_add_finished_listener:
+ * @func: (scope notified) (closure user_data) (destroy destroy): told when
+ *   any macro run ends
+ * @user_data: (nullable): passed to @func
+ * @destroy: (nullable): frees @user_data when the listener is removed
+ *
+ * How code that started a macro with gowl_macro_run_by_name() hears how
+ * it ended -- a timeline or threaded macro replies `OK started NAME
+ * id=N' and finishes later.  The gabbrev module waits for `macro'
+ * variables this way.  Works whether or not the macro module is loaded.
+ *
+ * Returns: a listener id for gowl_macro_remove_finished_listener()
+ */
+guint
+gowl_macro_add_finished_listener(
+	GowlMacroFinishedFunc func,
+	gpointer              user_data,
+	GDestroyNotify        destroy
+){
+	FinishedListener *l;
+	guint id;
+
+	g_return_val_if_fail(func != NULL, 0);
+
+	l = g_new0(FinishedListener, 1);
+	l->func = func;
+	l->data = user_data;
+	l->destroy = destroy;
+	gowl_fault_guard_hold();
+	g_mutex_lock(&finished_lock);
+	if (finished_listeners == NULL)
+		finished_listeners = g_ptr_array_new_with_free_func(
+			finished_listener_free);
+	id = l->id = next_listener_id++;
+	g_ptr_array_add(finished_listeners, l);
+	g_mutex_unlock(&finished_lock);
+	gowl_fault_guard_release();
+	return id;
+}
+
+/**
+ * gowl_macro_remove_finished_listener:
+ * @listener_id: from gowl_macro_add_finished_listener()
+ */
+void
+gowl_macro_remove_finished_listener(guint listener_id)
+{
+	FinishedListener *gone = NULL;
+	guint i;
+
+	gowl_fault_guard_hold();
+	g_mutex_lock(&finished_lock);
+	for (i = 0; finished_listeners != NULL && i < finished_listeners->len; i++) {
+		FinishedListener *l = g_ptr_array_index(finished_listeners, i);
+
+		if (l->id == listener_id) {
+			gone = g_ptr_array_steal_index(finished_listeners, i);
+			break;
+		}
+	}
+	g_mutex_unlock(&finished_lock);
+	gowl_fault_guard_release();
+	if (gone != NULL)
+		finished_listener_free(gone);
+}
+
+/**
+ * gowl_macro_emit_finished: (skip)
+ * @id: the run's id
+ * @name: the macro's name
+ * @result: (nullable): its result
+ * @error: (nullable): why it did not finish
+ *
+ * The macro module's report that a run ended; every listener hears it.
+ * The listeners are called outside the lock, from a snapshot, so one
+ * may remove itself.
+ */
+void
+gowl_macro_emit_finished(
+	guint        id,
+	const gchar *name,
+	const gchar *result,
+	const gchar *error
+){
+	g_autoptr(GArray) snap = NULL;
+	guint i;
+
+	snap = g_array_new(FALSE, FALSE, sizeof(FinishedListener));
+	gowl_fault_guard_hold();
+	g_mutex_lock(&finished_lock);
+	for (i = 0; finished_listeners != NULL && i < finished_listeners->len; i++)
+		g_array_append_val(snap,
+			*(FinishedListener *)g_ptr_array_index(finished_listeners, i));
+	g_mutex_unlock(&finished_lock);
+	gowl_fault_guard_release();
+	for (i = 0; i < snap->len; i++) {
+		FinishedListener *l = &g_array_index(snap, FinishedListener, i);
+
+		l->func(id, name, result, error, l->data);
+	}
+}

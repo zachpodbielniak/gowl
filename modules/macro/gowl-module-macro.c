@@ -497,6 +497,9 @@ on_run_finished(
 	          result != NULL ? result : "");
 	macro_event(self, "%s %s %u", cancelled ? "stopped" : "finished",
 	            name, id);
+	/* Code that started it (a gabbrev `macro' variable) hears it too */
+	gowl_macro_emit_finished(id, name, result,
+	                         cancelled ? "it was stopped" : NULL);
 	if (self->dbus != NULL)
 		gowl_macro_dbus_emit(self->dbus, "Finished", name,
 		                     result != NULL ? result : "");
@@ -526,6 +529,7 @@ on_run_faulted(
 	macro_log(self, LOG_FAULT, "%s %s (id %u); quarantined -- lift with "
 	          "macro-clear %s", name, reason, id, name);
 	macro_event(self, "fault %s %s", name, what);
+	gowl_macro_emit_finished(id, name, NULL, reason);
 
 	summary = g_strdup_printf("Macro \"%s\" stopped", name);
 	body = g_strdup_printf("It %s and is held back. Clear it with: "

@@ -840,10 +840,10 @@ $(OBJDIR)/tests/test-gabbrev-config.o: TEST_CFLAGS += -I$(abspath $(BUILDDIR)/in
 # The module end to end: the real gabbrev.so in a headless compositor,
 # a keyboard plugged in through the backend, and a client recording
 # every key the expansion types.
-$(OUTDIR)/test-gabbrev-module: $(OBJDIR)/tests/xdg-shell-protocol.o $(OUTDIR)/modules/gabbrev.so
+$(OUTDIR)/test-gabbrev-module: $(OBJDIR)/tests/xdg-shell-protocol.o $(OUTDIR)/modules/gabbrev.so $(OUTDIR)/modules/macro.so
 $(OBJDIR)/tests/test-gabbrev-module.o: xdg-shell-client-protocol.h tests/macro-test-client.h
 $(OUTDIR)/test-gabbrev-module: TEST_LDFLAGS += $(OBJDIR)/tests/xdg-shell-protocol.o $(shell $(PKG_CONFIG) --libs wayland-client json-glib-1.0)
-$(OBJDIR)/tests/test-gabbrev-module.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client json-glib-1.0) -DGOWL_TEST_GABBREV_MODULE='"$(abspath $(OUTDIR)/modules/gabbrev.so)"'
+$(OBJDIR)/tests/test-gabbrev-module.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client json-glib-1.0) -DGOWL_TEST_GABBREV_MODULE='"$(abspath $(OUTDIR)/modules/gabbrev.so)"' -DGOWL_TEST_MACRO_MODULE='"$(abspath $(OUTDIR)/modules/macro.so)"'
 
 # Macros.  The loader test includes the loader directly and compiles
 # real macro files with crispy against this build's headers, so it

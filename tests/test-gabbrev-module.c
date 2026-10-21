@@ -573,6 +573,139 @@ test_ipc(
 	command_ok(b, "gabbrev-remove test");
 }
 
+/* --- calling into gowl macros --- */
+
+static gboolean
+macro_answer(
+	GowlMacroContext *ctx,
+	gpointer          data
+){
+	(void)data;
+	gowl_macro_set_result(ctx, "42");
+	return TRUE;
+}
+
+/* A timeline macro: a step queued, so it finishes after macro-run
+   replied; its result must still reach the variable */
+static gboolean
+macro_late(
+	GowlMacroContext *ctx,
+	gpointer          data
+){
+	(void)data;
+	gowl_macro_wait(ctx, 60);
+	gowl_macro_set_result(ctx, "late");
+	return TRUE;
+}
+
+static gboolean
+macro_args(
+	GowlMacroContext *ctx,
+	gpointer          data
+){
+	g_autofree gchar *joined = NULL;
+	GString *s = g_string_new(NULL);
+	guint i;
+
+	(void)data;
+	for (i = 0; i < gowl_macro_get_argc(ctx); i++)
+		g_string_append(s, gowl_macro_get_arg(ctx, i));
+	joined = g_string_free(s, FALSE);
+	gowl_macro_set_result(ctx, joined);
+	return TRUE;
+}
+
+static void
+bench_up_macro(
+	Bench         *b,
+	gconstpointer  data
+){
+	static const gchar *modules[] = {
+		GOWL_TEST_GABBREV_MODULE, GOWL_TEST_MACRO_MODULE, NULL
+	};
+
+	(void)data;
+	memset(b, 0, sizeof *b);
+	fake_keyboard_impl.name = "gowl-test-keyboard";
+	if (!rig_up(&b->r, titles, app_ids, modules))
+		return;
+	b->kb = g_new0(struct wlr_keyboard, 1);
+	wlr_keyboard_init(b->kb, &fake_keyboard_impl, "test-kb");
+	wl_signal_emit_mutable(&b->r.compositor->backend->events.new_input,
+	                       &b->kb->base);
+	pump(&b->r, 20);
+	gowl_macro_register_func("gab-answer", macro_answer, NULL, NULL);
+	gowl_macro_register_func("gab-late", macro_late, NULL, NULL);
+	gowl_macro_register_func("gab-args", macro_args, NULL, NULL);
+	command_ok(b, "gabbrev-add --name test {matches: ["
+	           "{trigger: ';ma', replace: '{{m}}', vars: "
+	           "[{name: m, type: macro, params: {name: gab-answer}}]},"
+	           "{trigger: ';ml', replace: '{{m}}', vars: "
+	           "[{name: m, type: macro, params: {name: gab-late}}]},"
+	           "{trigger: ';mg', replace: '{{m}}', vars: "
+	           "[{name: x, type: echo, params: {echo: b}},"
+	           " {name: m, type: macro, params: {name: gab-args, "
+	           "args: [a, '{{x}}']}}]},"
+	           "{trigger: ';mx', replace: '{{m}}', vars: "
+	           "[{name: m, type: macro, params: {name: no-such-macro}}]}"
+	           "]}");
+	focus_window(&b->r, 0);
+	reset_keys(&b->r);
+	b->up = TRUE;
+}
+
+static void
+bench_down_macro(
+	Bench         *b,
+	gconstpointer  data
+){
+	gowl_macro_unregister_func("gab-answer");
+	gowl_macro_unregister_func("gab-late");
+	gowl_macro_unregister_func("gab-args");
+	bench_down(b, data);
+}
+
+static void
+test_macro_variables(
+	Bench         *b,
+	gconstpointer  data
+){
+	static const guint32 want_now[] = {
+		KEY_BACKSPACE, KEY_BACKSPACE, KEY_BACKSPACE, KEY_4, KEY_2
+	};
+	static const guint32 want_late[] = {
+		KEY_BACKSPACE, KEY_BACKSPACE, KEY_BACKSPACE, KEY_L, KEY_A, KEY_T, KEY_E
+	};
+	static const guint32 want_args[] = {
+		KEY_BACKSPACE, KEY_BACKSPACE, KEY_BACKSPACE, KEY_A, KEY_B
+	};
+	g_autoptr(GArray) p = NULL;
+	g_autoptr(JsonObject) st = NULL;
+
+	(void)data;
+	BENCH_UP(b);
+	/* a result given at once */
+	type(b, ";ma");
+	assert_typed(b, 3, want_now, G_N_ELEMENTS(want_now));
+	/* a result given after a queued step: the variable waits */
+	reset_keys(&b->r);
+	type(b, ";ml");
+	assert_typed(b, 3, want_late, G_N_ELEMENTS(want_late));
+	/* arguments, substituted */
+	reset_keys(&b->r);
+	type(b, ";mg");
+	assert_typed(b, 3, want_args, G_N_ELEMENTS(want_args));
+	/* no such macro: nothing typed, a reason */
+	reset_keys(&b->r);
+	type(b, ";mx");
+	pump(&b->r, 200);
+	p = presses(b, 0);
+	g_assert_cmpuint(p->len, ==, 3);
+	st = command_json(b, "gabbrev-status");
+	g_assert_nonnull(strstr(json_object_get_string_member(st, "last-error"),
+	                        "no-such-macro"));
+}
+
 #define ADD(name, fn) \
 	g_test_add(name, Bench, NULL, bench_up, fn, bench_down)
 
@@ -592,5 +725,7 @@ main(int argc, char **argv)
 	ADD("/gabbrev/module/c-variables", test_c_variables);
 	ADD("/gabbrev/module/deny-and-off", test_deny_and_off);
 	ADD("/gabbrev/module/ipc", test_ipc);
+	g_test_add("/gabbrev/module/macro-variables", Bench, NULL,
+	           bench_up_macro, test_macro_variables, bench_down_macro);
 	return g_test_run();
 }

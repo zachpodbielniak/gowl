@@ -111,6 +111,7 @@
 #include "util/gowl-filter.h"
 #include "gabbrev/gowl-gabbrev.h"
 #include "gabbrev/gowl-gabbrev-private.h"
+#include "macro/gowl-macro.h"
 
 #include "gowl-gabbrev-model.h"
 #include "gowl-gabbrev-engine.h"
@@ -326,6 +327,10 @@ struct _GowlModuleGabbrev {
 	GHashTable         *cvar_funcs;      /* key -> GabbrevCvarFunc */
 	GHashTable         *cvar_builds;     /* key -> CvarBuild* (in flight) */
 	GHashTable         *cvar_faulted;    /* key -> reason */
+
+	/* `macro' variables waiting for their run to end */
+	GHashTable         *macro_waits;     /* run id -> GowlGabbrevRequest ref */
+	guint               macro_listener;
 
 	/* counters */
 	guint64             n_expanded;
@@ -3139,6 +3144,118 @@ resolve_c(
 	g_thread_unref(g_thread_new("gabbrev-cc", cvar_thread, b));
 }
 
+/* --- `macro': a gowl macro's result --- */
+
+/* A macro run ended: answer whoever waits for it.  The compositor
+   thread, from the macro module. */
+static void
+on_macro_finished(
+	guint        id,
+	const gchar *name,
+	const gchar *result,
+	const gchar *error,
+	gpointer     data
+){
+	GowlModuleGabbrev *self = data;
+	GowlGabbrevRequest *req;
+
+	if (!g_hash_table_steal_extended(self->macro_waits, GUINT_TO_POINTER(id),
+	                                 NULL, (gpointer *)&req))
+		return;
+	if (error != NULL) {
+		g_autofree gchar *m = g_strdup_printf("macro %s: %s", name, error);
+
+		gowl_gabbrev_request_return_error(req, m);
+	} else {
+		gowl_gabbrev_request_return(req, result != NULL ? result : "");
+	}
+	gowl_gabbrev_request_unref(req);
+}
+
+/*
+ * `macro': runs a gowl macro by name (params.name, params.args -- a
+ * list, substituted like any param) and takes what it gave
+ * gowl_macro_set_result() as the value.  A macro that queues steps or
+ * runs threaded finishes later: the variable waits for it (unless
+ * `wait: false'), hearing the end through gowl_macro_add_finished_
+ * listener().  The macro sees trigger `ipc' with detail `gabbrev:' and
+ * what was typed, so it can tell who ran it.
+ */
+static void
+resolve_macro(
+	GowlModuleGabbrev  *self,
+	GowlGabbrevRequest *req
+){
+	const gchar *name = gowl_gabbrev_request_get_param(req, "name");
+	const gchar *args = gowl_gabbrev_request_get_param(req, "args");
+	gboolean wait = param_bool(req, "wait", TRUE);
+	g_autoptr(GString) line = g_string_new("macro-run ");
+	g_autofree gchar *detail = NULL;
+	g_autofree gchar *qdetail = NULL;
+	g_autofree gchar *qname = NULL;
+	g_autofree gchar *reply = NULL;
+	const gchar *rest;
+
+	if (name == NULL || *name == '\0') {
+		gowl_gabbrev_request_return_error(req, "macro: params.name names it");
+		return;
+	}
+	detail = g_strdup_printf("--detail=gabbrev:%s",
+	                         gowl_gabbrev_request_get_trigger(req));
+	qdetail = g_shell_quote(detail);
+	qname = g_shell_quote(name);
+	g_string_append_printf(line, "%s -- %s", qdetail, qname);
+	if (args != NULL && *args != '\0') {
+		g_auto(GStrv) parts = g_strsplit(args, "\n", -1);
+		guint i;
+
+		for (i = 0; parts[i] != NULL; i++) {
+			g_autofree gchar *q = g_shell_quote(parts[i]);
+
+			g_string_append_printf(line, " %s", q);
+		}
+	}
+	reply = gowl_compositor_run_command(self->compositor, line->str);
+
+	if (reply == NULL) {
+		gowl_gabbrev_request_return_error(req, "macro: the macro module is "
+		                                  "not loaded (modules: macro: "
+		                                  "{enabled: true})");
+		return;
+	}
+	if (g_str_has_prefix(reply, "ERROR")) {
+		gowl_gabbrev_request_return_error(req, g_strstrip(reply + 5));
+		return;
+	}
+	/* `OK started NAME id=N ...': it finishes later */
+	if (g_str_has_prefix(reply, "OK started ")) {
+		const gchar *idp = strstr(reply, " id=");
+		g_autofree gchar *idtext = idp != NULL
+			? g_strndup(idp + 4, strcspn(idp + 4, " ")) : NULL;
+		guint64 id = 0;
+
+		if (!wait || idtext == NULL
+		    || !g_ascii_string_to_unsigned(idtext, 10, 1, G_MAXUINT, &id,
+		                                   NULL)) {
+			gowl_gabbrev_request_return(req, "");
+			return;
+		}
+		g_hash_table_insert(self->macro_waits, GUINT_TO_POINTER((guint)id),
+		                    gowl_gabbrev_request_ref(req));
+		return;
+	}
+	/* `OK ran NAME' (nothing to give) or `OK NAME: RESULT' */
+	if (g_str_has_prefix(reply, "OK ran ")) {
+		gowl_gabbrev_request_return(req, "");
+		return;
+	}
+	rest = g_str_has_prefix(reply, "OK ") ? reply + 3 : reply;
+	if (g_str_has_prefix(rest, name) && g_str_has_prefix(rest + strlen(name),
+	                                                     ": "))
+		rest += strlen(name) + 2;
+	gowl_gabbrev_request_return(req, rest);
+}
+
 /* --- the dispatch --- */
 
 static gboolean
@@ -3173,6 +3290,8 @@ host_resolve(
 		resolve_file(req);
 	else if (g_strcmp0(var->type, "c") == 0)
 		resolve_c(self, req);
+	else if (g_strcmp0(var->type, "macro") == 0)
+		resolve_macro(self, req);
 	else if (g_strcmp0(var->type, "choice") == 0)
 		resolve_choice(self, job, req);
 	else if (g_strcmp0(var->type, "form") == 0)
@@ -4359,6 +4478,8 @@ gowl_module_gabbrev_finalize(GObject *object)
 	g_hash_table_unref(self->cvar_funcs);
 	g_hash_table_unref(self->cvar_builds);
 	g_hash_table_unref(self->cvar_faulted);
+	gowl_macro_remove_finished_listener(self->macro_listener);
+	g_hash_table_unref(self->macro_waits);
 	g_strfreev(self->setting_files);
 	g_strfreev(self->terminals);
 	gowl_filter_free(self->deny);
@@ -4408,6 +4529,11 @@ gowl_module_gabbrev_init(GowlModuleGabbrev *self)
 	                                          NULL);
 	self->cvar_faulted = g_hash_table_new_full(g_str_hash, g_str_equal,
 	                                           g_free, g_free);
+	self->macro_waits = g_hash_table_new_full(g_direct_hash, g_direct_equal,
+	                                          NULL,
+	                                          (GDestroyNotify)gowl_gabbrev_request_unref);
+	self->macro_listener = gowl_macro_add_finished_listener(on_macro_finished,
+	                                                        self, NULL);
 	self->start_on = TRUE;
 	self->builtin = TRUE;
 	self->toast = TRUE;

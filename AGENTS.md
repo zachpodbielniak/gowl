@@ -271,7 +271,9 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   Backspace, the cursor hint, a paste for what the layout cannot type,
   shell variables, failures typing nothing, a type registered from C and
   answered from a thread, `c' variables (registered and compiled by
-  crispy), the deny filter and off, and the IPC surface
+  crispy), the deny filter and off, the IPC surface, and `macro' variables
+  against the real macro.so -- a result given at once, one given after a
+  queued step (waited for), arguments, and an unknown macro
 
 `make test` also runs every `tests/*.sh` **source guard** before the compiled
 tests. These assert invariants no unit test can reach:

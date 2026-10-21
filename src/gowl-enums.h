@@ -697,6 +697,27 @@ typedef enum {
 #define GOWL_TYPE_KEY_DELIVERY (gowl_key_delivery_get_type())
 GType gowl_key_delivery_get_type(void) G_GNUC_CONST;
 
+/* --- GowlTextCommitResult --- */
+
+/**
+ * GowlTextCommitResult:
+ * @GOWL_TEXT_COMMIT_UNAVAILABLE: no text input reaches the window;
+ *   nothing was sent
+ * @GOWL_TEXT_COMMIT_SENT: the edit was sent
+ * @GOWL_TEXT_COMMIT_PENDING: the edit waits for the client to enable a
+ *   text input gowl entered for it; the callback says how it went
+ *
+ * What gowl_compositor_commit_text() did.
+ */
+typedef enum {
+	GOWL_TEXT_COMMIT_UNAVAILABLE = 0,
+	GOWL_TEXT_COMMIT_SENT,
+	GOWL_TEXT_COMMIT_PENDING
+} GowlTextCommitResult;
+
+#define GOWL_TYPE_TEXT_COMMIT_RESULT (gowl_text_commit_result_get_type())
+GType gowl_text_commit_result_get_type(void) G_GNUC_CONST;
+
 G_END_DECLS
 
 #endif /* GOWL_ENUMS_H */

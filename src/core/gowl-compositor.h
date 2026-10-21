@@ -1498,6 +1498,56 @@ gint       gowl_compositor_send_text_to_client (GowlCompositor *self,
                                                 const gchar    *text);
 
 /**
+ * GOWL_TEXT_COMMIT_WAIT_MS:
+ *
+ * How long a borrowed text input is given to be enabled.
+ */
+#define GOWL_TEXT_COMMIT_WAIT_MS (250)
+
+/**
+ * GowlTextCommitFunc:
+ * @delivered: %TRUE when the edit reached the text field
+ * @user_data: the data given with it
+ *
+ * The outcome of a %GOWL_TEXT_COMMIT_PENDING edit, on the compositor
+ * thread.
+ */
+typedef void (*GowlTextCommitFunc) (gboolean delivered,
+                                    gpointer user_data);
+
+/**
+ * gowl_compositor_client_has_text_input:
+ * @self: a #GowlCompositor
+ * @client: a window
+ *
+ * Returns: %TRUE when gowl_compositor_commit_text() may reach @client
+ */
+gboolean   gowl_compositor_client_has_text_input (GowlCompositor *self,
+                                                GowlClient     *client);
+
+/**
+ * gowl_compositor_commit_text:
+ * @self: a #GowlCompositor
+ * @client: the focused window
+ * @delete_before: bytes before the cursor to remove first
+ * @text: (nullable): UTF-8 text to insert
+ * @func: (scope async) (nullable): the outcome of a pending edit
+ * @user_data: (closure func): data for @func
+ *
+ * Edits @client's focused text field through text-input-v3, as an
+ * input method would: no keys, no keymap, no clipboard.  With no input
+ * method running, gowl enters the window's text input for the edit.
+ *
+ * Returns: sent, pending (@func is called later), or unavailable
+ */
+GowlTextCommitResult gowl_compositor_commit_text (GowlCompositor     *self,
+                                                GowlClient         *client,
+                                                guint               delete_before,
+                                                const gchar        *text,
+                                                GowlTextCommitFunc  func,
+                                                gpointer            user_data);
+
+/**
  * gowl_compositor_deliver_key:
  * @self: a #GowlCompositor
  * @client: the window; it keeps no focus afterwards

@@ -76,6 +76,17 @@ typedef struct {
 	struct wl_listener         commit;
 	struct wl_listener         disable;
 	struct wl_listener         destroy;
+
+	/* An edit from inside the compositor (gowl_compositor_commit_text)
+	   waiting for the client to enable this text input.  `borrowed':
+	   the compositor entered it only for the edit, with no input
+	   method running, and leaves it again afterwards. */
+	gboolean                   borrowed;
+	gchar                     *pending_text;
+	guint                      pending_delete;
+	GowlTextCommitFunc         pending_func;
+	gpointer                   pending_data;
+	struct wl_event_source    *pending_timeout;
 } GowlTextInput;
 
 typedef struct {
@@ -119,6 +130,9 @@ struct _GowlTextInputRelay {
 
 static void relay_send_state(GowlTextInputRelay *relay, GowlTextInput *ti);
 static void popup_place(GowlInputPopup *p);
+static void ti_send_edit(GowlTextInput *ti, guint delete_before,
+                         const gchar *text);
+static void ti_finish_pending(GowlTextInput *ti, gboolean delivered);
 
 /* -----------------------------------------------------------
  * Which text input is the one
@@ -209,6 +223,13 @@ on_text_input_enable(struct wl_listener *listener, void *data)
 	GowlTextInput *ti = wl_container_of(listener, ti, enable);
 	(void)data;
 
+	/* The client enabled the text input gowl entered for an edit (the
+	   first enabling commit is signalled as `enable', not `commit') */
+	if (ti->pending_func != NULL) {
+		ti_send_edit(ti, ti->pending_delete, ti->pending_text);
+		ti_finish_pending(ti, TRUE);
+		return;
+	}
 	if (ti->relay->input_method == NULL) {
 		g_debug("text-input: enabled with no input method");
 		return;
@@ -222,6 +243,13 @@ on_text_input_commit(struct wl_listener *listener, void *data)
 	GowlTextInput *ti = wl_container_of(listener, ti, commit);
 	(void)data;
 
+	/* The client enabled the text input it was entered for: the edit
+	   waiting for that goes now */
+	if (ti->pending_func != NULL && ti->input->current_enabled) {
+		ti_send_edit(ti, ti->pending_delete, ti->pending_text);
+		ti_finish_pending(ti, TRUE);
+		return;
+	}
 	if (!ti->input->current_enabled || ti->relay->input_method == NULL)
 		return;
 	relay_send_state(ti->relay, ti);
@@ -246,6 +274,11 @@ on_text_input_destroy(struct wl_listener *listener, void *data)
 	GowlTextInputRelay *relay = ti->relay;
 	(void)data;
 
+	/* Gone with an edit waiting: it is not delivered (and there is
+	   nothing left to leave) */
+	ti->borrowed = FALSE;
+	if (ti->pending_func != NULL)
+		ti_finish_pending(ti, FALSE);
 	wl_list_remove(&ti->enable.link);
 	wl_list_remove(&ti->commit.link);
 	wl_list_remove(&ti->disable.link);
@@ -841,6 +874,11 @@ gowl_text_input_finish(GowlCompositor *self)
 		wl_list_remove(&ti->commit.link);
 		wl_list_remove(&ti->disable.link);
 		wl_list_remove(&ti->destroy.link);
+		/* Shutting down: a waiting edit is dropped without its
+		   callback, whose owner is going away too */
+		if (ti->pending_timeout != NULL)
+			wl_event_source_remove(ti->pending_timeout);
+		g_free(ti->pending_text);
 		g_free(ti);
 	}
 	g_list_free(relay->text_inputs);
@@ -865,4 +903,198 @@ gowl_text_input_finish(GowlCompositor *self)
 	g_list_free(relay->virtual_keyboards);
 	g_free(relay);
 	self->text_input_relay = NULL;
+}
+
+/* -----------------------------------------------------------
+ * Committing text from inside the compositor
+ * ----------------------------------------------------------- */
+
+/* @client's text input: the enabled one on its surface, else -- with
+   no input method running -- one of its text inputs that is entered
+   nowhere and so can be borrowed.  NULL when neither. */
+static GowlTextInput *
+relay_text_input_for(
+	GowlCompositor *self,
+	GowlClient     *client,
+	gboolean       *borrow
+){
+	GowlTextInputRelay *relay;
+	struct wlr_surface *surface;
+	struct wl_client *owner;
+	GowlTextInput *spare = NULL;
+	GList *l;
+
+	*borrow = FALSE;
+	relay = (GowlTextInputRelay *)self->text_input_relay;
+	if (relay == NULL || client == NULL)
+		return NULL;
+	surface = gowl_client_get_wlr_surface(client);
+	if (surface == NULL || surface->resource == NULL)
+		return NULL;
+	owner = wl_resource_get_client(surface->resource);
+	for (l = relay->text_inputs; l != NULL; l = l->next) {
+		GowlTextInput *ti = (GowlTextInput *)l->data;
+
+		if (ti->input->focused_surface == surface
+		    && ti->input->current_enabled)
+			return ti;
+		if (spare == NULL && ti->input->focused_surface == NULL
+		    && ti->pending_func == NULL
+		    && wl_resource_get_client(ti->input->resource) == owner)
+			spare = ti;
+	}
+	/* Borrowing is only for when there is no input method: with one,
+	   the relay enters text inputs itself, and one that is not
+	   enabled is simply not a text field */
+	if (spare == NULL || relay->input_method != NULL
+	    || relay_focused_surface(relay) != surface)
+		return NULL;
+	*borrow = TRUE;
+	return spare;
+}
+
+/* One edit, applied by the client on `done': the protocol orders it --
+   delete first, then commit -- whatever order the events come in */
+static void
+ti_send_edit(
+	GowlTextInput *ti,
+	guint          delete_before,
+	const gchar   *text
+){
+	if (delete_before > 0)
+		wlr_text_input_v3_send_delete_surrounding_text(ti->input,
+			delete_before, 0);
+	if (text != NULL && *text != '\0')
+		wlr_text_input_v3_send_commit_string(ti->input, text);
+	wlr_text_input_v3_send_done(ti->input);
+}
+
+/* The waiting edit is over, delivered or not: a borrowed text input is
+   left again, and the caller told */
+static void
+ti_finish_pending(
+	GowlTextInput *ti,
+	gboolean       delivered
+){
+	GowlTextCommitFunc func = ti->pending_func;
+	gpointer data = ti->pending_data;
+
+	if (ti->pending_timeout != NULL) {
+		wl_event_source_remove(ti->pending_timeout);
+		ti->pending_timeout = NULL;
+	}
+	g_clear_pointer(&ti->pending_text, g_free);
+	ti->pending_func = NULL;
+	ti->pending_data = NULL;
+	if (ti->borrowed && ti->input->focused_surface != NULL)
+		wlr_text_input_v3_send_leave(ti->input);
+	ti->borrowed = FALSE;
+	if (func != NULL)
+		func(delivered, data);
+}
+
+/* The client never enabled the text input: it has no text field */
+static gint
+on_pending_timeout(gpointer data)
+{
+	GowlTextInput *ti = data;
+
+	/* A wl_event_loop timer is not removed by firing: finishing
+	   removes it, which libwayland allows from its own callback */
+	ti_finish_pending(ti, FALSE);
+	return 0;
+}
+
+/**
+ * gowl_compositor_client_has_text_input:
+ * @self: a #GowlCompositor
+ * @client: a window
+ *
+ * Whether gowl_compositor_commit_text() may reach @client: it has a
+ * text-input-v3 enabled on its surface right now, or -- with no input
+ * method running -- a text input gowl can enter for the length of one
+ * edit.  The second is a promise of an attempt, not of a text field:
+ * an application with nothing focused that takes text never enables
+ * it, and the commit then reports it was not delivered.
+ *
+ * Returns: %TRUE if text can be committed to @client
+ */
+gboolean
+gowl_compositor_client_has_text_input(
+	GowlCompositor *self,
+	GowlClient     *client
+){
+	gboolean borrow;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	return relay_text_input_for(self, client, &borrow) != NULL;
+}
+
+/**
+ * gowl_compositor_commit_text:
+ * @self: a #GowlCompositor
+ * @client: the window, which must hold the keyboard focus
+ * @delete_before: bytes of text before the cursor to remove first
+ * @text: (nullable): UTF-8 text to insert at the cursor
+ * @func: (scope async) (nullable): called once when a
+ *   %GOWL_TEXT_COMMIT_PENDING edit is delivered or given up on
+ * @user_data: (closure func): data for @func
+ *
+ * Replaces text in @client's focused text field the way an input
+ * method does: one delete_surrounding_text and one commit_string,
+ * applied together on `done'.  Unlike typed keys this needs no keymap,
+ * so any character arrives intact (no clipboard round trip for an
+ * emoji), and the change is a single edit the application can undo as
+ * one.
+ *
+ * A text input that is enabled already gets the edit at once.  With no
+ * input method running, gowl enters one of @client's text inputs for
+ * the edit and leaves it straight after: the client answers the enter
+ * by enabling it -- if a text field has focus -- and the edit goes then
+ * (%GOWL_TEXT_COMMIT_PENDING; @func says how it went, on this thread).
+ * A client that does not enable it within a moment had no text field.
+ *
+ * Returns: whether the edit was sent, will be, or cannot be
+ */
+GowlTextCommitResult
+gowl_compositor_commit_text(
+	GowlCompositor     *self,
+	GowlClient         *client,
+	guint               delete_before,
+	const gchar        *text,
+	GowlTextCommitFunc  func,
+	gpointer            user_data
+){
+	GowlTextInput *ti;
+	gboolean borrow;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self),
+	                     GOWL_TEXT_COMMIT_UNAVAILABLE);
+
+	if (text != NULL && !g_utf8_validate(text, -1, NULL))
+		return GOWL_TEXT_COMMIT_UNAVAILABLE;
+	ti = relay_text_input_for(self, client, &borrow);
+	if (ti == NULL)
+		return GOWL_TEXT_COMMIT_UNAVAILABLE;
+	if (!borrow) {
+		ti_send_edit(ti, delete_before, text);
+		return GOWL_TEXT_COMMIT_SENT;
+	}
+
+	/* Borrowed: entered now, edited when the client enables it */
+	ti->borrowed = TRUE;
+	ti->pending_text = g_strdup(text);
+	ti->pending_delete = delete_before;
+	ti->pending_func = func;
+	ti->pending_data = user_data;
+	ti->pending_timeout = wl_event_loop_add_timer(
+		gowl_compositor_get_event_loop(self),
+		(wl_event_loop_timer_func_t)on_pending_timeout, ti);
+	if (ti->pending_timeout != NULL)
+		wl_event_source_timer_update(ti->pending_timeout,
+		                             GOWL_TEXT_COMMIT_WAIT_MS);
+	wlr_text_input_v3_send_enter(ti->input,
+	                             gowl_client_get_wlr_surface(client));
+	return GOWL_TEXT_COMMIT_PENDING;
 }

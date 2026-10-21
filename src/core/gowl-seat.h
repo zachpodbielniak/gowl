@@ -207,6 +207,54 @@ void      gowl_seat_set_clipboard_bytes (GowlSeat     *self,
                                           const gchar  *mime_type);
 
 /**
+ * GOWL_SEAT_TRANSIENT_MIME:
+ *
+ * The MIME type a clipboard source offers to say "paste me, do not
+ * keep me" -- KDE's password-manager hint, which clipboard histories
+ * already honour.  Its content is the string "secret".
+ */
+#define GOWL_SEAT_TRANSIENT_MIME "x-kde-passwordManagerHint"
+
+/**
+ * gowl_seat_set_clipboard_transient:
+ * @self: a #GowlSeat
+ * @text: the text to place on the clipboard
+ *
+ * gowl_seat_set_clipboard(), with the source also offering
+ * %GOWL_SEAT_TRANSIENT_MIME so clipboard histories leave it out.  For
+ * text that is on the clipboard only to be pasted once -- a text
+ * expansion, the user's own clipboard put back afterwards.  Emits
+ * #GowlSeat::clipboard-changed like the plain setter; a listener that
+ * keeps history asks gowl_seat_clipboard_is_transient().
+ */
+void      gowl_seat_set_clipboard_transient (GowlSeat     *self,
+                                          const gchar  *text);
+
+/**
+ * gowl_seat_set_clipboard_bytes_transient:
+ * @self: a #GowlSeat
+ * @data: (transfer none): the bytes to offer
+ * @mime_type: the MIME type to advertise them as
+ *
+ * gowl_seat_set_clipboard_bytes(), marked transient the same way.
+ */
+void      gowl_seat_set_clipboard_bytes_transient (GowlSeat     *self,
+                                          GBytes       *data,
+                                          const gchar  *mime_type);
+
+/**
+ * gowl_seat_clipboard_is_transient:
+ * @self: a #GowlSeat
+ *
+ * Whether the current clipboard source offers %GOWL_SEAT_TRANSIENT_MIME:
+ * set transiently by gowl, or marked by its client (KeePassXC marks a
+ * copied password).  A clipboard history should not keep it.
+ *
+ * Returns: %TRUE when the clipboard asks not to be kept
+ */
+gboolean  gowl_seat_clipboard_is_transient (GowlSeat     *self);
+
+/**
  * gowl_seat_get_primary_selection:
  * @self: a #GowlSeat
  *

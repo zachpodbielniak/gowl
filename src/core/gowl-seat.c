@@ -467,6 +467,41 @@ gowl_seat_send_scroll(
 /* --- Clipboard --- */
 
 /*
+ * The transient marker.  KDE's convention, which clipboard managers
+ * (Klipper, CopyQ, cliphist's wl-paste wrappers, gowl's own history)
+ * read as "do not keep this": a source that also offers
+ * GOWL_SEAT_TRANSIENT_MIME is on the clipboard only to be pasted once.
+ * KeePassXC marks a copied password this way; gowl marks what it puts
+ * there only to paste it (gabbrev's expansions, put-backs).  Asked for
+ * that type, a source answers "secret".
+ */
+static gboolean
+gowl_seat_send_transient_hint(
+	const char *mime_type,
+	int32_t     fd
+){
+	static const gchar answer[] = "secret";
+	ssize_t n;
+
+	if (mime_type == NULL || strcmp(mime_type, GOWL_SEAT_TRANSIENT_MIME) != 0)
+		return FALSE;
+	do
+		n = write(fd, answer, sizeof answer - 1);
+	while (n < 0 && errno == EINTR);
+	close(fd);
+	return TRUE;
+}
+
+static void
+gowl_seat_offer_transient_hint(struct wlr_data_source *source)
+{
+	char **slot;
+
+	slot = wl_array_add(&source->mime_types, sizeof(char *));
+	*slot = g_strdup(GOWL_SEAT_TRANSIENT_MIME);
+}
+
+/*
  * Custom wlr_data_source that serves a text string.
  * Used by gowl_seat_set_clipboard().
  */
@@ -484,7 +519,8 @@ gowl_text_source_send(
 	struct gowl_text_source *ts;
 
 	ts = wl_container_of(source, ts, base);
-	(void)mime_type;
+	if (gowl_seat_send_transient_hint(mime_type, fd))
+		return;
 
 	if (ts->text != NULL) {
 		size_t len = strlen(ts->text);
@@ -611,7 +647,8 @@ gowl_bytes_source_send(
 	GowlClipboardWrite       *w;
 
 	bs = wl_container_of(source, bs, base);
-	(void)mime_type;
+	if (gowl_seat_send_transient_hint(mime_type, fd))
+		return;
 
 	if (bs->data == NULL || bs->loop == NULL) {
 		close(fd);
@@ -668,7 +705,8 @@ gowl_primary_text_source_send(
 	struct gowl_primary_text_source *ts;
 
 	ts = wl_container_of(source, ts, base);
-	(void)mime_type;
+	if (gowl_seat_send_transient_hint(mime_type, fd))
+		return;
 
 	if (ts->text != NULL) {
 		size_t len = strlen(ts->text);
@@ -844,25 +882,16 @@ gowl_seat_get_clipboard(GowlSeat *self)
 	return gowl_seat_read_selection_fd(gowl_seat_open_clipboard(self));
 }
 
-/**
- * gowl_seat_set_clipboard:
- * @self: a #GowlSeat
- * @text: the UTF-8 text to place on the clipboard
- *
- * Sets the Wayland clipboard to @text by creating a compositor-
- * owned data source offering text/plain and UTF8_STRING.
- */
-void
-gowl_seat_set_clipboard(
+/* The text source, offered as text, and marked transient when asked */
+static void
+gowl_seat_set_text_selection(
 	GowlSeat    *self,
-	const gchar *text
+	const gchar *text,
+	gboolean     transient
 ){
 	struct wlr_seat *seat;
 	struct gowl_text_source *ts;
 	char *mime_plain, *mime_utf8, *mime_utf8_str;
-
-	g_return_if_fail(GOWL_IS_SEAT(self));
-	g_return_if_fail(text != NULL);
 
 	seat = (struct wlr_seat *)self->wlr_seat;
 	if (seat == NULL)
@@ -886,6 +915,8 @@ gowl_seat_set_clipboard(
 		slot = wl_array_add(&ts->base.mime_types, sizeof(char *));
 		*slot = mime_utf8_str;
 	}
+	if (transient)
+		gowl_seat_offer_transient_hint(&ts->base);
 
 	wlr_seat_set_selection(seat, &ts->base,
 	                       wl_display_next_serial(seat->display));
@@ -895,33 +926,88 @@ gowl_seat_set_clipboard(
 	   this, and a set from inside the compositor -- OCR text, a
 	   picked colour, cmacs's own kills -- is a clipboard change like
 	   any other.  Synchronous, so a caller can mark its own write
-	   (the history's `restoring') around the call. */
+	   (the history's `restoring') around the call.  A transient set
+	   is announced too; listeners ask gowl_seat_clipboard_is_transient(). */
 	g_signal_emit(self, seat_signals[SIGNAL_CLIPBOARD_CHANGED], 0);
 }
 
 /**
- * gowl_seat_set_clipboard_bytes:
+ * gowl_seat_set_clipboard:
  * @self: a #GowlSeat
- * @data: (transfer none): the bytes to offer
- * @mime_type: the MIME type to advertise, e.g. "image/png"
+ * @text: the text to place on the clipboard
  *
- * Offer @data on the clipboard as @mime_type.  See the header for why
- * this is not gowl_seat_set_clipboard() with a different MIME string.
+ * Set the clipboard content to @text.
  */
 void
-gowl_seat_set_clipboard_bytes(
+gowl_seat_set_clipboard(
+	GowlSeat    *self,
+	const gchar *text
+){
+	g_return_if_fail(GOWL_IS_SEAT(self));
+	g_return_if_fail(text != NULL);
+
+	gowl_seat_set_text_selection(self, text, FALSE);
+}
+
+/**
+ * gowl_seat_set_clipboard_transient:
+ * @self: a #GowlSeat
+ * @text: the text to place on the clipboard
+ *
+ * gowl_seat_set_clipboard(), marked as not worth keeping: the source
+ * also offers %GOWL_SEAT_TRANSIENT_MIME, which clipboard histories
+ * (gowl's among them) skip.
+ */
+void
+gowl_seat_set_clipboard_transient(
+	GowlSeat    *self,
+	const gchar *text
+){
+	g_return_if_fail(GOWL_IS_SEAT(self));
+	g_return_if_fail(text != NULL);
+
+	gowl_seat_set_text_selection(self, text, TRUE);
+}
+
+/**
+ * gowl_seat_clipboard_is_transient:
+ * @self: a #GowlSeat
+ *
+ * Whether what is on the clipboard now asks not to be kept: its source
+ * offers %GOWL_SEAT_TRANSIENT_MIME -- gowl's transient sets, and any
+ * client that marks a copy the KDE way (KeePassXC does, for passwords).
+ *
+ * Returns: %TRUE if a history should leave the clipboard alone
+ */
+gboolean
+gowl_seat_clipboard_is_transient(GowlSeat *self)
+{
+	struct wlr_seat *seat;
+	char **mime;
+
+	g_return_val_if_fail(GOWL_IS_SEAT(self), FALSE);
+
+	seat = (struct wlr_seat *)self->wlr_seat;
+	if (seat == NULL || seat->selection_source == NULL)
+		return FALSE;
+	wl_array_for_each(mime, &seat->selection_source->mime_types)
+		if (*mime != NULL && strcmp(*mime, GOWL_SEAT_TRANSIENT_MIME) == 0)
+			return TRUE;
+	return FALSE;
+}
+
+/* The bytes source, under @mime_type, and marked transient when asked */
+static void
+gowl_seat_set_bytes_selection(
 	GowlSeat    *self,
 	GBytes      *data,
-	const gchar *mime_type
+	const gchar *mime_type,
+	gboolean     transient
 ){
 	static gsize sigpipe_once = 0;
 	struct wlr_seat *seat;
 	struct gowl_bytes_source *bs;
 	char **slot;
-
-	g_return_if_fail(GOWL_IS_SEAT(self));
-	g_return_if_fail(data != NULL);
-	g_return_if_fail(mime_type != NULL);
 
 	seat = (struct wlr_seat *)self->wlr_seat;
 	if (seat == NULL)
@@ -946,13 +1032,59 @@ gowl_seat_set_clipboard_bytes(
 
 	slot = wl_array_add(&bs->base.mime_types, sizeof(char *));
 	*slot = g_strdup(mime_type);
+	if (transient)
+		gowl_seat_offer_transient_hint(&bs->base);
 
 	wlr_seat_set_selection(seat, &bs->base,
 	                       wl_display_next_serial(seat->display));
 
-	/* See gowl_seat_set_clipboard(): a screenshot on the clipboard is
-	   a clipboard change too. */
+	/* See gowl_seat_set_text_selection(): a screenshot on the
+	   clipboard is a clipboard change too. */
 	g_signal_emit(self, seat_signals[SIGNAL_CLIPBOARD_CHANGED], 0);
+}
+
+/**
+ * gowl_seat_set_clipboard_bytes:
+ * @self: a #GowlSeat
+ * @data: (transfer none): the bytes to offer
+ * @mime_type: the MIME type to advertise, e.g. "image/png"
+ *
+ * Offer @data on the clipboard as @mime_type.  See the header for why
+ * this is not gowl_seat_set_clipboard() with a different MIME string.
+ */
+void
+gowl_seat_set_clipboard_bytes(
+	GowlSeat    *self,
+	GBytes      *data,
+	const gchar *mime_type
+){
+	g_return_if_fail(GOWL_IS_SEAT(self));
+	g_return_if_fail(data != NULL);
+	g_return_if_fail(mime_type != NULL);
+
+	gowl_seat_set_bytes_selection(self, data, mime_type, FALSE);
+}
+
+/**
+ * gowl_seat_set_clipboard_bytes_transient:
+ * @self: a #GowlSeat
+ * @data: (transfer none): the bytes to offer
+ * @mime_type: the MIME type to advertise
+ *
+ * gowl_seat_set_clipboard_bytes(), marked as not worth keeping (see
+ * gowl_seat_set_clipboard_transient()).
+ */
+void
+gowl_seat_set_clipboard_bytes_transient(
+	GowlSeat    *self,
+	GBytes      *data,
+	const gchar *mime_type
+){
+	g_return_if_fail(GOWL_IS_SEAT(self));
+	g_return_if_fail(data != NULL);
+	g_return_if_fail(mime_type != NULL);
+
+	gowl_seat_set_bytes_selection(self, data, mime_type, TRUE);
 }
 
 /**

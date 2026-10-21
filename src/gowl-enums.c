@@ -669,4 +669,32 @@ gowl_key_delivery_get_type(void)
 	return (GType)g_type_id;
 }
 
+/* --- GowlTextCommitResult GType registration --- */
+
+/**
+ * gowl_text_commit_result_get_type:
+ *
+ * Retrieves the #GType for #GowlTextCommitResult.
+ *
+ * Returns: the #GType for #GowlTextCommitResult
+ */
+GType
+gowl_text_commit_result_get_type(void)
+{
+	static gsize g_type_id = 0;
+
+	if (g_once_init_enter(&g_type_id)) {
+		static const GEnumValue values[] = {
+			{ GOWL_TEXT_COMMIT_UNAVAILABLE, "GOWL_TEXT_COMMIT_UNAVAILABLE", "unavailable" },
+			{ GOWL_TEXT_COMMIT_SENT,        "GOWL_TEXT_COMMIT_SENT",        "sent" },
+			{ GOWL_TEXT_COMMIT_PENDING,     "GOWL_TEXT_COMMIT_PENDING",     "pending" },
+			{ 0, NULL, NULL }
+		};
+		GType type_id = g_enum_register_static("GowlTextCommitResult", values);
+		g_once_init_leave(&g_type_id, type_id);
+	}
+
+	return (GType)g_type_id;
+}
+
 #pragma GCC diagnostic pop

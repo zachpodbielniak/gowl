@@ -348,6 +348,11 @@ clip_on_clipboard_changed(GowlSeat *seat, gpointer data)
 
 	if (self->restoring || self->compositor == NULL)
 		return;
+	/* Marked "do not keep": a password manager's copy, or text gowl
+	   put there only to paste it (gabbrev).  Never written to the
+	   history, so never to disk either. */
+	if (gowl_seat_clipboard_is_transient(seat))
+		return;
 
 	/* GowlSeat keeps the wlr_seat as an alias field; the private
 	   header is what a module gets it through. */

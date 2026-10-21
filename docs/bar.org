@@ -622,6 +622,7 @@ Shipped in =bar.so= but *off* unless you add them to a widget list. Each has its
 | =netshares=     | Mount CIFS, NFS and SSHFS shares                                       | no                                 | [[file:bar-widgets/netshares.org]]          |
 | =tvremote=      | Remote for Fire TV, Android TV, Roku, Samsung and LG                   | no                                 | [[file:bar-widgets/tvremote.org]]           |
 | =wow-gold=      | World of Warcraft gold, sales and trends from your addons, via tsmctl | no                                 | [[file:bar-widgets/wow-gold.org]]           |
+| =gabbrev=       | Text expansion: on/off, expansions still resolving (cancel), phrases to accept, usage | yes                | [[file:bar-widgets/gabbrev.org]]            |
 
 ** Panels
 :PROPERTIES:

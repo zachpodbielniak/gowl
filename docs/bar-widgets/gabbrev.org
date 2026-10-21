@@ -1,0 +1,103 @@
+#+title: Text expansion widget
+#+description: The gabbrev widget in the gowl bar: expansion on or off, expansions still resolving with a cancel for each, phrases learning noticed, and usage
+#+authors: Zach Podbielniak
+#+categories: gowl bar widgets
+#+created: 2026-10-21T00:00:00-04:00
+#+updated: 2026-10-21T00:00:00-04:00
+#+version: 1.0
+
+* What it does
+:PROPERTIES:
+:CUSTOM_ID: what-it-does
+:END:
+
+=gabbrev= is the bar's face for the text expander (see [[file:../gabbrev.org][gabbrev.org]]).  It shows a keyboard:
+
+| Looks                          | Means                                                         |
+|--------------------------------+---------------------------------------------------------------|
+| plain keyboard                 | expansion is on, nothing in flight                            |
+| muted keyboard                 | expansion is off, or the =gabbrev= module is not loaded       |
+| yellow hourglass and a number  | that many expansions are still resolving (a slow command, a model, a macro) |
+
+Hover for the state, how many matches are loaded, and whether learning has phrases to offer.  *Middle-click* switches expansion off and on without opening anything.
+
+Click it for the panel:
+
+- *On / off and Reload* buttons.
+- *Expanding now*: each expansion still resolving, with the variable it waits for and how long it has waited.  Select one (click, or Return) to cancel it --- the trigger, if it was already rubbed out, is typed back.  *Cancel all* stops every one.
+- *Typed often*: the phrases learning noticed, with the trigger proposed for each and how often you typed it.  Select one (or press =a=) to accept it: it becomes a match in the learned-matches file at once.  =x= dismisses it for the session.  Shown only with learning on (=learn: true=).
+- *Usage*: the three most used matches and how many loaded matches have never fired.
+
+It is where gabbrev's toasts lead: the "still waiting" toast of a slow expansion and the "typed often" toast of a new suggestion both name this panel, so a click on the toast opens it.
+
+It owns no state.  Everything comes from the module's own commands --- =gabbrev-status= every two seconds, =gabbrev-suggestions= when the panel opens --- run in process, so the widget and =gowl-msg= never disagree.
+
+* Quick start --- standalone gowl
+:PROPERTIES:
+:CUSTOM_ID: quick-start-gowl
+:END:
+
+The widget needs the =gabbrev= module, which is opt-in in standalone gowl:
+
+#+begin_src yaml
+modules:
+  gabbrev:
+    enabled: true
+    learn: true            # for the "Typed often" section; optional
+
+bar:
+  widgets-right: "gabbrev clipboard audio clock"
+#+end_src
+
+Or keep the shipped layout and add only this one, with the bar's amendment key:
+
+#+begin_src yaml
+bar:
+  widgets-right-add: "gabbrev"
+#+end_src
+
+Without the module the widget stays muted and its panel says the module is not loaded.
+
+* Quick start --- cmacs
+:PROPERTIES:
+:CUSTOM_ID: quick-start-cmacs
+:END:
+
+Under =cmacs --gowl= the module is always loaded and the widget is on the top bar by default (=cmacs-gowl-bar-default-widgets=).  Learning is =cmacs-gowl-gabbrev-learn=; =M-x cmacs-gowl-gabbrev-suggestions= is the same list in a buffer, and =M-x cmacs-gowl-gabbrev-list= has the usage columns.
+
+* Settings
+:PROPERTIES:
+:CUSTOM_ID: settings
+:END:
+
+The widget has none of its own.  What it shows is set on the module (=modules: gabbrev:=):
+
+| Module setting      | Affects                                                  |
+|---------------------+----------------------------------------------------------|
+| =learn=             | whether there is a "Typed often" section                 |
+| =learn-min-count=   | how often a phrase is typed before it is listed          |
+| =learn-toast=       | the "typed often" toast that opens this panel            |
+| =stats=             | the Usage section                                        |
+| =pending-toast-ms=  | when the "still waiting" toast appears (0: never)        |
+
+* Troubleshooting
+:PROPERTIES:
+:CUSTOM_ID: troubleshooting
+:END:
+
+*Always muted.*  The module is not loaded (=gowl-msg gabbrev-status= answers =ERROR unknown command=), or expansion is off (=gowl-msg gabbrev-on=).
+
+*No "Typed often" section.*  Learning is off, or nothing has been typed three times yet.  Learning never counts in denied windows (password prompts), terminals (unless =learn-terminals=), or input from a KVM or a macro, and never counts a run with a digit or a symbol in it.
+
+*A toast does not open the panel.*  The widget is not on any bar: add it as above.
+
+* Files
+:PROPERTIES:
+:CUSTOM_ID: files
+:END:
+
+| File                                  | What                                              |
+|---------------------------------------+---------------------------------------------------|
+| =modules/bar/bar-plugins-gabbrev.c=   | the widget                                        |
+| =tests/test-bar-gabbrev.c=            | the widget, fed the module's replies as JSON      |
+| =modules/gabbrev/=                    | the module it reports on                          |

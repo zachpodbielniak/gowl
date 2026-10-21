@@ -5948,6 +5948,7 @@ gowl_module_bar_init(GowlModuleBar *self)
 	bar_register_netshares_plugins(self->registry);
 	bar_register_assistant_plugins(self->registry);
 	bar_register_wowgold_plugins(self->registry);
+	bar_register_gabbrev_plugins(self->registry);
 
 	g_signal_connect(self->registry, "plugin-unloaded",
 	                 G_CALLBACK(bar_on_plugin_unloaded), self);

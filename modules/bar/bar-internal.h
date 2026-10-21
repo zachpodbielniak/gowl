@@ -87,6 +87,7 @@ void bar_register_meeting_plugins     (GowlBarRegistry *registry);
 void bar_register_netshares_plugins   (GowlBarRegistry *registry);
 void bar_register_assistant_plugins   (GowlBarRegistry *registry);
 void bar_register_wowgold_plugins     (GowlBarRegistry *registry);
+void bar_register_gabbrev_plugins     (GowlBarRegistry *registry);
 
 /* --- The output a widget is being run for -------------------------- */
 

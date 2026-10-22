@@ -3707,6 +3707,41 @@ gowl_compositor_get_cursor(GowlCompositor *self)
 }
 
 /**
+ * gowl_compositor_get_cursor_position:
+ * @self: a #GowlCompositor
+ * @x: (out) (optional): layout x, in pixels
+ * @y: (out) (optional): layout y, in pixels
+ *
+ * Where the pointer is, in output-layout coordinates -- the space
+ * gowl_compositor_inject_pointer_warp() takes, so an embedder that
+ * injects input can read back where it ended up (a constraint may have
+ * held or clamped it).
+ *
+ * Returns: %FALSE (and 0, 0) before the compositor has a cursor
+ */
+gboolean
+gowl_compositor_get_cursor_position(GowlCompositor *self,
+                                    gdouble        *x,
+                                    gdouble        *y)
+{
+	gdouble cx = 0.0, cy = 0.0;
+	gboolean ok;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	ok = self->wlr_cursor != NULL;
+	if (ok) {
+		cx = self->wlr_cursor->x;
+		cy = self->wlr_cursor->y;
+	}
+	if (x != NULL)
+		*x = cx;
+	if (y != NULL)
+		*y = cy;
+	return ok;
+}
+
+/**
  * gowl_compositor_get_keyboard_group:
  * @self: a #GowlCompositor
  *

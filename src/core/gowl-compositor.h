@@ -577,6 +577,21 @@ gboolean gowl_compositor_keyboard_is_grabbed (GowlCompositor *self);
 GowlCursor *gowl_compositor_get_cursor (GowlCompositor *self);
 
 /**
+ * gowl_compositor_get_cursor_position:
+ * @self: a #GowlCompositor
+ * @x: (out) (optional): layout x, in pixels
+ * @y: (out) (optional): layout y, in pixels
+ *
+ * Where the pointer is, in output-layout coordinates (the space
+ * gowl_compositor_inject_pointer_warp() takes).
+ *
+ * Returns: %FALSE (and 0, 0) before the compositor has a cursor
+ */
+gboolean gowl_compositor_get_cursor_position (GowlCompositor *self,
+                                              gdouble        *x,
+                                              gdouble        *y);
+
+/**
  * gowl_compositor_get_keyboard_group:
  * @self: a #GowlCompositor
  *

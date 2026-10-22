@@ -835,6 +835,10 @@ the section off; =GOWL_MENU_NO_HISTORY= in the environment keeps
 nothing at all, which is what the tests set. A =keep-open= row such as
 volume up is never recorded: pressing it nine times is one choice.
 
+***** Choosing for another program
+
+A program that needs a person to pick one thing --- the screen-share and screenshot portal asking /what/ to share --- can put its list on this card instead of popping up a launcher of its own: =menu-choose PROMPT<TAB>LINE<TAB>LINE...= over the IPC socket opens the card on exactly those lines, with the prompt as the title, typing filtering them and Return choosing as usual. The answer is an event, =menu chosen TOKEN INDEX= or =menu cancelled TOKEN= (Escape, a click outside, or the ordinary menu opened over it), so the asker subscribes to =menu= events first and waits. None of those lines are recorded in the recent choices --- they are window titles, not menu rows. See [[file:ipc.org][ipc.org]] for =menu-choice= and =menu-pick=.
+
 | Property       | Type   | Default | Description |
 |----------------+--------+---------+-------------|
 | =width=        | int    | theme   | The card's width in logical pixels |

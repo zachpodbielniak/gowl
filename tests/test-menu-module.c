@@ -815,6 +815,150 @@ test_menu_path_adds_programs(void)
 	g_rmdir(bin);
 }
 
+/* ── Choose mode ────────────────────────────────────────────────── */
+
+/* The token out of an `OK TOKEN' reply. */
+static gchar *
+choose(Fixture *f, const gchar *args)
+{
+	g_autofree gchar *reply = run(f, "menu-choose", args);
+
+	g_assert_nonnull(reply);
+	g_assert_true(g_str_has_prefix(reply, "OK "));
+	return g_strdup(reply + 3);
+}
+
+static void
+test_choose_answers_the_original_index(Fixture *f, gconstpointer data)
+{
+	g_autofree gchar *token = NULL;
+	g_autofree gchar *reply = NULL;
+	g_autofree gchar *want = NULL;
+
+	(void)data;
+	NEED_MODULE(f);
+	token = choose(f, "Share:\tScreen: HEADLESS-1\tWindow: foot\tWindow: mpv");
+	reply = run(f, "menu-choice", token);
+	want = g_strdup_printf("OK %s pending", token);
+	g_assert_cmpstr(reply, ==, want);
+
+	/* Typing narrows the rows; the answer is still the index in the
+	 * asker's list, not the row's place on the filtered card. */
+	key(f, XKB_KEY_m);
+	key(f, XKB_KEY_p);
+	key(f, XKB_KEY_v);
+	key(f, XKB_KEY_Return);
+	g_free(reply);
+	reply = run(f, "menu-choice", token);
+	g_free(want);
+	want = g_strdup_printf("OK %s chosen 2", token);
+	g_assert_cmpstr(reply, ==, want);
+	/* Choosing closes the card. */
+	g_assert_false(key(f, XKB_KEY_a));
+}
+
+static void
+test_choose_escape_cancels(Fixture *f, gconstpointer data)
+{
+	g_autofree gchar *token = NULL;
+	g_autofree gchar *reply = NULL;
+	g_autofree gchar *want = NULL;
+
+	(void)data;
+	NEED_MODULE(f);
+	token = choose(f, "Pick\tone\ttwo");
+	/* The first Escape clears a filter, the second dismisses. */
+	key(f, XKB_KEY_o);
+	key(f, XKB_KEY_Escape);
+	reply = run(f, "menu-choice", token);
+	want = g_strdup_printf("OK %s pending", token);
+	g_assert_cmpstr(reply, ==, want);
+	key(f, XKB_KEY_Escape);
+	g_free(reply);
+	g_free(want);
+	reply = run(f, "menu-choice", token);
+	want = g_strdup_printf("OK %s cancelled", token);
+	g_assert_cmpstr(reply, ==, want);
+}
+
+static void
+test_choose_replaced_is_cancelled(Fixture *f, gconstpointer data)
+{
+	g_autofree gchar *first = NULL;
+	g_autofree gchar *second = NULL;
+	g_autofree gchar *reply = NULL;
+	g_autofree gchar *want = NULL;
+
+	(void)data;
+	NEED_MODULE(f);
+	first = choose(f, "Pick\ta\tb");
+	second = choose(f, "Pick\tc\td");
+	g_assert_cmpstr(first, !=, second);
+	reply = run(f, "menu-choice", first);
+	want = g_strdup_printf("OK %s cancelled", first);
+	g_assert_cmpstr(reply, ==, want);
+
+	/* Opening the ordinary menu over a choice cancels it too, and the
+	 * tree's rows are back. */
+	g_free(run(f, "menu-open", NULL));
+	g_free(reply);
+	g_free(want);
+	reply = run(f, "menu-choice", second);
+	want = g_strdup_printf("OK %s cancelled", second);
+	g_assert_cmpstr(reply, ==, want);
+	g_free(reply);
+	reply = run(f, "menu-pick", "1");
+	g_assert_cmpstr(reply, ==, "OK");
+	/* Row 1 of the tree is the Style submenu: picking it enters it
+	 * and the card stays open, as Return would. */
+	g_assert_true(is_open(f));
+}
+
+static void
+test_choose_pick_by_number(Fixture *f, gconstpointer data)
+{
+	g_autofree gchar *token = NULL;
+	g_autofree gchar *reply = NULL;
+	g_autofree gchar *want = NULL;
+
+	(void)data;
+	NEED_MODULE(f);
+	token = choose(f, "Pick\tzero\tone\ttwo");
+	reply = run(f, "menu-pick", "9");
+	g_assert_cmpstr(reply, ==, "ERROR no such row");
+	g_free(reply);
+	reply = run(f, "menu-pick", "2");
+	g_assert_cmpstr(reply, ==, "OK");
+	g_free(reply);
+	reply = run(f, "menu-choice", NULL);
+	want = g_strdup_printf("OK %s chosen 1", token);
+	g_assert_cmpstr(reply, ==, want);
+	g_free(reply);
+	reply = run(f, "menu-pick", "1");
+	g_assert_cmpstr(reply, ==, "ERROR the menu is not open");
+}
+
+static void
+test_choose_needs_lines_and_an_unlocked_session(Fixture *f, gconstpointer data)
+{
+	g_autofree gchar *reply = NULL;
+
+	(void)data;
+	NEED_MODULE(f);
+	reply = run(f, "menu-choose", "Prompt only");
+	g_assert_true(g_str_has_prefix(reply, "ERROR usage"));
+	g_free(reply);
+	reply = run(f, "menu-choice", NULL);
+	g_assert_cmpstr(reply, ==, "OK none");
+	g_free(reply);
+
+	/* Set directly: the setter drives a scene this compositor lacks. */
+	f->comp->locked = TRUE;
+	reply = run(f, "menu-choose", "Pick\ta");
+	g_assert_cmpstr(reply, ==, "ERROR the session is locked");
+	f->comp->locked = FALSE;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -873,6 +1017,15 @@ main(int argc, char *argv[])
 	    test_an_empty_tree_opens_onto_an_empty_card);
 	ADD("/menu-module/refresh-reports-what-it-read",
 	    test_refresh_reports_what_it_read);
+
+	ADD("/menu-module/choose-answers-the-original-index",
+	    test_choose_answers_the_original_index);
+	ADD("/menu-module/choose-escape-cancels", test_choose_escape_cancels);
+	ADD("/menu-module/choose-replaced-is-cancelled",
+	    test_choose_replaced_is_cancelled);
+	ADD("/menu-module/choose-pick-by-number", test_choose_pick_by_number);
+	ADD("/menu-module/choose-needs-lines-and-an-unlocked-session",
+	    test_choose_needs_lines_and_an_unlocked_session);
 
 #undef ADD
 

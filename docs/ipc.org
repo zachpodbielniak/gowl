@@ -83,6 +83,9 @@ Under =cmacs --gowl= the socket is opened when =cmacs-gowl-mode= starts, and =cm
 | =menu-close=                  | Closes the card |
 | =menu-refresh=                | Re-reads =menu.yaml= and the user's overlay |
 | =menu-list [ROUTE]=           | What is under a route: route, label, =menu= or =action=, and =checked=/=disabled=/=-=, tab separated |
+| =menu-choose PROMPT<TAB>LINE...= | The card as a dmenu: lists the LINEs (tab separated, PROMPT as the title) and answers =OK TOKEN= at once. The pick arrives later as the event =menu chosen TOKEN INDEX= (INDEX into the lines as given, whatever was typed to filter) or =menu cancelled TOKEN=. One choice at a time: a second, or opening the ordinary menu, cancels the first. Lines are never recorded in the menu's history. This is the screen-cast/screenshot portal's chooser |
+| =menu-choice [TOKEN]=         | The last choice: =TOKEN pending=, =TOKEN chosen N=, =TOKEN cancelled=, or =none= --- for an asker that polls instead of subscribing |
+| =menu-pick N=                 | Chooses the Nth row on the open card, from 1, as Alt+N does |
 | =screenshot-ocr=              | Drag a region; tesseract reads it and the text goes on the clipboard (the screenshot module) |
 | =screenshot-color=            | Click a pixel; its =#rrggbb= goes on the clipboard (the screenshot module) |
 | =screenshot-ocr-config=       | ={"command", "language"}=: what OCR runs, for a caller reading a region itself |

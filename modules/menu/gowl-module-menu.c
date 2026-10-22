@@ -69,6 +69,7 @@
 #include "barkit/gowl-bar-theme.h"
 #include "barkit/gowl-bar-icon.h"
 #include "interfaces/gowl-ipc-handler.h"
+#include "ipc/gowl-ipc.h"
 #include "interfaces/gowl-keybind-handler.h"
 #include "interfaces/gowl-mouse-handler.h"
 #include "interfaces/gowl-startup-handler.h"
@@ -176,6 +177,24 @@ struct _GowlModuleMenu {
 	gboolean         animate;
 	gboolean         show_hints;
 	gint             recent_max;
+
+	/*
+	 * CHOOSE MODE: the card as a dmenu.  `menu-choose' hands it a list
+	 * of lines; the rows are those lines and nothing from the tree, and
+	 * choosing one answers the program that asked instead of running
+	 * anything.  The answer goes out as a text event (`EVENT menu
+	 * chosen TOKEN INDEX', or `cancelled TOKEN'), so the asker must not
+	 * wait on its own request for a human; the token is what tells two
+	 * askers' answers apart.  @choose_items is non-NULL exactly while a
+	 * choice is open, and none of it is recorded in the history: the
+	 * lines are a stranger's (window titles, for the screen-cast
+	 * chooser), not menu entries.
+	 */
+	GPtrArray       *choose_items;      /* GowlMenuRow *, or NULL */
+	gchar           *choose_token;      /* the open choice's token */
+	gchar           *choose_prompt;     /* the header's title */
+	gchar           *choose_last;       /* `TOKEN chosen N' / `cancelled' */
+	guint            choose_serial;
 };
 
 static void menu_ipc_init(GowlIpcHandlerInterface *iface);
@@ -394,6 +413,96 @@ menu_icon_for(GowlModuleMenu *self, const gchar *name)
 	return NULL;
 }
 
+/* ── Choose mode ─────────────────────────────────────────────────── */
+
+static void menu_hide(GowlModuleMenu *self);
+
+/*
+ * Ends the open choice: @index is the chosen line, or -1 for none (the
+ * card was dismissed, replaced by another opening, or the module went
+ * away).  Says so on the socket and remembers it for `menu-choice', so
+ * an asker that missed the event -- or never subscribed -- can still
+ * read the answer.  Then closes the card, unless @keep_card says the
+ * caller is about to reuse it.
+ */
+static void
+menu_choose_finish(GowlModuleMenu *self, gint index, gboolean keep_card)
+{
+	g_autofree gchar *token = NULL;
+	GowlIpc *ipc;
+
+	if (self->choose_items == NULL)
+		return;
+	token = g_steal_pointer(&self->choose_token);
+	/* Cleared BEFORE the card closes: menu_hide() finishes an open
+	 * choice itself, and must find nothing left to finish. */
+	g_clear_pointer(&self->choose_items, g_ptr_array_unref);
+	g_clear_pointer(&self->choose_prompt, g_free);
+
+	g_free(self->choose_last);
+	if (index >= 0)
+		self->choose_last = g_strdup_printf("%s chosen %d", token, index);
+	else
+		self->choose_last = g_strdup_printf("%s cancelled", token);
+
+	ipc = self->compositor != NULL
+	      ? gowl_compositor_get_ipc(self->compositor) : NULL;
+	if (ipc != NULL) {
+		if (index >= 0)
+			gowl_ipc_push_event(ipc, "EVENT menu chosen %s %d",
+			                    token, index);
+		else
+			gowl_ipc_push_event(ipc, "EVENT menu cancelled %s", token);
+	}
+	if (!keep_card)
+		menu_hide(self);
+}
+
+/*
+ * `menu-choose PROMPT<TAB>LINE<TAB>LINE...': opens the card on those
+ * lines.  Tab-separated because it is one text command and a line of
+ * the list can hold anything else, spaces included -- the same shape
+ * `menu-list' answers in.  Returns the token, or NULL when there is
+ * nothing to choose from or nowhere to show it.
+ */
+static gchar *
+menu_choose_begin(GowlModuleMenu *self, const gchar *args)
+{
+	g_auto(GStrv) fields = NULL;
+	GPtrArray *items;
+	guint i;
+
+	if (args == NULL)
+		return NULL;
+	fields = g_strsplit(args, "\t", -1);
+	if (fields[0] == NULL || fields[1] == NULL)
+		return NULL;
+
+	items = g_ptr_array_new_with_free_func(
+		(GDestroyNotify)gowl_menu_row_free);
+	for (i = 1; fields[i] != NULL; i++) {
+		GowlMenuRow *row = g_new0(GowlMenuRow, 1);
+
+		/* The route carries the line's index in the ASKER's list,
+		 * which is what survives filtering. */
+		row->route = g_strdup_printf("choose:%u", i - 1);
+		row->label = g_strdup(fields[i]);
+		row->runnable = TRUE;
+		g_ptr_array_add(items, row);
+	}
+
+	/* One choice at a time.  A second asker replaces the first, and
+	 * the first is told it was cancelled rather than left waiting. */
+	menu_choose_finish(self, -1, TRUE);
+
+	self->choose_items = items;
+	self->choose_prompt = g_strdup(*fields[0] != '\0' ? fields[0]
+	                                                  : "Choose");
+	self->choose_token = g_strdup_printf("c%u-%d", ++self->choose_serial,
+	                                     (gint)getpid());
+	return g_strdup(self->choose_token);
+}
+
 /* ── Rows ────────────────────────────────────────────────────────── */
 
 static void
@@ -404,7 +513,26 @@ menu_reload_rows(GowlModuleMenu *self)
 	g_clear_pointer(&self->rows, g_ptr_array_unref);
 	self->n_recent  = 0;
 	self->n_special = 0;
-	if (self->filter->len > 0
+	if (self->choose_items != NULL) {
+		/*
+		 * A choice lists its own lines, filtered by what was typed,
+		 * in the order they were given: the asker ordered them (the
+		 * screen-cast chooser puts screens before windows) and the
+		 * fuzzy tiers would shuffle that for no gain on a short list.
+		 */
+		self->rows = g_ptr_array_new_with_free_func(
+			(GDestroyNotify)gowl_menu_row_free);
+		for (i = 0; i < self->choose_items->len; i++) {
+			const GowlMenuRow *row = g_ptr_array_index(
+				self->choose_items, i);
+
+			if (self->filter->len > 0
+			    && gowl_menu_match(row->label, self->filter->str,
+			                       NULL) < 0)
+				continue;
+			g_ptr_array_add(self->rows, gowl_menu_row_copy(row));
+		}
+	} else if (self->filter->len > 0
 	    && gowl_menu_is_private(self->menu, self->route)) {
 		/*
 		 * Typing inside a private submenu (the clipboard) filters
@@ -502,6 +630,9 @@ menu_step(GowlModuleMenu *self, gint from, gint direction)
 static void
 menu_hide(GowlModuleMenu *self)
 {
+	/* A choice closed by Escape, a click outside or anything else is
+	 * a cancellation, and the asker is waiting to hear it. */
+	menu_choose_finish(self, -1, TRUE);
 	menu_anim_stop(self);
 	if (self->node != NULL) {
 		wlr_scene_node_destroy(&self->node->node);
@@ -522,6 +653,8 @@ menu_hide(GowlModuleMenu *self)
 	if (self->hits != NULL)
 		g_array_set_size(self->hits, 0);
 }
+
+static gboolean menu_present(GowlModuleMenu *self);
 
 static void
 menu_open_route(GowlModuleMenu *self, const gchar *route)
@@ -554,10 +687,21 @@ menu_open_route(GowlModuleMenu *self, const gchar *route)
 		resolved = g_steal_pointer(&next);
 	}
 
+	/* The tree replaces a choice that was up: tell its asker. */
+	menu_choose_finish(self, -1, TRUE);
 	g_free(self->route);
 	self->route = g_steal_pointer(&resolved);
 	g_string_truncate(self->filter, 0);
+	menu_present(self);
+}
 
+/*
+ * Puts the card on screen for whatever @route and @choose_items say:
+ * the part of opening a route that is the same for a choice.
+ */
+static gboolean
+menu_present(GowlModuleMenu *self)
+{
 	/*
 	 * Somewhere to draw, or nothing at all.  Open with no output the
 	 * card is invisible and the key handler still swallows every key:
@@ -572,7 +716,7 @@ menu_open_route(GowlModuleMenu *self, const gchar *route)
 		if (mon == NULL) {
 			g_message("menu: no output to draw on");
 			menu_hide(self);
-			return;
+			return FALSE;
 		}
 		if (self->monitor != mon) {
 			if (self->monitor != NULL)
@@ -600,6 +744,7 @@ menu_open_route(GowlModuleMenu *self, const gchar *route)
 	menu_reload_rows(self);
 	self->cursor = menu_step(self, -1, 1);
 	menu_render(self);
+	return TRUE;
 }
 
 static void
@@ -626,6 +771,18 @@ menu_activate_index(GowlModuleMenu *self, gint index)
 	row = g_ptr_array_index(self->rows, index);
 	if (row->disabled)
 		return;
+
+	/* A choice answers its asker and runs nothing. */
+	if (self->choose_items != NULL) {
+		guint64 picked = 0;
+
+		if (row->route != NULL
+		    && g_str_has_prefix(row->route, "choose:")
+		    && g_ascii_string_to_unsigned(row->route + 7, 10, 0,
+		                                  G_MAXINT, &picked, NULL))
+			menu_choose_finish(self, (gint)picked, FALSE);
+		return;
+	}
 
 	result = gowl_menu_activate(self->menu, self->compositor, row->route,
 	                            &next);
@@ -917,7 +1074,9 @@ menu_draw_header(GowlModuleMenu *self, cairo_t *cr, gint x, gint y,
 
 	/* Title on the left, the count on the right. */
 	cy = y + pad_y + title_h / 2;
-	if (searching) {
+	if (self->choose_prompt != NULL) {
+		title = g_strdup(self->choose_prompt);
+	} else if (searching) {
 		title = g_strdup("Search");
 	} else if (g_strcmp0(self->route, "root") == 0) {
 		title = g_strdup("Menu");
@@ -995,7 +1154,10 @@ menu_draw_header(GowlModuleMenu *self, cairo_t *cr, gint x, gint y,
 		pango_layout_set_text(layout, self->filter->str, -1);
 		gowl_bar_theme_cairo_set(self->theme, cr, GOWL_BAR_COLOR_TEXT);
 	} else {
-		pango_layout_set_text(layout, self->with_path
+		pango_layout_set_text(layout, self->choose_items != NULL
+			? "Type to filter  \xc2\xb7  Return chooses  "
+			  "\xc2\xb7  Escape cancels"
+			: self->with_path
 			? "Search apps and programs on $PATH  \xc2\xb7  = sum  "
 			  "\xc2\xb7  ! run"
 			: "Type to search  \xc2\xb7  = sum  \xc2\xb7  ! run  "
@@ -1915,6 +2077,60 @@ menu_handle_command(GowlIpcHandler *handler, const gchar *command,
 		return g_strdup_printf("OK %u entries",
 		                       gowl_menu_n_entries(self->menu));
 	}
+	/*
+	 * menu-choose PROMPT\tLINE\tLINE...: the card as a dmenu, for a
+	 * program that needs a human to pick one thing (the screen-cast
+	 * and screenshot portal's chooser).  Answers `OK TOKEN' at once;
+	 * the pick arrives later as `EVENT menu chosen TOKEN INDEX' or
+	 * `EVENT menu cancelled TOKEN', and `menu-choice' reads it back.
+	 */
+	if (g_strcmp0(command, "menu-choose") == 0) {
+		g_autofree gchar *token = NULL;
+
+		if (gowl_compositor_is_locked(self->compositor))
+			return g_strdup("ERROR the session is locked");
+		token = menu_choose_begin(self, args);
+		if (token == NULL)
+			return g_strdup("ERROR usage: menu-choose "
+			                "PROMPT<TAB>LINE[<TAB>LINE...]");
+		g_free(self->route);
+		self->route = g_strdup("root");
+		g_string_truncate(self->filter, 0);
+		if (!menu_present(self))
+			return g_strdup("ERROR no output to draw on");
+		return g_strdup_printf("OK %s", token);
+	}
+	/* menu-choice [TOKEN]: `OK TOKEN pending', `OK TOKEN chosen N',
+	 * `OK TOKEN cancelled', or `OK none' -- the last answer, for an
+	 * asker that polls instead of subscribing. */
+	if (g_strcmp0(command, "menu-choice") == 0) {
+		if (self->choose_items != NULL
+		    && (route == NULL
+		        || g_strcmp0(route, self->choose_token) == 0))
+			return g_strdup_printf("OK %s pending",
+			                       self->choose_token);
+		if (self->choose_last != NULL
+		    && (route == NULL
+		        || g_str_has_prefix(self->choose_last, route)))
+			return g_strdup_printf("OK %s", self->choose_last);
+		return g_strdup("OK none");
+	}
+	/* menu-pick N: choose the Nth row on the card, from 1, exactly as
+	 * Alt+N does -- for a pedal, a macro, or a test. */
+	if (g_strcmp0(command, "menu-pick") == 0) {
+		guint64 n = 0;
+
+		if (!self->open)
+			return g_strdup("ERROR the menu is not open");
+		if (route == NULL
+		    || !g_ascii_string_to_unsigned(route, 10, 1, G_MAXINT, &n,
+		                                   NULL)
+		    || self->rows == NULL || n > self->rows->len)
+			return g_strdup("ERROR no such row");
+		self->cursor = (gint)n - 1;
+		menu_activate_index(self, (gint)n - 1);
+		return g_strdup("OK");
+	}
 	if (g_strcmp0(command, "menu-list") == 0)
 		return menu_list_reply(self, route);
 	if (g_strcmp0(command, "menu-forget") == 0) {
@@ -2139,6 +2355,7 @@ gowl_module_menu_finalize(GObject *object)
 	if (self->filter != NULL)
 		g_string_free(self->filter, TRUE);
 	g_free(self->route);
+	g_free(self->choose_last);
 	G_OBJECT_CLASS(gowl_module_menu_parent_class)->finalize(object);
 }
 

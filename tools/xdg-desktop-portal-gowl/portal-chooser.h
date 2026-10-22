@@ -20,6 +20,7 @@
 #define PORTAL_CHOOSER_H
 
 #include <glib.h>
+#include <gio/gio.h>
 
 G_BEGIN_DECLS
 
@@ -38,6 +39,17 @@ G_BEGIN_DECLS
  *
  * None of them available is not an error; the caller decides what a
  * missing chooser means.
+ *
+ * ASYNCHRONOUS, AND ONE AT A TIME.  A pick waits on a human, for
+ * minutes if need be, and the portal's main loop is also what feeds
+ * every running cast its frames and answers every other session; a
+ * pick that blocked it froze the cast in the other window for as long
+ * as somebody took to choose.  So a pick is a GTask that completes
+ * later.  Picks are queued and shown in turn -- the menu card shows
+ * one choice at a time, and two dmenus fighting over the keyboard are
+ * worse than one after the other.  A pick's cancellable (the request's,
+ * closed by the frontend) withdraws it whether it is showing or still
+ * queued.
  */
 
 /**
@@ -53,19 +65,38 @@ typedef enum {
 } PortalChooserResult;
 
 /**
- * portal_chooser_run:
+ * portal_chooser_run_async:
  * @prompt: what the chooser is asking, e.g. `Share'
- * @lines: (array zero-terminated=1): the choices; a tab or newline in
- *   one is replaced by a space
+ * @lines: (array zero-terminated=1): the choices, copied; a tab or
+ *   newline in one is replaced by a space
+ * @cancellable: (nullable): withdraws the pick, queued or showing
+ * @callback: called with the answer
+ * @user_data: for @callback
+ *
+ * Queues a pick and returns at once.
+ */
+void portal_chooser_run_async (const gchar         *prompt,
+                               const gchar *const  *lines,
+                               GCancellable        *cancellable,
+                               GAsyncReadyCallback  callback,
+                               gpointer             user_data);
+
+/**
+ * portal_chooser_run_finish:
+ * @result: the #GAsyncResult
  * @index: (out): the chosen line's index, when %PORTAL_CHOOSER_CHOSEN
  *
- * Puts @lines in front of a human and waits for the answer.
- *
- * Returns: what happened
+ * Returns: what happened; a withdrawn pick is %PORTAL_CHOOSER_CANCELLED
  */
-PortalChooserResult portal_chooser_run (const gchar        *prompt,
-                                        const gchar *const *lines,
-                                        guint              *index);
+PortalChooserResult portal_chooser_run_finish (GAsyncResult *result,
+                                               guint        *index);
+
+/**
+ * portal_chooser_pending:
+ *
+ * Returns: how many picks are queued or showing (for tests and logs)
+ */
+guint portal_chooser_pending (void);
 
 G_END_DECLS
 

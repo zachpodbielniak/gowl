@@ -55,6 +55,7 @@
 #include "portal-screenshot.h"
 #include "portal-chooser.h"
 #include "portal-gowl.h"
+#include "portal-request.h"
 
 #include <cairo.h>
 #include <glib/gstdio.h>
@@ -202,74 +203,6 @@ point_picker(void)
 	                     : NULL;
 }
 
-/*
- * Runs a picker and reads `X,Y WxH' from it (slurp's format; a bare
- * `X,Y' is a 1x1 area).  An empty answer, or a picker that exits
- * non-zero, is the human backing out.
- */
-static PortalChooserResult
-run_picker(const gchar *cmd, Rect *out)
-{
-	g_auto(GStrv) argv = NULL;
-	g_autoptr(GSubprocess) proc = NULL;
-	g_autoptr(GError) error = NULL;
-	g_autofree gchar *text = NULL;
-	gint n;
-
-	if (!g_shell_parse_argv(cmd, NULL, &argv, &error)) {
-		g_warning("screenshot: picker '%s' is unparseable: %s", cmd,
-		          error->message);
-		return PORTAL_CHOOSER_UNAVAILABLE;
-	}
-	proc = g_subprocess_newv((const gchar * const *)argv,
-	                         G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error);
-	if (proc == NULL
-	    || !g_subprocess_communicate_utf8(proc, NULL, NULL, &text, NULL,
-	                                      &error)) {
-		g_warning("screenshot: picker '%s' failed: %s", cmd,
-		          error->message);
-		return PORTAL_CHOOSER_UNAVAILABLE;
-	}
-	if (!g_subprocess_get_successful(proc) || text == NULL
-	    || *g_strstrip(text) == '\0')
-		return PORTAL_CHOOSER_CANCELLED;
-	out->w = 1;
-	out->h = 1;
-	n = sscanf(text, "%d,%d %dx%d", &out->x, &out->y, &out->w, &out->h);
-	if (n != 2 && n != 4) {
-		g_warning("screenshot: picker said '%s', not `X,Y WxH'", text);
-		return PORTAL_CHOOSER_CANCELLED;
-	}
-	if (out->w <= 0 || out->h <= 0)
-		return PORTAL_CHOOSER_CANCELLED;
-	return PORTAL_CHOOSER_CHOSEN;
-}
-
-/* Where to sample: a picker, else (inside gowl) the pointer. */
-static PortalChooserResult
-pick_point(Rect *out)
-{
-	g_autofree gchar *cmd = point_picker();
-	g_autoptr(PortalGowl) gowl = NULL;
-	g_autoptr(JsonNode) result = NULL;
-	JsonObject *p;
-
-	if (cmd != NULL)
-		return run_picker(cmd, out);
-	gowl = portal_gowl_connect(NULL);
-	if (gowl == NULL)
-		return PORTAL_CHOOSER_UNAVAILABLE;
-	result = portal_gowl_call(gowl, "pointer.get", NULL, NULL);
-	if (result == NULL || !JSON_NODE_HOLDS_OBJECT(result))
-		return PORTAL_CHOOSER_UNAVAILABLE;
-	p = json_node_get_object(result);
-	out->x = (gint32)json_object_get_double_member_with_default(p, "x", 0);
-	out->y = (gint32)json_object_get_double_member_with_default(p, "y", 0);
-	out->w = 1;
-	out->h = 1;
-	return PORTAL_CHOOSER_CHOSEN;
-}
-
 /* ---------------------------------------------------------------
  * Sources
  * --------------------------------------------------------------- */
@@ -331,48 +264,6 @@ active_window(GPtrArray *sources)
 			return s;
 	}
 	return NULL;
-}
-
-/*
- * The chooser over the sources @want accepts, plus an Area row when
- * @offer_area.  @area_chosen says the human took that row.
- */
-static PortalChooserResult
-choose(GPtrArray *sources, gboolean want_outputs, gboolean want_windows,
-       gboolean offer_area, const PortalCaptureSource **chosen,
-       gboolean *area_chosen)
-{
-	g_autoptr(GPtrArray) lines = g_ptr_array_new();
-	g_autoptr(GPtrArray) map = g_ptr_array_new();
-	PortalChooserResult result;
-	guint index = 0;
-	guint i;
-
-	*chosen = NULL;
-	*area_chosen = FALSE;
-	for (i = 0; i < sources->len; i++) {
-		const PortalCaptureSource *s = g_ptr_array_index(sources, i);
-
-		if (s->is_window ? !want_windows : !want_outputs)
-			continue;
-		g_ptr_array_add(lines, s->title);
-		g_ptr_array_add(map, (gpointer)s);
-	}
-	if (offer_area) {
-		g_ptr_array_add(lines, (gpointer)"Area: select a region");
-		g_ptr_array_add(map, NULL);
-	}
-	if (lines->len == 0)
-		return PORTAL_CHOOSER_UNAVAILABLE;
-	g_ptr_array_add(lines, NULL);
-
-	result = portal_chooser_run("Screenshot",
-	                            (const gchar * const *)lines->pdata, &index);
-	if (result != PORTAL_CHOOSER_CHOSEN)
-		return result;
-	*chosen = g_ptr_array_index(map, index);
-	*area_chosen = *chosen == NULL;
-	return result;
 }
 
 /* ---------------------------------------------------------------
@@ -558,6 +449,298 @@ available_targets(PortalScreenshot *self)
 	return targets;
 }
 
+/*
+ * A Screenshot or PickColor in flight.  Choosing a window, dragging out
+ * an area and clicking a point all wait on a human, and the portal's
+ * main loop keeps serving casts meanwhile, so the call is answered
+ * from the callbacks below once the human is done -- or when the
+ * frontend closes the request, which withdraws whatever is showing.
+ */
+typedef struct {
+	PortalScreenshot      *self;
+	GDBusMethodInvocation *invocation;
+	gchar                 *app_id;
+	GPtrArray             *sources;
+	GPtrArray             *offered;   /* source per chooser line; NULL = Area */
+	PortalRequest         *request;
+	gboolean               pick_color;
+	gboolean               use_area;
+	Rect                   area;      /* layout coordinates */
+	GSubprocess           *picker;
+} ShotOp;
+
+static void
+shot_op_free(ShotOp *op)
+{
+	if (op == NULL)
+		return;
+	if (op->invocation != NULL)
+		reply(g_steal_pointer(&op->invocation), PORTAL_RESPONSE_OTHER,
+		      NULL);
+	g_free(op->app_id);
+	g_clear_pointer(&op->sources, g_ptr_array_unref);
+	g_clear_pointer(&op->offered, g_ptr_array_unref);
+	portal_request_free(op->request);
+	g_clear_object(&op->picker);
+	g_free(op);
+}
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(ShotOp, shot_op_free)
+
+static void
+shot_reply(ShotOp *op, guint32 response, GVariantBuilder *results)
+{
+	GDBusMethodInvocation *invocation = g_steal_pointer(&op->invocation);
+
+	if (invocation != NULL)
+		reply(invocation, response, results);
+}
+
+static GCancellable *
+shot_cancellable(ShotOp *op)
+{
+	return op->request != NULL
+		? portal_request_get_cancellable(op->request) : NULL;
+}
+
+/* The source is decided (and @area, when it is an area): shoot it. */
+static void
+shoot(ShotOp *op, const PortalCaptureSource *source)
+{
+	PortalScreenshot *self = op->self;
+	g_autoptr(PortalCaptureImage) image = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *path = NULL;
+	g_autofree gchar *uri = NULL;
+	GVariantBuilder results;
+	Rect crop;
+	gboolean have_crop = FALSE;
+
+	if (source == NULL) {
+		g_message("screenshot: nothing to shoot for '%s'", op->app_id);
+		shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+		return;
+	}
+	image = portal_capture_grab(self->capture, source, FALSE,
+	                            GRAB_TIMEOUT_MS, &error);
+	if (image == NULL) {
+		g_warning("screenshot: could not capture %s: %s", source->title,
+		          error->message);
+		shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+		return;
+	}
+
+	if (op->pick_color) {
+		Rect point = op->area;
+		Rect px;
+		guint8 r = 0;
+		guint8 g = 0;
+		guint8 b = 0;
+
+		point.w = 1;
+		point.h = 1;
+		if (!area_to_pixels(source, &point, image, &px)
+		    || !portal_capture_image_pixel(image, (guint32)px.x,
+		                                   (guint32)px.y, &r, &g, &b)) {
+			shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+			return;
+		}
+		g_variant_builder_init(&results, G_VARIANT_TYPE_VARDICT);
+		g_variant_builder_add(&results, "{sv}", "color",
+			g_variant_new("(ddd)", r / 255.0, g / 255.0, b / 255.0));
+		shot_reply(op, PORTAL_RESPONSE_SUCCESS, &results);
+		return;
+	}
+
+	if (op->use_area) {
+		have_crop = area_to_pixels(source, &op->area, image, &crop);
+		if (!have_crop) {
+			shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+			return;
+		}
+	}
+	path = screenshot_path(&error);
+	if (path == NULL || !write_png(image, have_crop ? &crop : NULL, path,
+	                               &error)) {
+		g_warning("screenshot: %s", error->message);
+		shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+		return;
+	}
+	uri = g_filename_to_uri(path, NULL, NULL);
+	g_variant_builder_init(&results, G_VARIANT_TYPE_VARDICT);
+	g_variant_builder_add(&results, "{sv}", "uri",
+	                      g_variant_new_string(uri));
+	shot_reply(op, PORTAL_RESPONSE_SUCCESS, &results);
+	g_message("screenshot: '%s' took %s%s into %s", op->app_id,
+	          source->title, op->use_area ? " (an area)" : "", path);
+}
+
+/* A picker answered: `X,Y WxH' (slurp's format; `X,Y' is a point). */
+static void
+on_picked(GObject *source, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(ShotOp) op = data;
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *text = NULL;
+	gint n;
+
+	if (!g_subprocess_communicate_utf8_finish(G_SUBPROCESS(source), res,
+	                                          &text, NULL, &error)) {
+		/* Withdrawn (the request closed) or the picker broke. */
+		if (op->picker != NULL)
+			g_subprocess_force_exit(op->picker);
+		shot_reply(op, g_error_matches(error, G_IO_ERROR,
+		                               G_IO_ERROR_CANCELLED)
+		           ? PORTAL_RESPONSE_CANCELLED : PORTAL_RESPONSE_OTHER,
+		           NULL);
+		return;
+	}
+	/* An empty answer, or a picker that failed, is the human backing
+	 * out (slurp exits 1 on Escape). */
+	if (!g_subprocess_get_successful(G_SUBPROCESS(source)) || text == NULL
+	    || *g_strstrip(text) == '\0') {
+		shot_reply(op, PORTAL_RESPONSE_CANCELLED, NULL);
+		return;
+	}
+	op->area.w = 1;
+	op->area.h = 1;
+	n = sscanf(text, "%d,%d %dx%d", &op->area.x, &op->area.y, &op->area.w,
+	           &op->area.h);
+	if ((n != 2 && n != 4) || op->area.w <= 0 || op->area.h <= 0) {
+		g_warning("screenshot: the picker said '%s', not `X,Y WxH'", text);
+		shot_reply(op, PORTAL_RESPONSE_CANCELLED, NULL);
+		return;
+	}
+	shoot(op, output_at(op->sources, op->area.x, op->area.y));
+}
+
+/* Starts @cmd and answers through on_picked().  Takes @op. */
+static void
+run_picker(ShotOp *op, const gchar *cmd)
+{
+	g_auto(GStrv) argv = NULL;
+	g_autoptr(GError) error = NULL;
+
+	if (!g_shell_parse_argv(cmd, NULL, &argv, &error)) {
+		g_warning("screenshot: picker '%s' is unparseable: %s", cmd,
+		          error->message);
+		shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+		shot_op_free(op);
+		return;
+	}
+	op->picker = g_subprocess_newv((const gchar * const *)argv,
+	                               G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error);
+	if (op->picker == NULL) {
+		g_warning("screenshot: picker '%s' failed: %s", cmd,
+		          error->message);
+		shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+		shot_op_free(op);
+		return;
+	}
+	g_subprocess_communicate_utf8_async(op->picker, NULL,
+		shot_cancellable(op), on_picked, op);
+}
+
+/* The area picker, or OTHER when there is none.  Takes @op. */
+static void
+pick_area(ShotOp *op)
+{
+	g_autofree gchar *cmd = area_picker();
+
+	op->use_area = TRUE;
+	if (cmd == NULL) {
+		shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+		shot_op_free(op);
+		return;
+	}
+	run_picker(op, cmd);
+}
+
+static void
+on_chosen(GObject *source, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(ShotOp) op = data;
+	guint index = 0;
+	const PortalCaptureSource *chosen;
+
+	(void)source;
+	switch (portal_chooser_run_finish(res, &index)) {
+	case PORTAL_CHOOSER_CHOSEN:
+		if (index >= op->offered->len)
+			break;
+		chosen = g_ptr_array_index(op->offered, index);
+		if (chosen == NULL) {
+			pick_area(g_steal_pointer(&op));
+			return;
+		}
+		shoot(op, chosen);
+		return;
+	case PORTAL_CHOOSER_CANCELLED:
+		shot_reply(op, PORTAL_RESPONSE_CANCELLED, NULL);
+		return;
+	case PORTAL_CHOOSER_UNAVAILABLE:
+	default:
+		/* No chooser at all: the screen, rather than nothing -- unless
+		 * a window was what was asked for. */
+		if (op->offered->len > 0
+		    && g_ptr_array_index(op->offered, 0) != NULL
+		    && !((const PortalCaptureSource *)
+		         g_ptr_array_index(op->offered, 0))->is_window) {
+			shoot(op, focused_output(op->sources));
+			return;
+		}
+		break;
+	}
+	shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+}
+
+/* The chooser over the sources wanted, plus an Area row.  Takes @op. */
+static void
+choose(ShotOp *op, gboolean want_outputs, gboolean want_windows,
+       gboolean offer_area)
+{
+	g_autoptr(GPtrArray) lines = g_ptr_array_new();
+	guint i;
+
+	op->offered = g_ptr_array_new();
+	for (i = 0; i < op->sources->len; i++) {
+		const PortalCaptureSource *s = g_ptr_array_index(op->sources, i);
+
+		if (s->is_window ? !want_windows : !want_outputs)
+			continue;
+		g_ptr_array_add(lines, s->title);
+		g_ptr_array_add(op->offered, (gpointer)s);
+	}
+	if (offer_area) {
+		g_ptr_array_add(lines, (gpointer)"Area: select a region");
+		g_ptr_array_add(op->offered, NULL);
+	}
+	if (lines->len == 0) {
+		shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+		shot_op_free(op);
+		return;
+	}
+	g_ptr_array_add(lines, NULL);
+	portal_chooser_run_async("Screenshot",
+	                         (const gchar * const *)lines->pdata,
+	                         shot_cancellable(op), on_chosen, op);
+}
+
+static ShotOp *
+shot_op_new(PortalScreenshot *self, GDBusMethodInvocation *invocation,
+            const gchar *handle, const gchar *app_id, gboolean outputs_only)
+{
+	ShotOp *op = g_new0(ShotOp, 1);
+
+	op->self = self;
+	op->invocation = invocation;
+	op->app_id = g_strdup(app_id);
+	op->sources = portal_capture_list_sources(self->capture,
+		self->can_window && !outputs_only, TRUE);
+	op->request = portal_request_new(self->conn, handle);
+	return op;
+}
+
 static void
 handle_screenshot(PortalScreenshot *self, GVariant *params,
                   GDBusMethodInvocation *invocation)
@@ -566,27 +749,15 @@ handle_screenshot(PortalScreenshot *self, GVariant *params,
 	const gchar *app_id;
 	const gchar *parent_window;
 	g_autoptr(GVariant) options = NULL;
-	g_autoptr(GPtrArray) sources = NULL;
-	g_autoptr(PortalCaptureImage) image = NULL;
-	g_autoptr(GError) error = NULL;
-	g_autofree gchar *path = NULL;
-	g_autofree gchar *uri = NULL;
 	g_autofree gchar *picker = NULL;
-	const PortalCaptureSource *source = NULL;
 	gboolean interactive = FALSE;
-	gboolean use_area = FALSE;
 	guint32 target = 0;
-	Rect area;
-	Rect crop;
-	gboolean have_crop = FALSE;
-	PortalChooserResult result = PORTAL_CHOOSER_CHOSEN;
-	GVariantBuilder results;
+	ShotOp *op;
 
 	g_variant_get(params, "(&o&s&s@a{sv})", &handle, &app_id,
 	              &parent_window, &options);
 	g_variant_lookup(options, "interactive", "b", &interactive);
 	g_variant_lookup(options, "target", "u", &target);
-	memset(&area, 0, sizeof area);
 
 	if (target != 0 && ((target & (target - 1)) != 0
 	                    || (target & available_targets(self)) == 0)) {
@@ -596,97 +767,36 @@ handle_screenshot(PortalScreenshot *self, GVariant *params,
 		return;
 	}
 
-	sources = portal_capture_list_sources(self->capture, self->can_window,
-	                                      TRUE);
+	op = shot_op_new(self, invocation, handle, app_id, FALSE);
 	picker = area_picker();
 
-	/* Decide what to shoot. */
+	/* Decide what to shoot; a human may be asked, later. */
 	switch (target) {
 	case TARGET_SCREEN:
-		if (interactive)
-			result = choose(sources, TRUE, FALSE, FALSE, &source,
-			                &use_area);
-		if (source == NULL && result != PORTAL_CHOOSER_CANCELLED) {
-			source = focused_output(sources);
-			result = PORTAL_CHOOSER_CHOSEN;
+		if (interactive) {
+			choose(op, TRUE, FALSE, FALSE);
+			return;
 		}
+		shoot(op, focused_output(op->sources));
 		break;
 	case TARGET_WINDOW:
-		result = choose(sources, FALSE, TRUE, FALSE, &source, &use_area);
-		break;
+		choose(op, FALSE, TRUE, FALSE);
+		return;
 	case TARGET_AREA:
-		use_area = TRUE;
-		break;
+		pick_area(op);
+		return;
 	case TARGET_ACTIVE_WINDOW:
-		source = active_window(sources);
-		if (source == NULL)
-			result = PORTAL_CHOOSER_UNAVAILABLE;
+		shoot(op, active_window(op->sources));
 		break;
 	default:
 		if (!interactive) {
-			source = focused_output(sources);
+			shoot(op, focused_output(op->sources));
 			break;
 		}
-		result = choose(sources, TRUE, self->can_window, picker != NULL,
-		                &source, &use_area);
-		/* No chooser at all: the screen, rather than nothing. */
-		if (result == PORTAL_CHOOSER_UNAVAILABLE) {
-			source = focused_output(sources);
-			result = PORTAL_CHOOSER_CHOSEN;
-		}
-		break;
-	}
-
-	if (use_area && result == PORTAL_CHOOSER_CHOSEN) {
-		result = picker != NULL ? run_picker(picker, &area)
-		                        : PORTAL_CHOOSER_UNAVAILABLE;
-		if (result == PORTAL_CHOOSER_CHOSEN) {
-			source = output_at(sources, area.x, area.y);
-			if (source == NULL)
-				result = PORTAL_CHOOSER_UNAVAILABLE;
-		}
-	}
-	if (result == PORTAL_CHOOSER_CANCELLED) {
-		reply(invocation, PORTAL_RESPONSE_CANCELLED, NULL);
+		choose(op, TRUE, self->can_window, picker != NULL);
 		return;
 	}
-	if (result != PORTAL_CHOOSER_CHOSEN || source == NULL) {
-		g_message("screenshot: nothing to shoot for '%s'", app_id);
-		reply(invocation, PORTAL_RESPONSE_OTHER, NULL);
-		return;
-	}
-
-	image = portal_capture_grab(self->capture, source, FALSE,
-	                            GRAB_TIMEOUT_MS, &error);
-	if (image == NULL) {
-		g_warning("screenshot: could not capture %s: %s", source->title,
-		          error->message);
-		reply(invocation, PORTAL_RESPONSE_OTHER, NULL);
-		return;
-	}
-	if (use_area) {
-		have_crop = area_to_pixels(source, &area, image, &crop);
-		if (!have_crop) {
-			reply(invocation, PORTAL_RESPONSE_OTHER, NULL);
-			return;
-		}
-	}
-
-	path = screenshot_path(&error);
-	if (path == NULL || !write_png(image, have_crop ? &crop : NULL, path,
-	                               &error)) {
-		g_warning("screenshot: %s", error->message);
-		reply(invocation, PORTAL_RESPONSE_OTHER, NULL);
-		return;
-	}
-	uri = g_filename_to_uri(path, NULL, NULL);
-
-	g_variant_builder_init(&results, G_VARIANT_TYPE_VARDICT);
-	g_variant_builder_add(&results, "{sv}", "uri",
-	                      g_variant_new_string(uri));
-	reply(invocation, PORTAL_RESPONSE_SUCCESS, &results);
-	g_message("screenshot: '%s' took %s%s into %s", app_id, source->title,
-	          use_area ? " (an area)" : "", path);
+	shot_op_free(op);
 }
 
 static void
@@ -696,58 +806,38 @@ handle_pick_color(PortalScreenshot *self, GVariant *params,
 	const gchar *handle;
 	const gchar *app_id;
 	const gchar *parent_window;
-	g_autoptr(GPtrArray) sources = NULL;
-	g_autoptr(PortalCaptureImage) image = NULL;
-	g_autoptr(GError) error = NULL;
-	const PortalCaptureSource *output;
-	PortalChooserResult result;
-	GVariantBuilder results;
-	Rect point;
-	Rect px;
-	guint8 r = 0;
-	guint8 g = 0;
-	guint8 b = 0;
+	g_autofree gchar *cmd = NULL;
+	g_autoptr(PortalGowl) gowl = NULL;
+	g_autoptr(JsonNode) result = NULL;
+	ShotOp *op;
+	JsonObject *p;
 
 	g_variant_get(params, "(&o&s&s@a{sv})", &handle, &app_id,
 	              &parent_window, NULL);
 
-	result = pick_point(&point);
-	if (result == PORTAL_CHOOSER_CANCELLED) {
-		reply(invocation, PORTAL_RESPONSE_CANCELLED, NULL);
-		return;
-	}
-	if (result != PORTAL_CHOOSER_CHOSEN) {
-		g_message("screenshot: no way to pick a point for '%s'", app_id);
-		reply(invocation, PORTAL_RESPONSE_OTHER, NULL);
-		return;
-	}
-	sources = portal_capture_list_sources(self->capture, FALSE, TRUE);
-	output = output_at(sources, point.x, point.y);
-	if (output == NULL) {
-		reply(invocation, PORTAL_RESPONSE_OTHER, NULL);
-		return;
-	}
-	image = portal_capture_grab(self->capture, output, FALSE,
-	                            GRAB_TIMEOUT_MS, &error);
-	if (image == NULL) {
-		g_warning("screenshot: could not capture %s: %s", output->title,
-		          error->message);
-		reply(invocation, PORTAL_RESPONSE_OTHER, NULL);
-		return;
-	}
-	point.w = 1;
-	point.h = 1;
-	if (!area_to_pixels(output, &point, image, &px)
-	    || !portal_capture_image_pixel(image, (guint32)px.x, (guint32)px.y,
-	                                   &r, &g, &b)) {
-		reply(invocation, PORTAL_RESPONSE_OTHER, NULL);
-		return;
-	}
+	op = shot_op_new(self, invocation, handle, app_id, TRUE);
+	op->pick_color = TRUE;
 
-	g_variant_builder_init(&results, G_VARIANT_TYPE_VARDICT);
-	g_variant_builder_add(&results, "{sv}", "color",
-		g_variant_new("(ddd)", r / 255.0, g / 255.0, b / 255.0));
-	reply(invocation, PORTAL_RESPONSE_SUCCESS, &results);
+	/* A picker, answering later; else, inside gowl, the pointer. */
+	cmd = point_picker();
+	if (cmd != NULL) {
+		run_picker(op, cmd);
+		return;
+	}
+	gowl = portal_gowl_connect(NULL);
+	if (gowl != NULL)
+		result = portal_gowl_call(gowl, "pointer.get", NULL, NULL);
+	if (result == NULL || !JSON_NODE_HOLDS_OBJECT(result)) {
+		g_message("screenshot: no way to pick a point for '%s'", app_id);
+		shot_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+		shot_op_free(op);
+		return;
+	}
+	p = json_node_get_object(result);
+	op->area.x = (gint32)json_object_get_double_member_with_default(p, "x", 0);
+	op->area.y = (gint32)json_object_get_double_member_with_default(p, "y", 0);
+	shoot(op, output_at(op->sources, op->area.x, op->area.y));
+	shot_op_free(op);
 }
 
 static void

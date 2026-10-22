@@ -250,37 +250,99 @@ portal_gowl_command(PortalGowl *self, const gchar *line, GError **error)
 }
 
 gchar *
-portal_gowl_wait_event_text(PortalGowl *self, const gchar *prefix,
-                            guint timeout_ms, GError **error)
+portal_gowl_take_event_text(PortalGowl *self, const gchar *prefix)
 {
-	gint64 end = g_get_monotonic_time() + (gint64)timeout_ms * 1000;
+	GList *l;
 
 	g_return_val_if_fail(self != NULL, NULL);
 
-	for (;;) {
-		GList *l;
-		gint64 left;
-		gboolean was_event = FALSE;
-		g_autoptr(JsonObject) msg = NULL;
+	for (l = self->events.head; l != NULL; l = l->next) {
+		if (g_str_has_prefix(l->data, prefix)) {
+			gchar *hit = l->data;
 
-		/* Queued first: the answer may have come in with a reply. */
-		for (l = self->events.head; l != NULL; l = l->next) {
-			if (g_str_has_prefix(l->data, prefix)) {
-				gchar *hit = l->data;
-
-				g_queue_delete_link(&self->events, l);
-				return hit;
-			}
+			g_queue_delete_link(&self->events, l);
+			return hit;
 		}
-		left = (end - g_get_monotonic_time()) / 1000000;
-		if (left <= 0) {
-			g_set_error(error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT,
-			            "no `%s' event in %u ms", prefix, timeout_ms);
-			return NULL;
-		}
-		set_timeout(self, (guint)left);
-		msg = read_message(self, &was_event, error);
-		if (msg == NULL)
-			return NULL;
 	}
+	return NULL;
+}
+
+/* Parses a line read asynchronously, as read_message() does. */
+static gboolean
+take_line(PortalGowl *self, const gchar *line, GError **error)
+{
+	g_autoptr(JsonParser) parser = json_parser_new();
+	JsonNode *root;
+	JsonObject *obj;
+
+	if (!json_parser_load_from_data(parser, line, -1, error))
+		return FALSE;
+	root = json_parser_get_root(parser);
+	if (root == NULL || !JSON_NODE_HOLDS_OBJECT(root))
+		return TRUE;
+	obj = json_node_get_object(root);
+	if (g_strcmp0(json_object_get_string_member_with_default(obj, "method",
+	                                                         ""),
+	              "event") == 0) {
+		JsonObject *params = json_object_get_object_member(obj, "params");
+		const gchar *text = params != NULL
+			? json_object_get_string_member_with_default(params, "text",
+			                                             NULL)
+			: NULL;
+
+		if (text != NULL)
+			g_queue_push_tail(&self->events, g_strdup(text));
+	}
+	return TRUE;
+}
+
+static void
+read_line_done(GObject *source, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(GTask) task = data;
+	PortalGowl *self = g_task_get_task_data(task);
+	g_autofree gchar *line = NULL;
+	GError *error = NULL;
+
+	line = g_data_input_stream_read_line_finish_utf8(
+		G_DATA_INPUT_STREAM(source), res, NULL, &error);
+	if (line == NULL) {
+		if (error == NULL)
+			error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_CLOSED,
+				"the compositor closed the connection");
+		g_task_return_error(task, error);
+		return;
+	}
+	if (!take_line(self, line, &error)) {
+		g_task_return_error(task, error);
+		return;
+	}
+	g_task_return_boolean(task, TRUE);
+}
+
+void
+portal_gowl_read_async(PortalGowl *self, GCancellable *cancellable,
+                       GAsyncReadyCallback callback, gpointer user_data)
+{
+	GTask *task;
+
+	g_return_if_fail(self != NULL);
+
+	/* The PortalGowl is not a GObject; the task's source object is
+	 * NULL and the connection rides along as task data. */
+	task = g_task_new(NULL, cancellable, callback, user_data);
+	g_task_set_task_data(task, self, NULL);
+	/* A socket timeout applies to asynchronous reads too, and a human
+	 * may take minutes: the caller's cancellable is the bound. */
+	set_timeout(self, 0);
+	g_data_input_stream_read_line_async(self->in, G_PRIORITY_DEFAULT,
+	                                    cancellable, read_line_done, task);
+}
+
+gboolean
+portal_gowl_read_finish(PortalGowl *self, GAsyncResult *result,
+                        GError **error)
+{
+	(void)self;
+	return g_task_propagate_boolean(G_TASK(result), error);
 }

@@ -55,6 +55,7 @@
 #include "portal-chooser.h"
 #include "portal-pw.h"
 #include "portal-restore.h"
+#include "portal-request.h"
 
 #include <string.h>
 
@@ -91,6 +92,9 @@ typedef struct {
 	guint32           persist_mode;  /* 0, 1 or 2, from SelectSources */
 	gchar            *restore_token; /* out of restore_data, or NULL */
 	PortalPwStream   *stream;
+	/* A Start waiting on the chooser, withdrawn if the session goes
+	 * first.  Not owned: the pick's StartOp owns it. */
+	PortalRequest    *pending;
 } ScreenCastSession;
 
 struct _PortalScreenCast {
@@ -152,40 +156,6 @@ static const gchar sc_session_introspection_xml[] =
 static void session_destroy(gpointer data);
 
 /* ---------------------------------------------------------------
- * The chooser
- * --------------------------------------------------------------- */
-
-/*
- * Puts @sources in front of a human.  NULL with @cancelled unset means
- * there was no chooser to run, and the caller falls back.
- */
-static const PortalCaptureSource *
-choose_source(GPtrArray *sources, gboolean *cancelled)
-{
-	g_autofree const gchar **lines = NULL;
-	guint index = 0;
-	guint i;
-
-	*cancelled = FALSE;
-	lines = g_new0(const gchar *, sources->len + 1);
-	for (i = 0; i < sources->len; i++)
-		lines[i] = ((const PortalCaptureSource *)
-		            g_ptr_array_index(sources, i))->title;
-
-	switch (portal_chooser_run("Share", lines, &index)) {
-	case PORTAL_CHOOSER_CHOSEN:
-		return index < sources->len ? g_ptr_array_index(sources, index)
-		                            : NULL;
-	case PORTAL_CHOOSER_CANCELLED:
-		*cancelled = TRUE;
-		return NULL;
-	case PORTAL_CHOOSER_UNAVAILABLE:
-	default:
-		return NULL;
-	}
-}
-
-/* ---------------------------------------------------------------
  * Session objects
  * --------------------------------------------------------------- */
 
@@ -232,6 +202,11 @@ session_destroy(gpointer data)
 
 	if (session == NULL)
 		return;
+	/* A Start still choosing for this session is withdrawn; its
+	 * completion finds the session gone and answers cancelled. */
+	if (session->pending != NULL)
+		g_cancellable_cancel(portal_request_get_cancellable(
+			session->pending));
 	g_clear_pointer(&session->stream, portal_pw_stream_free);
 	if (session->session_reg_id != 0
 	    && session->portal->conn != NULL
@@ -380,22 +355,70 @@ handle_select_sources(PortalScreenCast *self, GVariant *params,
 	empty_reply(invocation, PORTAL_RESPONSE_SUCCESS);
 }
 
+/*
+ * A Start in flight.  The chooser answers later -- the main loop keeps
+ * running casts and other sessions meanwhile -- so everything the
+ * answer needs is kept here, and the session is looked up again by its
+ * handle when it comes: it may have been closed in between.
+ */
+typedef struct {
+	PortalScreenCast      *portal;
+	GDBusMethodInvocation *invocation;
+	gchar                 *session_handle;
+	gchar                 *app_id;
+	GPtrArray             *sources;
+	gchar                 *old_token;   /* a grant being restored */
+	gchar                 *stream_id;
+	PortalRequest         *request;
+} StartOp;
+
 static void
-handle_start(PortalScreenCast *self, GVariant *params,
-             GDBusMethodInvocation *invocation)
+start_op_free(StartOp *op)
 {
-	const gchar *handle;
-	const gchar *session_handle;
-	const gchar *app_id;
-	const gchar *parent_window;
 	ScreenCastSession *session;
-	g_autoptr(GPtrArray) sources = NULL;
-	g_autoptr(GError) error = NULL;
-	const PortalCaptureSource *chosen = NULL;
+
+	if (op == NULL)
+		return;
+	if (op->invocation != NULL)
+		empty_reply(op->invocation, PORTAL_RESPONSE_OTHER);
+	session = g_hash_table_lookup(op->portal->sessions, op->session_handle);
+	if (session != NULL && session->pending == op->request)
+		session->pending = NULL;
+	g_free(op->session_handle);
+	g_free(op->app_id);
+	g_clear_pointer(&op->sources, g_ptr_array_unref);
+	g_free(op->old_token);
+	g_free(op->stream_id);
+	portal_request_free(op->request);
+	g_free(op);
+}
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(StartOp, start_op_free)
+
+/* Answers the op's call, once. */
+static void
+start_reply(StartOp *op, guint32 response, GVariantBuilder *results)
+{
+	GDBusMethodInvocation *invocation = g_steal_pointer(&op->invocation);
+
+	if (invocation == NULL)
+		return;
+	if (results == NULL) {
+		empty_reply(invocation, response);
+		return;
+	}
+	g_dbus_method_invocation_return_value(invocation,
+		g_variant_new("(ua{sv})", response, results));
+}
+
+/* The source is decided: open the stream and answer. */
+static void
+start_with(StartOp *op, const PortalCaptureSource *chosen)
+{
+	PortalScreenCast *self = op->portal;
+	ScreenCastSession *session;
 	const PortalGrant *grant = NULL;
-	g_autofree gchar *old_token = NULL;
-	g_autofree gchar *stream_id = NULL;
-	gboolean cancelled = FALSE;
+	g_autoptr(GError) error = NULL;
 	GVariantBuilder results;
 	GVariantBuilder streams;
 	GVariantBuilder props;
@@ -404,60 +427,17 @@ handle_start(PortalScreenCast *self, GVariant *params,
 	guint32 w = 0;
 	guint32 h = 0;
 
-	g_variant_get(params, "(&o&o&s&s@a{sv})", &handle, &session_handle,
-	              &app_id, &parent_window, NULL);
-
-	session = g_hash_table_lookup(self->sessions, session_handle);
+	session = g_hash_table_lookup(self->sessions, op->session_handle);
 	if (session == NULL) {
-		empty_reply(invocation, PORTAL_RESPONSE_OTHER);
+		/* Closed while the human was choosing. */
+		start_reply(op, PORTAL_RESPONSE_CANCELLED, NULL);
 		return;
 	}
-
-	sources = portal_capture_list_sources(self->capture,
-		(session->source_types & SOURCE_TYPE_WINDOW) != 0,
-		(session->source_types & SOURCE_TYPE_MONITOR) != 0);
-	if (sources->len == 0) {
-		g_warning("screencast: nothing to share");
-		empty_reply(invocation, PORTAL_RESPONSE_OTHER);
+	session->pending = NULL;
+	if (session->stream != NULL) {
+		g_warning("screencast: %s is already started", op->session_handle);
+		start_reply(op, PORTAL_RESPONSE_OTHER, NULL);
 		return;
-	}
-
-	/*
-	 * A restore first.  The grant has to be this application's, and
-	 * its source has to still be here and be a kind the session asked
-	 * for; anything less and the human is asked, as the spec wants --
-	 * a restore that guesses shares the wrong thing silently.
-	 */
-	if (session->restore_token != NULL) {
-		grant = portal_restore_lookup(self->restore,
-		                              session->restore_token, app_id);
-		if (grant != NULL)
-			chosen = portal_restore_match(grant, sources);
-		if (chosen != NULL) {
-			old_token = g_strdup(grant->token);
-			stream_id = g_strdup(grant->stream_id);
-			g_message("screencast: restored '%s' for '%s' without "
-			          "asking", chosen->title, app_id);
-		} else {
-			g_message("screencast: %s for '%s'; asking", grant != NULL
-			          ? "the restored source is gone"
-			          : "unknown restore token", app_id);
-		}
-	}
-
-	if (chosen == NULL)
-		chosen = choose_source(sources, &cancelled);
-	if (cancelled) {
-		empty_reply(invocation, PORTAL_RESPONSE_CANCELLED);
-		return;
-	}
-	if (chosen == NULL) {
-		/* No chooser installed, or it answered with something not on the
-		 * menu.  The first source is the first output, which is the
-		 * behaviour portal-wlr has without a chooser configured. */
-		chosen = g_ptr_array_index(sources, 0);
-		g_message("screencast: no chooser; sharing '%s'. Set "
-		          "GOWL_PORTAL_CHOOSER to pick.", chosen->title);
 	}
 
 	session->stream = portal_pw_stream_new(self->pw, self->capture, chosen,
@@ -465,7 +445,7 @@ handle_start(PortalScreenCast *self, GVariant *params,
 	if (session->stream == NULL) {
 		g_warning("screencast: could not start the stream: %s",
 		          error->message);
-		empty_reply(invocation, PORTAL_RESPONSE_OTHER);
+		start_reply(op, PORTAL_RESPONSE_OTHER, NULL);
 		return;
 	}
 	node_id = portal_pw_stream_node_id(session->stream);
@@ -477,13 +457,12 @@ handle_start(PortalScreenCast *self, GVariant *params,
 	 * so the token the application holds next time is a new one, and
 	 * the stream keeps the id it had.
 	 */
-	if (old_token != NULL)
-		portal_restore_remove(self->restore, old_token);
-	grant = NULL;
+	if (op->old_token != NULL)
+		portal_restore_remove(self->restore, op->old_token);
 	if (session->persist_mode > 0)
-		grant = portal_restore_add(self->restore, app_id,
+		grant = portal_restore_add(self->restore, op->app_id,
 		                           session->persist_mode, chosen,
-		                           stream_id);
+		                           op->stream_id);
 
 	/*
 	 * One stream, as (node_id, properties).  `size' and `source_type'
@@ -524,11 +503,122 @@ handle_start(PortalScreenCast *self, GVariant *params,
 			              (guint32)RESTORE_DATA_VERSION,
 			              g_variant_new_string(grant->token)));
 	}
-	g_dbus_method_invocation_return_value(invocation,
-		g_variant_new("(ua{sv})", PORTAL_RESPONSE_SUCCESS, &results));
+	start_reply(op, PORTAL_RESPONSE_SUCCESS, &results);
 
-	g_message("screencast: '%s' is casting %s (node %u)", app_id,
+	g_message("screencast: '%s' is casting %s (node %u)", op->app_id,
 	          chosen->title, node_id);
+}
+
+static void
+on_chosen(GObject *source, GAsyncResult *res, gpointer data)
+{
+	g_autoptr(StartOp) op = data;
+	guint index = 0;
+	PortalChooserResult result;
+
+	(void)source;
+	result = portal_chooser_run_finish(res, &index);
+	switch (result) {
+	case PORTAL_CHOOSER_CHOSEN:
+		if (index < op->sources->len) {
+			start_with(op, g_ptr_array_index(op->sources, index));
+			return;
+		}
+		start_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+		return;
+	case PORTAL_CHOOSER_CANCELLED:
+		start_reply(op, PORTAL_RESPONSE_CANCELLED, NULL);
+		return;
+	case PORTAL_CHOOSER_UNAVAILABLE:
+	default:
+		/* No chooser installed.  The first source is the first output,
+		 * which is the behaviour portal-wlr has without a chooser
+		 * configured. */
+		g_message("screencast: no chooser; sharing '%s'. Set "
+		          "GOWL_PORTAL_CHOOSER to pick.",
+		          ((const PortalCaptureSource *)
+		           g_ptr_array_index(op->sources, 0))->title);
+		start_with(op, g_ptr_array_index(op->sources, 0));
+		return;
+	}
+}
+
+static void
+handle_start(PortalScreenCast *self, GVariant *params,
+             GDBusMethodInvocation *invocation)
+{
+	const gchar *handle;
+	const gchar *session_handle;
+	const gchar *app_id;
+	const gchar *parent_window;
+	ScreenCastSession *session;
+	const PortalCaptureSource *chosen = NULL;
+	g_autoptr(StartOp) op = NULL;
+	g_autofree const gchar **lines = NULL;
+	GCancellable *cancellable;
+	guint i;
+
+	g_variant_get(params, "(&o&o&s&s@a{sv})", &handle, &session_handle,
+	              &app_id, &parent_window, NULL);
+
+	session = g_hash_table_lookup(self->sessions, session_handle);
+	if (session == NULL || session->pending != NULL) {
+		empty_reply(invocation, PORTAL_RESPONSE_OTHER);
+		return;
+	}
+
+	op = g_new0(StartOp, 1);
+	op->portal = self;
+	op->invocation = invocation;
+	op->session_handle = g_strdup(session_handle);
+	op->app_id = g_strdup(app_id);
+	op->sources = portal_capture_list_sources(self->capture,
+		(session->source_types & SOURCE_TYPE_WINDOW) != 0,
+		(session->source_types & SOURCE_TYPE_MONITOR) != 0);
+	if (op->sources->len == 0) {
+		g_warning("screencast: nothing to share");
+		start_reply(op, PORTAL_RESPONSE_OTHER, NULL);
+		return;
+	}
+
+	/*
+	 * A restore first.  The grant has to be this application's, and
+	 * its source has to still be here and be a kind the session asked
+	 * for; anything less and the human is asked, as the spec wants --
+	 * a restore that guesses shares the wrong thing silently.
+	 */
+	if (session->restore_token != NULL) {
+		const PortalGrant *grant = portal_restore_lookup(self->restore,
+			session->restore_token, app_id);
+
+		if (grant != NULL)
+			chosen = portal_restore_match(grant, op->sources);
+		if (chosen != NULL) {
+			op->old_token = g_strdup(grant->token);
+			op->stream_id = g_strdup(grant->stream_id);
+			g_message("screencast: restored '%s' for '%s' without "
+			          "asking", chosen->title, app_id);
+			start_with(op, chosen);
+			return;
+		}
+		g_message("screencast: %s for '%s'; asking", grant != NULL
+		          ? "the restored source is gone"
+		          : "unknown restore token", app_id);
+	}
+
+	/* The human, later.  The Request object is what the frontend
+	 * closes when the application gives up or goes away. */
+	op->request = portal_request_new(self->conn, handle);
+	session->pending = op->request;
+	lines = g_new0(const gchar *, op->sources->len + 1);
+	for (i = 0; i < op->sources->len; i++)
+		lines[i] = ((const PortalCaptureSource *)
+		            g_ptr_array_index(op->sources, i))->title;
+	/* The cancellable first: argument order is unspecified, and the
+	 * steal empties `op'. */
+	cancellable = portal_request_get_cancellable(op->request);
+	portal_chooser_run_async("Share", lines, cancellable, on_chosen,
+	                         g_steal_pointer(&op));
 }
 
 static void

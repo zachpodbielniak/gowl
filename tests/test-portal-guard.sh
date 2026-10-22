@@ -204,6 +204,16 @@ if [ -f "$sccast" ]; then
 	fi
 fi
 
+# Guard: with PW_STREAM_FLAG_ALLOC_BUFFERS the BACKEND allocates the
+# buffer memory in add_buffer.  It used to expect a ready-made memfd,
+# find none, and return: every cast negotiated and delivered no frame.
+pw="$root/tools/xdg-desktop-portal-gowl/portal-pw.c"
+if [ -f "$pw" ] && grep -q 'PW_STREAM_FLAG_ALLOC_BUFFERS' "$pw" \
+   && ! awk '/^on_stream_add_buffer\(/,/^}/' "$pw" | grep -q 'memfd_create('; then
+	echo "FAIL: portal-pw.c asks to allocate buffers but add_buffer makes none"
+	fail=1
+fi
+
 # Guard: grants are a standing permission to record the screen, and are
 # written owner-only.
 restore="$root/tools/xdg-desktop-portal-gowl/portal-restore.c"
@@ -243,15 +253,34 @@ fi
 # should not pop up instead of it.
 ch="$root/tools/xdg-desktop-portal-gowl/portal-chooser.c"
 if [ -f "$ch" ]; then
-	body=$(awk '/^portal_chooser_run\(/,/^}/' "$ch")
-	env_at=$(printf '%s\n' "$body" | grep -n 'run_command(env' | head -1 | cut -d: -f1)
-	menu_at=$(printf '%s\n' "$body" | grep -n 'run_gowl_menu(' | head -1 | cut -d: -f1)
+	body=$(awk '/^begin\(/,/^}/' "$ch")
+	env_at=$(printf '%s\n' "$body" | grep -n 'dmenu_start(task, env)' | head -1 | cut -d: -f1)
+	menu_at=$(printf '%s\n' "$body" | grep -n 'menu_start(' | head -1 | cut -d: -f1)
 	dmenu_at=$(printf '%s\n' "$body" | grep -n 'dmenu_command(' | head -1 | cut -d: -f1)
 	if [ -z "$env_at" ] || [ -z "$menu_at" ] || [ -z "$dmenu_at" ] \
 	   || [ "$env_at" -gt "$menu_at" ] || [ "$menu_at" -gt "$dmenu_at" ]; then
-		echo "FAIL: portal_chooser_run() is not env, then menu card, then dmenu"
+		echo "FAIL: the chooser's begin() is not env, then menu card, then dmenu"
 		fail=1
 	fi
+	# Nothing waits on a human synchronously: the portal's one main
+	# loop feeds every running cast.  A blocking wait froze the cast in
+	# somebody else's call for as long as a person took to choose.
+	for f in "$ch" "$sccast" "$ss"; do
+		[ -f "$f" ] || continue
+		if sed 's,/\*.*\*/,,' "$f" \
+		     | grep -E 'g_subprocess_communicate(_utf8)?\(|g_subprocess_wait(_check)?\(|portal_gowl_wait_event' \
+		     >/dev/null; then
+			echo "FAIL: $(basename "$f") waits on a human synchronously"
+			fail=1
+		fi
+	done
+	for f in "$sccast" "$ss"; do
+		if [ -f "$f" ] && ! grep -q 'portal_request_new' "$f"; then
+			echo "FAIL: $(basename "$f") exports no Request object, so the"
+			echo "      frontend cannot withdraw a pending pick"
+			fail=1
+		fi
+	done
 	if ! grep -q 'events.subscribe' "$ch" || ! grep -q 'menu-choose ' "$ch"; then
 		echo "FAIL: the menu chooser must subscribe before menu-choose,"
 		echo "      or the answer can arrive unheard"
@@ -277,5 +306,6 @@ fi
 echo "portal guard PASSED (both libei directions served, injection guarded,"
 echo "                     ScreenCast captures windows as well as outputs,"
 echo "                     advertises only what it does; Screenshot routed;"
-echo "                     chooser order; grants 0600)"
+echo "                     chooser order, asynchronous; grants 0600;"
+echo "                     cast buffers allocated)"
 exit 0

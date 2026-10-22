@@ -25,7 +25,8 @@ PKG_LIBS = $(shell pkg-config --libs $(PKG_DEPS))
 # whatever else is installed.  With it, a single window can be shared
 # -- the thing portal-wlr cannot do, because wlr-screencopy addresses
 # outputs and ext-image-capture-source addresses toplevels.
-CAP_SRCS = portal-capture.c portal-chooser.c portal-gowl.c portal-screenshot.c
+CAP_SRCS = portal-capture.c portal-chooser.c portal-gowl.c portal-request.c \
+           portal-screenshot.c
 CAP_GEN = ext-image-capture-source-v1-client-protocol.h \
           ext-image-capture-source-v1-protocol.c \
           ext-image-copy-capture-v1-client-protocol.h \

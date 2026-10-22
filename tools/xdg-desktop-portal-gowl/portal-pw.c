@@ -20,8 +20,8 @@
  * portal-pw.c - The PipeWire stream a cast is delivered through.
  *
  * An application that asked for a screen cast is handed a PipeWire node
- * id and connects to it; this is the other end of that node.  PipeWire
- * allocates the buffers (as memfds, because we ask for MemFd), and each
+ * id and connects to it; this is the other end of that node.  This end
+ * allocates the buffers (memfds, PW_STREAM_FLAG_ALLOC_BUFFERS), and each
  * one is wrapped as a wl_buffer so the compositor's capture writes
  * straight into the memory the application will read.  One copy, done
  * by the compositor, into its final destination.
@@ -35,6 +35,9 @@
  * single-threaded and no locking is needed between the two halves.
  */
 
+/* memfd_create(), F_ADD_SEALS */
+#define _GNU_SOURCE 1
+
 #include "portal-pw.h"
 
 #include <pipewire/pipewire.h>
@@ -44,7 +47,11 @@
 #include <spa/buffer/meta.h>
 
 #include <glib-unix.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 struct _PortalPw {
 	struct pw_loop    *loop;
@@ -338,23 +345,57 @@ on_stream_param_changed(void *data, uint32_t id, const struct spa_pod *param)
 	request_frame(self);
 }
 
-/* Each buffer PipeWire allocated becomes a wl_buffer over the same
- * memfd, kept in the pw_buffer's user_data so the frame path is a
- * pointer read rather than a lookup. */
+/*
+ * Each buffer gets a memfd of OUR making, wrapped as a wl_buffer, kept
+ * in the pw_buffer's user_data so the frame path is a pointer read
+ * rather than a lookup.
+ *
+ * Ours, not PipeWire's: the stream is connected with
+ * PW_STREAM_FLAG_ALLOC_BUFFERS, which means the APPLICATION fills in
+ * the buffer memory here -- datas[0].type arrives as the bitmask of
+ * types the peer accepts, not as a type, and the fd is -1.  This used
+ * to expect a ready-made memfd, found none, and returned: every cast
+ * negotiated, reported a node id, linked, and delivered no frame at
+ * all, with the consumer logging "unknown buffer data type -1".  The
+ * portal tests only checked the node id; they now pull frames.
+ */
 static void
 on_stream_add_buffer(void *data, struct pw_buffer *buffer)
 {
 	PortalPwStream *self = data;
 	struct spa_data *d = &buffer->buffer->datas[0];
+	gsize size = (gsize)self->stride * self->height;
+	gint fd;
 
-	if (d->type != SPA_DATA_MemFd || d->fd < 0) {
-		g_warning("pw: a buffer arrived that is not a memfd; "
-		          "it cannot be a capture target");
-		buffer->user_data = NULL;
+	buffer->user_data = NULL;
+	if ((d->type & (1u << SPA_DATA_MemFd)) == 0) {
+		g_warning("pw: the consumer accepts no memfd buffers (types "
+		          "0x%x); they cannot be a capture target", d->type);
 		return;
 	}
+	fd = memfd_create("gowl-portal-cast", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+	if (fd < 0 || ftruncate(fd, (off_t)size) < 0) {
+		g_warning("pw: cannot make a %zu-byte buffer: %s", size,
+		          g_strerror(errno));
+		if (fd >= 0)
+			close(fd);
+		return;
+	}
+	/* The size can never change under the compositor's mapping. */
+	fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL);
+
+	d->type = SPA_DATA_MemFd;
+	d->flags = SPA_DATA_FLAG_READWRITE;
+	d->fd = fd;
+	d->mapoffset = 0;
+	d->maxsize = (guint32)size;
+	d->data = NULL;   /* the consumer maps it; so does the compositor */
+	d->chunk->offset = 0;
+	d->chunk->size = 0;
+	d->chunk->stride = (gint32)self->stride;
+
 	buffer->user_data = portal_capture_shm_buffer(
-		self->capture_ctx, (gint)d->fd, d->maxsize, self->width,
+		self->capture_ctx, fd, size, self->width,
 		self->height, self->stride, self->shm_format);
 	request_frame(self);
 }
@@ -363,6 +404,7 @@ static void
 on_stream_remove_buffer(void *data, struct pw_buffer *buffer)
 {
 	PortalPwStream *self = data;
+	struct spa_data *d = &buffer->buffer->datas[0];
 
 	if (self->pending == buffer) {
 		self->pending = NULL;
@@ -370,6 +412,11 @@ on_stream_remove_buffer(void *data, struct pw_buffer *buffer)
 	}
 	portal_capture_buffer_destroy(buffer->user_data);
 	buffer->user_data = NULL;
+	/* The memfd add_buffer made. */
+	if (d->type == SPA_DATA_MemFd && d->fd >= 0) {
+		close((gint)d->fd);
+		d->fd = -1;
+	}
 }
 
 static void

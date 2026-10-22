@@ -99,21 +99,48 @@ gchar *portal_gowl_command (PortalGowl  *self,
                             GError     **error);
 
 /**
- * portal_gowl_wait_event_text:
+ * portal_gowl_take_event_text:
  * @self: a #PortalGowl
- * @prefix: the start of the event's text line, e.g. `EVENT menu '
- * @timeout_ms: how long to wait
- * @error: return location for an error
+ * @prefix: the start of an event's text line, e.g. `EVENT menu '
  *
- * Waits for an event whose text form starts with @prefix, on a
- * connection that subscribed to it.
+ * Takes the first event already read whose text form starts with
+ * @prefix.  No I/O: events arrive through portal_gowl_call() (those
+ * that came before its reply) and portal_gowl_read_async().
  *
  * Returns: (transfer full) (nullable): the event's text line
  */
-gchar *portal_gowl_wait_event_text (PortalGowl  *self,
-                                    const gchar *prefix,
-                                    guint        timeout_ms,
-                                    GError     **error);
+gchar *portal_gowl_take_event_text (PortalGowl  *self,
+                                    const gchar *prefix);
+
+/**
+ * portal_gowl_read_async:
+ * @self: a #PortalGowl
+ * @cancellable: (nullable): cancels the read
+ * @callback: called when one line has been read
+ * @user_data: for @callback
+ *
+ * Reads one message without blocking, queueing it if it is an event.
+ * The wait for a human goes through here, so the portal's main loop
+ * -- running casts, other sessions -- keeps turning meanwhile.  No
+ * timeout: the caller bounds the wait with @cancellable.
+ */
+void portal_gowl_read_async (PortalGowl          *self,
+                             GCancellable        *cancellable,
+                             GAsyncReadyCallback  callback,
+                             gpointer             user_data);
+
+/**
+ * portal_gowl_read_finish:
+ * @self: a #PortalGowl
+ * @result: the #GAsyncResult
+ * @error: return location for an error
+ *
+ * Returns: %TRUE if a message was read; %FALSE at the end of the
+ *          connection, on an error, or when cancelled
+ */
+gboolean portal_gowl_read_finish (PortalGowl    *self,
+                                  GAsyncResult  *result,
+                                  GError       **error);
 
 void portal_gowl_free (PortalGowl *self);
 

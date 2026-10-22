@@ -68,7 +68,7 @@ unset GOWL_SOCKET
 comp_pid=""
 cleanup () {
 	[ -n "$comp_pid" ] && kill -TERM "$comp_pid" 2>/dev/null || true
-	rm -rf "$runtime"
+	if [ -n "$KEEP_RUNTIME" ]; then echo "kept $runtime"; else rm -rf "$runtime"; fi
 }
 trap cleanup EXIT INT TERM
 
@@ -107,6 +107,9 @@ fi
 cat >"$runtime/chooser.sh" <<'EOF'
 #!/bin/sh
 echo run >>"$RUNTIME/chooser.count"
+echo $$ >"$RUNTIME/chooser.pid"
+# Held: a human who has not chosen yet.
+while [ -f "$RUNTIME/hold" ]; do sleep 0.05; done
 head -1
 EOF
 # Pickers answering in slurp's format.
@@ -441,6 +444,134 @@ grep -q "uint32 0" "$RUNTIME/start.txt" || fail "Start via the menu: $(cat "$RUN
 "$MSG" menu-choice | grep -q 'chosen 0' || fail "the card did not record the pick"
 close_session
 echo "ok: gowl's menu card is the chooser inside gowl"
+
+# Closing the request takes the card down.
+create menu2.app
+select_sources menu2.app "{'types': <uint32 1>}"
+start menu2.app &
+start_pid=$!
+i=0
+while [ $i -lt 100 ]; do
+	"$MSG" menu-choice 2>/dev/null | grep -q pending && break
+	i=$((i + 1)); sleep 0.1
+done
+"$MSG" menu-choice | grep -q pending || fail "the second card never opened"
+gdbus call --session --dest $DEST \
+	--object-path /org/freedesktop/portal/desktop/request/gowltest/st$n \
+	--method org.freedesktop.impl.portal.Request.Close >/dev/null \
+	|| fail "the card's Start exported no Request object"
+wait $start_pid || fail "the closed Start never answered"
+grep -q "uint32 1" "$RUNTIME/start.txt" || fail "closed card Start: $(cat "$RUNTIME/start.txt")"
+"$MSG" menu-choice | grep -q cancelled || fail "the card is still up: $("$MSG" menu-choice)"
+close_session
+echo "ok: a closed request takes the menu card down"
+
+# --- The chooser does not block the portal --------------------------
+stop_portal
+start_portal GOWL_PORTAL_CHOOSER="$RUNTIME/chooser.sh"
+
+# A cast, running.
+create cast.app
+select_sources cast.app "{'types': <uint32 1>}"
+start cast.app
+grep -q "uint32 0" "$RUNTIME/start.txt" || fail "the cast: $(cat "$RUNTIME/start.txt")"
+cast_serial=$(sed -n "s/.*'pipewire-serial': <uint64 \([0-9]*\)>.*/\1/p" "$RUNTIME/start.txt")
+cast_session=$session
+
+# A second app's chooser, held open.
+touch "$RUNTIME/hold"
+runs=$(chooser_runs)
+create held.app
+select_sources held.app "{'types': <uint32 1>}"
+held_session=$session
+held_n=$n
+start held.app &
+held_pid=$!
+i=0
+while [ $i -lt 100 ] && [ "$(chooser_runs)" = "$runs" ]; do
+	i=$((i + 1)); sleep 0.05
+done
+[ "$(chooser_runs)" -gt "$runs" ] || fail "the held chooser never ran"
+
+# While it waits: the cast still produces frames, and other sessions
+# are still answered.
+#
+# A screen cast is damage-driven: an idle output delivers its first
+# frame and then nothing, correctly.  The menu card going up and down
+# is the damage.  media.type=Video is what a real consumer sets and
+# gst does not; without it WirePlumber will not link the two and says
+# `target not found'.
+if command -v gst-launch-1.0 >/dev/null 2>&1 \
+   && gst-inspect-1.0 pipewiresrc >/dev/null 2>&1; then
+	( i=0; while [ $i -lt 60 ]; do
+		"$MSG" menu-open >/dev/null 2>&1; sleep 0.1
+		"$MSG" menu-close >/dev/null 2>&1; sleep 0.1
+		i=$((i + 1)); done ) &
+	damage_pid=$!
+	timeout 20 gst-launch-1.0 -q pipewiresrc target-object="$cast_serial" \
+		stream-properties="props,media.type=Video,media.category=Capture" \
+		num-buffers=8 ! fakesink >"$RUNTIME/gst.log" 2>&1 \
+		|| { kill $damage_pid 2>/dev/null
+		     fail "the cast produced no frames while a chooser waited: $(cat "$RUNTIME/gst.log")"; }
+	kill $damage_pid 2>/dev/null || true
+	wait $damage_pid 2>/dev/null || true
+	echo "ok: a running cast delivers frames (8) while a chooser waits"
+else
+	echo "NOTE: no gst pipewiresrc; frames not checked while a chooser waits"
+fi
+expect_prop $SC version 6
+create other2.app
+select_sources other2.app "{'types': <uint32 1>}"
+grep -q "uint32 0" "$RUNTIME/select.txt" \
+	|| fail "SelectSources was not answered while a chooser waited"
+echo "ok: other sessions are served while a chooser waits"
+
+# Closing the request withdraws the pick: Start answers cancelled and
+# the chooser process is gone.
+chooser_pid=$(cat "$RUNTIME/chooser.pid")
+gdbus call --session --dest $DEST \
+	--object-path /org/freedesktop/portal/desktop/request/gowltest/st$held_n \
+	--method org.freedesktop.impl.portal.Request.Close >/dev/null \
+	|| fail "the pending Start exported no Request object"
+wait $held_pid || fail "the closed Start never answered"
+grep -q "uint32 1" "$RUNTIME/start.txt" \
+	|| fail "a closed request did not answer cancelled: $(cat "$RUNTIME/start.txt")"
+i=0
+while [ $i -lt 40 ] && kill -0 "$chooser_pid" 2>/dev/null; do
+	i=$((i + 1)); sleep 0.05
+done
+if kill -0 "$chooser_pid" 2>/dev/null; then
+	fail "the withdrawn chooser (pid $chooser_pid) is still running"
+fi
+echo "ok: a closed request cancels its pick"
+
+# Two picks at once: the second waits its turn, and both complete.
+runs=$(chooser_runs)
+session=$held_session
+create q1.app
+select_sources q1.app "{'types': <uint32 1>}"
+q1=$session
+gdbus call --session --dest $DEST --object-path $OBJ --method $SC.Start \
+	/org/freedesktop/portal/desktop/request/gowltest/q1 "$q1" q1.app "" "{}" \
+	>"$RUNTIME/q1.txt" &
+q1_pid=$!
+create q2.app
+select_sources q2.app "{'types': <uint32 1>}"
+q2=$session
+gdbus call --session --dest $DEST --object-path $OBJ --method $SC.Start \
+	/org/freedesktop/portal/desktop/request/gowltest/q2 "$q2" q2.app "" "{}" \
+	>"$RUNTIME/q2.txt" &
+q2_pid=$!
+sleep 0.5
+[ "$(chooser_runs)" = $((runs + 1)) ] \
+	|| fail "two choosers were shown at once (or none): $(chooser_runs) vs $runs"
+rm -f "$RUNTIME/hold"
+wait $q1_pid || fail "the first queued Start failed"
+wait $q2_pid || fail "the second queued Start failed"
+grep -q "uint32 0" "$RUNTIME/q1.txt" || fail "q1: $(cat "$RUNTIME/q1.txt")"
+grep -q "uint32 0" "$RUNTIME/q2.txt" || fail "q2: $(cat "$RUNTIME/q2.txt")"
+[ "$(chooser_runs)" = $((runs + 2)) ] || fail "the queued pick never showed"
+echo "ok: two queued picks both complete, one after the other"
 
 stop_portal
 echo "screencast + screenshot portal PASSED"

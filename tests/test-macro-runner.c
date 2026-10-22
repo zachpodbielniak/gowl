@@ -413,6 +413,43 @@ action_seen_n(
 	return n_actions_named("recorded-key") >= GPOINTER_TO_UINT(n);
 }
 
+/* "tick" seen at least three times. */
+static gboolean
+three_ticks(
+	Rig      *r,
+	gpointer  data
+){
+	(void)r;
+	(void)data;
+	return n_actions_named("tick") >= 3;
+}
+
+/*
+ * When the Nth action named @arg happened (monotonic microseconds), or
+ * -1 when there was no Nth.
+ */
+static gint64
+action_time(
+	const gchar *arg,
+	guint        nth
+){
+	guint i;
+	guint n = 0;
+	gint64 when = -1;
+
+	g_mutex_lock(&actions_lock);
+	for (i = 0; i < actions->len; i++) {
+		Action *a = g_ptr_array_index(actions, i);
+
+		if (g_strcmp0(a->arg, arg) == 0 && n++ == nth) {
+			when = a->when;
+			break;
+		}
+	}
+	g_mutex_unlock(&actions_lock);
+	return when;
+}
+
 /* @arg seen at least twice. */
 static gboolean
 action_seen_n2(
@@ -907,6 +944,8 @@ test_triggers(
 	g_autofree gchar *reply = NULL;
 	guint i;
 	gboolean found;
+	gint64 armed;
+	gint64 first;
 
 	(void)data;
 	RIG_UP(r);
@@ -919,7 +958,20 @@ test_triggers(
 	            "\t\tgowl_macro_get_arg(ctx, 0));\n"
 	            "\tgowl_macro_action(ctx, GOWL_ACTION_CUSTOM, s);\n"
 	            "\treturn TRUE;");
+	/*
+	 * Compiled first.  A macro is compiled on its first run, on the
+	 * compositor's thread, and the first run here is the first tick:
+	 * gcc and ld took 1.4 s of a 380 ms window on a loaded machine, and
+	 * the test then counted no ticks at all -- measuring the compiler,
+	 * not the timer.  macro-compile fills the same cache the run reads.
+	 * `evt' too: the event check below waits a second, and its first
+	 * run would otherwise spend that second in gcc.
+	 */
+	assert_ok(r, "macro-compile tick");
+	assert_ok(r, "macro-compile evt");
+
 	allow_warnings();
+	armed = g_get_monotonic_time();
 	configure(r, "triggers",
 	          "every 100: tick\n"
 	          "layout-changed: evt 'an arg'\n"
@@ -929,9 +981,21 @@ test_triggers(
 	          "garbage", NULL);
 	restore_warnings();
 
-	pump(r, 380);
-	g_assert_cmpuint(n_actions_named("tick"), >=, 2);
-	g_assert_cmpuint(n_actions_named("tick"), <=, 5);
+	/*
+	 * Against the trigger's own schedule, not a wall-clock window: the
+	 * loop running late (a loaded machine) delays ticks and is no fault
+	 * of the timer.  What the timer must do is fire at all, never
+	 * early, and never faster than its interval -- which is also what
+	 * proves `every 5' (under the 100 ms floor) was refused: installed,
+	 * it would put ticks 5 ms apart.
+	 */
+	pump_until(r, 10000, three_ticks, NULL);
+	g_assert_cmpuint(n_actions_named("tick"), >=, 3);
+	first = action_time("tick", 0);
+	g_assert_cmpint(first - armed, >=, 95 * 1000);
+	for (i = 1; i < 3; i++)
+		g_assert_cmpint(action_time("tick", i) - action_time("tick", i - 1),
+		                >=, 95 * 1000);
 
 	/* an event runs from an idle, never inside the emission */
 	g_signal_emit_by_name(r->compositor, "layout-changed",

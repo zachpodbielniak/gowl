@@ -26,20 +26,35 @@
  * rather than "the screen it happens to be on", because the compositor
  * makes a toplevel an addressable capture source.
  *
- * The chooser is an external dmenu-style command, the way
- * xdg-desktop-portal-wlr does it: this process has no toolkit and
- * should not grow one, and the session already has a menu the user
- * configured.  $GOWL_PORTAL_CHOOSER overrides it; otherwise the first
- * of bemenu/fuzzel/wofi/rofi/dmenu found on PATH is used.  With none of
- * them installed the cast falls back to the focused output, which is
- * what portal-wlr would have given anyway -- a call that starts
- * sharing the wrong screen is recoverable, one that fails to start is
- * an unanswerable support question.
+ * The chooser is portal-chooser.c: gowl's own menu card when the
+ * portal runs inside gowl, else a dmenu-style command
+ * ($GOWL_PORTAL_CHOOSER, or the first of bemenu/fuzzel/wofi/rofi/dmenu
+ * on PATH).  With none of them available the cast falls back to the
+ * first output, which is what portal-wlr would have given anyway -- a
+ * call that starts sharing the wrong screen is recoverable, one that
+ * fails to start is an unanswerable support question.
+ *
+ * VERSION 6.  Restore (v4): SelectSources' persist_mode and
+ * restore_data are honoured through portal-restore.c, and Start
+ * returns persist_mode and fresh restore_data whenever the session
+ * asked to persist.  A restore that finds its source skips the
+ * chooser; one that does not asks, exactly as a first session does.
+ * pipewire-serial (v6) is in every stream's properties.  mapping_id
+ * (v5) is optional and only means something to a RemoteDesktop session
+ * with screen-cast streams, which this backend does not combine.
+ *
+ * CURSOR MODES.  Hidden and Embedded only.  Embedded is the
+ * compositor's PAINT_CURSORS capture option; Metadata would need a
+ * second, cursor-only capture session and SPA_META_Cursor buffers,
+ * which this backend does not produce -- so it is not advertised, and a
+ * session that asks for it anyway is closed, as the spec requires.
  */
 
 #include "portal-screencast.h"
 #include "portal-capture.h"
+#include "portal-chooser.h"
 #include "portal-pw.h"
+#include "portal-restore.h"
 
 #include <string.h>
 
@@ -52,6 +67,18 @@
 #define SOURCE_TYPE_MONITOR 1
 #define SOURCE_TYPE_WINDOW  2
 
+/* org.freedesktop.portal.ScreenCast cursor modes. */
+#define CURSOR_MODE_HIDDEN   1
+#define CURSOR_MODE_EMBEDDED 2
+#define CURSOR_MODES_AVAILABLE (CURSOR_MODE_HIDDEN | CURSOR_MODE_EMBEDDED)
+
+/* The interface version served: see the file comment. */
+#define SCREENCAST_VERSION 6
+
+/* Our restore_data: ("gowl", RESTORE_DATA_VERSION, <s token>). */
+#define RESTORE_VENDOR       "gowl"
+#define RESTORE_DATA_VERSION 1
+
 #define SCREENCAST_PATH "/org/freedesktop/portal/desktop"
 
 typedef struct {
@@ -61,14 +88,17 @@ typedef struct {
 	guint             session_reg_id;
 	guint32           source_types;  /* what SelectSources asked for */
 	gboolean          with_cursor;
+	guint32           persist_mode;  /* 0, 1 or 2, from SelectSources */
+	gchar            *restore_token; /* out of restore_data, or NULL */
 	PortalPwStream   *stream;
 } ScreenCastSession;
 
 struct _PortalScreenCast {
 	GDBusConnection *conn;
 	guint            reg_id;
-	PortalCapture   *capture;
+	PortalCapture   *capture;    /* borrowed: shared with Screenshot */
 	PortalPw        *pw;
+	PortalRestore   *restore;
 	gboolean         can_window;
 	GHashTable      *sessions;   /* handle -> ScreenCastSession* */
 };
@@ -125,95 +155,34 @@ static void session_destroy(gpointer data);
  * The chooser
  * --------------------------------------------------------------- */
 
-/* The menu program to pipe the source list through, or NULL. */
-static gchar *
-chooser_command(void)
-{
-	const gchar *env = g_getenv("GOWL_PORTAL_CHOOSER");
-	const gchar *candidates[] = {
-		"bemenu", "fuzzel", "wofi", "rofi", "dmenu", NULL
-	};
-	gsize i;
-
-	if (env != NULL && *env != '\0')
-		return g_strdup(env);
-	for (i = 0; candidates[i] != NULL; i++) {
-		g_autofree gchar *path = g_find_program_in_path(candidates[i]);
-
-		if (path == NULL)
-			continue;
-		/* Each of these reads lines on stdin and prints the chosen one,
-		 * given the flag that makes it a picker rather than a runner. */
-		if (g_strcmp0(candidates[i], "bemenu") == 0)
-			return g_strdup_printf("%s -p 'Share:' -l 15", path);
-		if (g_strcmp0(candidates[i], "fuzzel") == 0)
-			return g_strdup_printf("%s --dmenu --prompt 'Share: '", path);
-		if (g_strcmp0(candidates[i], "wofi") == 0)
-			return g_strdup_printf("%s --dmenu --prompt 'Share'", path);
-		if (g_strcmp0(candidates[i], "rofi") == 0)
-			return g_strdup_printf("%s -dmenu -p 'Share'", path);
-		return g_strdup_printf("%s -p 'Share:'", path);
-	}
-	return NULL;
-}
-
 /*
- * Runs the chooser over @sources and returns the chosen one.  A chooser
- * that fails or is cancelled returns NULL, and the caller decides
- * whether that is a cancellation or a reason to fall back.
+ * Puts @sources in front of a human.  NULL with @cancelled unset means
+ * there was no chooser to run, and the caller falls back.
  */
 static const PortalCaptureSource *
-run_chooser(GPtrArray *sources, gboolean *cancelled)
+choose_source(GPtrArray *sources, gboolean *cancelled)
 {
-	g_autofree gchar *cmd = chooser_command();
-	g_auto(GStrv) argv = NULL;
-	g_autoptr(GSubprocess) proc = NULL;
-	g_autoptr(GError) error = NULL;
-	g_autoptr(GString) menu = g_string_new(NULL);
-	g_autofree gchar *out = NULL;
+	g_autofree const gchar **lines = NULL;
+	guint index = 0;
 	guint i;
 
 	*cancelled = FALSE;
-	if (cmd == NULL || sources->len == 0)
-		return NULL;
-	if (!g_shell_parse_argv(cmd, NULL, &argv, &error)) {
-		g_warning("screencast: chooser '%s' is unparseable: %s", cmd,
-		          error->message);
-		return NULL;
-	}
+	lines = g_new0(const gchar *, sources->len + 1);
+	for (i = 0; i < sources->len; i++)
+		lines[i] = ((const PortalCaptureSource *)
+		            g_ptr_array_index(sources, i))->title;
 
-	for (i = 0; i < sources->len; i++) {
-		const PortalCaptureSource *s = g_ptr_array_index(sources, i);
-
-		g_string_append_printf(menu, "%s\n", s->title);
-	}
-
-	proc = g_subprocess_newv((const gchar * const *)argv,
-		G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE,
-		&error);
-	if (proc == NULL) {
-		g_warning("screencast: could not run the chooser: %s", error->message);
-		return NULL;
-	}
-	if (!g_subprocess_communicate_utf8(proc, menu->str, NULL, &out, NULL,
-	                                   &error)) {
-		g_warning("screencast: the chooser failed: %s", error->message);
-		return NULL;
-	}
-	if (out == NULL || *out == '\0') {
-		/* An empty answer from a chooser that ran is the human pressing
-		 * Escape, which is a cancellation and not an error. */
+	switch (portal_chooser_run("Share", lines, &index)) {
+	case PORTAL_CHOOSER_CHOSEN:
+		return index < sources->len ? g_ptr_array_index(sources, index)
+		                            : NULL;
+	case PORTAL_CHOOSER_CANCELLED:
 		*cancelled = TRUE;
 		return NULL;
+	case PORTAL_CHOOSER_UNAVAILABLE:
+	default:
+		return NULL;
 	}
-	g_strchomp(out);
-	for (i = 0; i < sources->len; i++) {
-		const PortalCaptureSource *s = g_ptr_array_index(sources, i);
-
-		if (g_strcmp0(s->title, out) == 0)
-			return s;
-	}
-	return NULL;
 }
 
 /* ---------------------------------------------------------------
@@ -275,6 +244,7 @@ session_destroy(gpointer data)
 	}
 	g_free(session->handle);
 	g_free(session->app_id);
+	g_free(session->restore_token);
 	g_free(session);
 }
 
@@ -338,9 +308,11 @@ handle_select_sources(PortalScreenCast *self, GVariant *params,
 	const gchar *session_handle;
 	const gchar *app_id;
 	g_autoptr(GVariant) options = NULL;
+	g_autoptr(GVariant) restore = NULL;
 	ScreenCastSession *session;
 	guint32 types = 0;
 	guint32 cursor_mode = 0;
+	guint32 persist = 0;
 
 	g_variant_get(params, "(&o&o&s@a{sv})", &handle, &session_handle,
 	              &app_id, &options);
@@ -355,15 +327,56 @@ handle_select_sources(PortalScreenCast *self, GVariant *params,
 			types &= ~(guint32)SOURCE_TYPE_WINDOW;
 		session->source_types = types;
 	}
-	/* EMBEDDED (2) is the only mode with a meaning here: the compositor
-	 * either paints the cursor into the frame or it does not.  METADATA
-	 * would need a separate cursor stream, which this does not do, so
-	 * anything else is treated as "no cursor". */
-	if (g_variant_lookup(options, "cursor_mode", "u", &cursor_mode))
-		session->with_cursor = cursor_mode == 2;
+	/*
+	 * A cursor mode we did not advertise closes the session: the spec
+	 * says so, and quietly treating METADATA as HIDDEN would hand the
+	 * application a cast without the pointer it asked for and no way
+	 * to know.  Exactly one mode bit, and one of ours.
+	 */
+	if (g_variant_lookup(options, "cursor_mode", "u", &cursor_mode)) {
+		if (cursor_mode == 0 || (cursor_mode & (cursor_mode - 1)) != 0
+		    || (cursor_mode & ~(guint32)CURSOR_MODES_AVAILABLE) != 0) {
+			g_message("screencast: %s asked for cursor mode %u, which "
+			          "is not offered; closing the session", app_id,
+			          cursor_mode);
+			empty_reply(invocation, PORTAL_RESPONSE_OTHER);
+			g_hash_table_remove(self->sessions, session_handle);
+			return;
+		}
+		session->with_cursor = cursor_mode == CURSOR_MODE_EMBEDDED;
+	}
 
-	g_debug("screencast: %s wants types 0x%x, cursor %s", app_id,
-	        session->source_types, session->with_cursor ? "on" : "off");
+	/* persist_mode: 0 none, 1 while the app runs, 2 until revoked. */
+	if (g_variant_lookup(options, "persist_mode", "u", &persist))
+		session->persist_mode = MIN(persist, 2u);
+
+	/*
+	 * restore_data is ANYBODY's: the frontend hands back whatever a
+	 * backend once returned, and that may have been GNOME's or KDE's
+	 * before the user switched desktops.  Ours, or ignored.
+	 */
+	restore = g_variant_lookup_value(options, "restore_data",
+	                                 G_VARIANT_TYPE("(suv)"));
+	if (restore != NULL) {
+		const gchar *vendor = NULL;
+		guint32 version = 0;
+		g_autoptr(GVariant) data = NULL;
+
+		g_variant_get(restore, "(&suv)", &vendor, &version, &data);
+		g_clear_pointer(&session->restore_token, g_free);
+		if (g_strcmp0(vendor, RESTORE_VENDOR) == 0
+		    && version == RESTORE_DATA_VERSION
+		    && g_variant_is_of_type(data, G_VARIANT_TYPE_STRING))
+			session->restore_token = g_variant_dup_string(data, NULL);
+		else
+			g_debug("screencast: restore data from '%s' v%u is not "
+			        "ours", vendor, version);
+	}
+
+	g_debug("screencast: %s wants types 0x%x, cursor %s, persist %u%s",
+	        app_id, session->source_types,
+	        session->with_cursor ? "on" : "off", session->persist_mode,
+	        session->restore_token != NULL ? ", restoring" : "");
 	empty_reply(invocation, PORTAL_RESPONSE_SUCCESS);
 }
 
@@ -378,12 +391,16 @@ handle_start(PortalScreenCast *self, GVariant *params,
 	ScreenCastSession *session;
 	g_autoptr(GPtrArray) sources = NULL;
 	g_autoptr(GError) error = NULL;
-	const PortalCaptureSource *chosen;
+	const PortalCaptureSource *chosen = NULL;
+	const PortalGrant *grant = NULL;
+	g_autofree gchar *old_token = NULL;
+	g_autofree gchar *stream_id = NULL;
 	gboolean cancelled = FALSE;
 	GVariantBuilder results;
 	GVariantBuilder streams;
 	GVariantBuilder props;
 	guint32 node_id;
+	guint64 serial;
 	guint32 w = 0;
 	guint32 h = 0;
 
@@ -405,7 +422,31 @@ handle_start(PortalScreenCast *self, GVariant *params,
 		return;
 	}
 
-	chosen = run_chooser(sources, &cancelled);
+	/*
+	 * A restore first.  The grant has to be this application's, and
+	 * its source has to still be here and be a kind the session asked
+	 * for; anything less and the human is asked, as the spec wants --
+	 * a restore that guesses shares the wrong thing silently.
+	 */
+	if (session->restore_token != NULL) {
+		grant = portal_restore_lookup(self->restore,
+		                              session->restore_token, app_id);
+		if (grant != NULL)
+			chosen = portal_restore_match(grant, sources);
+		if (chosen != NULL) {
+			old_token = g_strdup(grant->token);
+			stream_id = g_strdup(grant->stream_id);
+			g_message("screencast: restored '%s' for '%s' without "
+			          "asking", chosen->title, app_id);
+		} else {
+			g_message("screencast: %s for '%s'; asking", grant != NULL
+			          ? "the restored source is gone"
+			          : "unknown restore token", app_id);
+		}
+	}
+
+	if (chosen == NULL)
+		chosen = choose_source(sources, &cancelled);
 	if (cancelled) {
 		empty_reply(invocation, PORTAL_RESPONSE_CANCELLED);
 		return;
@@ -428,7 +469,21 @@ handle_start(PortalScreenCast *self, GVariant *params,
 		return;
 	}
 	node_id = portal_pw_stream_node_id(session->stream);
+	serial = portal_pw_stream_serial(session->stream);
 	portal_pw_stream_get_size(session->stream, &w, &h);
+
+	/*
+	 * The grant.  Single use: a restored one is consumed and replaced,
+	 * so the token the application holds next time is a new one, and
+	 * the stream keeps the id it had.
+	 */
+	if (old_token != NULL)
+		portal_restore_remove(self->restore, old_token);
+	grant = NULL;
+	if (session->persist_mode > 0)
+		grant = portal_restore_add(self->restore, app_id,
+		                           session->persist_mode, chosen,
+		                           stream_id);
 
 	/*
 	 * One stream, as (node_id, properties).  `size' and `source_type'
@@ -440,17 +495,35 @@ handle_start(PortalScreenCast *self, GVariant *params,
 	g_variant_builder_add(&props, "{sv}", "source_type",
 		g_variant_new_uint32(chosen->is_window
 		                     ? SOURCE_TYPE_WINDOW : SOURCE_TYPE_MONITOR));
+	/* `id' persists across restored sessions (v4): the grant's. */
 	g_variant_builder_add(&props, "{sv}", "id",
-		g_variant_new_string(chosen->id != NULL ? chosen->id : ""));
+		g_variant_new_string(grant != NULL ? grant->stream_id
+		                     : chosen->id != NULL ? chosen->id : ""));
 	if (w > 0 && h > 0)
 		g_variant_builder_add(&props, "{sv}", "size",
 			g_variant_new("(ii)", (gint32)w, (gint32)h));
+	/* `position' (compositor space) for a monitor only. */
+	if (!chosen->is_window)
+		g_variant_builder_add(&props, "{sv}", "position",
+			g_variant_new("(ii)", chosen->x, chosen->y));
+	if (serial != 0)
+		g_variant_builder_add(&props, "{sv}", "pipewire-serial",
+			g_variant_new_uint64(serial));
 	g_variant_builder_add(&streams, "(u@a{sv})", node_id,
 		g_variant_builder_end(&props));
 
 	g_variant_builder_init(&results, G_VARIANT_TYPE_VARDICT);
 	g_variant_builder_add(&results, "{sv}", "streams",
 		g_variant_builder_end(&streams));
+	/* Restore (v4): the mode granted, and what to hand back next time. */
+	if (grant != NULL) {
+		g_variant_builder_add(&results, "{sv}", "persist_mode",
+			g_variant_new_uint32(grant->persist_mode));
+		g_variant_builder_add(&results, "{sv}", "restore_data",
+			g_variant_new("(suv)", RESTORE_VENDOR,
+			              (guint32)RESTORE_DATA_VERSION,
+			              g_variant_new_string(grant->token)));
+	}
 	g_dbus_method_invocation_return_value(invocation,
 		g_variant_new("(ua{sv})", PORTAL_RESPONSE_SUCCESS, &results));
 
@@ -488,14 +561,14 @@ sc_get_property(GDBusConnection *conn, const gchar *sender, const gchar *path,
 	(void)conn; (void)sender; (void)path; (void)iface;
 
 	if (g_strcmp0(name, "version") == 0)
-		return g_variant_new_uint32(4);
+		return g_variant_new_uint32(SCREENCAST_VERSION);
 	if (g_strcmp0(name, "AvailableSourceTypes") == 0)
 		return g_variant_new_uint32(SOURCE_TYPE_MONITOR
 			| (self->can_window ? SOURCE_TYPE_WINDOW : 0));
 	if (g_strcmp0(name, "AvailableCursorModes") == 0)
 		/* HIDDEN | EMBEDDED.  No METADATA: that needs a cursor stream
 		 * of its own, which this backend does not produce. */
-		return g_variant_new_uint32(1 | 2);
+		return g_variant_new_uint32(CURSOR_MODES_AVAILABLE);
 	g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_PROPERTY,
 	            "no such property: %s", name);
 	return NULL;
@@ -510,11 +583,13 @@ static const GDBusInterfaceVTable sc_vtable = {
  * --------------------------------------------------------------- */
 
 PortalScreenCast *
-portal_screencast_new(GDBusConnection *conn, GError **error)
+portal_screencast_new(GDBusConnection *conn, PortalCapture *capture,
+                      GError **error)
 {
 	PortalScreenCast *self;
 
 	g_return_val_if_fail(conn != NULL, NULL);
+	g_return_val_if_fail(capture != NULL, NULL);
 
 	self = g_new0(PortalScreenCast, 1);
 	/* Owned, not borrowed: the bus name can be lost (another backend
@@ -525,11 +600,7 @@ portal_screencast_new(GDBusConnection *conn, GError **error)
 	self->sessions = g_hash_table_new_full(g_str_hash, g_str_equal, NULL,
 	                                       session_destroy);
 
-	self->capture = portal_capture_new(error);
-	if (self->capture == NULL) {
-		portal_screencast_free(self);
-		return NULL;
-	}
+	self->capture = capture;
 	if (!portal_capture_available(self->capture, &self->can_window)) {
 		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
 			"the compositor offers no image-copy-capture");
@@ -541,6 +612,7 @@ portal_screencast_new(GDBusConnection *conn, GError **error)
 		portal_screencast_free(self);
 		return NULL;
 	}
+	self->restore = portal_restore_new(NULL);
 
 	if (sc_node_info == NULL)
 		sc_node_info = g_dbus_node_info_new_for_xml(sc_introspection_xml,
@@ -573,6 +645,8 @@ portal_screencast_free(PortalScreenCast *self)
 	g_clear_pointer(&self->sessions, g_hash_table_unref);
 	g_clear_object(&self->conn);
 	g_clear_pointer(&self->pw, portal_pw_free);
-	g_clear_pointer(&self->capture, portal_capture_free);
+	g_clear_pointer(&self->restore, portal_restore_free);
+	/* The capture context is the caller's. */
+	self->capture = NULL;
 	g_free(self);
 }

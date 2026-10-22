@@ -76,6 +76,17 @@ PortalPwStream *portal_pw_stream_new (PortalPw                  *self,
 guint32 portal_pw_stream_node_id (PortalPwStream *stream);
 
 /**
+ * portal_pw_stream_serial:
+ * @stream: a #PortalPwStream
+ *
+ * The node's `object.serial' -- unlike the node id, never reused, which
+ * is why ScreenCast v6 hands it out as `pipewire-serial'.
+ *
+ * Returns: the serial, or 0 when PipeWire has not said
+ */
+guint64 portal_pw_stream_serial (PortalPwStream *stream);
+
+/**
  * portal_pw_stream_get_size:
  * @stream: a #PortalPwStream
  * @width: (out): the stream's width in pixels

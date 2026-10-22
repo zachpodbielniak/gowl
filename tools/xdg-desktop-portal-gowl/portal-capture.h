@@ -42,14 +42,50 @@ G_BEGIN_DECLS
 typedef struct _PortalCapture PortalCapture;
 typedef struct _PortalCaptureStream PortalCaptureStream;
 
-/* One thing that can be cast: an output or a mapped toplevel. */
+/*
+ * One thing that can be cast: an output or a mapped toplevel.
+ *
+ * The fields after @handle describe the source the way a restore
+ * token has to: an output by connector name and by make and model (a
+ * dock renumbers connectors, the monitor is still the monitor), a
+ * window by its application and its title.  The geometry is the
+ * output's place in the layout, in logical coordinates, which is what
+ * a region picker such as slurp answers in.
+ */
 typedef struct {
 	gboolean  is_window;
 	gchar    *id;        /* the output's name, or the toplevel's identifier */
 	gchar    *title;     /* what to show a human choosing */
 	gchar    *app_id;    /* windows only */
 	gpointer  handle;    /* wl_output* or ext_foreign_toplevel_handle_v1* */
+
+	gchar    *output_name;   /* outputs: the connector, e.g. DP-1 */
+	gchar    *make;          /* outputs: as wl_output.geometry said */
+	gchar    *model;
+	gchar    *window_title;  /* windows: the bare title, not the label */
+	gint32    x, y;          /* outputs: logical position in the layout */
+	gint32    width, height; /* outputs: logical size */
+	gint32    scale;         /* outputs: wl_output.scale, at least 1 */
 } PortalCaptureSource;
+
+/**
+ * PortalCaptureImage:
+ * @width: pixels across
+ * @height: rows
+ * @stride: bytes per row
+ * @format: the wl_shm format the compositor wrote (0 ARGB8888,
+ *   1 XRGB8888, otherwise a fourcc)
+ * @data: (array length=height): the pixels, @stride * @height bytes
+ *
+ * One frame, copied out of the compositor's buffer.
+ */
+typedef struct {
+	guint32  width;
+	guint32  height;
+	guint32  stride;
+	guint32  format;
+	guint8  *data;
+} PortalCaptureImage;
 
 /**
  * PortalCaptureReadyFunc:
@@ -216,7 +252,53 @@ void portal_capture_buffer_destroy (gpointer buffer);
 
 void portal_capture_stream_free (PortalCaptureStream *stream);
 
+/**
+ * portal_capture_grab:
+ * @self: a #PortalCapture
+ * @source: what to capture, borrowed for the call
+ * @with_cursor: draw the pointer into the frame
+ * @timeout_ms: how long to wait for the compositor
+ * @error: return location for an error
+ *
+ * Captures ONE frame of @source into memory: the Screenshot portal's
+ * path, through the same capture session a cast uses.  Blocks; the
+ * compositor answers within a frame or two.
+ *
+ * Returns: (transfer full) (nullable): the frame, freed with
+ *          portal_capture_image_free()
+ */
+PortalCaptureImage *portal_capture_grab (PortalCapture             *self,
+                                         const PortalCaptureSource *source,
+                                         gboolean                   with_cursor,
+                                         guint                      timeout_ms,
+                                         GError                   **error);
+
+/**
+ * portal_capture_image_pixel:
+ * @image: a #PortalCaptureImage
+ * @x: column
+ * @y: row
+ * @r: (out): red, 0-255
+ * @g: (out): green
+ * @b: (out): blue
+ *
+ * Reads one pixel whatever byte order the compositor chose.
+ *
+ * Returns: %FALSE when the point is outside the image or the format
+ *          is not one this backend knows
+ */
+gboolean portal_capture_image_pixel (const PortalCaptureImage *image,
+                                     guint32                   x,
+                                     guint32                   y,
+                                     guint8                   *r,
+                                     guint8                   *g,
+                                     guint8                   *b);
+
+void portal_capture_image_free (PortalCaptureImage *image);
+
 void portal_capture_source_free (PortalCaptureSource *source);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(PortalCaptureImage, portal_capture_image_free)
 
 G_END_DECLS
 

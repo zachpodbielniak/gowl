@@ -152,10 +152,130 @@ if [ -f "$sccast" ]; then
 	fi
 fi
 
+# Guard: what ScreenCast ADVERTISES, it does.
+#
+# A version number and a cursor-mode bitmask are promises an application
+# acts on without checking.  Version 4 promises restore (persist_mode and
+# restore_data in Start's results), 6 promises pipewire-serial, and the
+# METADATA cursor bit (4) promises SPA_META_Cursor buffers.  The backend
+# once said version 4 while implementing none of restore; an app that
+# asked to persist was simply asked again every call, with nothing to
+# say why.
+if [ -f "$sccast" ]; then
+	version=$(sed -n 's/^#define SCREENCAST_VERSION \([0-9]*\).*/\1/p' "$sccast")
+	if [ -z "$version" ]; then
+		echo "FAIL: portal-screencast.c has no SCREENCAST_VERSION"
+		fail=1
+	else
+		if [ "$version" -ge 4 ]; then
+			for key in "\"persist_mode\"" "\"restore_data\""; do
+				if ! grep -q "$key" "$sccast"; then
+					echo "FAIL: ScreenCast says v$version but never handles $key"
+					fail=1
+				fi
+			done
+		fi
+		if [ "$version" -ge 6 ] && ! grep -q '"pipewire-serial"' "$sccast"; then
+			echo "FAIL: ScreenCast says v$version but sends no pipewire-serial"
+			fail=1
+		fi
+	fi
+	modes=$(sed -n 's/^#define CURSOR_MODES_AVAILABLE (\(.*\))$/\1/p' "$sccast")
+	case "$modes" in
+	*METADATA*)
+		if ! grep -q 'SPA_META_Cursor' \
+		     "$root/tools/xdg-desktop-portal-gowl/portal-pw.c"; then
+			echo "FAIL: METADATA cursors are advertised but portal-pw.c"
+			echo "      produces no SPA_META_Cursor"
+			fail=1
+		fi
+		;;
+	"")
+		echo "FAIL: portal-screencast.c has no CURSOR_MODES_AVAILABLE"
+		fail=1
+		;;
+	esac
+	if ! grep -q 'AvailableCursorModes.*' "$sccast" \
+	   || ! awk '/"AvailableCursorModes"/ { hot = 4 } hot > 0 { print; hot-- }' \
+	        "$sccast" | grep -q 'CURSOR_MODES_AVAILABLE'; then
+		echo "FAIL: AvailableCursorModes is not CURSOR_MODES_AVAILABLE;"
+		echo "      the property and the SelectSources check can disagree"
+		fail=1
+	fi
+fi
+
+# Guard: grants are a standing permission to record the screen, and are
+# written owner-only.
+restore="$root/tools/xdg-desktop-portal-gowl/portal-restore.c"
+if [ -f "$restore" ] && ! grep -q 'G_FILE_SET_CONTENTS_CONSISTENT, 0600' "$restore"; then
+	echo "FAIL: portal-restore.c does not write the grants file 0600"
+	fail=1
+fi
+
+# Guard: Screenshot is served, declared and routed.
+ss="$root/tools/xdg-desktop-portal-gowl/portal-screenshot.c"
+if [ -f "$ss" ]; then
+	for sym in "'Screenshot'" "'PickColor'" "'AvailableTargets'" \
+	           portal_capture_grab; do
+		if ! grep -q "$sym" "$ss"; then
+			echo "FAIL: portal-screenshot.c lacks $sym"
+			fail=1
+		fi
+	done
+	if ! grep -q 'org.freedesktop.impl.portal.Screenshot' \
+	     "$root/data/gowl.portal"; then
+		echo "FAIL: gowl.portal does not declare Screenshot"
+		fail=1
+	fi
+	if ! grep -q '^org.freedesktop.impl.portal.Screenshot=gowl' \
+	     "$root/data/gowl-portals.conf"; then
+		echo "FAIL: gowl-portals.conf does not route Screenshot to gowl"
+		fail=1
+	fi
+else
+	echo "FAIL: the Screenshot backend is missing"
+	fail=1
+fi
+
+# Guard: the chooser order.  An explicit $GOWL_PORTAL_CHOOSER beats the
+# menu card, and the card beats the dmenu family -- inside gowl the card
+# is the session's own menu, and a bemenu that happens to be installed
+# should not pop up instead of it.
+ch="$root/tools/xdg-desktop-portal-gowl/portal-chooser.c"
+if [ -f "$ch" ]; then
+	body=$(awk '/^portal_chooser_run\(/,/^}/' "$ch")
+	env_at=$(printf '%s\n' "$body" | grep -n 'run_command(env' | head -1 | cut -d: -f1)
+	menu_at=$(printf '%s\n' "$body" | grep -n 'run_gowl_menu(' | head -1 | cut -d: -f1)
+	dmenu_at=$(printf '%s\n' "$body" | grep -n 'dmenu_command(' | head -1 | cut -d: -f1)
+	if [ -z "$env_at" ] || [ -z "$menu_at" ] || [ -z "$dmenu_at" ] \
+	   || [ "$env_at" -gt "$menu_at" ] || [ "$menu_at" -gt "$dmenu_at" ]; then
+		echo "FAIL: portal_chooser_run() is not env, then menu card, then dmenu"
+		fail=1
+	fi
+	if ! grep -q 'events.subscribe' "$ch" || ! grep -q 'menu-choose ' "$ch"; then
+		echo "FAIL: the menu chooser must subscribe before menu-choose,"
+		echo "      or the answer can arrive unheard"
+		fail=1
+	fi
+else
+	echo "FAIL: portal-chooser.c is missing"
+	fail=1
+fi
+
+# Guard: the top-level rule rebuilds the portal on ANY of its sources.
+# It used to name four files, and the tests ran against a stale binary.
+if ! grep -q 'PORTAL_SOURCES := ' "$root/Makefile" \
+   || ! grep -q 'tools/xdg-desktop-portal-gowl/\*\.c' "$root/Makefile"; then
+	echo "FAIL: the Makefile's portal rule does not depend on every source"
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	echo "portal guard FAILED"
 	exit 1
 fi
 echo "portal guard PASSED (both libei directions served, injection guarded,"
-echo "                     ScreenCast captures windows as well as outputs)"
+echo "                     ScreenCast captures windows as well as outputs,"
+echo "                     advertises only what it does; Screenshot routed;"
+echo "                     chooser order; grants 0600)"
 exit 0

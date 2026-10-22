@@ -32,6 +32,9 @@
  * paced by its consumer, and queueing ahead only buys latency.
  */
 
+/* memfd_create() */
+#define _GNU_SOURCE 1
+
 #include "portal-capture.h"
 
 #include <wayland-client.h>
@@ -43,6 +46,9 @@
 #include "ext-foreign-toplevel-list-v1-client-protocol.h"
 
 #include <glib-unix.h>
+#include <poll.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 struct _PortalCapture {
 	struct wl_display  *display;
@@ -64,6 +70,14 @@ typedef struct {
 	struct wl_output  *output;
 	guint32            name;
 	gchar             *description;
+	gchar             *connector;   /* wl_output.name, v4 */
+	gchar             *make;
+	gchar             *model;
+	int32_t            x, y;        /* wl_output.geometry: layout position */
+	int32_t            mode_w;      /* the current mode, in pixels */
+	int32_t            mode_h;
+	int32_t            scale;
+	int32_t            transform;
 } PortalOutput;
 
 typedef struct {
@@ -86,6 +100,8 @@ struct _PortalCaptureStream {
 	guint32  format;
 	gboolean have_format;
 	gboolean stopped;
+	gboolean frame_done;     /* a `ready' since the last submit */
+	gboolean frame_failed;   /* a `failed' since the last submit */
 
 	PortalCaptureSizeFunc    on_size;
 	PortalCaptureReadyFunc   on_ready;
@@ -101,6 +117,10 @@ portal_capture_source_free(PortalCaptureSource *source)
 	g_free(source->id);
 	g_free(source->title);
 	g_free(source->app_id);
+	g_free(source->output_name);
+	g_free(source->make);
+	g_free(source->model);
+	g_free(source->window_title);
 	g_free(source);
 }
 
@@ -115,8 +135,14 @@ output_geometry(void *data, struct wl_output *output, int32_t x, int32_t y,
 {
 	PortalOutput *self = data;
 
-	(void)output; (void)x; (void)y; (void)pw; (void)ph; (void)subpixel;
-	(void)transform;
+	(void)output; (void)pw; (void)ph; (void)subpixel;
+	self->x = x;
+	self->y = y;
+	self->transform = transform;
+	g_free(self->make);
+	self->make = g_strdup(make != NULL ? make : "");
+	g_free(self->model);
+	self->model = g_strdup(model != NULL ? model : "");
 	if (self->description == NULL && model != NULL)
 		self->description = g_strdup_printf("%s %s",
 			make != NULL ? make : "", model);
@@ -126,7 +152,13 @@ static void
 output_mode(void *data, struct wl_output *o, uint32_t f, int32_t w, int32_t h,
             int32_t r)
 {
-	(void)data; (void)o; (void)f; (void)w; (void)h; (void)r;
+	PortalOutput *self = data;
+
+	(void)o; (void)r;
+	if ((f & WL_OUTPUT_MODE_CURRENT) == 0)
+		return;
+	self->mode_w = w;
+	self->mode_h = h;
 }
 
 static void
@@ -138,7 +170,10 @@ output_done(void *data, struct wl_output *o)
 static void
 output_scale(void *data, struct wl_output *o, int32_t factor)
 {
-	(void)data; (void)o; (void)factor;
+	PortalOutput *self = data;
+
+	(void)o;
+	self->scale = factor > 0 ? factor : 1;
 }
 
 static void
@@ -149,6 +184,8 @@ output_name(void *data, struct wl_output *o, const char *name)
 	(void)o;
 	g_free(self->description);
 	self->description = g_strdup(name);
+	g_free(self->connector);
+	self->connector = g_strdup(name);
 }
 
 static void
@@ -271,6 +308,7 @@ registry_global(void *data, struct wl_registry *registry, uint32_t name,
 
 		o->capture = self;
 		o->name = name;
+		o->scale = 1;
 		o->output = wl_registry_bind(registry, name, &wl_output_interface,
 		                             version < 4u ? version : 4u);
 		wl_output_add_listener(o->output, &output_listener, o);
@@ -343,6 +381,9 @@ output_free(gpointer data)
 	if (o->output != NULL)
 		wl_output_destroy(o->output);
 	g_free(o->description);
+	g_free(o->connector);
+	g_free(o->make);
+	g_free(o->model);
 	g_free(o);
 }
 
@@ -452,6 +493,24 @@ portal_capture_list_sources(PortalCapture *self, gboolean want_windows,
 			                 ? o->description : "output");
 			s->title = g_strdup_printf("Screen: %s", s->id);
 			s->handle = o->output;
+			s->output_name = g_strdup(o->connector != NULL
+			                          ? o->connector : s->id);
+			s->make = g_strdup(o->make != NULL ? o->make : "");
+			s->model = g_strdup(o->model != NULL ? o->model : "");
+			s->x = o->x;
+			s->y = o->y;
+			s->scale = o->scale > 0 ? o->scale : 1;
+			/* Logical size: the mode, turned by a 90/270 transform
+			 * (odd values), divided by the integer scale.  A
+			 * fractional scale is not on wl_output; such an output
+			 * rounds here, which only matters to a region picker. */
+			if ((o->transform & 1) != 0) {
+				s->width = o->mode_h / s->scale;
+				s->height = o->mode_w / s->scale;
+			} else {
+				s->width = o->mode_w / s->scale;
+				s->height = o->mode_h / s->scale;
+			}
 			g_ptr_array_add(out, s);
 		}
 	}
@@ -466,6 +525,7 @@ portal_capture_list_sources(PortalCapture *self, gboolean want_windows,
 			s->is_window = TRUE;
 			s->id = g_strdup(t->identifier != NULL ? t->identifier : "");
 			s->app_id = g_strdup(t->app_id != NULL ? t->app_id : "");
+			s->window_title = g_strdup(t->title != NULL ? t->title : "");
 			s->title = g_strdup_printf("Window: %s%s%s",
 				t->title != NULL && *t->title != '\0' ? t->title : "(untitled)",
 				t->app_id != NULL && *t->app_id != '\0' ? " — " : "",
@@ -510,6 +570,7 @@ frame_ready(void *data, struct ext_image_copy_capture_frame_v1 *frame)
 
 	(void)frame;
 	g_clear_pointer(&self->frame, ext_image_copy_capture_frame_v1_destroy);
+	self->frame_done = TRUE;
 	if (self->on_ready != NULL)
 		self->on_ready(self, self->user_data);
 }
@@ -522,6 +583,7 @@ frame_failed(void *data, struct ext_image_copy_capture_frame_v1 *frame,
 
 	(void)frame;
 	g_clear_pointer(&self->frame, ext_image_copy_capture_frame_v1_destroy);
+	self->frame_failed = TRUE;
 	/*
 	 * A buffer the compositor cannot use means the constraints moved
 	 * under us -- the window was resized between the size event and the
@@ -702,6 +764,8 @@ portal_capture_stream_submit(PortalCaptureStream *stream, gpointer buffer)
 	if (stream->frame != NULL)
 		return;
 
+	stream->frame_done = FALSE;
+	stream->frame_failed = FALSE;
 	stream->frame = ext_image_copy_capture_session_v1_create_frame(
 		stream->session);
 	ext_image_copy_capture_frame_v1_add_listener(stream->frame,
@@ -796,4 +860,165 @@ portal_capture_stream_free(PortalCaptureStream *stream)
 	if (stream->capture != NULL)
 		wl_display_flush(stream->capture->display);
 	g_free(stream);
+}
+
+/* ---------------------------------------------------------------
+ * One frame, for a screenshot
+ * --------------------------------------------------------------- */
+
+/*
+ * Dispatches whatever the compositor sends for up to @timeout_ms.
+ *
+ * The GLib fd source would do this on the next main-loop turn, but the
+ * screenshot path answers a D-Bus call synchronously and the main loop
+ * is not turning: this is the standard prepare_read / poll / read
+ * sequence, which is safe because nothing else reads the display
+ * meanwhile.
+ */
+static gboolean
+dispatch_for(struct wl_display *display, gint timeout_ms)
+{
+	struct pollfd pfd;
+
+	while (wl_display_prepare_read(display) != 0) {
+		if (wl_display_dispatch_pending(display) < 0)
+			return FALSE;
+	}
+	wl_display_flush(display);
+	pfd.fd = wl_display_get_fd(display);
+	pfd.events = POLLIN;
+	pfd.revents = 0;
+	if (poll(&pfd, 1, timeout_ms) <= 0) {
+		wl_display_cancel_read(display);
+		return TRUE;
+	}
+	if (wl_display_read_events(display) < 0)
+		return FALSE;
+	return wl_display_dispatch_pending(display) >= 0;
+}
+
+void
+portal_capture_image_free(PortalCaptureImage *image)
+{
+	if (image == NULL)
+		return;
+	g_free(image->data);
+	g_free(image);
+}
+
+gboolean
+portal_capture_image_pixel(const PortalCaptureImage *image, guint32 x,
+                           guint32 y, guint8 *r, guint8 *g, guint8 *b)
+{
+	const guint8 *p;
+
+	if (image == NULL || x >= image->width || y >= image->height)
+		return FALSE;
+	p = image->data + (gsize)y * image->stride + (gsize)x * 4u;
+	/*
+	 * Every format here is a 32-bit little-endian word, named from the
+	 * most significant byte down -- so ARGB8888 is B, G, R, A in memory.
+	 * (The same trap as portal-pw.c's spa_format_from_shm().)
+	 */
+	switch (image->format) {
+	case 0u:           /* WL_SHM_FORMAT_ARGB8888 */
+	case 1u:           /* WL_SHM_FORMAT_XRGB8888 */
+	case 0x34325241u:
+	case 0x34325258u:
+		*b = p[0]; *g = p[1]; *r = p[2];
+		return TRUE;
+	case 0x34324241u:  /* ABGR8888 */
+	case 0x34324258u:  /* XBGR8888 */
+		*r = p[0]; *g = p[1]; *b = p[2];
+		return TRUE;
+	default:
+		return FALSE;
+	}
+}
+
+PortalCaptureImage *
+portal_capture_grab(PortalCapture *self, const PortalCaptureSource *source,
+                    gboolean with_cursor, guint timeout_ms, GError **error)
+{
+	PortalCaptureStream *stream;
+	PortalCaptureImage *image = NULL;
+	gpointer buffer = NULL;
+	gint fd = -1;
+	gsize size = 0;
+	guint8 *map = NULL;
+	gint64 end;
+
+	g_return_val_if_fail(self != NULL, NULL);
+	g_return_val_if_fail(source != NULL, NULL);
+
+	stream = portal_capture_stream_new(self, source, with_cursor, NULL,
+	                                   NULL, NULL, NULL, error);
+	if (stream == NULL)
+		return NULL;
+	if (!portal_capture_stream_wait_ready(stream, timeout_ms)) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT,
+			"the compositor never described the capture source");
+		goto out;
+	}
+
+	/* A memfd the compositor writes into, the same arrangement a cast
+	 * uses with PipeWire's buffers, read back once instead of handed
+	 * on. */
+	size = (gsize)stream->width * 4u * stream->height;
+	fd = memfd_create("gowl-portal-screenshot", MFD_CLOEXEC);
+	if (fd < 0 || ftruncate(fd, (off_t)size) < 0) {
+		g_set_error(error, G_IO_ERROR, g_io_error_from_errno(errno),
+		            "could not make a buffer: %s", g_strerror(errno));
+		goto out;
+	}
+	buffer = portal_capture_shm_buffer(self, fd, size, stream->width,
+		stream->height, stream->width * 4u, stream->format);
+	if (buffer == NULL) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		                    "could not wrap the buffer for the compositor");
+		goto out;
+	}
+
+	portal_capture_stream_submit(stream, buffer);
+	end = g_get_monotonic_time() + (gint64)timeout_ms * 1000;
+	while (!stream->frame_done && !stream->frame_failed && !stream->stopped) {
+		gint64 left = (end - g_get_monotonic_time()) / 1000;
+
+		if (left <= 0)
+			break;
+		if (!dispatch_for(self->display, (gint)MIN(left, 100)))
+			break;
+	}
+	if (!stream->frame_done) {
+		g_set_error_literal(error, G_IO_ERROR,
+			stream->frame_failed || stream->stopped
+			? G_IO_ERROR_FAILED : G_IO_ERROR_TIMED_OUT,
+			stream->frame_failed || stream->stopped
+			? "the compositor could not capture the source"
+			: "the compositor never delivered the frame");
+		goto out;
+	}
+
+	map = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+	if (map == MAP_FAILED) {
+		map = NULL;
+		g_set_error(error, G_IO_ERROR, g_io_error_from_errno(errno),
+		            "could not read the frame: %s", g_strerror(errno));
+		goto out;
+	}
+	image = g_new0(PortalCaptureImage, 1);
+	image->width = stream->width;
+	image->height = stream->height;
+	image->stride = stream->width * 4u;
+	image->format = stream->format;
+	image->data = g_memdup2(map, size);
+
+out:
+	if (map != NULL)
+		munmap(map, size);
+	portal_capture_buffer_destroy(buffer);
+	if (fd >= 0)
+		close(fd);
+	portal_capture_stream_free(stream);
+	return image;
 }

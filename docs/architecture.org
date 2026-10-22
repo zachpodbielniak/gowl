@@ -601,7 +601,7 @@ Not served: security-context, drm-lease, alpha-modifier, xdg-toplevel-icon / -ta
 *** Input, as configured
 The keymap is built by =build_keymap()= from the =xkb-*= keys (a keymap file, else rules/model/layout/variant/options, else the environment) and applied to the keyboard group and every keyboard =gowl-input-config.c= tracks. Per-device libinput settings from the =input:= section are applied by the same file when a device appears and again on reload. Key modes, bind flags, pointer binds and gestures all end in =run_keybind_entry()=: one function runs an action whatever bound it, so =dispatch_key()= (mode, lock and press/release filtering), =dispatch_mousebind()= and =dispatch_gesture()= only decide whether a bind matched. A finger count with a configured gesture is claimed before the module gesture handlers, like a module claimant, and summed until the gesture ends.
 
-** Screen Sharing (the gowl ScreenCast portal, and portal-wlr)
+** Screen Sharing (the gowl ScreenCast and Screenshot portals, and portal-wlr)
 
 Screen capture is abstracted behind the =GowlCaptureProvider= GObject
 interface (=src/interfaces/gowl-capture-provider.h=), so the compositor
@@ -613,9 +613,11 @@ It reports a =GowlCaptureCapability= bitmask, surfaces sources as the
 =GowlCaptureSource= boxed type (kind/id/title/app_id), and emits
 =source-added= / =source-removed= as windows map and unmap.
 
-Screen capture for apps (Zoom, OBS, browsers) goes through
-=xdg-desktop-portal-wlr=, which talks to gowl over wlroots protocols.
-The provider advertises the globals the portal needs:
+Screen capture for apps (Zoom, OBS, browsers) goes through gowl's own
+backend, =tools/xdg-desktop-portal-gowl= (below), with
+=xdg-desktop-portal-wlr= as the fallback =data/gowl-portals.conf= names
+after it.  portal-wlr talks to gowl over wlroots protocols, and the
+provider advertises the globals it needs:
 
 - =zwlr_screencopy_manager_v1= -- the actual frame capture path.
 - =zwlr_output_manager_v1= (=wlr-output-management=) -- so the portal can
@@ -641,11 +643,55 @@ The standard =ext-image-capture-source-v1= makes an =ext_foreign_toplevel_handle
 
 - =portal-capture.c= is the Wayland half: it lists outputs and mapped toplevels, opens a capture session on the chosen one, and copies each frame into a buffer the caller supplies.
 - =portal-pw.c= is the PipeWire half: the buffers PipeWire allocates are memfds, each wrapped as a =wl_buffer= over a =wl_shm= pool, so a frame is copied once -- by the compositor -- straight into the memory the application reads. Frames are requested only when PipeWire returns a buffer, so a consumer that stops reading stops the capture rather than building a queue.
-- =portal-screencast.c= is the D-Bus half: =CreateSession=, =SelectSources=, =Start=. The chooser is an external dmenu-style command (=$GOWL_PORTAL_CHOOSER=, else the first of bemenu/fuzzel/wofi/rofi/dmenu found), because this process has no toolkit and the session already has a menu.
+- =portal-screencast.c= is the D-Bus half: =CreateSession=, =SelectSources=, =Start=, serving interface version 6 (restore, below, and =pipewire-serial= in each stream's properties; the optional v5 =mapping_id= is left out, since it only means something to a RemoteDesktop session carrying screen-cast streams, which this backend does not combine).
+- =portal-chooser.c= is the chooser, shared with Screenshot (below).
+- =portal-restore.c= is the restore store (below).
+
+The capture context (=PortalCapture=, one Wayland connection) is created once by =portal-dbus.c= and lent to both ScreenCast and Screenshot.
 
 Two things are easy to get wrong here and are both asserted by tests. The capture session's =shm_format= carries a *wl_shm* enum, not a DRM fourcc -- they agree except for ARGB8888 and XRGB8888, which are 0 and 1 -- and getting it wrong yields a stream that negotiates cleanly and shows the wrong colours. And the session's first size event arrives while the PipeWire stream is still being constructed, so the size callback has to tolerate not having one yet.
 
-The backend declines the interface when PipeWire is absent or the compositor offers no image-copy-capture, and the frontend then falls back to portal-wlr, so a session missing either is no worse off than before. =tests/test-portal-screencast.sh= drives the whole handshake against a headless compositor on a private bus; =tests/test-portal-guard.sh= asserts the window path specifically, since a backend that bound only the output source manager would pass everything else while being a worse portal-wlr.
+The backend declines the interface when PipeWire is absent or the compositor offers no image-copy-capture -- it never exports the object, and says why in its log -- and =gowl-portals.conf= names portal-wlr after it (=ScreenCast=gowl;wlr=) so a frontend that finds it missing moves on, and a session missing either is no worse off than before. =tests/test-portal-screencast.sh= drives the whole handshake against a headless compositor on a private bus; =tests/test-portal-guard.sh= asserts the window path specifically, since a backend that bound only the output source manager would pass everything else while being a worse portal-wlr.
+
+Until 2026-10 the top-level Makefile rebuilt the portal only when one of four files changed (=main.c= and the input-capture half), so the ScreenCast sources never triggered a rebuild, and the test ran a binary in =tools/xdg-desktop-portal-gowl/= that nothing rebuilt either. Both now point at =build/<type>/xdg-desktop-portal-gowl=, which depends on every source in the directory, and =make test= builds it first; the guard checks the rule.
+
+*** Restore tokens (ScreenCast v4)
+
+An application that passes =persist_mode= 1 or 2 to =SelectSources= is handed a restore token, and presenting it next time skips the chooser. The token itself is the frontend's: it maps it to the backend's opaque =restore_data= =(suv)=, which for gowl is =("gowl", 1, <s TOKEN>)= -- a token of the backend's own, naming a /grant/ in =portal-restore.c=. The grant records what was shared the way the next session can find it again:
+
+- an output by connector, make and model; restored by connector (with the same monitor on it), else by make and model when exactly one output has them -- a dock renumbers connectors, the monitor is still the monitor;
+- a window by application and title; restored by both, else by application alone when it has exactly one window -- a browser's title follows its tab.
+
+Anything ambiguous, or gone, is no match, and the human is asked exactly as on a first cast: a restore that guesses shares the wrong thing silently. A grant is bound to the application it was given to (another app presenting the token is asked), and it is single use, as the spec says restore tokens are -- a restored session consumes its grant and =Start= returns fresh =restore_data= (and =persist_mode=) for the next one, keeping the stream's =id= so the application sees the same stream. Restore data from another backend (=GNOME=, =KDE=, after a desktop switch) is ignored, never parsed.
+
+=persist_mode= 2 grants live in =$XDG_STATE_HOME/gowl/screencast-grants.yaml=, written atomically with mode 0600 (it is a standing permission to record the screen) and kept to the 64 most recently used. Deleting an entry -- or the file -- revokes it. =persist_mode= 1 grants are kept in memory only and end with the portal process, which runs as long as the session. Why a store rather than the description itself inside =restore_data=: the grants are then visible and revocable from this side, and bound to their application.
+
+*** Cursor modes
+
+=AvailableCursorModes= is Hidden and Embedded (=1|2=). Embedded is the capture session's =PAINT_CURSORS= option, so the pointer is drawn by the compositor into the frame. Metadata (=4=) is not advertised: it needs a second, cursor-only capture session and =SPA_META_Cursor= on every buffer, which this backend does not produce. A =SelectSources= naming a mode that is not advertised closes the session, as the spec requires -- treating Metadata as Hidden would hand the application a cast without the pointer it asked for and no way to know. The guard fails if the bit is ever added without =SPA_META_Cursor= in =portal-pw.c=.
+
+*** The chooser
+
+=portal-chooser.c= puts the list in front of a human, in this order:
+
+1. =$GOWL_PORTAL_CHOOSER=, a dmenu-style command (lines on stdin, the chosen one on stdout). An explicit setting always wins; the value =gowl= means the menu card and nothing else.
+2. gowl's own menu card (Super+space), when the portal runs inside a gowl session with the =menu= module loaded. The portal connects to =$GOWL_SOCKET= (else =$XDG_RUNTIME_DIR/gowl.sock=), subscribes to =menu= events, and sends =menu-choose PROMPT<TAB>LINE...= through =gowl.command=; the card lists the lines, and the pick comes back as the event =menu chosen TOKEN INDEX= (or =cancelled=). Subscribing first is what keeps the answer from arriving unheard. A choice nobody answers is withdrawn after five minutes (=$GOWL_PORTAL_CHOOSER_TIMEOUT=, seconds) and reads as cancelled.
+3. the first of bemenu, fuzzel, wofi, rofi, dmenu on =$PATH=.
+
+With none of them, a cast shares the first output (portal-wlr's behaviour without a chooser) and an interactive screenshot shoots the focused output.
+
+*** Screenshot (v3)
+
+=portal-screenshot.c= serves =org.freedesktop.impl.portal.Screenshot= through the same capture path, one frame at a time (=portal_capture_grab()=: a memfd =wl_shm= buffer, one =capture=, read back), and needs no PipeWire, so it is served whenever image-copy-capture is. =Screenshot= writes a PNG (cairo; wl_shm's ARGB8888/XRGB8888 are cairo's ARGB32/RGB24 byte for byte) to =$GOWL_PORTAL_SCREENSHOT_DIR=, else =$XDG_PICTURES_DIR/Screenshots=, and answers its =file://= URI. The v3 =target=:
+
+| Target | What is shot |
+|--------+--------------|
+| 1 Screen | the focused output (gowl's =monitor.get=, else the first); with =interactive= and several outputs, the chooser picks |
+| 2 Window | a window, from the chooser |
+| 4 Area | a rectangle from =slurp= (=$GOWL_PORTAL_AREA_PICKER= overrides it, same =X,Y WxH= format), cropped out of the output under its corner |
+| 8 Active Window | the focused window, as gowl's =window.focused= reports it, matched by application and title |
+
+With no target, a non-interactive call shoots the focused output and an interactive one offers the outputs, the windows and an /Area/ row in one chooser. =AvailableTargets= is computed when it is read, so Area is advertised only with a picker and Active Window only when gowl's socket answers. =PickColor= samples the pixel at a point from =$GOWL_PORTAL_POINT_PICKER=, else =slurp -p=, else the pointer's position (gowl's =pointer.get=). Layout coordinates become output pixels through =wl_output='s position, current mode and integer scale; a rotated or fractionally scaled output is found correctly but sampled at the rounded pixel.
 
 ** Input Capture & Injection (deskflow / KVM)
 :PROPERTIES:

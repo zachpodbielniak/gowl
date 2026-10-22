@@ -375,10 +375,16 @@ set by the KVM client, not the user.
 
 - =/usr/share/xdg-desktop-portal/portals/gowl.portal= -- declares the
   =org.freedesktop.impl.portal.desktop.gowl= D-Bus name implements
-  =InputCapture= + =RemoteDesktop= with =UseIn=gowl=.
+  =InputCapture=, =RemoteDesktop=, =ScreenCast= and =Screenshot= with
+  =UseIn=gowl=.
 - =/usr/share/xdg-desktop-portal/gowl-portals.conf= -- pins
-  =InputCapture= / =RemoteDesktop= to =gowl= and leaves =default=wlr= so
-  ScreenCast/Screenshot still go to =xdg-desktop-portal-wlr=.
+  =InputCapture= / =RemoteDesktop= to =gowl=, and =ScreenCast= /
+  =Screenshot= to =gowl;wlr=: gowl's own backend first (single windows,
+  restore tokens, the menu-card chooser, Screenshot v3), and
+  =xdg-desktop-portal-wlr= named after it as the fallback for a session
+  where gowl's declines the interface (no PipeWire for ScreenCast, or a
+  compositor without image-copy-capture). See /Screen Sharing/ in
+  [[file:architecture.org][architecture.org]].
 - =org.freedesktop.impl.portal.desktop.gowl.service= -- D-Bus activation.
 
 - =org.freedesktop.impl.portal.Secret= is pinned to =gnome-keyring=. It is

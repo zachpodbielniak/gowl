@@ -17,11 +17,12 @@
  */
 
 /*
- * xdg-desktop-portal-gowl -- the InputCapture + RemoteDesktop portal
- * backend for gowl / cmacs --gowl.
+ * xdg-desktop-portal-gowl -- the portal backend for gowl / cmacs --gowl:
+ * InputCapture, RemoteDesktop, Screenshot and (with PipeWire)
+ * ScreenCast.
  *
  *   normal mode:  own org.freedesktop.impl.portal.desktop.gowl and serve
- *                 the InputCapture/RemoteDesktop impl-portal interfaces.
+ *                 those impl-portal interfaces.
  *   --self-test:  connect to the compositor, query zones, install a
  *                 left-edge barrier, enable capture, and print what comes
  *                 back -- no D-Bus.  Used by the Phase-2 integration test.

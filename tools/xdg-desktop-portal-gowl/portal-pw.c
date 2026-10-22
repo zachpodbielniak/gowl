@@ -483,7 +483,48 @@ portal_pw_stream_new(PortalPw *self, PortalCapture *capture_ctx,
 		return NULL;
 	}
 
+	/*
+	 * Until the server has bound the node, its id is SPA_ID_INVALID
+	 * and it has no serial -- and Start() is about to put both in its
+	 * reply.  A short bounded wait on PipeWire's loop, here, rather
+	 * than an id of 4294967295 that a consumer would try to connect
+	 * to.
+	 */
+	{
+		gint64 end = g_get_monotonic_time() + 2 * G_USEC_PER_SEC;
+
+		while (g_get_monotonic_time() < end
+		       && (pw_stream_get_node_id(stream->stream) == SPA_ID_INVALID
+		           || portal_pw_stream_serial(stream) == 0)) {
+			enum pw_stream_state state =
+				pw_stream_get_state(stream->stream, NULL);
+
+			if (state == PW_STREAM_STATE_ERROR)
+				break;
+			pw_loop_iterate(self->loop, 50);
+		}
+	}
+
 	return stream;
+}
+
+guint64
+portal_pw_stream_serial(PortalPwStream *stream)
+{
+	const struct pw_properties *props;
+	const char *value;
+	guint64 serial = 0;
+
+	if (stream == NULL || stream->stream == NULL)
+		return 0;
+	props = pw_stream_get_properties(stream->stream);
+	value = props != NULL ? pw_properties_get(props, PW_KEY_OBJECT_SERIAL)
+	                      : NULL;
+	if (value == NULL
+	    || !g_ascii_string_to_unsigned(value, 10, 1, G_MAXUINT64, &serial,
+	                                   NULL))
+		return 0;
+	return serial;
 }
 
 guint32

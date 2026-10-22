@@ -309,7 +309,22 @@ tests. These assert invariants no unit test can reach:
   working fd, and the connection dies the instant libei states its
   direction. A source guard rather than a unit test because this machine
   has libeis (server) but not libei (client), so there is nothing to
-  build a real sender with
+  build a real sender with. It also holds the capture portals to what
+  they advertise: a ScreenCast version promises restore (v4) and
+  `pipewire-serial` (v6), the Metadata cursor bit promises
+  `SPA_META_Cursor`, Screenshot is declared and routed, the chooser is
+  `$GOWL_PORTAL_CHOOSER`, then the menu card, then dmenu, and the
+  screen-cast grants file is written 0600
+- `test-portal-screencast.sh` -- ScreenCast and Screenshot end to end on
+  a private bus against a headless compositor: a stream with a node and
+  serial, restore tokens (skips the chooser, single use, survives a
+  portal restart, bound to its app, a vanished source asks again,
+  mode 1 never on disk), an unadvertised cursor mode closing the session,
+  a PNG of the output's size, an area of the picked size, PickColor
+  reading the 0.3-grey root background, and the menu card as the chooser
+  (`menu-choose`, answered with `menu-pick`). It sets `GOWL_SOCKET` to
+  the headless compositor's socket: inherited, it would open the card on
+  the developer's live desktop
 - `test-cube-guard.sh` -- the `cube` module still claims ONLY its own
   reveal (it sorts ahead of every other effect module, so a `client_event`
   that started returning TRUE broadly would silently switch window

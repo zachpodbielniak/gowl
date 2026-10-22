@@ -35,6 +35,8 @@
  */
 
 #include "portal-dbus.h"
+#include "portal-capture.h"
+#include "portal-screenshot.h"
 #ifdef GOWL_HAVE_PIPEWIRE
 #include "portal-screencast.h"
 #endif
@@ -71,6 +73,15 @@ struct _PortalDbus {
 	gchar           *session_handle;
 	guint            session_reg_id;
 	guint            zone_set;      /* last zones reported */
+
+	/* The capture context Screenshot and ScreenCast share: one
+	 * Wayland connection binding ext-image-copy-capture, NULL when the
+	 * compositor cannot be reached for it. */
+	PortalCapture    *capture;
+	/* Screenshot needs only that, not PipeWire.  NULL when the
+	 * compositor offers no image-copy-capture: the interface is then
+	 * not exported and the frontend routes elsewhere. */
+	PortalScreenshot *screenshot;
 
 #ifdef GOWL_HAVE_PIPEWIRE
 	/* The ScreenCast backend shares this bus name and connection.  It
@@ -1132,11 +1143,34 @@ on_bus_acquired(GDBusConnection *conn, const gchar *name, gpointer user_data)
 		g_clear_error(&error);
 	}
 
-#ifdef GOWL_HAVE_PIPEWIRE
 	{
+		GError *cap_error = NULL;
+
+		if (self->capture == NULL)
+			self->capture = portal_capture_new(&cap_error);
+		if (self->capture == NULL) {
+			g_message("portal: no screen capture: %s",
+				cap_error != NULL ? cap_error->message : "?");
+			g_clear_error(&cap_error);
+		}
+	}
+	if (self->capture != NULL) {
+		GError *ss_error = NULL;
+
+		self->screenshot = portal_screenshot_new(conn, self->capture,
+			&ss_error);
+		if (self->screenshot == NULL) {
+			g_message("portal: no Screenshot backend: %s",
+				ss_error != NULL ? ss_error->message : "?");
+			g_clear_error(&ss_error);
+		}
+	}
+#ifdef GOWL_HAVE_PIPEWIRE
+	if (self->capture != NULL) {
 		GError *sc_error = NULL;
 
-		self->screencast = portal_screencast_new(conn, &sc_error);
+		self->screencast = portal_screencast_new(conn, self->capture,
+			&sc_error);
 		if (self->screencast == NULL) {
 			g_message("portal: no ScreenCast backend: %s",
 				sc_error != NULL ? sc_error->message : "?");
@@ -1233,10 +1267,13 @@ portal_dbus_free(PortalDbus *self)
 	if (self == NULL)
 		return;
 
+	/* Before the connection goes: they unregister their own objects.
+	 * Then the capture context they borrowed. */
 #ifdef GOWL_HAVE_PIPEWIRE
-	/* Before the connection goes: it unregisters its own objects. */
 	g_clear_pointer(&self->screencast, portal_screencast_free);
 #endif
+	g_clear_pointer(&self->screenshot, portal_screenshot_free);
+	g_clear_pointer(&self->capture, portal_capture_free);
 
 	/*
 	 * The connection is borrowed from g_bus_own_name and is gone the

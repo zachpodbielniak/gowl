@@ -22,6 +22,8 @@
 #include <glib.h>
 #include <gio/gio.h>
 
+#include "portal-capture.h"
+
 G_BEGIN_DECLS
 
 /*
@@ -38,6 +40,8 @@ typedef struct _PortalScreenCast PortalScreenCast;
 /**
  * portal_screencast_new:
  * @conn: the session bus connection the backend already owns
+ * @capture: the Wayland capture context, borrowed; it must outlive
+ *   the backend (it is shared with the Screenshot backend)
  * @error: return location for an error
  *
  * Exports the ScreenCast backend.  Returns %NULL with @error set when
@@ -49,6 +53,7 @@ typedef struct _PortalScreenCast PortalScreenCast;
  * Returns: (transfer full): the backend, or %NULL
  */
 PortalScreenCast *portal_screencast_new (GDBusConnection *conn,
+                                         PortalCapture   *capture,
                                          GError         **error);
 
 void portal_screencast_free (PortalScreenCast *self);

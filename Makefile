@@ -439,17 +439,25 @@ $(OUTDIR)/gowl-mcp: tools/gowl-mcp/gowl-mcp.c | $(OUTDIR)
 	$(MAKE) -C tools/gowl-mcp OUTDIR=$(abspath $(OUTDIR))
 endif
 
-# xdg-desktop-portal-gowl: InputCapture + RemoteDesktop portal backend.
-# Standalone binary (links no libgowl); built only when libeis is present.
+# xdg-desktop-portal-gowl: InputCapture, RemoteDesktop, Screenshot and
+# ScreenCast portal backend.  Standalone binary (links no libgowl); built
+# only when libeis is present.
+#
+# Every source and header is a prerequisite.  The list used to name four
+# files, so a change to the ScreenCast half never rebuilt the binary and
+# the portal tests ran against whatever was built last -- passing, against
+# old code.  The tests are prerequisites of `test' for the same reason.
 ifeq ($(LIBEIS_AVAILABLE),1)
 .PHONY: xdg-desktop-portal-gowl
 xdg-desktop-portal-gowl: $(OUTDIR)/xdg-desktop-portal-gowl
+test: xdg-desktop-portal-gowl
 
-$(OUTDIR)/xdg-desktop-portal-gowl: tools/xdg-desktop-portal-gowl/main.c \
-                                   tools/xdg-desktop-portal-gowl/portal-eis.c \
-                                   tools/xdg-desktop-portal-gowl/portal-wayland.c \
-                                   tools/xdg-desktop-portal-gowl/portal-dbus.c \
-                                   | $(OUTDIR)
+PORTAL_SOURCES := $(filter-out %-protocol.c %-client-protocol.h, \
+	$(wildcard tools/xdg-desktop-portal-gowl/*.c \
+	           tools/xdg-desktop-portal-gowl/*.h)) \
+	tools/xdg-desktop-portal-gowl/Makefile
+
+$(OUTDIR)/xdg-desktop-portal-gowl: $(PORTAL_SOURCES) | $(OUTDIR)
 	$(MAKE) -C tools/xdg-desktop-portal-gowl OUTDIR=$(abspath $(OUTDIR))
 endif
 

@@ -8769,7 +8769,7 @@ gowl_compositor_drop_pq_encode(GowlCompositor *self)
 /* How often an output that is backing off asks again, in milliseconds. */
 #define GOWL_FRAME_BACKOFF_MS              (50)
 
-static gboolean monitor_frame_retry(gpointer data);
+static gint monitor_frame_retry(gpointer data);
 
 /*
  * One frame did not reach the screen.
@@ -8797,27 +8797,37 @@ monitor_frame_failed(GowlMonitor *m, const gchar *why)
 /*
  * Ask for the next frame on a timer instead of immediately.
  *
- * Armed at most once -- the id is the guard -- and dropped by
- * on_monitor_destroy().
+ * Armed at most once -- frame_retry_armed is the guard -- and dropped by
+ * on_monitor_destroy().  The timer is on the compositor's own event
+ * loop, so it fires on the dispatch thread, under cmacs's gowl lock;
+ * see the comment on GowlMonitor.frame_retry.
  */
 static void
 monitor_frame_retry_later(GowlMonitor *m)
 {
-	if (m->frame_retry_id != 0)
+	if (m->frame_retry_armed)
 		return;
-	m->frame_retry_id = g_timeout_add(GOWL_FRAME_BACKOFF_MS,
-	                                  monitor_frame_retry, m);
+	if (m->frame_retry == NULL) {
+		if (m->compositor == NULL || m->compositor->event_loop == NULL)
+			return;
+		m->frame_retry = wl_event_loop_add_timer(
+			m->compositor->event_loop, monitor_frame_retry, m);
+		if (m->frame_retry == NULL)
+			return;
+	}
+	wl_event_source_timer_update(m->frame_retry, GOWL_FRAME_BACKOFF_MS);
+	m->frame_retry_armed = TRUE;
 }
 
-static gboolean
+static gint
 monitor_frame_retry(gpointer data)
 {
 	GowlMonitor *m = (GowlMonitor *)data;
 
-	m->frame_retry_id = 0;
+	m->frame_retry_armed = FALSE;
 	if (m->wlr_output != NULL)
 		wlr_output_schedule_frame(m->wlr_output);
-	return G_SOURCE_REMOVE;
+	return 0;
 }
 
 static void
@@ -8999,7 +9009,11 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 	wl_list_remove(&m->request_state.link);
 
 	/* And the backoff timer, which holds a pointer to this monitor. */
-	g_clear_handle_id(&m->frame_retry_id, g_source_remove);
+	if (m->frame_retry != NULL) {
+		wl_event_source_remove(m->frame_retry);
+		m->frame_retry = NULL;
+	}
+	m->frame_retry_armed = FALSE;
 
 	/* And the encode's buffers, before the renderer that made them. */
 	g_clear_pointer(&m->pq_scene, wlr_swapchain_destroy);

@@ -285,11 +285,14 @@ awk '/^toggle_apply\(/,/^}/' modules/bar/bar-plugins-core.c \
 # that pipe on the compositor thread is fine for a line of text and a
 # frozen desktop for a megabyte of PNG: a client that writes slowly
 # holds the compositor for as long as it likes, and one that never
-# writes holds it forever.
+# writes holds it forever.  The read is an fd source on the
+# compositor's own wl_event_loop -- not g_unix_fd_add(), whose GLib
+# default context nothing iterates standalone and Emacs's thread
+# iterates under cmacs (tests/test-glib-context-guard.sh).
 clip="modules/clipboard/gowl-module-clipboard.c"
 if [ -f "$clip" ]; then
-	grep -q "g_unix_fd_add" "$clip" ||
-		fail "$clip does not read the selection from the main loop; a slow client now freezes the desktop"
+	grep -q "wl_event_loop_add_fd" "$clip" ||
+		fail "$clip does not read the selection from the event loop; a slow client now freezes the desktop"
 	grep -q "CLIP_READ_TIMEOUT_MS" "$clip" ||
 		fail "$clip has no read deadline; a client that stops writing holds the pipe forever"
 	grep -q "restoring" "$clip" ||

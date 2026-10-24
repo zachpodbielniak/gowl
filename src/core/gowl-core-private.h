@@ -844,7 +844,14 @@ struct _GowlMonitor {
 	 * at the speed of the event loop, rendering the whole scene each
 	 * time, with nothing in any log. */
 	guint    commit_failures;
-	guint    frame_retry_id;
+	/* The backoff timer: a wl_event_loop timer, never a GLib one.
+	 * GLib's default context is not the compositor's: standalone
+	 * nothing iterates it, so the retry never fired and a backed-off
+	 * output stopped asking for frames; under cmacs --gowl Emacs's
+	 * thread iterates it, so the retry ran beside the dispatch thread
+	 * with no lock, against a monitor it could be destroying. */
+	struct wl_event_source *frame_retry;
+	gboolean frame_retry_armed;
 	/*
 	 * The PQ encode: the scene is rendered into `pq_scene' and then
 	 * encoded into `pq_out', which is what gets committed.  Two

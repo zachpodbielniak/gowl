@@ -809,6 +809,23 @@ docs/                       # Documentation (architecture, building, configurati
 - Never declare variables mid-block -- declarations go at the top (gnu89).
 - Never use `camelCase` for C identifiers.
 - Do not run `make install` without explicit user request.
+- Never put compositor work on GLib's default main context:
+  `g_timeout_add`, `g_idle_add`, `g_unix_fd_add`, `g_io_add_watch`,
+  `g_child_watch_add`, `g_unix_signal_add`, or `g_source_attach(s, NULL)`.
+  Standalone nothing iterates that context (`wl_display_run` only), so
+  the callback never fires.  Under `cmacs --gowl` Emacs's thread iterates
+  it, so the callback runs beside the dispatch thread without cmacs's
+  gowl lock.  Use `wl_event_loop_add_timer`, `wl_event_loop_add_idle`
+  or `wl_event_loop_add_fd` on `gowl_compositor_get_event_loop()`.  A
+  thread that runs its own GLib loop (tray, notifyd, logind, the D-Bus
+  modules) attaches to its own context.  Two sites broke this in
+  2026-10: the output frame backoff (a backed-off output stopped asking
+  for frames standalone, and the retry raced `on_monitor_destroy` under
+  cmacs) and the clipboard history read (never written standalone, and
+  the index was rewritten from Emacs's thread under cmacs).
+  `tests/test-glib-context-guard.sh` refuses every form above in `src/`
+  (minus `src/bar`) and `modules/`, and `test-clipboard-history`
+  checks that a copy reaches the history using only the event loop.
 - Never wait on a child process from a module with GSubprocess's async
   calls, `g_child_watch_add()` or a GLib-context fd watch: under cmacs
   they complete on the default main context, which is Emacs's thread,

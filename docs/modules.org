@@ -916,6 +916,8 @@ would have hung Emacs waiting on a writer that could only run once the
 read returned.  The blocking read (=gowl_seat_get_clipboard()=) also
 gives up after three seconds of silence.
 
+The module's own end of the pipe is read the same way: an fd source and a four-second deadline timer, both on the compositor's =wl_event_loop=, ended together, so neither can fire on a closed fd.  Until 2026-10 these were =g_unix_fd_add()= and =g_timeout_add()= on GLib's default context.  Standalone nothing iterates that context, so no copy ever reached the history.  Under cmacs, =clip_store()= ran on Emacs's thread and rewrote the index while the =clipboard-*= commands read it on the dispatch thread.  Reads still in flight are cancelled when the module is deactivated.  =test-clipboard-history= checks that a copy reaches the index when only the event loop is dispatched, and that nothing is left on the default context.
+
 Putting an entry back is itself a selection change, so the module
 ignores its own writes; without that, pasting from the history would add
 a duplicate every time. An exact repeat of the newest entry is skipped

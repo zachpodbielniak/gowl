@@ -59,6 +59,11 @@ typedef struct {
 	gulong   changed_id;
 	guint64  next_id;
 	/*
+	 * Selection reads still draining (ClipRead).  Kept so detaching
+	 * the module can cancel them: each one's sources point back here.
+	 */
+	GList   *reads;
+	/*
 	 * Set while this module is the one putting something on the
 	 * clipboard.  Without it, restoring an entry looks exactly like a
 	 * new copy and the history grows a duplicate every time you paste
@@ -250,29 +255,52 @@ clip_store(GowlClipboard *self, const gchar *mime, const guint8 *data,
 
 /* ── Reading the selection, without blocking ─────────────────────── */
 
+/*
+ * One selection read in flight.
+ *
+ * Both sources are on the compositor's wl_event_loop, never GLib's
+ * default context.  That context is not the compositor's: standalone
+ * nothing iterates it, so the history was never written; under
+ * cmacs --gowl it is Emacs's thread, so clip_store() ran there with no
+ * lock while the IPC commands below read and rewrote the same index on
+ * the dispatch thread.
+ */
 typedef struct {
-	GowlClipboard *module;
-	gchar         *mime;
-	GByteArray    *buf;
-	gint           fd;
-	guint          timeout_id;
+	GowlClipboard          *module;
+	gchar                  *mime;
+	GByteArray             *buf;
+	gint                    fd;
+	struct wl_event_source *fd_source;
+	struct wl_event_source *timer;
 } ClipRead;
 
+/*
+ * End a read: drop both sources and the fd together, so neither
+ * source can fire on a closed (and possibly reused) fd number, and
+ * forget it on the module.  When @store is set, keep what arrived.
+ * @loop_alive is FALSE only when the compositor -- and with it the
+ * event loop, which frees its own sources -- is already gone.
+ */
 static void
-clip_read_free(gpointer data)
+clip_read_finish(ClipRead *r, gboolean store, gboolean loop_alive)
 {
-	ClipRead *r = data;
+	if (store && r->module != NULL && r->buf->len > 0)
+		clip_store(r->module, r->mime, r->buf->data, r->buf->len);
 
-	if (r->timeout_id != 0)
-		g_source_remove(r->timeout_id);
+	if (loop_alive && r->fd_source != NULL)
+		wl_event_source_remove(r->fd_source);
+	if (loop_alive && r->timer != NULL)
+		wl_event_source_remove(r->timer);
 	if (r->fd >= 0)
 		close(r->fd);
+	if (r->module != NULL)
+		r->module->reads = g_list_remove(r->module->reads, r);
 	g_byte_array_unref(r->buf);
 	g_free(r->mime);
 	g_free(r);
 }
 
-static gboolean
+static gint
 clip_read_timeout(gpointer data)
 {
 	ClipRead *r = data;
@@ -280,14 +308,12 @@ clip_read_timeout(gpointer data)
 	/* The client stopped writing.  Whatever arrived is not worth
 	   keeping -- a truncated clipboard entry is worse than none. */
 	g_debug("clipboard: read of %s timed out", r->mime);
-	r->timeout_id = 0;
-	close(r->fd);
-	r->fd = -1;
-	return G_SOURCE_REMOVE;
+	clip_read_finish(r, FALSE, TRUE);
+	return 0;
 }
 
-static gboolean
-clip_read_cb(gint fd, GIOCondition condition, gpointer data)
+static gint
+clip_read_cb(gint fd, guint32 mask, gpointer data)
 {
 	ClipRead *r = data;
 	guint8    chunk[16384];
@@ -299,7 +325,8 @@ clip_read_cb(gint fd, GIOCondition condition, gpointer data)
 			if (r->buf->len + (guint)n > CLIP_MAX_BYTES) {
 				g_debug("clipboard: %s exceeds the cap",
 				        r->mime);
-				return G_SOURCE_REMOVE;
+				clip_read_finish(r, FALSE, TRUE);
+				return 0;
 			}
 			g_byte_array_append(r->buf, chunk, (guint)n);
 			continue;
@@ -307,13 +334,12 @@ clip_read_cb(gint fd, GIOCondition condition, gpointer data)
 		if (n < 0 && errno == EINTR)
 			continue;
 		if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-			return G_SOURCE_CONTINUE;
+			return 0;
 		break;                          /* EOF, or the pipe broke */
 	}
 
-	if ((condition & G_IO_ERR) == 0 && r->buf->len > 0)
-		clip_store(r->module, r->mime, r->buf->data, r->buf->len);
-	return G_SOURCE_REMOVE;
+	clip_read_finish(r, (mask & WL_EVENT_ERROR) == 0, TRUE);
+	return 0;
 }
 
 /* The MIME type worth keeping, in order of preference. */
@@ -343,10 +369,14 @@ clip_on_clipboard_changed(GowlSeat *seat, gpointer data)
 	struct wlr_seat *wlr_seat;
 	struct wlr_data_source *source;
 	const gchar *mime;
+	struct wl_event_loop *loop;
 	ClipRead *r;
 	gint fds[2];
 
 	if (self->restoring || self->compositor == NULL)
+		return;
+	loop = gowl_compositor_get_event_loop(self->compositor);
+	if (loop == NULL)
 		return;
 	/* Marked "do not keep": a password manager's copy, or text gowl
 	   put there only to paste it (gabbrev).  Never written to the
@@ -393,11 +423,17 @@ clip_on_clipboard_changed(GowlSeat *seat, gpointer data)
 	r->mime = g_strdup(mime);
 	r->buf = g_byte_array_new();
 	r->fd = fds[0];
-	r->timeout_id = g_timeout_add(CLIP_READ_TIMEOUT_MS,
-	                              clip_read_timeout, r);
-	g_unix_fd_add_full(G_PRIORITY_DEFAULT, fds[0],
-	                   G_IO_IN | G_IO_ERR | G_IO_HUP,
-	                   clip_read_cb, r, clip_read_free);
+	/* HUP and ERROR are always reported by wl_event_loop. */
+	r->fd_source = wl_event_loop_add_fd(loop, fds[0], WL_EVENT_READABLE,
+	                                    clip_read_cb, r);
+	r->timer = wl_event_loop_add_timer(loop, clip_read_timeout, r);
+	self->reads = g_list_prepend(self->reads, r);
+	if (r->fd_source == NULL || r->timer == NULL) {
+		g_warning("clipboard: cannot watch the selection pipe");
+		clip_read_finish(r, FALSE, TRUE);
+		return;
+	}
+	wl_event_source_timer_update(r->timer, CLIP_READ_TIMEOUT_MS);
 }
 
 /* ── Commands ────────────────────────────────────────────────────── */
@@ -523,6 +559,15 @@ clip_handle_command(GowlIpcHandler *handler, const gchar *command,
 static void
 clip_detach(GowlClipboard *self)
 {
+	/* Reads still draining point at this module; end them first.
+	   Not stored: the module is going away.  The weak pointer is
+	   NULL once the compositor is finalized, and its event loop with
+	   it: a module can be deactivated after that (the manager is
+	   released after the compositor). */
+	while (self->reads != NULL)
+		clip_read_finish(self->reads->data, FALSE,
+		                 self->compositor != NULL);
+
 	if (self->compositor != NULL) {
 		GowlSeat *seat = gowl_compositor_get_seat(self->compositor);
 

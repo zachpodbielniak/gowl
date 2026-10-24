@@ -1,0 +1,9 @@
+# An input hook (AutoHotkey's InputHook): Super+g, then type a tag number
+# and Enter (or wait three seconds) -- the tag is shown.  What was typed
+# is $GOWL_HOTKEY_INPUT to the actions after the input.
+hotkey:
+  hotkeys:
+    - key: "#g"
+      do:
+        - {input: tag, length: 2, timeout: 3s, end-keys: [Enter, Esc]}
+        - {shell: "gowl-msg -c tags.view tag=\"$GOWL_HOTKEY_INPUT\""}

@@ -79,6 +79,7 @@ gowl_macro_trigger_get_type(void)
 			{ GOWL_MACRO_TRIGGER_TIMER, "GOWL_MACRO_TRIGGER_TIMER", "timer" },
 			{ GOWL_MACRO_TRIGGER_REMAP, "GOWL_MACRO_TRIGGER_REMAP", "remap" },
 			{ GOWL_MACRO_TRIGGER_VOICE, "GOWL_MACRO_TRIGGER_VOICE", "voice" },
+			{ GOWL_MACRO_TRIGGER_HOTKEY, "GOWL_MACRO_TRIGGER_HOTKEY", "hotkey" },
 			{ 0, NULL, NULL }
 		};
 		GType t = g_enum_register_static("GowlMacroTrigger", values);

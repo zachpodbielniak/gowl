@@ -28,7 +28,7 @@ Subscribe with `events.subscribe {"events": [PATTERNS]}` (glob patterns; absent 
 | `backdrop.changed` | translucency backdrop changed | `{style}` |
 | `transition.changed` | tag transition selected (Super+:) | `{name, label}` |
 | `command` | a module command ran, from any source | `{line}` |
-| `macro`, `broadcast`, `inputremap`, `screenshot`, ... | a module's own event | `{args, words[]}` |
+| `macro`, `broadcast`, `inputremap`, `hotkey`, `screenshot`, ... | a module's own event | `{args, words[]}` |
 
 ## Semantics worth knowing
 

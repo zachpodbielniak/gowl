@@ -169,6 +169,8 @@ LIB_SRCS := \
 	src/core/gowl-xwayland-sync.c \
 	src/macro/gowl-macro.c \
 	src/gabbrev/gowl-gabbrev.c \
+	src/hotkey/gowl-hotkey.c \
+	src/hotkey/gowl-hotkey-spec.c \
 	src/core/gowl-decor.c \
 	src/core/gowl-static-prefix-key-policy.c \
 	src/core/gowl-session-default.c \
@@ -248,6 +250,7 @@ LIB_HDRS := \
 	src/interfaces/gowl-input-observer.h \
 	src/macro/gowl-macro.h \
 	src/gabbrev/gowl-gabbrev.h \
+	src/hotkey/gowl-hotkey.h \
 	src/config/gowl-config.h \
 	src/config/gowl-config-compiler.h \
 	src/config/gowl-keybind.h \
@@ -857,6 +860,29 @@ $(OBJDIR)/tests/test-gabbrev-module.o: xdg-shell-client-protocol.h text-input-un
 $(OUTDIR)/test-gabbrev-module: TEST_LDFLAGS += $(GABBREV_TEST_PROTO) $(shell $(PKG_CONFIG) --libs wayland-client json-glib-1.0)
 $(OBJDIR)/tests/test-gabbrev-module.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client json-glib-1.0) -DGOWL_TEST_GABBREV_MODULE='"$(abspath $(OUTDIR)/modules/gabbrev.so)"' -DGOWL_TEST_MACRO_MODULE='"$(abspath $(OUTDIR)/modules/macro.so)"' -DGOWL_TEST_CLIPBOARD_MODULE='"$(abspath $(OUTDIR)/modules/clipboard.so)"'
 
+# The hotkey module's pure halves -- the model (YAML), the engine (what
+# a key means), the Send parser, the hotstring translator -- are included
+# by their tests, like gabbrev's.
+HOTKEY_PURE := $(wildcard modules/hotkey/gowl-hotkey-model.* modules/hotkey/gowl-hotkey-engine.* modules/hotkey/gowl-hotkey-send.* modules/hotkey/gowl-hotkey-hotstring.*)
+HOTKEY_PURE_TESTS := test-hotkey-engine test-hotkey-send test-hotkey-model test-hotkey-hotstring test-hotkey-config
+$(patsubst %,$(OBJDIR)/tests/%.o,$(HOTKEY_PURE_TESTS)): $(HOTKEY_PURE)
+$(patsubst %,$(OBJDIR)/tests/%.o,$(HOTKEY_PURE_TESTS)): TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags json-glib-1.0) -DGOWL_TEST_DATA='"$(abspath data)"' -DGOWL_TEST_DOCS='"$(abspath docs)"'
+$(patsubst %,$(OUTDIR)/%,$(HOTKEY_PURE_TESTS)): TEST_LDFLAGS += $(shell $(PKG_CONFIG) --libs json-glib-1.0)
+# The config test compiles the shipped C example, which includes
+# <gowl/gowl.h> the way a user's config.c does.
+$(OBJDIR)/tests/test-hotkey-config.o: data/example-hotkey.c
+$(OBJDIR)/tests/test-hotkey-config.o: TEST_CFLAGS += -I$(abspath $(BUILDDIR)/include)
+
+# The hotkey module end to end: the real hotkey.so, with gabbrev.so
+# (hotstrings) and macro.so (macro actions), in a headless compositor with
+# a keyboard and a pointer plugged in through the backend and a client
+# recording every key that reaches it.
+HOTKEY_TEST_PROTO := $(OBJDIR)/tests/xdg-shell-protocol.o
+$(OUTDIR)/test-hotkey-module: $(HOTKEY_TEST_PROTO) $(OUTDIR)/modules/hotkey.so $(OUTDIR)/modules/gabbrev.so $(OUTDIR)/modules/macro.so
+$(OBJDIR)/tests/test-hotkey-module.o: xdg-shell-client-protocol.h tests/macro-test-client.h
+$(OUTDIR)/test-hotkey-module: TEST_LDFLAGS += $(HOTKEY_TEST_PROTO) $(shell $(PKG_CONFIG) --libs wayland-client json-glib-1.0)
+$(OBJDIR)/tests/test-hotkey-module.o: TEST_CFLAGS += $(shell $(PKG_CONFIG) --cflags wayland-client json-glib-1.0) -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"' -DGOWL_TEST_DATA='"$(abspath data)"'
+
 # Macros.  The loader test includes the loader directly and compiles
 # real macro files with crispy against this build's headers, so it
 # needs the same dev include dir the module is given.  The runner and
@@ -915,7 +941,9 @@ $(OUTDIR)/modules/inputremap.so: $(wildcard modules/inputremap/*.c modules/input
 $(OUTDIR)/modules/broadcast.so: $(wildcard modules/broadcast/*.c modules/broadcast/*.h)
 # The text expander: five files, json-glib, crispy for `c' variables.
 $(OUTDIR)/modules/gabbrev.so: $(wildcard modules/gabbrev/*.c modules/gabbrev/*.h)
-$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modules/broadcast.so $(OUTDIR)/modules/gabbrev.so $(OUTDIR)/modules/macro.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
+# AutoHotkey for gowl: eight files, json-glib, gio (D-Bus), crispy for C.
+$(OUTDIR)/modules/hotkey.so: $(wildcard modules/hotkey/*.c modules/hotkey/*.h)
+$(OUTDIR)/modules/wallpaper.so $(OUTDIR)/modules/screenlock.so $(OUTDIR)/modules/roundcorners.so $(OUTDIR)/modules/blur.so $(OUTDIR)/modules/liquidglass.so $(OUTDIR)/modules/liquidwater.so $(OUTDIR)/modules/liquidrain.so $(OUTDIR)/modules/fizz.so $(OUTDIR)/modules/leaves.so $(OUTDIR)/modules/snow.so $(OUTDIR)/modules/hints.so $(OUTDIR)/modules/soapfilm.so $(OUTDIR)/modules/embers.so $(OUTDIR)/modules/submerged.so $(OUTDIR)/modules/dew.so $(OUTDIR)/modules/crt.so $(OUTDIR)/modules/bar.so $(OUTDIR)/modules/menu.so $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modules/broadcast.so $(OUTDIR)/modules/gabbrev.so $(OUTDIR)/modules/hotkey.so $(OUTDIR)/modules/macro.so: $(OUTDIR)/$(LIB_SHARED_FULL) | $(OUTDIR)/modules
 	$(MAKE) -C modules/$(basename $(notdir $@)) OUTDIR=$(abspath $(OUTDIR)/modules) LIBDIR=$(abspath $(OUTDIR)) WLROOTS_PC=$(WLROOTS_PC) CFLAGS="$(MODULE_CFLAGS)" LDFLAGS="$(MODULE_LDFLAGS) -Wl,-rpath,$(abspath $(OUTDIR))"
 $(OUTDIR)/test-gpu-reset: $(addprefix $(OUTDIR)/modules/,wallpaper.so screenlock.so roundcorners.so)
 $(OBJDIR)/tests/test-gpu-reset.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
@@ -958,7 +986,7 @@ TEARDOWN_MODULES := wallpaper tile monocle float scrolling animation cube \
 	fizz leaves snow hints soapfilm embers submerged dew crt \
 	layout-indicator alpha \
 	vanitygaps roundcorners windowrules dropdown scratchpad screenshot \
-	osd clipboard bar menu gabbrev $(TRANSITION_MODULES)
+	osd clipboard bar menu gabbrev hotkey $(TRANSITION_MODULES)
 $(OUTDIR)/test-compositor-teardown: $(patsubst %,$(OUTDIR)/modules/%.so,$(TEARDOWN_MODULES))
 $(OBJDIR)/tests/test-compositor-teardown.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 

@@ -1,0 +1,11 @@
+# A C snippet: types today's date as ISO 8601 into the focused window.
+# Compiled once by crispy (later runs are instant) and called under the
+# fault guard, so a mistake in it costs the action, not the session.
+hotkey:
+  hotkeys:
+    - key: "#!d"
+      do:
+        c: |
+          g_autoptr(GDateTime) now = g_date_time_new_now_local();
+          g_autofree gchar *day = g_date_time_format(now, "%Y-%m-%d");
+          gowl_hotkey_send_text(comp, day);

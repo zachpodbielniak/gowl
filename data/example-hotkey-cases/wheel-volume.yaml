@@ -1,0 +1,7 @@
+# Volume on the wheel while the forward button is held, mute on a click
+# of the wheel itself with Super held.
+hotkey:
+  hotkeys:
+    - {key: "XButton2 & WheelUp", do: {run: [wpctl, set-volume, "@DEFAULT_AUDIO_SINK@", 5%+]}}
+    - {key: "XButton2 & WheelDown", do: {run: [wpctl, set-volume, "@DEFAULT_AUDIO_SINK@", 5%-]}}
+    - {key: "#MButton", do: {run: [wpctl, set-mute, "@DEFAULT_AUDIO_SINK@", toggle]}}

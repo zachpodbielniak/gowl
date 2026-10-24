@@ -1,0 +1,149 @@
+# gowl - example hotkey configuration (AutoHotkey for gowl)
+#
+# Put this in ~/.config/gowl/config.yaml (or keep the `hotkey:' part in a
+# file of its own and name it from `hotkey: include:').  Every hotkey is a
+# key -- in AutoHotkey's notation or gowl's -- and a list of actions.
+#
+# Full reference: docs/hotkey.org.  Every shipped example is loaded by
+# tests/test-hotkey-config.c, so nothing here is out of date.
+
+modules:
+  hotkey:
+    enabled: true                    # opt-in in standalone gowl
+    suspend-key: Super+Shift+Pause   # suspends every hotkey (not itself)
+    # key-delay: 0                   # ms between the keys a send types
+    # send-mode: input               # input: all at once; event: paced
+    # accept-synthetic: false        # true: a KVM's keys fire hotkeys too
+    # dbus: false                    # true: own org.gowl.Hotkey1
+    # scripts: [~/.config/gowl/hotkeys.c]   # crispy hotkey scripts
+  gabbrev:
+    enabled: true                    # hotstrings are typed by gabbrev
+  macro:
+    enabled: true                    # for the {macro: ...} actions
+
+hotkey:
+  # ---- where hotkeys apply (AutoHotkey's #HotIf) -----------------------
+  contexts:
+    browser: "app-id=librewolf or app-id=firefox* or app-id=org.mozilla.*"
+    terminal: "app-id=gst or app-id=foot"
+    # all of: the focused window, the window under the pointer, any window
+    youtube:
+      when: "title=*YouTube*"
+      absent: "app-id=org.example.Recorder"
+
+  # ---- window groups (GroupAdd), cycled by {window: group-activate} ---
+  groups:
+    terminals: "app-id=gst or app-id=foot"
+
+  # ---- hotkeys ---------------------------------------------------------
+  hotkeys:
+    # Super+Alt+t: a terminal -- AutoHotkey's #!t
+    - key: "#!t"
+      do: {action: spawn, arg: gst}
+
+    # the same, in gowl's notation, with an id for IPC
+    - id: browser
+      key: Super+Alt+b
+      description: a browser
+      do: {run: [librewolf]}
+
+    # CapsLock as a layer: vim arrows while it is held...
+    - {key: "CapsLock & h", do: {send: "{Left}"}}
+    - {key: "CapsLock & j", do: {send: "{Down}"}}
+    - {key: "CapsLock & k", do: {send: "{Up}"}}
+    - {key: "CapsLock & l", do: {send: "{Right}"}}
+    # ...and Escape when it is tapped alone
+    - {key: CapsLock, do: {send: "{Esc}"}}
+
+    # only in the browser: Ctrl+Shift+d duplicates the tab
+    - key: "^+d"
+      context: browser
+      do: {send: "!d!{Enter}"}
+
+    # ~: the window still gets the key -- here a log of every F1
+    - key: "~F1"
+      do: {shell: "date >> ~/.cache/f1-presses"}
+
+    # a double tap of Shift opens the menu; Shift still works
+    - key: LShift
+      double: 300
+      do: {command: "menu-toggle"}
+
+    # hold Escape for half a second: lock the screen; tap it: Escape
+    - key: Esc
+      hold: 500
+      do: {action: lock}
+
+    # several actions in order, waiting on the shell before the toast
+    - key: "#!s"
+      do:
+        - {shell: "grim -g \"$(slurp)\" ~/Pictures/shot.png", wait: true}
+        - {notify: "screenshot saved"}
+
+    # a window action on the focused window, and on a named one
+    - {key: "#f", do: {window: float}}
+    - {key: "#+m", do: {window: minimize, target: "app-id=org.example.Music"}}
+    - {key: "XButton1", do: {window: group-activate, arg: terminals}}
+
+    # the mouse: Ctrl+wheel zooms the focused window's text
+    - {key: "^WheelUp", do: {send: "^{+}"}}
+    - {key: "^WheelDown", do: {send: "^-"}}
+
+    # a function, written once below, called from several hotkeys
+    - {key: "#+t", do: {call: tidy}}
+
+    # a macro (docs/macros.org), told it was a hotkey that ran it
+    - {key: "#+p", do: {macro: float-center}}
+
+    # C, compiled once by crispy and run under the fault guard
+    - key: "#!d"
+      do:
+        c: |
+          g_autoptr(GDateTime) now = g_date_time_new_now_local();
+          g_autofree gchar *iso = g_date_time_format_iso8601(now);
+          gowl_hotkey_send_text(comp, iso);
+
+    # into a mode: resize until Escape, or two seconds of nothing
+    - {key: "#r", do: {mode: resize}}
+
+  # ---- remaps (a::b) ---------------------------------------------------
+  remaps:
+    AppsKey: RWin        # the Menu key is a second Super key
+    XButton2: MButton    # the forward button pastes the selection
+
+  # ---- modes -----------------------------------------------------------
+  modes:
+    resize:
+      timeout: 2s        # back to normal after two seconds of nothing
+      swallow: true      # keys with no hotkey here do nothing
+      label: Resize
+      hotkeys:
+        - {key: h, do: {window: move-by, arg: "-40 0"}}
+        - {key: l, do: {window: move-by, arg: "40 0"}}
+        - {key: Esc, do: {mode: default}}
+
+  # ---- hotstrings (typed by gabbrev) -----------------------------------
+  hotstrings:
+    - "::btw::by the way"
+    - ":*:;sig::Best regards,{Enter}Ada"
+    - {hotstring: ":*X:;up::", do: {shell: "notify-send \"$(uptime -p)\""}}
+
+  # ---- timers ----------------------------------------------------------
+  timers:
+    - id: stretch
+      every: 50m
+      do: {notify: "stand up and stretch"}
+
+  # ---- event hooks -----------------------------------------------------
+  on:
+    window-open:
+      - filter: "app-id=steam"
+        do: [{window: float}, {notify: "Steam is open"}]
+    startup:
+      - {notify: "hotkeys loaded"}
+
+  # ---- functions -------------------------------------------------------
+  functions:
+    tidy:
+      - {rpc: layout.set, params: {name: tile}}
+      - {notify: "tidied"}

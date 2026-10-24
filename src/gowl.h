@@ -83,6 +83,9 @@
 /* Text expansion (the API the gabbrev module and its extenders share) */
 #include "gabbrev/gowl-gabbrev.h"
 
+/* Hotkeys (the API the hotkey module and its extenders share) */
+#include "hotkey/gowl-hotkey.h"
+
 /* Boxed types */
 #include "boxed/gowl-capture-result.h"
 #include "boxed/gowl-focus-token.h"

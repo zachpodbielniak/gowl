@@ -2203,6 +2203,40 @@ void gowl_compositor_inject_key (GowlCompositor *self,
                                  gboolean        pressed);
 
 /**
+ * gowl_compositor_get_lock_state:
+ * @self: a #GowlCompositor
+ * @caps: (out) (optional): whether Caps Lock is on
+ * @num: (out) (optional): whether Num Lock is on
+ *
+ * The locks of the keyboard group's state -- what windows are told.
+ *
+ * Returns: %FALSE (and both off) before there is a keyboard
+ */
+gboolean gowl_compositor_get_lock_state (GowlCompositor *self,
+                                         gboolean       *caps,
+                                         gboolean       *num);
+
+/**
+ * gowl_compositor_set_lock_state:
+ * @self: a #GowlCompositor
+ * @caps: 1 to lock Caps Lock, 0 to turn it off, -1 to leave it
+ * @num: the same for Num Lock
+ *
+ * Off is off in every part of the state -- locked, and the depressed and
+ * latched masks too -- so a Caps Lock key held down (a swallowed one, a
+ * `CapsLock & j' prefix) stops capitalising what is typed meanwhile.
+ *
+ * Sets the locks on every keyboard -- each device in the group and the
+ * group itself, so that the next key on any device does not carry its
+ * own state back -- and windows are told the new modifiers.  The hotkey
+ * module uses it to undo the toggle of a Caps Lock it swallowed (a
+ * `CapsLock & j' layer) and for AutoHotkey's SetCapsLockState.
+ */
+void     gowl_compositor_set_lock_state (GowlCompositor *self,
+                                         gint            caps,
+                                         gint            num);
+
+/**
  * GowlClientMapFunc:
  * @compositor: the compositor
  * @client: the newly mapped client

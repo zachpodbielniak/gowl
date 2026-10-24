@@ -1,0 +1,5 @@
+# Tap Shift twice quickly: the menu.  Shift is never swallowed, so it
+# still capitalises; only two clean taps in 300 ms count.
+hotkey:
+  hotkeys:
+    - {key: LShift, double: 300, do: {command: "menu-toggle"}}

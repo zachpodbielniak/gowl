@@ -1,0 +1,10 @@
+# Event hooks (what AutoHotkey users build with SetWinEventHook): Steam
+# windows float and say so; focusing a terminal clears the urgent mark.
+hotkey:
+  on:
+    window-open:
+      - filter: "app-id=steam"
+        do: [{window: float}, {notify: "Steam opened"}]
+    focus:
+      - filter: "app-id=gst"
+        do: {window: urgent, arg: "off"}

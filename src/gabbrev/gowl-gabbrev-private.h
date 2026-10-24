@@ -77,6 +77,7 @@ void                gowl_gabbrev_handle_release       (GowlGabbrevHandle  *handl
 typedef struct {
 	gboolean  is_file;
 	gchar    *text;            /* a path, or YAML */
+	gchar    *id;              /* gowl_gabbrev_add_yaml_source()'s, or NULL */
 } GowlGabbrevSource;
 
 GPtrArray          *gowl_gabbrev_dup_sources          (void);

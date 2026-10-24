@@ -1,0 +1,10 @@
+# Application chords: Super+Alt and a letter starts (or, with the
+# focus-or-launch macro, focuses) an application.
+hotkey:
+  hotkeys:
+    - {key: "#!t", do: {action: spawn, arg: gst}}
+    - {key: "#!b", do: {run: [librewolf]}}
+    - {key: "#!e", do: {run: [emacsclient, -c]}}
+    - {key: "#!f", do: {run: [foot, -e, yazi]}}
+    # focus the mail window if it is open, else start it
+    - {key: "#!m", do: {macro: focus-or-launch, args: [org.example.Mail, mail-client]}}

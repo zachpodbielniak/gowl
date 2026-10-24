@@ -161,6 +161,15 @@ With the opt-in =macro= module loaded, the =macro-= words run and manage macros:
 gowl-msg macro-run sort-windows reverse
 #+end_src
 
+* Hotkeys
+
+With the opt-in =hotkey= module loaded, the =hotkey-= words drive it: =hotkey-status=, =-list=, =-problems=, =-add YAML=, =-remove ID=, =-enable ID=, =-disable ID=, =-toggle ID=, =-fire ID=, =-suspend [on|off|toggle]=, =-mode [NAME]=, =-send KEYS=, =-send-text TEXT=, =-call NAME ARGS=, =-functions=, =-func-define NAME FORM=, =-func-undefine NAME=, =-context-set NAME 0|1=, =-context-clear NAME=, =-contexts=, =-history=, =-keystate KEY=, =-capslock STATE=, =-numlock STATE=, =-input-start [NAME] [OPTIONS]=, =-input-stop=, =-timers=, =-timer-enable ID=, =-timer-disable ID=, =-cancel=, =-reload=, =-help=.  Events: =EVENT hotkey fired|mode|suspended|input|enabled|disabled|script|fault ...=.  It also adds the JSON-RPC methods =hotkey.list=, =.status=, =.add=, =.remove=, =.set=, =.send=, =.fire= and =.call= (see [[#wire-protocol-modules][Adding methods from a module]]).  See [[file:hotkey.org::#hotkey-control][hotkey.org]].
+
+#+begin_src bash
+gowl-msg hotkey-send 'hello{Enter}'
+gowl-msg -c hotkey.set suspended=true
+#+end_src
+
 * From a module
 
 A module implementing =GowlIpcHandler= answers its own command names; =gowl_compositor_run_command()= is the shared entry point for the =ipc-command= keybind action, cmacs's =gowl-run-command=, MCP and this socket, so a command means the same thing from each.  Core commands are answered first (=src/ipc/gowl-ipc-core.c=), then the modules.  =gowl_ipc_push_event()= adds an event.
@@ -574,3 +583,5 @@ gowl_ipc_register_method(gowl_compositor_get_ipc(compositor),
 #+end_src
 
 The method receives its params already checked -- every member declared, of its declared type, nulls removed -- and returns a =JsonNode= (transfer full) or sets a =GOWL_IPC_ERROR= error, whose code goes on the wire as is. =gowl_ipc_push_json_event()= sends an event to JSON subscribers only; =gowl_ipc_wants_event()= says whether anybody would receive one, for an event that costs something to compute; =gowl_ipc_declare_event()= lists it in =rpc.discover=; =gowl_ipc_call()= runs a method in process, through the same check, for tests and embedders. Name methods =namespace.verb=, take windows as =id= and outputs as =monitor=, and unregister them (=gowl_ipc_unregister_method()=) when the module deactivates.
+
+The =hotkey= module is a worked example (=modules/hotkey/gowl-module-hotkey.c=, =methods_install()=).  A module that loads before the IPC server exists --- under cmacs the server starts when =gowl-start-ipc= runs --- connects to the compositor's =ipc-changed= signal, emitted by =gowl_compositor_set_ipc()= whenever the server is installed or replaced, and registers its methods then.

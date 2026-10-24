@@ -1,0 +1,11 @@
+# The side buttons of a mouse: back cycles through the terminals, forward
+# through the browsers; with the button held, the wheel steps tags.
+hotkey:
+  groups:
+    terminals: "app-id=gst or app-id=foot"
+    browsers: "app-id=librewolf or app-id=firefox*"
+  hotkeys:
+    - {key: XButton1, do: {window: group-activate, arg: terminals}}
+    - {key: XButton2, do: {window: group-activate, arg: browsers}}
+    - {key: "XButton1 & WheelUp", do: {action: focus-stack, arg: "-1"}}
+    - {key: "XButton1 & WheelDown", do: {action: focus-stack, arg: "1"}}

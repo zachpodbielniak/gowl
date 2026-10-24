@@ -1,0 +1,6 @@
+# Timers: a reminder every 50 minutes, and a one-shot five minutes after
+# gowl starts.  A timer is skipped while hotkeys are suspended.
+hotkey:
+  timers:
+    - {id: stretch, every: 50m, do: {notify: "stand up and stretch"}}
+    - {id: sync-notes, once: 5m, do: {shell: "cd ~/Documents/notes && git pull -q"}}

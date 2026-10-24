@@ -130,8 +130,8 @@ Everything a macro knows arrives in its =GowlMacroContext=:
 | =gowl_macro_get_name(ctx)=             | the name it was run by                                        |
 | =gowl_macro_get_path(ctx)=             | its source file, or =NULL= (registered, defined)              |
 | =gowl_macro_get_argc/arg/argv(ctx)=    | its arguments, shell-parsed from the command line            |
-| =gowl_macro_get_trigger(ctx)=          | =API=, =IPC=, =DBUS=, =EVENT=, =TIMER=, =REMAP= or =VOICE=    |
-| =gowl_macro_get_trigger_detail(ctx)=   | who started it: the IPC line, the event and its window, the remap rule and input, the interval, what was said |
+| =gowl_macro_get_trigger(ctx)=          | =API=, =IPC=, =DBUS=, =EVENT=, =TIMER=, =REMAP=, =VOICE= or =HOTKEY= |
+| =gowl_macro_get_trigger_detail(ctx)=   | who started it: the IPC line, the event and its window, the remap rule and input, the interval, what was said, the hotkey id |
 | =gowl_macro_is_threaded(ctx)=          | which mode it is in                                           |
 
 And a macro reports through it:

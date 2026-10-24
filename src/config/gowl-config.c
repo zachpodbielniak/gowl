@@ -1110,6 +1110,12 @@ struct _GowlConfig {
 	GPtrArray *gabbrev_nodes;
 	gchar     *gabbrev_base_dir;
 
+	/* hotkey: the AutoHotkey-style module's section, kept as YAML the
+	 * same way (a ref each, in file order): hotkeys, remaps, modes,
+	 * hotstrings, timers and event hooks are the opt-in hotkey
+	 * module's format, and with it not loaded they are inert. */
+	GPtrArray *hotkey_nodes;
+
 	/* Rules - array of GowlRuleEntry* (heap-allocated) */
 	GPtrArray *rules;
 
@@ -1729,6 +1735,7 @@ gowl_config_finalize(GObject *object)
 	g_clear_pointer(&self->broadcast_rules, g_ptr_array_unref);
 	g_clear_pointer(&self->gabbrev_nodes, g_ptr_array_unref);
 	g_free(self->gabbrev_base_dir);
+	g_clear_pointer(&self->hotkey_nodes, g_ptr_array_unref);
 	g_free(self->xkb_layout);
 	g_free(self->xkb_variant);
 	g_free(self->xkb_model);
@@ -2577,6 +2584,8 @@ gowl_config_init(GowlConfig *self)
 		(GDestroyNotify)gowl_broadcast_rule_unref);
 	self->gabbrev_nodes = g_ptr_array_new_with_free_func(
 		(GDestroyNotify)yaml_node_unref);
+	self->hotkey_nodes = g_ptr_array_new_with_free_func(
+		(GDestroyNotify)yaml_node_unref);
 	gowl_config_add_default_mousebinds(self);
 
 	self->rules = g_ptr_array_new_with_free_func(gowl_rule_entry_free);
@@ -2984,7 +2993,7 @@ static const gchar *const top_level_keys[] = {
 	"shadow-radius", "shadow-opacity", "shadow-offset-x", "shadow-offset-y",
 	"shadow-color", "wallpaper-fade", "wallpaper-tags", "wallpaper-outputs",
 	"lock-command", "lock-on-suspend", "keybinds", "modes",
-	"mousebinds", "gestures", "input", "input-remap", "broadcast", "gabbrev", "rules", "dropdowns", "autostart",
+	"mousebinds", "gestures", "input", "input-remap", "broadcast", "gabbrev", "hotkey", "rules", "dropdowns", "autostart",
 	"monitors", "modules", "profiles",
 	NULL
 };
@@ -5690,6 +5699,24 @@ gowl_config_apply_mapping(
 			g_ptr_array_add(self->gabbrev_nodes, yaml_node_ref(gn));
 	}
 
+	/* hotkey: AutoHotkey for gowl (docs/hotkey.org) -- `hotkeys:',
+	 * `remaps:', `modes:', `contexts:', `hotstrings:', `timers:',
+	 * `on:'.  Kept whole for the opt-in module, which owns and checks
+	 * the format; only "is it a mapping" is checked here. */
+	if (yaml_mapping_has_member(mapping, "hotkey")) {
+		YamlNode *hn;
+
+		hn = yaml_mapping_get_member(mapping, "hotkey");
+		g_ptr_array_set_size(self->hotkey_nodes, 0);
+		if (hn == NULL || yaml_node_get_node_type(hn) != YAML_NODE_MAPPING) {
+			g_warning("gowl_config: `hotkey:' is a mapping of "
+			          "`hotkeys:', `remaps:', `modes:' and the rest; "
+			          "ignoring it");
+			self->problems++;
+		} else
+			g_ptr_array_add(self->hotkey_nodes, yaml_node_ref(hn));
+	}
+
 	/* Keybinds: mapping of
 	 *   "Mod+Key": { action: <name>, arg: "<value>", desc: "<text>" }
 	 *
@@ -7742,6 +7769,100 @@ gowl_config_clear_gabbrev(GowlConfig *self)
 {
 	g_return_if_fail(GOWL_IS_CONFIG(self));
 	g_ptr_array_set_size(self->gabbrev_nodes, 0);
+}
+
+/**
+ * gowl_config_get_hotkey_nodes:
+ * @self: a #GowlConfig
+ *
+ * The `hotkey:' section(s) of the config: each a YAML mapping in the
+ * hotkey module's format (docs/hotkey.org), for that module to load.
+ *
+ * Returns: (transfer none) (element-type YamlNode): the sections, in
+ *   the order they were added
+ */
+GPtrArray *
+gowl_config_get_hotkey_nodes(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->hotkey_nodes;
+}
+
+/**
+ * gowl_config_add_hotkey_yaml:
+ * @self: a #GowlConfig
+ * @yaml: a `hotkey:' section's contents
+ * @error: return location for a parse error
+ *
+ * Adds a section as though the YAML config had a second `hotkey:' --
+ * the C config's way of writing hotkeys in the YAML form.  Like
+ * everything else set on a #GowlConfig it lasts until the config is
+ * replaced; gowl_hotkey_add_yaml() is the process-wide form.
+ *
+ * |[<!-- language="C" -->
+ * gowl_config_add_hotkey_yaml(config,
+ *     "hotkeys:\n"
+ *     "  - {key: \"#!t\", do: {action: spawn, arg: gst}}\n", NULL);
+ * ]|
+ *
+ * Returns: %TRUE when @yaml parsed to a mapping and was added
+ */
+gboolean
+gowl_config_add_hotkey_yaml(
+	GowlConfig   *self,
+	const gchar  *yaml,
+	GError      **error
+){
+	g_autoptr(YamlParser) parser = NULL;
+	YamlNode *root;
+	GError *local = NULL;
+
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), FALSE);
+	g_return_val_if_fail(yaml != NULL, FALSE);
+
+	/* Always with an error location: yaml-glib dereferences a NULL one
+	   on malformed input */
+	parser = yaml_parser_new();
+	if (!yaml_parser_load_from_data(parser, yaml, -1, &local)) {
+		g_propagate_error(error, local);
+		return FALSE;
+	}
+	root = yaml_parser_get_root(parser);
+	if (root == NULL || yaml_node_get_node_type(root) != YAML_NODE_MAPPING) {
+		g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+		            "a hotkey section is a mapping");
+		return FALSE;
+	}
+	g_ptr_array_add(self->hotkey_nodes, yaml_node_ref(root));
+	return TRUE;
+}
+
+/**
+ * gowl_config_get_hotkey_base_dir:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (nullable): the directory of the YAML file
+ *   the config came from, which a relative hotkey `script:' or
+ *   `include:' is relative to; %NULL for a config not loaded from a file
+ */
+const gchar *
+gowl_config_get_hotkey_base_dir(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self), NULL);
+	return self->gabbrev_base_dir;
+}
+
+/**
+ * gowl_config_clear_hotkey:
+ * @self: a #GowlConfig
+ *
+ * Removes every `hotkey:' section.
+ */
+void
+gowl_config_clear_hotkey(GowlConfig *self)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	g_ptr_array_set_size(self->hotkey_nodes, 0);
 }
 
 /* --- XKB --- */

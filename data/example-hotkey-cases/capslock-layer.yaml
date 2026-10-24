@@ -1,0 +1,16 @@
+# CapsLock as a navigation layer (the most-copied AutoHotkey script).
+# Held, it turns hjkl into arrows, u/i into Home/End, and d into Delete;
+# tapped alone it is Escape.  The Caps Lock light never comes on: a
+# swallowed CapsLock has its toggle undone.
+hotkey:
+  hotkeys:
+    - {key: "CapsLock & h", do: {send: "{Left}"}}
+    - {key: "CapsLock & j", do: {send: "{Down}"}}
+    - {key: "CapsLock & k", do: {send: "{Up}"}}
+    - {key: "CapsLock & l", do: {send: "{Right}"}}
+    - {key: "CapsLock & u", do: {send: "{Home}"}}
+    - {key: "CapsLock & i", do: {send: "{End}"}}
+    - {key: "CapsLock & d", do: {send: "{Del}"}}
+    # Shift held too: select as you move ({Blind} keeps the Shift)
+    - {key: "CapsLock & n", do: {send: "{Blind}{Left}"}}
+    - {key: "CapsLock", do: {send: "{Esc}"}}

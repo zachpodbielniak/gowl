@@ -33,6 +33,7 @@ gowl-msg -s                     # text events: "EVENT focus 12", "EVENT mode res
 - `inputremap-devices|list|add RULE|remove NAME|clear|reload|enable|disable|log|identify|status`
 - `broadcast-on|off|toggle|panic|status|list|add-team YAML|add-rule YAML|assign TEAM SLOT [ID]|...`
 - `gabbrev-status|list|on|off|toggle|reload|load PATH|add YAML|remove NAME|clear|expand ID|insert TEXT|search|render ID|test TEXT|resolve ID JSON|cancel [JOB]|builtin|stats [--unused]|stats-reset [ID]|suggestions [N]|accept [--trigger T] PHRASE|dismiss PHRASE|learn [on|off|clear]`
+- `hotkey-status|list|problems|add [--id=ID] YAML|remove ID|enable ID|disable ID|toggle ID|fire ID|suspend [on|off|toggle]|mode [NAME]|send KEYS|send-text TEXT|call NAME ARGS|history|keystate KEY|capslock STATE|numlock STATE|context-set NAME 0|1|input-start|input-stop|timers|cancel|reload|help`
 - `macro-run NAME ARGS`, `macro-stop`, `macro-list`, `macro-status`, `macro-record ...`, `macro-voice ...`
 
 An unknown command answers `ERROR unknown command 'X'`. `gowl-msg help` prints the core list.

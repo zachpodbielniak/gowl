@@ -1630,6 +1630,35 @@ the seat directly again.  =tests/test-record-guard.sh= enforces the
 recorder half at the tap now rather than by keeping injection away from
 it --- the old arrangement relied on the bypass that *was* the bug.
 
+*** A swallowed key has still changed the keyboard
+:PROPERTIES:
+:CUSTOM_ID: swallowed-key-state
+:END:
+
+An input observer's =filter_key= decides before the key reaches any
+client, but *not* before xkb: the keyboard's state is updated as the
+evdev event arrives, so by the time a module swallows Caps Lock the lock
+is already toggled, and by the time it swallows a modifier that
+modifier is already down.  Two consequences, both met by the hotkey
+module:
+
+- *Locks.*  =gowl_compositor_get_lock_state()= and
+  =gowl_compositor_set_lock_state(self, caps, num)= (-1 keeps one as it
+  is) read and set Caps Lock and Num Lock on every keyboard and on the
+  group.  Setting a lock off also clears its depressed and latched
+  bits, or a held Caps Lock keeps capitalising.  Set it from an idle
+  /after/ the key event: the group copies its members' state when they
+  change, so a correction made inside the event is overwritten by the
+  propagation that follows it.
+- *Modifiers.*  =wlr_keyboard_group= copies its members' modifiers
+  whenever one of them changes.  A modifier a module holds by injection
+  (a remap onto Control) is therefore wiped by the next physical
+  modifier press.  The hotkey module listens to the group's
+  =events.modifiers= while it holds one and puts it back, and takes the
+  listener off on every way out --- wlroots aborts when an object is
+  destroyed with a listener still on it (=tests/test-hotkey-guard.sh=,
+  rule 8).
+
 *** A captured image that outlives the frame needs a buffer we own
 :PROPERTIES:
 :CUSTOM_ID: fx-buffer-ownership

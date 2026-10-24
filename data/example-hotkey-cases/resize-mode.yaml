@@ -1,0 +1,20 @@
+# A modal layer: Super+r enters `resize', where hjkl move and size the
+# focused window and every other key does nothing; Escape, Enter, or two
+# seconds without a key leave it.
+hotkey:
+  modes:
+    resize:
+      timeout: 2s
+      swallow: true
+      label: "RESIZE  hjkl move, HJKL size, Esc leave"
+      hotkeys:
+        - {key: h, do: {window: move-by, arg: "-40 0"}}
+        - {key: l, do: {window: move-by, arg: "40 0"}}
+        - {key: k, do: {window: move-by, arg: "0 -40"}}
+        - {key: j, do: {window: move-by, arg: "0 40"}}
+        - {key: "+h", do: {rpc: window.move_by, params: {dwidth: -40}}}
+        - {key: "+l", do: {rpc: window.move_by, params: {dwidth: 40}}}
+        - {key: Esc, do: {mode: default}}
+        - {key: Enter, do: {mode: default}}
+  hotkeys:
+    - {key: "#r", do: {mode: resize}}

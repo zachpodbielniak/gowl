@@ -1,0 +1,15 @@
+# Shortcuts that only exist in one application (AutoHotkey's #HotIf
+# WinActive).  The same key does something else -- or nothing -- in
+# every other window.
+hotkey:
+  contexts:
+    librewolf: "app-id=librewolf"
+  hotkeys:
+    # Ctrl+Shift+d: duplicate the tab (address bar, Alt+Enter)
+    - {key: "^+d", context: librewolf, do: {send: "!d!{Enter}"}}
+    # F2: reopen the last closed tab
+    - {key: F2, context: librewolf, do: {send: "^+t"}}
+    # an inline condition instead of a named context
+    - key: F3
+      when: "app-id=librewolf and title=*YouTube*"
+      do: {send: "k"}        # play/pause the video

@@ -87,6 +87,7 @@ enum {
 	SIGNAL_RENDERER_REPLACED,
 	SIGNAL_POINTER_CONFINE_CHANGED,
 	SIGNAL_MODULE_EVENT,
+	SIGNAL_IPC_CHANGED,
 	N_SIGNALS
 };
 
@@ -1091,6 +1092,27 @@ gowl_compositor_class_init(GowlCompositorClass *klass)
 		             G_TYPE_STRING);
 
 	/**
+	 * GowlCompositor::ipc-changed:
+	 * @compositor: the #GowlCompositor that emitted the signal
+	 * @ipc: (nullable): the IPC server now in use, or %NULL for none
+	 *
+	 * gowl_compositor_set_ipc() gave the compositor another server.  A
+	 * module that adds JSON-RPC methods registers them on the new one
+	 * here: under cmacs the server is started from Lisp, after the
+	 * modules have started (the hotkey module does this).
+	 */
+	compositor_signals[SIGNAL_IPC_CHANGED] =
+		g_signal_new("ipc-changed",
+		             G_TYPE_FROM_CLASS(klass),
+		             G_SIGNAL_RUN_LAST,
+		             0,
+		             NULL, NULL,
+		             NULL,
+		             G_TYPE_NONE,
+		             1,
+		             GOWL_TYPE_IPC);
+
+	/**
 	 * GowlCompositor::client-pre-map:
 	 * @compositor: the #GowlCompositor that emitted the signal
 	 * @client: the #GowlClient that is about to be placed
@@ -1534,9 +1556,12 @@ gowl_compositor_set_ipc(
 	GowlCompositor *self,
 	GowlIpc        *ipc
 ){
+	gboolean changed;
+
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
 	/* A server being replaced stops hearing about this compositor. */
+	changed = self->ipc != ipc;
 	if (self->ipc != NULL && self->ipc != ipc)
 		gowl_compositor_ipc_uninstall_methods(self, self->ipc);
 	self->ipc = ipc;
@@ -1549,6 +1574,8 @@ gowl_compositor_set_ipc(
 		gowl_ipc_set_command_handler(ipc, ipc_command_handler, self);
 		gowl_compositor_ipc_install_methods(self, ipc);
 	}
+	if (changed)
+		g_signal_emit(self, compositor_signals[SIGNAL_IPC_CHANGED], 0, ipc);
 }
 
 static gchar *

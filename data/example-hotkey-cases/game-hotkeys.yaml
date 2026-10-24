@@ -1,0 +1,16 @@
+# Hotkeys for a game -- EverQuest here.  They work while the game is
+# fullscreen and inhibiting shortcuts: hotkeys are decided before any
+# bind and before shortcuts-inhibit, as AutoHotkey's hook is.  `$' keeps
+# the keys the hotkeys send from firing hotkeys again.
+hotkey:
+  contexts:
+    everquest: "app-id=eqgame.exe"
+  hotkeys:
+    # one key, a sequence: target the nearest, then auto-attack
+    - key: "$Numpad1"
+      context: everquest
+      do: {send: "{Tab}{Sleep 50}q", send-mode: event, key-delay: 30}
+    # sit / stand toggle on the mouse
+    - {key: "$XButton1", context: everquest, do: {send: "/sit{Enter}"}}
+    # suspend everything while chatting: one key off, the same key on
+    - {key: "$Pause", suspend-exempt: true, context: everquest, do: {suspend: toggle}}

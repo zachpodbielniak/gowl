@@ -3440,6 +3440,29 @@ gabbrev:
 
 The section is kept whole and handed to the module, which owns the format; config-load only checks that it is a mapping (anything else is a counted problem).  The module reports its own problems --- unknown keys, regexes that do not compile, missing files --- in =gowl-msg gabbrev-status=, and loads everything else.  Module settings (=builtin=, =deny-filter=, =terminals=, =picker-command=, =stats=, =learn=, =watch=, =clipboard-history=, ...) go under =modules: gabbrev:=.  The full reference --- matching, every variable type, grab-and-rewrite, C variables, filters and profiles, the IPC --- is [[file:gabbrev.org][gabbrev.org]]; =data/example-gabbrev.yaml= and =data/example-gabbrev.c= are complete examples.  In a C config: =gowl_gabbrev_add_file()=, =gowl_gabbrev_add_yaml()=, =gowl_gabbrev_register_func()= and =gowl_gabbrev_register_var_type()= (process-wide: they survive a reload), or =gowl_config_add_gabbrev_yaml()= for a section on the config object.
 
+*** Hotkeys (hotkey)
+:PROPERTIES:
+:CUSTOM_ID: hotkey-config
+:END:
+
+The =hotkey= section configures the opt-in =hotkey= module, gowl's AutoHotkey: hotkeys on keys, buttons and the wheel, remaps, modes, contexts, hotstrings (handed to gabbrev), timers, event hooks and functions.
+
+#+begin_src yaml
+modules:
+  hotkey: { enabled: true }
+
+hotkey:
+  hotkeys:
+    - {key: "#!t", do: {action: spawn, arg: gst}}
+    - {key: "CapsLock & j", do: {send: "{Down}"}}
+  remaps:
+    XButton2: MButton
+  hotstrings:
+    - "::btw::by the way"
+#+end_src
+
+Like =gabbrev:=, the section is kept whole and handed to the module, which owns the format; config-load only checks that it is a mapping (anything else is a counted problem).  The module reports its own problems --- unknown keys and key names, actions it cannot read, filters that do not parse --- in =gowl-msg hotkey-problems=, and loads everything else.  Module settings (=suspend-key=, =key-delay=, =send-mode=, =scripts=, =dbus=, ...) go under =modules: hotkey:=.  The full reference --- the key notation, how a key is decided, every action, Send syntax, the C API, the IPC, a cookbook and a map from AutoHotkey --- is [[file:hotkey.org][hotkey.org]]; =data/example-hotkey.yaml=, =data/example-hotkey.c= and =data/example-hotkey-script.c= are complete examples.  In a C config: =gowl_hotkey_define()=, =gowl_hotkey_register_func()=, =gowl_hotkey_register_context()= and =gowl_hotkey_add_yaml()= (process-wide: they survive a reload), or =gowl_config_add_hotkey_yaml()= for a section on the config object.
+
 *** Monitor Configuration
 :PROPERTIES:
 :CUSTOM_ID: monitor-configuration
@@ -4107,6 +4130,25 @@ gowl_gabbrev_register_func("build-id", build_id, NULL, NULL);
 #+end_src
 
 =gowl_gabbrev_register_var_type()= adds a whole variable type, or replaces a built-in one; a type's function may answer from any thread.  See [[file:gabbrev.org::#gabbrev-extending][gabbrev.org]] and =data/example-gabbrev.c=.
+
+**** Hotkeys from C
+
+The =hotkey= module's hotkeys, functions and contexts can come from C, process-wide (they survive a config reload) and before the module loads:
+
+#+begin_src C
+static void
+which_window(GowlHotkeyCall *call, gpointer data)
+{
+    GowlClient *c = gowl_hotkey_call_get_focused(call);
+
+    g_message("focused: %s", c != NULL ? gowl_client_get_app_id(c) : "nothing");
+}
+
+gowl_hotkey_define("which-window", "#!w", which_window, NULL, NULL, NULL);
+gowl_hotkey_add_yaml("mine", "hotkeys: [{key: F9, do: {notify: hi}}]", NULL);
+#+end_src
+
+See [[file:hotkey.org::#hotkey-c-api][hotkey.org]] and =data/example-hotkey.c=.
 
 **** Adding Rules
 :PROPERTIES:

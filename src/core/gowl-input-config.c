@@ -423,3 +423,102 @@ gowl_input_config_foreach_device(
 		func(t->device, user_data);
 	}
 }
+
+/* ── Lock state ───────────────────────────────────────────────────── */
+
+typedef struct {
+	gint caps;
+	gint num;
+} LockChange;
+
+/* The locked-modifier mask of @kb with @change applied. */
+static void
+apply_lock_change(
+	struct wlr_keyboard *kb,
+	gpointer             data
+){
+	LockChange *ch = data;
+	xkb_mod_index_t caps_idx;
+	xkb_mod_index_t num_idx;
+	guint32 locked;
+	guint32 depressed;
+	guint32 latched;
+	guint32 off = 0;
+
+	if (kb == NULL || kb->keymap == NULL || kb->xkb_state == NULL)
+		return;
+	locked = kb->modifiers.locked;
+	caps_idx = xkb_keymap_mod_get_index(kb->keymap, XKB_MOD_NAME_CAPS);
+	num_idx = xkb_keymap_mod_get_index(kb->keymap, XKB_MOD_NAME_NUM);
+	if (ch->caps >= 0 && caps_idx != XKB_MOD_INVALID) {
+		if (ch->caps > 0)
+			locked |= (1u << caps_idx);
+		else
+			off |= (1u << caps_idx);
+	}
+	if (ch->num >= 0 && num_idx != XKB_MOD_INVALID) {
+		if (ch->num > 0)
+			locked |= (1u << num_idx);
+		else
+			off |= (1u << num_idx);
+	}
+	/* Off is off in every part of the state: a Caps Lock key that is
+	 * held down -- a swallowed one, a `CapsLock & j' prefix -- has the
+	 * lock in the DEPRESSED mask, and would capitalise what is typed
+	 * while it is held */
+	locked &= ~off;
+	depressed = kb->modifiers.depressed & ~off;
+	latched = kb->modifiers.latched & ~off;
+	if (locked == kb->modifiers.locked && depressed == kb->modifiers.depressed
+	    && latched == kb->modifiers.latched)
+		return;
+	wlr_keyboard_notify_modifiers(kb, depressed, latched, locked,
+	                              kb->modifiers.group);
+}
+
+gboolean
+gowl_compositor_get_lock_state(
+	GowlCompositor *self,
+	gboolean       *caps,
+	gboolean       *num
+){
+	struct wlr_keyboard *kb;
+	xkb_mod_index_t idx;
+
+	if (caps != NULL)
+		*caps = FALSE;
+	if (num != NULL)
+		*num = FALSE;
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+	if (self->wlr_kb_group == NULL)
+		return FALSE;
+	kb = &self->wlr_kb_group->keyboard;
+	if (kb->keymap == NULL)
+		return FALSE;
+	idx = xkb_keymap_mod_get_index(kb->keymap, XKB_MOD_NAME_CAPS);
+	if (caps != NULL && idx != XKB_MOD_INVALID)
+		*caps = (kb->modifiers.locked & (1u << idx)) != 0;
+	idx = xkb_keymap_mod_get_index(kb->keymap, XKB_MOD_NAME_NUM);
+	if (num != NULL && idx != XKB_MOD_INVALID)
+		*num = (kb->modifiers.locked & (1u << idx)) != 0;
+	return TRUE;
+}
+
+void
+gowl_compositor_set_lock_state(
+	GowlCompositor *self,
+	gint            caps,
+	gint            num
+){
+	LockChange ch;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+	if (self->wlr_kb_group == NULL)
+		return;
+	ch.caps = caps;
+	ch.num = num;
+	/* The devices first: a device's modifier change is copied onto the
+	 * group, so the group goes last and ends with the new value */
+	gowl_input_config_foreach_keyboard(self, apply_lock_change, &ch);
+	apply_lock_change(&self->wlr_kb_group->keyboard, &ch);
+}

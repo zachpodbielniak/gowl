@@ -828,6 +828,22 @@ Turns individual workspaces into a /floating desktop/: every window on one float
 
 *Files:* =gowl-floatdesk-state.c= (the decisions and the state file, tested directly), =gowl-floatdesk-apps.c= (desktop entries to windows, tested directly), =gowl-module-floatdesk.c=, =gowl-floatdesk-titlebar.c=, =gowl-floatdesk-dock.c=.  Full reference: [[file:floatdesk.org][floatdesk.org]].
 
+*** The hotkey module
+:PROPERTIES:
+:CUSTOM_ID: hotkey-module
+:END:
+AutoHotkey for gowl: hotkeys in AutoHotkey's notation (=#!t=, =~LButton=, =CapsLock & j=, =^a UP=) or gowl's (=Super+Alt+t=), on keys, mouse buttons and wheel notches, running lists of actions --- keybind actions, gowl commands, wire-protocol methods, macros, shell lines and programs, crispy C, functions, the Send language, window and mouse operations, toasts, and under cmacs Elisp.  Around them: remaps, contexts (=#HotIf=), modes, double taps and long presses, hotstrings (handed to gabbrev), timers, event hooks, input hooks, key state and the lock keys.  Opt-in in standalone gowl (=modules: hotkey: {enabled: true}=) and under cmacs (=cmacs-gowl-hotkey-enable=).
+
+*Interfaces:* =GowlInputObserver= (=filter_key= decides every key before binds and before keyboard-shortcuts-inhibit, so hotkeys work in fullscreen games), =GowlMouseHandler= (buttons and the wheel), =GowlIpcHandler=, =GowlStartupHandler=, =GowlShutdownHandler=
+
+*A key is decided once*, by a pure state machine (=gowl-hotkey-engine.c=), and the release follows the press's decision.  The keys it types go through =gowl_compositor_inject_key()=, the compositor's own key path, marked with a send level so they do not fire hotkeys of their own.  Actions run a loop turn after the key event, never inside it; nothing waits through GLib's default context (=tests/test-hotkey-guard.sh=).
+
+*Extending:* =src/hotkey/gowl-hotkey.h= --- =gowl_hotkey_define()= (a hotkey running a C function), =gowl_hotkey_register_func()=, =gowl_hotkey_register_context()= / =gowl_hotkey_set_context()=, =gowl_hotkey_add_yaml()=, and =gowl_hotkey_send()= and friends; a /hotkey script/ is a crispy C file the module builds and reloads on save.  Control is the =hotkey-*= text commands, the =hotkey.*= JSON-RPC methods, and with =dbus: true= =org.gowl.Hotkey1=.
+
+*Settings:* =suspend-key=, =key-delay=, =send-mode=, =send-level=, =accept-synthetic=, =hotstrings=, =scripts=, =c-timeout=, =dbus=, =toast=, =log=.
+
+*Files:* =gowl-module-hotkey.c= (input, configuration, contexts, timers, hooks, IPC), =gowl-hotkey-runner.c= (actions), =gowl-hotkey-script.c=, =gowl-hotkey-dbus.c=, and the pure halves tested directly: =gowl-hotkey-engine.c=, =gowl-hotkey-model.c=, =gowl-hotkey-send.c=, =gowl-hotkey-hotstring.c=.  The key notation and the registries are in libgowl (=src/hotkey/=).  Full reference: [[file:hotkey.org][hotkey.org]].
+
 *** The macro module
 :PROPERTIES:
 :CUSTOM_ID: macro-module

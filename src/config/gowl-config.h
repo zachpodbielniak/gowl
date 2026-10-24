@@ -1223,6 +1223,42 @@ const gchar *gowl_config_get_gabbrev_base_dir   (GowlConfig         *self);
 void         gowl_config_clear_gabbrev          (GowlConfig         *self);
 
 /**
+ * gowl_config_get_hotkey_nodes:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (element-type YamlNode): the `hotkey:' sections
+ */
+GPtrArray   *gowl_config_get_hotkey_nodes       (GowlConfig         *self);
+
+/**
+ * gowl_config_add_hotkey_yaml:
+ * @self: a #GowlConfig
+ * @yaml: a `hotkey:' section's contents
+ * @error: return location for a parse error
+ *
+ * Returns: %TRUE when added
+ */
+gboolean     gowl_config_add_hotkey_yaml        (GowlConfig         *self,
+                                                 const gchar        *yaml,
+                                                 GError            **error);
+
+/**
+ * gowl_config_get_hotkey_base_dir:
+ * @self: a #GowlConfig
+ *
+ * Returns: (transfer none) (nullable): the config file's directory
+ */
+const gchar *gowl_config_get_hotkey_base_dir    (GowlConfig         *self);
+
+/**
+ * gowl_config_clear_hotkey:
+ * @self: a #GowlConfig
+ *
+ * Removes every `hotkey:' section.
+ */
+void         gowl_config_clear_hotkey           (GowlConfig         *self);
+
+/**
  * gowl_config_get_keybinds:
  * @self: a #GowlConfig
  *

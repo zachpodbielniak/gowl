@@ -1,0 +1,1582 @@
+#+title: hotkey: AutoHotkey for gowl
+#+description: The hotkey module: AutoHotkey's hotkeys, combinations, remaps, modes, contexts, hotstrings, timers and event hooks, done in the compositor -- every notation, every action, the C API, the IPC, JSON-RPC and D-Bus control, a cookbook, and a map from AutoHotkey.
+#+authors: Zach Podbielniak
+#+categories: gowl modules
+#+created: 2026-10-24T03:00:00-04:00
+#+updated: 2026-10-24T03:00:00-04:00
+#+version: 0.1.0
+
+* hotkey
+:PROPERTIES:
+:CUSTOM_ID: hotkey
+:END:
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: hotkey-overview
+:END:
+
+The *hotkey* module is AutoHotkey for gowl.  A hotkey is a key --- written as AutoHotkey writes it (=#!t=, =~LButton=, =CapsLock & j=, =^a UP=) or as gowl writes it (=Super+Alt+t=) --- and a list of actions to run when it is pressed: a gowl action or command, a wire-protocol method, a macro, a shell command, a program, a piece of C, a function, typed keys, a window or mouse operation, a toast, a mode, and under =cmacs --gowl= any Elisp.  Around that sit the rest of what AutoHotkey users build their scripts from: remaps (=a::b=), contexts (=#HotIf=), modes, double taps and long presses, hotstrings, timers (=SetTimer=), event hooks (what =SetWinEventHook= is used for), input hooks (=InputHook=), the Send language, the lock keys (=SetCapsLockState=) and the key history.
+
+Doing it in the compositor is what makes it work the way AutoHotkey works on Windows.  AutoHotkey installs a /keyboard hook/ that sees every key before any application does and decides, key by key, whether the application gets it; gowl's compositor is already that place.  A hotkey is decided before any configured keybind and before an application's keyboard-shortcuts-inhibit, so it works in a fullscreen game; a swallowed key reaches nothing; and the keys a hotkey types go through the compositor's own key path, so they reach the focused window exactly as typed keys do, X11 windows included.
+
+How it fits with gowl's other input modules:
+
+| Module       | What it does                                              | Use it for                                           |
+|--------------+-----------------------------------------------------------+------------------------------------------------------|
+| =hotkey=     | keys, buttons and wheel notches running actions; remaps   | everything an AutoHotkey script does                 |
+| =gabbrev=    | typed text expanding into other text                      | snippets; the hotkey module's hotstrings go here     |
+| =macro=      | C macros run by name, triggers, recording                 | longer programs; a hotkey can run one                |
+| =inputremap= | one /device/'s keys onto other keys or actions, 1:1       | a foot pedal or macro pad kept apart from the keyboard |
+| =broadcast=  | keys typed in one window repeated into others             | multiboxing                                          |
+
+The two that overlap most: *remap a modifier* (Caps Lock and Control swapped for good, or one device's keys rewritten) with =inputremap= or an xkb option --- it claims the device, so the original key never reaches the keyboard state; *remap to a modifier, or anything conditional* (Caps Lock as Control only in a terminal, a key that is a layer) with =hotkey=.
+
+The module is *opt-in*.  Standalone gowl loads it only when the configuration says so:
+
+#+begin_src yaml
+modules:
+  hotkey: {enabled: true}
+#+end_src
+
+Under =cmacs --gowl= set =cmacs-gowl-hotkey-enable= (or define a hotkey from Elisp, which loads it); see /Hotkeys (AutoHotkey)/ in the cmacs manual.
+
+** Quick start
+:PROPERTIES:
+:CUSTOM_ID: hotkey-quick-start
+:END:
+
+*1. Enable it*, and add a first hotkey, a remap and a hotstring, in =~/.config/gowl/config.yaml=:
+
+#+begin_src yaml
+modules:
+  hotkey: {enabled: true}
+  gabbrev: {enabled: true}       # types the hotstrings
+
+hotkey:
+  hotkeys:
+    - {key: "#!t", do: {action: spawn, arg: gst}}   # Super+Alt+t: a terminal
+  remaps:
+    CapsLock: Control_L                             # Caps Lock is Control
+  hotstrings:
+    - "::btw::by the way"
+#+end_src
+
+*2. Reload* the configuration (=Super+Shift+r=, or =gowl-msg reload=) --- the module re-reads its section whenever the configuration changes.
+
+*3. Check* what it made of it:
+
+#+begin_src sh
+gowl-msg hotkey-list          # every hotkey, with its canonical form
+gowl-msg hotkey-problems      # anything it could not use, one line each
+gowl-msg hotkey-status        # suspended?  mode?  counts
+#+end_src
+
+A mistake costs only the entry it is in: a key name gowl does not know, an action with a typo, a filter that does not parse --- each is one line in =hotkey-problems=, and everything else loads.
+
+** Key syntax
+:PROPERTIES:
+:CUSTOM_ID: hotkey-key-syntax
+:END:
+
+A hotkey's =key:= is AutoHotkey's notation or gowl's; both mean the same, and =hotkey-list= shows each in canonical AutoHotkey form.
+
+| AutoHotkey     | gowl                 | Meaning                                        |
+|----------------+----------------------+------------------------------------------------|
+| =#!t=          | =Super+Alt+t=        | Super, Alt and t                               |
+| =^+Enter=      | =Ctrl+Shift+Return=  | Control, Shift and Enter                       |
+| =<^a=          | =LCtrl+a=            | the *left* Control and a                       |
+| =>!F4=         | =RAlt+F4=            | the *right* Alt and F4                         |
+| =<^>!e=        | =AltGr+e=            | AltGr (the Level 3 shift, Mod5) and e          |
+| =*F13=         | =*F13=               | F13 with any other modifiers held              |
+| =~F1=          | =~F1=                | F1, and the window still gets it               |
+| =$Numpad1=     | =$Numpad1=           | Numpad1, never fired by injected input         |
+| =a UP=         | =a UP=               | fires when a is released                       |
+| =CapsLock & j= |                      | j while Caps Lock is held (a combination)      |
+| =~LButton=     |                      | the left button, passed through                |
+| =^WheelUp=     | =Ctrl+WheelUp=       | a wheel notch up with Control                  |
+|                | =Hyper+a=            | Hyper (Mod3), which AutoHotkey has no symbol for |
+
+*** The prefix symbols
+:PROPERTIES:
+:CUSTOM_ID: hotkey-prefix-symbols
+:END:
+
+| Symbol | Meaning                                                                                       |
+|--------+-----------------------------------------------------------------------------------------------|
+| =#=    | Super (the Windows key)                                                                       |
+| =!=    | Alt                                                                                           |
+| =^=    | Control                                                                                       |
+| =+=    | Shift                                                                                         |
+| =<=    | the next modifier must be the left-hand key: =<^= is the left Control                         |
+| =>=    | the right-hand key                                                                            |
+| =<^>!= | AltGr --- on Linux the Level 3 shift (Mod5), which is what AltGr is                           |
+| =*=    | wildcard: fire even with other modifiers held (=*^a= fires for Control+Shift+a)               |
+| =~=    | passthrough: fire, and let the window have the key too                                        |
+| =$=    | never fire on injected input --- not a Send's keys, not a KVM's (see [[#hotkey-levels][levels]])          |
+| =UP=   | (a suffix, after a space) fire on the release                                                 |
+| =&=    | (between two keys, with spaces) a custom combination                                           |
+
+Symbols are read while more than one character is left, so the last character is always the key: =^+= is Control and the plus key, =+= alone is the plus key, =#!= is Super and =!=.  An upper-case letter is the same key as its lower-case one; Shift is written =+=.
+
+*** Key names
+:PROPERTIES:
+:CUSTOM_ID: hotkey-key-names
+:END:
+
+- *One character* is the key that types it: =a=, =1=, =;=, =/=, =é=.
+- *AutoHotkey's names*, not case-sensitive: =Enter= =Esc= =Space= =Tab= =Backspace= (=BS=) =Delete= (=Del=) =Insert= (=Ins=) =Home= =End= =PgUp= =PgDn= =Up= =Down= =Left= =Right= =CapsLock= =ScrollLock= =NumLock= =PrintScreen= =Pause= =CtrlBreak= =AppsKey= =Help= =Sleep= =F1=..=F24= =Numpad0=..=Numpad9= =NumpadDot= =NumpadDiv= =NumpadMult= =NumpadAdd= =NumpadSub= =NumpadEnter= (and =NumpadHome= =NumpadUp= ... for the keys with Num Lock off) =Volume_Up= =Volume_Down= =Volume_Mute= =Media_Next= =Media_Prev= =Media_Stop= =Media_Play_Pause= =Browser_Back= =Browser_Forward= =Browser_Refresh= =Browser_Stop= =Browser_Search= =Browser_Favorites= =Browser_Home= =Launch_Mail= =Launch_Media= =Launch_App1= =Launch_App2=.
+- *Modifier keys*: =LCtrl= =RCtrl= =LShift= =RShift= =LAlt= =RAlt= =LWin= =RWin= =AltGr=, and the neutral =Ctrl= =Shift= =Alt= =Win= (either hand).
+- *Any XKB keysym name*: =Return= =Prior= =KP_5= =XF86AudioRaiseVolume= =ISO_Level3_Shift=.
+- *=code:NN=*: an evdev keycode, for a key with no keysym --- a macro pad's, a foot pedal's.  =gowl-msg hotkey-history= shows the code of every key pressed.
+- *Mouse*: =LButton= =RButton= =MButton= =XButton1= (back) =XButton2= (forward), and =BTN_SIDE= =BTN_EXTRA= =BTN_FORWARD= =BTN_BACK= =BTN_TASK=.
+- *The wheel*: =WheelUp= =WheelDown= =WheelLeft= =WheelRight=, one hotkey press per notch (a smooth-scrolling touchpad counts one notch per 15 units).
+
+*** Refused
+:PROPERTIES:
+:CUSTOM_ID: hotkey-key-refused
+:END:
+
+What AutoHotkey itself refuses is refused, each with its own message: a three-key combination (=a & b & c=; use a mode, or a context on a two-key one), a wheel =UP= hotkey (a notch has no release), a wheel as a combination's prefix (it cannot be held), a key name gowl does not know.
+
+** How a key is decided
+:PROPERTIES:
+:CUSTOM_ID: hotkey-semantics
+:END:
+
+The engine (=modules/hotkey/gowl-hotkey-engine.c=) decides each press once, in this order, and remembers the decision with the held key, so the release follows it whatever changes meanwhile --- a reload, a mode switch, the modifiers let go first:
+
+1. a *combination* whose prefix is held;
+2. the key as the *prefix* of a combination;
+3. a *long press*;
+4. a *lone modifier*;
+5. a *double tap*;
+6. a *plain* hotkey (the best one) and an *UP* hotkey;
+7. a *remap*, when nothing above took the key;
+8. a *swallowing mode* eats what is left.
+
+The traces below show input on the left and what the window receives on the right.
+
+*** Swallowed, passed through, and the release
+:PROPERTIES:
+:CUSTOM_ID: hotkey-suppression
+:END:
+
+A hotkey swallows its key: the window gets neither the press nor its release.  With =~= it gets both, and the hotkey fires too.
+
+#+begin_src yaml
+hotkey:
+  hotkeys:
+    - {key: "#!t", do: {action: spawn, arg: gst}}
+    - {key: "~F1", do: {shell: "date >> ~/f1.log"}}
+#+end_src
+
+#+begin_example
+Super down, Alt down, t down   ->  Super, Alt  (t is swallowed; the terminal starts)
+t up, Alt up, Super up         ->  Alt up, Super up  (t's release is swallowed too)
+F1 down, F1 up                 ->  F1 down, F1 up    (and the line is logged)
+#+end_example
+
+*** Modifiers: exact, wildcard, and which hand
+:PROPERTIES:
+:CUSTOM_ID: hotkey-modifiers
+:END:
+
+=^a= is Control+a and nothing else: Control+Shift+a is not it.  =*^a= is Control+a with anything else held too.  =<^a= wants the left Control key physically down; the right one does not count.  The neutral =Ctrl= key name matches either hand.
+
+*** UP hotkeys
+:PROPERTIES:
+:CUSTOM_ID: hotkey-up
+:END:
+
+=a UP= fires when a is released.  On its own it swallows the press too (as AutoHotkey's does); with =~a UP= the key works normally and the release fires.  A key can have both: =a= fires on the press and =a UP= on the release --- give one of them an =id:=, since by default the id is the key as written.
+
+*** Custom combinations and prefix keys
+:PROPERTIES:
+:CUSTOM_ID: hotkey-combinations
+:END:
+
+=CapsLock & j= fires when j is pressed while Caps Lock is held.  The prefix, Caps Lock, is then swallowed whenever it is pressed --- AutoHotkey's rule: a prefix loses its own function --- and its own hotkey, if it has one, fires on its *release*, and only if nothing else was pressed while it was held.  So:
+
+#+begin_src yaml
+hotkey:
+  hotkeys:
+    - {key: "CapsLock & j", do: {send: "{Down}"}}
+    - {key: "CapsLock", do: {send: "{Esc}"}}
+#+end_src
+
+#+begin_example
+CapsLock down, j down, j up, CapsLock up   ->  Down    (the combination)
+CapsLock down, CapsLock up                 ->  Escape  (tapped alone: its own hotkey)
+CapsLock down, x down, x up, CapsLock up   ->  x       (x has no combination: just x)
+#+end_example
+
+A combination is its own wildcard: Shift held with Caps Lock and j still fires it.  =~CapsLock & j= keeps the prefix working (the press goes through).  A *modifier* used as a prefix (=LShift & a=) is never swallowed --- it stays a modifier.
+
+*Caps Lock never toggles* when it is swallowed: the keyboard turns the lock on as the key goes down, before any decision, so the module puts the lock back as it was (and, with it off, takes it out of the held state too, so what is typed while Caps Lock is held is not capitalised).
+
+The prefix can be a mouse button and the key a wheel notch: =XButton1 & WheelUp=.
+
+*** Lone modifiers
+:PROPERTIES:
+:CUSTOM_ID: hotkey-lone-modifiers
+:END:
+
+A hotkey on a modifier key alone --- =LWin=, =LShift=, =RAlt= --- fires on the *release*, and only if no other key was pressed while it was held: tapping Super opens the menu, Super+t is still Super+t.  The modifier itself is never swallowed.  =~LAlt= fires on the press instead.
+
+*** Double taps
+:PROPERTIES:
+:CUSTOM_ID: hotkey-double
+:END:
+
+=double: true= (300 ms) or =double: 250ms= makes a hotkey fire on the second of two presses in time.  The first press is held back for that long: a second press fires the double; otherwise the key's plain hotkey fires --- or, with none, the key is put back.  Single and double are never both run.
+
+#+begin_src yaml
+hotkey:
+  hotkeys:
+    - {id: single, key: Esc, do: {notify: "one"}}
+    - {id: double, key: Esc, double: 300, do: {notify: "two"}}
+#+end_src
+
+#+begin_example
+Esc, (300 ms pass)             ->  "one"
+Esc, Esc (within 300 ms)       ->  "two"
+#+end_example
+
+Without the =single= hotkey, a lone Escape is put back after 300 ms, so Escape still works --- 300 ms late.  =~Esc= with =double:= passes both presses through and fires on the second, with no delay.  On a lone modifier (=LShift=, =double: 300=) the taps are counted on clean releases, and the modifier is never delayed.
+
+Another key pressed before the time is up decides it there and then: the first press was a single tap, and it is put back /ahead/ of the new key, so typed text keeps its order.
+
+*** Long presses
+:PROPERTIES:
+:CUSTOM_ID: hotkey-hold
+:END:
+
+=hold: true= (500 ms) or =hold: 1s= fires when the key has been held that long.  Released sooner, it was a tap: the key's plain hotkey fires, or with none the key is put back --- a quick Escape is still an Escape.  Another key pressed meanwhile makes it a tap at once (put back first, then the new key).  =~= on a long press lets the key through at once and fires at the time.
+
+*** Choosing among hotkeys
+:PROPERTIES:
+:CUSTOM_ID: hotkey-choosing
+:END:
+
+When several hotkeys match one press, one fires: the highest =priority:= (default 0), then one with a context over one without (AutoHotkey's =#HotIf= variants beat the global hotkey), then the one with more modifiers, then the one loaded last.  A hotkey whose context does not hold, or that is running already as often as =max-running:= allows, does not count --- the next one does, and with none the key is a key.
+
+A later definition with the *same id* replaces an earlier one, so a C config or a runtime =hotkey-add= can override the YAML.
+
+*** Injected input, =$= and levels
+:PROPERTIES:
+:CUSTOM_ID: hotkey-levels
+:END:
+
+Keys the module types itself (a Send, a remap, a key put back) carry a /send level/ (default 0, module setting =send-level=, action option =level:=).  A hotkey of input /level/ L (default 0, =level:=) fires on them only when the send level is above L --- so by default nothing the module types fires a hotkey, and a hotkey that sends its own key does not loop.  =$= on a hotkey refuses injected input at any level.
+
+Someone else's injected input --- a software KVM's (deskflow), a macro's --- is ignored unless the module setting =accept-synthetic: true= says a KVM keyboard is a keyboard; =$= hotkeys refuse it still.
+
+** Contexts (#HotIf)
+:PROPERTIES:
+:CUSTOM_ID: hotkey-contexts
+:END:
+
+A hotkey with =context: NAME= or its own conditions fires only where they hold.  A condition is gowl's filter language (=src/util/gowl-filter.h=, the same gabbrev and broadcast use): =and=, =or=, =not=, parentheses; ===/=!== globs, =~=/=!~= regexes, =<= =>= on numbers.
+
+| Key       | Holds when                                              | AutoHotkey             |
+|-----------+---------------------------------------------------------+------------------------|
+| =when:=   | the *focused* window matches (=filter:= is the same)    | =WinActive=            |
+| =over:=   | the window *under the pointer* matches                  | =MouseIsOver=          |
+| =exists:= | *any* window matches                                    | =WinExist=             |
+| =absent:= | *no* window matches                                     | =!WinExist=            |
+
+Every one given must hold.  The fields: =app-id= (and =class=, the same), =title=, =exec= (=/proc/PID/exe=), =pid=, =id= (the window id), =xwayland=, =floating=, =fullscreen= (=true=/=false=), =monitor=, =layout=, =tags= (=1,3=), =tag= (the lowest), =time= (=14:05=), =hour=, =weekday= (=mon= ... =sun=) and =mode= (the key mode).
+
+#+begin_src yaml
+hotkey:
+  contexts:
+    browser: "app-id=librewolf or app-id=firefox*"
+    meeting:
+      exists: "app-id=zoom or title=*Meet*"
+      when: "not app-id=zoom"
+  hotkeys:
+    - {key: "^+d", context: browser, do: {send: "!d!{Enter}"}}
+    - {key: F9, context: meeting, do: {window: activate, target: "app-id=zoom"}}
+    - key: F3
+      when: "app-id=librewolf and title=*YouTube*"
+      do: {send: "k"}
+    - key: "WheelUp"
+      over: "app-id=org.example.Music"
+      do: {run: [playerctl, volume, "0.05+"]}
+#+end_src
+
+A name that =contexts:= does not define is looked up in libgowl's registry: a *C predicate* (=gowl_hotkey_register_context()=, see [[#hotkey-c-api][the C API]]) or a *boolean* set from outside --- =gowl-msg hotkey-context-set NAME 1=, =gowl_hotkey_set_context()=.  cmacs's Elisp contexts are booleans: Lisp evaluates them when the focus or a title changes and sets the answer, so a key is never kept waiting for Lisp.  A name nobody defines never holds.
+
+*Window groups* (AutoHotkey's =GroupAdd=) are named filters too, under =groups:=, used by ={window: group-activate, arg: NAME}=.
+
+** Actions
+:PROPERTIES:
+:CUSTOM_ID: hotkey-actions
+:END:
+
+=do:= is one action or a list, run in order --- a /runner/, AutoHotkey's thread.  Most actions finish at once; a few wait (marked), and the runner picks up from the compositor's event loop when they are done, so nothing ever blocks the desktop.  An action is a mapping with exactly one kind key plus its options; a bare string is a gowl command line.  A failing action is reported (=hotkey-status=, the =fault= event) and the list goes on.
+
+| Kind         | Example                                             | Does                                                  |
+|--------------+-----------------------------------------------------+-------------------------------------------------------|
+| =action=     | ={action: spawn, arg: gst}=                         | a keybind action by name, with its argument           |
+| =command=    | ={command: "view 4"}=                               | any gowl command line (core or module)                |
+| =rpc=        | ={rpc: window.center, params: {width: 800}}=        | a wire-protocol method                                |
+| =window=     | ={window: float}=                                   | a window operation (below)                            |
+| =macro=      | ={macro: pip-corner, args: [small]}=                | a macro (waits with =wait: true=)                     |
+| =shell=      | ={shell: "grim ~/s.png"}=                           | a line through =/bin/sh -c= (waits with =wait: true=) |
+| =run=        | ={run: [librewolf, --new-window]}=                  | a program, no shell (waits with =wait: true=)         |
+| =c=          | ={c: "gowl_hotkey_send(comp, \"^c\");"}=            | crispy C (waits for the first build)                  |
+| =call=       | ={call: tidy, args: [x]}=                           | a function (below)                                    |
+| =send=       | ={send: "^c{Enter}"}=                               | keys, in [[#hotkey-send][Send syntax]] (waits until typed)       |
+| =send-text=  | ={send-text: "literal {text}"}=                     | literal text (waits until typed)                      |
+| =mode=       | ={mode: resize}=, ={mode: default}=                 | enter a mode, or leave modes                          |
+| =suspend=    | ={suspend: toggle}=                                 | suspend hotkeys: =on=, =off=, =toggle=                |
+| =hotkey=     | ={hotkey: disable, id: game-keys}=                  | enable, disable or toggle a hotkey                    |
+| =reload=     | ={reload: true}=                                    | read every source again                               |
+| =mouse=      | ={mouse: click, button: right, x: 10, y: 10}=       | click, press, release, move, drag, wheel              |
+| =clipboard=  | ={clipboard: "{{title}}"}=                          | set the clipboard                                     |
+| =notify=     | ={notify: "saved"}= (or =toast=)                    | a toast                                               |
+| =sleep=      | ={sleep: 250}=, ={sleep: 1.5s}=                     | wait (waits)                                          |
+| =input=      | ={input: tag, length: 2, end-keys: [Enter]}=        | an input hook (waits until it ends)                   |
+| =context=    | ={context: gaming, value: toggle}=                  | set a boolean context                                 |
+| =capslock=   | ={capslock: always-off}= (and =numlock=)            | the lock: =on= =off= =toggle= =always-on= =always-off= =normal= |
+| =custom=     | ={custom: "(message \"hi\")"}= (or =elisp=)         | the embedder's custom action --- Elisp under cmacs    |
+
+Options any action may carry where they mean something: =wait:= and =timeout:= (shell, run, macro; default 60 s, after which a child is killed), =target:= (window, mouse), =level:=, =send-mode:= (=input=|=event=) and =key-delay:= (send), =args:= (macro, call), =params:= (rpc), =cflags:= (c).  Durations are milliseconds, or =ms=, =s=, =m=, =h= after the number.
+
+*Shorthand*: one action may sit on the hotkey entry itself --- ={key: "#t", action: spawn, arg: gst}= --- except =mode:= and =context:=, which on an entry are the hotkey's own.  And =hotkeys:= may be a mapping, ={KEY: ACTIONS}=.
+
+*** Values in text: ={{...}}= and the environment
+:PROPERTIES:
+:CUSTOM_ID: hotkey-values
+:END:
+
+=send-text:=, =notify:=, =clipboard:= and =call:='s =args:= substitute: ={{id}}= (the hotkey), ={{key}}=, ={{trigger}}= (=hotkey=, =timer=, =event=, =hotstring=, =ipc=, ...), ={{app-id}}= and ={{title}}= (of the window focused when it fired), ={{input}}= (the last input hook's text), ={{prior}}= (the hotkey that fired before, AutoHotkey's =A_PriorHotkey=), ={{args}}= and ={{1}}=..={{9}}= (a function's arguments).
+
+A shell line and a program get the same values as *environment variables* --- =GOWL_HOTKEY_ID=, =GOWL_HOTKEY_KEY=, =GOWL_HOTKEY_TRIGGER=, =GOWL_HOTKEY_APP_ID=, =GOWL_HOTKEY_TITLE=, =GOWL_HOTKEY_WINDOW=, =GOWL_HOTKEY_PID=, =GOWL_HOTKEY_PRIOR=, =GOWL_HOTKEY_INPUT=, =GOWL_HOTKEY_ARGS= --- and nothing is ever substituted into the line itself: a window title cannot become a shell command.
+
+#+begin_src yaml
+hotkey:
+  hotkeys:
+    - key: "#+c"
+      do:
+        - {clipboard: "{{title}}"}
+        - {shell: "notify-send copied \"$GOWL_HOTKEY_TITLE\""}
+#+end_src
+
+*** Windows
+:PROPERTIES:
+:CUSTOM_ID: hotkey-window-actions
+:END:
+
+={window: VERB, arg: X, target: FILTER}= is a wire-protocol call on the focused window --- or, with =target:=, the first window the filter matches (AutoHotkey's =WinTitle= with =ahk_class= and =ahk_exe=).  It needs the IPC server (standalone gowl always has one; under cmacs, =gowl-start-ipc=).
+
+| Verb              | Method                    | =arg:=                         |
+|-------------------+---------------------------+--------------------------------|
+| =float=           | =window.set_floating=     | =on= =off= =toggle= (default)  |
+| =fullscreen=      | =window.set_fullscreen=   | the same                       |
+| =sticky=          | =window.set_sticky=       | the same                       |
+| =below=           | =window.set_below=        | the same                       |
+| =urgent=          | =window.set_urgent=       | the same                       |
+| =minimize=        | =window.set_minimized=    |                                |
+| =restore=         | =window.set_minimized=    |                                |
+| =close=, =kill=   | =window.close=            |                                |
+| =activate=, =focus= | =window.focus=          |                                |
+| =center=          | =window.center=           | =WIDTHxHEIGHT= (optional)      |
+| =promote=         | =window.promote=          |                                |
+| =move=            | =window.set_geometry=     | =X Y=                          |
+| =resize=          | =window.set_geometry=     | =WIDTHxHEIGHT=                 |
+| =geometry=        | =window.set_geometry=     | =X Y W H=                      |
+| =move-by=         | =window.move_by=          | =DX DY=                        |
+| =opacity=         | =window.set_opacity=      | =0.0= .. =1.0=                 |
+| =tag=             | =window.set_tags=         | a tag number                   |
+| =send-to-monitor= | =window.send_to_monitor=  | an output name                 |
+| =group-activate=  | (focus)                   | a group: its next window after the focused one, cycling |
+
+Anything else is ={rpc: METHOD, params: {...}}= --- =gowl-msg -c rpc.discover= lists every method.
+
+*** The mouse
+:PROPERTIES:
+:CUSTOM_ID: hotkey-mouse-actions
+:END:
+
+={mouse: VERB}= with =button:= (=left= =right= =middle= =back= =forward=, or a button name), =count:= (clicks), =x:= =y:= (where; layout coordinates, or with =relative: true= from the pointer, or with =coord: window= from the =target:= or focused window's corner), =to-x:= =to-y:= (a drag's end), =notches:= and =horizontal:= (the wheel; negative scrolls up or left).  Verbs: =click= =down= =up= =move= =drag= =wheel=.
+
+#+begin_src yaml
+hotkey:
+  hotkeys:
+    - {key: "#Numpad5", do: {mouse: click, count: 2}}
+    - {key: "#Numpad8", do: {mouse: move, x: 0, y: -40, relative: true}}
+    - {key: "#Numpad0", do: {mouse: drag, x: 100, y: 100, to-x: 600, to-y: 400}}
+    - {key: "#PgDn", do: {mouse: wheel, notches: 5}}
+#+end_src
+
+*** Functions
+:PROPERTIES:
+:CUSTOM_ID: hotkey-functions
+:END:
+
+={call: NAME, args: [...]}= runs, in this order of lookup:
+
+1. a list of actions under =functions:= --- run as part of the same runner, with =args:= as ={{1}}=..., nesting up to 16 deep;
+2. a *C function* registered with =gowl_hotkey_register_func()= (a C config, a script, an embedder);
+3. a function defined over IPC with =hotkey-func-define NAME FORM=: a custom action whose =%i= (the id), =%a= (the arguments, as a Lisp list of strings) and =%t= (the trigger) are filled in --- how cmacs's =cmacs-gowl-hotkey-define-function= works.
+
+=gowl-msg hotkey-call NAME ARGS...= calls one from outside: a C function's result is the reply (=OK RESULT=), a list of actions is started (=OK started=).
+
+#+begin_src yaml
+hotkey:
+  functions:
+    tidy:
+      - {rpc: layout.set, params: {name: tile}}
+      - {notify: "tidied {{1}}"}
+  hotkeys:
+    - {key: "#+t", do: {call: tidy, args: [the desktop]}}
+#+end_src
+
+*** C
+:PROPERTIES:
+:CUSTOM_ID: hotkey-c-actions
+:END:
+
+={c: CODE}= is the body of a function that sees =call= (the =GowlHotkeyCall=), =comp= (the compositor), =focused= (the focused window, or =NULL=), =args= and =ARG(n)=; ={c: {file: PATH}}= is a source file exporting =void gowl_hotkey_action(GowlHotkeyCall *call)=.  crispy compiles it on a worker thread the first time it runs (the runner waits), caches the build, and later runs are instant; =hotkey-reload= builds again.  Every call runs under the *fault guard*: a crash or a runaway loop costs that call --- reported, and held back until a reload --- not the session.  =cflags:= adds compiler flags, and a =#define CRISPY_PARAMS "..."= line in a file does too.
+
+#+begin_src yaml
+hotkey:
+  hotkeys:
+    - key: "#!d"
+      do:
+        c: |
+          g_autoptr(GDateTime) now = g_date_time_new_now_local();
+          g_autofree gchar *day = g_date_time_format(now, "%Y-%m-%d");
+          gowl_hotkey_send_text(comp, day);
+#+end_src
+
+** Send syntax
+:PROPERTIES:
+:CUSTOM_ID: hotkey-send
+:END:
+
+=send:= takes AutoHotkey's Send syntax:
+
+| Write                    | Types                                                        |
+|--------------------------+--------------------------------------------------------------|
+| =hello=                  | h e l l o                                                    |
+| =^c=  =!{Tab}=  =#e=  =+a= | Control+c, Alt+Tab, Super+e, Shift+a --- for the next key only |
+| ={Enter}= ={Esc}= ={F13}= | a named key (every [[#hotkey-key-names][key name]], and =code:NN=)     |
+| ={Tab 3}=                | three of them                                                |
+| ={Shift down}= ={Shift up}= | press or release only                                      |
+| ={U+00E9}=               | a character by code point                                    |
+| ={{}= ={}}= ={!}= ={^}= ={+}= ={#}= | the character itself                              |
+| ={Blind}...=             | leave the held modifiers alone (below)                       |
+| ={Raw}...=               | nothing after it is special                                  |
+| ={Text}...=              | the rest is text, typed as one run                           |
+| ={Click}= ={Click right}= ={LButton}= | a click                                         |
+| ={Sleep 100}=            | (gowl) wait before the rest                                  |
+| a newline, a tab         | Enter, Tab                                                   |
+
+*The hotkey's own modifiers are lifted* while a send types, and pressed again after if they are still held --- so =#!s= sending =x= types x, not Super+Alt+x.  ={Blind}= at the start keeps them: =CapsLock & n= sending ={Blind}{Left}= with Shift held selects.
+
+*Characters the keyboard layout cannot type* (no key makes them) are typed by the compositor's own text path into the focused window instead of being lost.
+
+=send-mode: input= (the default) types all at once; =event= paces keys =key-delay:= ms apart (module settings =send-mode= and =key-delay= set the defaults) --- for an application or a game that drops fast keys.  Sends are queued and typed one after another, never in the middle of a key event.
+
+** Remaps
+:PROPERTIES:
+:CUSTOM_ID: hotkey-remaps
+:END:
+
+=remaps:= is AutoHotkey's =a::b=: one key or button onto another, press for press and release for release, with every modifier held carried through.
+
+#+begin_src yaml
+hotkey:
+  remaps:
+    CapsLock: Control_L        # a mapping, FROM: TO...
+    XButton2: MButton
+    F13: "^Esc"                # a target with modifiers of its own
+  modes:
+    nav:
+      remaps: {j: Down, k: Up} # only in a mode
+#+end_src
+
+or a list, for conditions: =- {from: F13, to: Esc, context: everquest, id: pedal}=.
+
+A hotkey on the key beats a remap of it (=^a= fires; =a= alone is remapped).  A remap's target held across a reload is still released, and switching the module off releases every target it holds.
+
+*Remapping onto a modifier* (Caps Lock to Control) works fully: the Control the module holds stays in force while other modifier keys come and go.  *Remapping a modifier* (=LShift: a=) loads with a warning: the keyboard's own state has the source modifier down before any decision, so it still modifies --- use the =inputremap= module, which claims the device, or an xkb option, for a clean swap.
+
+** Modes
+:PROPERTIES:
+:CUSTOM_ID: hotkey-modes
+:END:
+
+A mode is a set of hotkeys (and remaps) in force only while it is entered.  Modes are the compositor's key modes, shared with configured keybinds' =mode:=, so a mode can be entered from either and the bar shows it.
+
+#+begin_src yaml
+hotkey:
+  modes:
+    resize:
+      timeout: 2s          # leave after two seconds of nothing
+      swallow: true        # keys with no hotkey here do nothing
+      oneshot: false       # true: leave after the first hotkey
+      toast: true          # say so when entered (default)
+      label: Resize        # what the toast says (default: the name)
+      on-enter: {notify: "resizing"}
+      on-exit: {notify: "done"}
+      hotkeys:
+        - {key: h, do: {window: move-by, arg: "-40 0"}}
+        - {key: Esc, do: {mode: default}}
+  hotkeys:
+    - {key: "#r", do: {mode: resize}}
+#+end_src
+
+A hotkey outside =modes:= is in the default mode only; =mode: "*"= puts one in every mode (a way out that always works).  A swallowing mode never eats a modifier, which its own hotkeys may need.
+
+** Hotstrings
+:PROPERTIES:
+:CUSTOM_ID: hotkey-hotstrings
+:END:
+
+=hotstrings:= are AutoHotkey's =:OPTIONS:ABBREVIATION::REPLACEMENT=.  gowl has one recognizer of typed text, gabbrev's, so the hotkey module translates its hotstrings into gabbrev matches and hands them over (as the libgowl source =hotkey=, replaced whole on every reload): the *gabbrev module must be enabled* for them to type anything --- =hotkey-status= says =hotstrings-active= and warns when it is not.
+
+#+begin_src yaml
+hotkey:
+  hotstrings:
+    - "::btw::by the way"
+    - ":*:;em::ada@example.com"
+    - {hotstring: ":*X:;up::", do: {shell: "notify-send \"$(uptime -p)\""}}
+    - {trigger: brb, replace: be right back, options: "*", context: chat}
+#+end_src
+
+| Option         | Meaning                                    | gabbrev                                   |
+|----------------+--------------------------------------------+-------------------------------------------|
+| (none)         | a whole word, fired by an end character    | =left_word= and =right_word=              |
+| =*=            | no end character needed                    | no =right_word=                           |
+| =?=            | inside a word too                          | no =left_word=                            |
+| =C=            | this case only                             | =propagate_case: false=                   |
+| (none), =C0=   | any case; the replacement follows it       | =propagate_case: true=                    |
+| =C1=           | any case, replacement as written           | treated as =C0= (warned)                  |
+| =R=, =T=       | the replacement is literal text            | as written                                |
+| (none)         | the replacement is Send syntax             | ={Enter}= ={Tab}= ={Space}= and the literals become text; other keys are left out (warned) |
+| =X=            | run the hotstring's =do:= instead          | a =hotkey-action= variable                |
+| =B0=, =O=      | no backspacing; omit the end character     | not available (warned)                    |
+| =Kn=           | key delay                                  | gabbrev's =key_delay= option (warned)     |
+| =Z=, =Pn=, =SI= =SE= =SP=, =S= | reset, priority, send mode, suspend | accepted; gabbrev already behaves so     |
+
+=context:= and =when:= become the match's =filter:= (gabbrev speaks the same filter language); =over:=, =exists:= and =absent:= cannot be said to gabbrev and are warned about.  Nothing is dropped silently: every option that cannot be had exactly is a line in =hotkey-problems=.
+
+** Timers
+:PROPERTIES:
+:CUSTOM_ID: hotkey-timers
+:END:
+
+AutoHotkey's =SetTimer=: =every:= repeats, =once:= runs once; =delay:= is the wait before the first run (default: one period).  A timer may have a =context:= and conditions (it skips a run where they do not hold), is skipped while hotkeys are suspended, never overlaps itself, and can be switched off and on (=hotkey-timer-disable ID=, =hotkey-timer-enable ID=; =hotkey-timers= lists them).
+
+#+begin_src yaml
+hotkey:
+  timers:
+    - {id: stretch, every: 50m, do: {notify: "stand up"}}
+    - {id: pull-notes, once: 5m, do: {shell: "cd ~/notes && git pull -q"}}
+    - id: game-reminder
+      every: 1h
+      when: "app-id=eqgame.exe"
+      do: {notify: "an hour of EverQuest"}
+#+end_src
+
+** Event hooks
+:PROPERTIES:
+:CUSTOM_ID: hotkey-hooks
+:END:
+
+=on:= runs actions when something happens --- what AutoHotkey users build with =OnMessage= and =SetWinEventHook=.  Each event takes a list of ={filter:, do:}= hooks (=filter:= is =when:= on the event's window), one hook, or a plain list of actions.
+
+| Event          | When                                  | Its window       | ={{...}}= detail        |
+|----------------+---------------------------------------+------------------+-------------------------|
+| =focus=        | a window gets the keyboard            | that window      |                         |
+| =window-open=  | a window appears                      | that window      |                         |
+| =window-close= | a window goes                         | that window      |                         |
+| =title=        | a window's title changes              | that window      |                         |
+| =tag=          | a monitor shows other tags            | none             | the tag mask and output |
+| =monitor=      | an output is plugged in               | none             | its name                |
+| =mode=         | the key mode changes                  | none             | the mode                |
+| =startup=      | the module starts                     | none             |                         |
+| =lock=, =unlock= | the session locks or unlocks        | none             |                         |
+
+#+begin_src yaml
+hotkey:
+  on:
+    window-open:
+      - filter: "app-id=steam"
+        do: [{window: float}, {notify: "Steam"}]
+    focus:
+      - {filter: "app-id=gst", do: {window: urgent, arg: "off"}}
+    lock: [{run: [playerctl, pause]}]
+#+end_src
+
+** Input hooks
+:PROPERTIES:
+:CUSTOM_ID: hotkey-input-hooks
+:END:
+
+AutoHotkey's =InputHook=: ={input: NAME}= collects what is typed until it ends, then the actions after it run with ={{input}}= and =GOWL_HOTKEY_INPUT= holding it.  It ends at =length:= characters (=max=), a =match:= entry typed in full (=match=), an =end-keys:= key (=endkey:KEY=), =timeout:= (=timeout=), a click (=mouse=), or =hotkey-input-stop= (=stopped=).  The keys it collects are swallowed unless =visible: true=; =case-sensitive: true= makes the match list exact; Backspace takes back a character.  Its end is the event =input NAME REASON TEXT= (and the D-Bus =InputEnded=).
+
+#+begin_src yaml
+hotkey:
+  hotkeys:
+    - key: "#g"
+      do:
+        - {input: tag, length: 2, timeout: 3s, end-keys: [Enter, Esc]}
+        - {shell: "gowl-msg -c tags.view tag=\"$GOWL_HOTKEY_INPUT\""}
+#+end_src
+
+From outside: =hotkey-input-start NAME L5 T2000 V C= (length, timeout, visible, case-sensitive), then listen for the =input= event.
+
+** Key state and the locks
+:PROPERTIES:
+:CUSTOM_ID: hotkey-key-state
+:END:
+
+- =hotkey-keystate KEY= --- whether the key (or button) is held now, and for Caps Lock and Num Lock whether the lock is on (AutoHotkey's =GetKeyState=).
+- =hotkey-history= --- the last 64 inputs: code, keysym, pressed, injected, swallowed, and the hotkey each fired (AutoHotkey's =KeyHistory=).  The first thing to look at when a hotkey does not fire.
+- =hotkey-capslock= / =hotkey-numlock= (and the =capslock:= / =numlock:= actions) --- AutoHotkey's =SetCapsLockState=: =on=, =off=, =toggle=, =always-on= and =always-off= (the key no longer changes it), =normal= (stop forcing).
+
+** The section
+:PROPERTIES:
+:CUSTOM_ID: hotkey-section
+:END:
+
+Everything the =hotkey:= section takes; an unknown key at any level is a problem (an =x-...= key is a note to yourself, ignored).
+
+| Key            | Takes                                      | See                          |
+|----------------+--------------------------------------------+------------------------------|
+| =hotkeys:=     | a list of hotkeys, or ={KEY: ACTIONS}=     | [[#hotkey-key-syntax][Key syntax]], [[#hotkey-semantics][semantics]] |
+| =remaps:=      | ={FROM: TO}= or a list of ={from:, to:}=   | [[#hotkey-remaps][Remaps]]                  |
+| =modes:=       | ={NAME: {...}}=                            | [[#hotkey-modes][Modes]]                    |
+| =contexts:=    | ={NAME: FILTER or {when:, over:, ...}}=    | [[#hotkey-contexts][Contexts]]                 |
+| =groups:=      | ={NAME: FILTER}=                           | [[#hotkey-contexts][Contexts]]                 |
+| =hotstrings:=  | a list                                     | [[#hotkey-hotstrings][Hotstrings]]               |
+| =timers:=      | a list                                     | [[#hotkey-timers][Timers]]                   |
+| =on:=          | ={EVENT: ...}=                             | [[#hotkey-hooks][Event hooks]]              |
+| =functions:=   | ={NAME: ACTIONS}=                          | [[#hotkey-functions][Functions]]                |
+| =include:=     | files (a section, or a config with one)    | relative to this file        |
+| =scripts:=     | crispy hotkey scripts                      | [[#hotkey-scripts][Scripts]]                  |
+
+A hotkey entry: =key:= (required), =do:= (or =actions:=, or one shorthand action), =id:= (default: the key, plus =@context= and =#mode=), =context:=, =when:= (=filter:=), =over:=, =exists:=, =absent:=, =mode:=, =double:=, =hold:=, =priority:=, =level:=, =suspend-exempt:=, =max-running:= (default 1, 0 = no limit), =enabled:=, =description:= (=desc:=).
+
+The sources, in load order: the configuration's =hotkey:= section(s) and what they =include:=, the C config's =gowl_config_add_hotkey_yaml()=, process-wide sections from libgowl (=gowl_hotkey_add_yaml()=, =gowl_hotkey_define()=, scripts, cmacs), then =hotkey-add= at run time.  Keys may be spelt with =_= or =-=.
+
+** Module settings
+:PROPERTIES:
+:CUSTOM_ID: hotkey-settings
+:END:
+
+Under =modules: hotkey:=:
+
+| Setting            | Default             | Meaning                                                     |
+|--------------------+---------------------+-------------------------------------------------------------|
+| =enabled=          | false               | load the module                                             |
+| =suspend-key=      | =Super+Shift+Pause= | suspends and resumes every hotkey but itself; =none= for no key |
+| =key-delay=        | 0                   | ms between the keys a send types (non-zero implies =event=) |
+| =send-mode=        | =input=             | =input= or =event=                                          |
+| =send-level=       | 0                   | the level of the keys the module types                      |
+| =accept-synthetic= | false               | let another program's injected keys (a KVM) fire hotkeys    |
+| =hotstrings=       | true                | hand =hotstrings:= to gabbrev                               |
+| =scripts=          | (none)              | crispy hotkey scripts, a list                               |
+| =c-timeout=        | 2000                | ms a C action, function or context may run                  |
+| =dbus=             | false               | own =org.gowl.Hotkey1= on the session bus                   |
+| =toast=            | true                | toasts for suspend, modes and =notify:=                     |
+| =log=              | false               | log every decision at message level, not info               |
+
+** The C API
+:PROPERTIES:
+:CUSTOM_ID: hotkey-c-api
+:END:
+
+=src/hotkey/gowl-hotkey.h= (in =<gowl/gowl.h>=) is the half of the module that lives in libgowl, so a C config, a script, a macro or an embedder can use it whether or not the module is loaded yet.  Everything is thread-safe; what it calls back runs on the compositor thread under the fault guard.
+
+| Function                                       | Does                                                       |
+|------------------------------------------------+------------------------------------------------------------|
+| =gowl_hotkey_spec_parse()= / =_to_string()=    | read a key as the module does; print it canonically        |
+| =gowl_hotkey_input_parse()=                    | one key, button or wheel name                              |
+| =gowl_hotkey_define(id, key, func, ...)=       | a hotkey that runs a C function, in one call               |
+| =gowl_hotkey_undefine(id)=                     | and back                                                   |
+| =gowl_hotkey_register_func(name, func, ...)=   | a function =call:= and =hotkey-call= can use               |
+| =gowl_hotkey_register_context(name, pred, ...)= | a context: a C predicate                                  |
+| =gowl_hotkey_set_context(name, value)=         | a context: a boolean kept up to date from outside          |
+| =gowl_hotkey_add_yaml(id, yaml, ...)=          | a whole section, process-wide; the same id replaces it     |
+| =gowl_hotkey_remove_yaml(id)=                  | and back                                                   |
+| =gowl_hotkey_send(comp, keys)=                 | type keys (Send syntax) through the module                 |
+| =gowl_hotkey_send_text(comp, text)=            | type text                                                  |
+| =gowl_hotkey_set_mode(comp, mode)=             | enter a mode                                               |
+| =gowl_hotkey_set_suspended(comp, b)=           | suspend                                                    |
+| =gowl_hotkey_call_function(comp, name, args)=  | =hotkey-call=                                              |
+| =gowl_hotkey_command(comp, line)=              | any gowl command line                                      |
+
+A function and a context get a =GowlHotkeyCall=: =gowl_hotkey_call_get_compositor()=, =_get_focused()= (the window the key is going to), =_get_id()= (the hotkey), =_get_trigger()=, =_get_detail()= (the key), =_get_args()= / =_get_arg(n)=, and =gowl_hotkey_call_set_result()= for =hotkey-call='s reply.  A context is asked while a key is decided: keep it quick and free of side effects (one that faults is false).
+
+*** From a C config
+:PROPERTIES:
+:CUSTOM_ID: hotkey-c-config
+:END:
+
+=data/example-hotkey.c= --- merge =add_hotkeys()= into =~/.config/gowl/config.c= and call it from =gowl_config_init()=:
+
+#+caption: =data/example-hotkey.c=
+#+begin_src c
+/*
+ * gowl - Example C configuration: hotkey (AutoHotkey for gowl)
+ * GObject Wayland Compositor
+ * Copyright (C) 2026  Zach Podbielniak
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * Four ways a C config extends the hotkey module (docs/hotkey.org, "The
+ * C API"):
+ *
+ *   1. a hotkey that runs a C function, in one call:
+ *      gowl_hotkey_define();
+ *   2. a C function YAML hotkeys call by name: {call: NAME};
+ *   3. a context -- a C predicate -- hotkeys name: context: NAME;
+ *   4. a whole `hotkey:' section written right here, process-wide, so
+ *      it survives a config reload: gowl_hotkey_add_yaml().
+ *
+ * Merge add_hotkeys() into ~/.config/gowl/config.c and call it from
+ * gowl_config_init(); then `gowl --recompile'.  Everything is safe to
+ * register before the module loads.  The module is opt-in:
+ *
+ *   modules:
+ *     hotkey: { enabled: true }
+ */
+
+#include <gowl/gowl.h>
+
+/* 1. Super+Alt+w: say which window has the keyboard, in a toast */
+static void
+example_which_window(
+	GowlHotkeyCall *call,
+	gpointer        data
+){
+	GowlClient *c = gowl_hotkey_call_get_focused(call);
+	g_autofree gchar *line = NULL;
+
+	(void)data;
+	line = g_strdup_printf("bar-notify %s|%s",
+	                       c != NULL ? gowl_client_get_app_id(c) : "nothing",
+	                       c != NULL ? gowl_client_get_title(c) : "");
+	g_free(gowl_hotkey_command(gowl_hotkey_call_get_compositor(call), line));
+}
+
+/* 2. `say': types its arguments, joined by spaces, and answers with how
+ * many characters that was (hotkey-call say hello world -> OK 11) */
+static void
+example_say(
+	GowlHotkeyCall *call,
+	gpointer        data
+){
+	g_autofree gchar *text = g_strjoinv(" ",
+		(gchar **)gowl_hotkey_call_get_args(call));
+	g_autofree gchar *n = NULL;
+
+	(void)data;
+	gowl_hotkey_send_text(gowl_hotkey_call_get_compositor(call), text);
+	n = g_strdup_printf("%ld", g_utf8_strlen(text, -1));
+	gowl_hotkey_call_set_result(call, n);
+}
+
+/* 3. `floating': the focused window floats.  A context is asked while a
+ * key is being decided, so it only reads -- quick and side-effect free. */
+static gboolean
+example_floating(
+	GowlHotkeyCall *call,
+	gpointer        data
+){
+	GowlClient *c = gowl_hotkey_call_get_focused(call);
+
+	(void)data;
+	return c != NULL && gowl_client_get_floating(c);
+}
+
+/*
+ * add_hotkeys:
+ *
+ * Everything above, registered.
+ *
+ * Returns: %TRUE when the key and the inline YAML parsed
+ */
+static gboolean
+add_hotkeys(void)
+{
+	GError *error = NULL;
+
+	/* 1. */
+	if (!gowl_hotkey_define("which-window", "#!w", example_which_window,
+	                        NULL, NULL, &error)) {
+		g_warning("hotkey example: %s", error->message);
+		g_error_free(error);
+		return FALSE;
+	}
+
+	/* 2. and 3. */
+	gowl_hotkey_register_func("say", example_say, NULL, NULL);
+	gowl_hotkey_register_context("floating", example_floating, NULL, NULL);
+
+	/* 4. a section that uses them */
+	if (!gowl_hotkey_add_yaml("example-c-config",
+		    "hotkeys:\n"
+		    "  - key: \"#!g\"\n"
+		    "    do: {call: say, args: [good, morning]}\n"
+		    "  # only on a floating window: Super+arrows move it\n"
+		    "  - {key: \"#Left\", context: floating, "
+		    "do: {window: move-by, arg: \"-50 0\"}}\n"
+		    "  - {key: \"#Right\", context: floating, "
+		    "do: {window: move-by, arg: \"50 0\"}}\n",
+		    &error)) {
+		g_warning("hotkey example: %s", error->message);
+		g_error_free(error);
+		return FALSE;
+	}
+	return TRUE;
+}
+#+end_src
+
+=gowl_config_add_hotkey_yaml(config, yaml, &error)= adds a section to a config object instead, lasting until the config is replaced.
+
+*** Scripts
+:PROPERTIES:
+:CUSTOM_ID: hotkey-scripts
+:END:
+
+A *hotkey script* is the =.ahk= file of gowl: plain C, compiled by crispy, that registers whatever it likes in =gowl_hotkey_script_init()=.  Name it in =scripts:= (the module setting, or the section's key):
+
+#+begin_src yaml
+modules:
+  hotkey:
+    enabled: true
+    scripts: [~/.config/gowl/hotkeys.c]
+#+end_src
+
+The module builds it on a worker thread (cached; an unchanged file is not rebuilt), opens it, and calls its init under the fault guard.  *Saving the file rebuilds it* (inotify): =gowl_hotkey_script_fini()= runs if it exports one, everything the old build registered --- functions, contexts, sections, =gowl_hotkey_define()= hotkeys --- is taken back, and the new init runs; nothing doubles up and nothing restarts.  A script that does not compile, or whose init returns =FALSE= or crashes, is reported (=fault script ...=) and costs only itself.  Dropping it from =scripts:= takes its registrations back.
+
+=data/example-hotkey-script.c=:
+
+#+caption: =data/example-hotkey-script.c=
+#+begin_src c
+/*
+ * gowl - Example hotkey script (the .ahk of gowl)
+ * GObject Wayland Compositor
+ * Copyright (C) 2026  Zach Podbielniak
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * A crispy hotkey script: plain C the hotkey module compiles (and
+ * caches) with crispy, opens, and calls gowl_hotkey_script_init() in.
+ * Name it in the configuration:
+ *
+ *   modules:
+ *     hotkey:
+ *       enabled: true
+ *       scripts: [~/.config/gowl/hotkeys.c]
+ *
+ * Save the file and the module rebuilds it and runs init again --
+ * everything the old build registered is taken back first, so there is
+ * no restart and nothing doubles up.  Every call into the script runs
+ * under the fault guard: a crash costs that one call, not the session.
+ *
+ * Flags for the compiler go in a CRISPY_PARAMS line:
+ *   #define CRISPY_PARAMS "$(pkg-config --cflags --libs libnotify)"
+ */
+
+#include <gowl/gowl.h>
+
+/* How many times Super+Alt+c has been pressed since the script loaded */
+static guint presses;
+
+/* Counts, and says so in a toast. */
+static void
+script_count(
+	GowlHotkeyCall *call,
+	gpointer        data
+){
+	g_autofree gchar *line = NULL;
+
+	(void)data;
+	presses++;
+	line = g_strdup_printf("bar-notify pressed %u time%s|", presses,
+	                       presses == 1 ? "" : "s");
+	g_free(gowl_hotkey_command(gowl_hotkey_call_get_compositor(call), line));
+}
+
+/* A context: true between nine and five on a weekday. */
+static gboolean
+script_working_hours(
+	GowlHotkeyCall *call,
+	gpointer        data
+){
+	g_autoptr(GDateTime) now = g_date_time_new_now_local();
+	gint hour = g_date_time_get_hour(now);
+	gint day = g_date_time_get_day_of_week(now);
+
+	(void)call;
+	(void)data;
+	return day <= 5 && hour >= 9 && hour < 17;
+}
+
+/* Hands the current window to the scratchpad and back: a function a
+ * YAML hotkey (or `hotkey-call stash') can call. */
+static void
+script_stash(
+	GowlHotkeyCall *call,
+	gpointer        data
+){
+	(void)data;
+	g_free(gowl_hotkey_command(gowl_hotkey_call_get_compositor(call),
+	                           "scratchpad-toggle"));
+}
+
+G_MODULE_EXPORT gboolean gowl_hotkey_script_init(void);
+G_MODULE_EXPORT void     gowl_hotkey_script_fini(void);
+
+/*
+ * gowl_hotkey_script_init:
+ *
+ * Registers the script's hotkeys, functions and contexts.  Called on the
+ * compositor thread, under the fault guard, each time the script is
+ * (re)built.
+ *
+ * Returns: %TRUE when it set itself up
+ */
+G_MODULE_EXPORT gboolean
+gowl_hotkey_script_init(void)
+{
+	GError *error = NULL;
+
+	presses = 0;
+	if (!gowl_hotkey_define("script-count", "#!c", script_count, NULL, NULL,
+	                        &error)) {
+		g_warning("hotkey script: %s", error->message);
+		g_error_free(error);
+		return FALSE;
+	}
+	gowl_hotkey_register_func("stash", script_stash, NULL, NULL);
+	gowl_hotkey_register_context("working-hours", script_working_hours,
+	                             NULL, NULL);
+	/* YAML that uses them: Super+Escape stashes the window, and during
+	 * working hours F12 opens the work chat */
+	return gowl_hotkey_add_yaml("example-script",
+		"hotkeys:\n"
+		"  - {key: \"#Esc\", do: {call: stash}}\n"
+		"  - {key: F12, context: working-hours, "
+		"do: {run: [element-desktop]}}\n", NULL);
+}
+
+/*
+ * gowl_hotkey_script_fini:
+ *
+ * Called before a rebuild replaces the script and when it is dropped.
+ * The module takes back what init registered by itself; this is for the
+ * script's own state.
+ */
+G_MODULE_EXPORT void
+gowl_hotkey_script_fini(void)
+{
+	presses = 0;
+}
+#+end_src
+
+** Control
+:PROPERTIES:
+:CUSTOM_ID: hotkey-control
+:END:
+
+*** Text commands
+:PROPERTIES:
+:CUSTOM_ID: hotkey-ipc
+:END:
+
+On the IPC socket (=gowl-msg COMMAND=), from a keybind's =ipc-command=, from Elisp's =gowl-run-command=, and over MCP.  Replies are =OK ...=, =OK JSON= or =ERROR ...=.
+
+| Command                                | Does                                                      |
+|----------------------------------------+-----------------------------------------------------------|
+| =hotkey-status=                        | state as JSON: active, suspended, mode, counts, prior, locks, warnings, last error |
+| =hotkey-list=                          | every hotkey and remap as JSON                            |
+| =hotkey-problems=                      | what the configuration could not use, and hotstring warnings |
+| =hotkey-add [--id=ID] YAML=            | a hotkey entry, or a section, for this session (refused whole on any problem); =--id= names it, so adding again replaces it and =hotkey-remove ID= takes it all back |
+| =hotkey-remove ID=                     | remove one added at run time (or by C); one from the config is disabled |
+| =hotkey-enable ID=, =hotkey-disable ID=, =hotkey-toggle ID= | switch one; survives a reload |
+| =hotkey-fire ID=                       | run a hotkey's actions as if pressed                      |
+| =hotkey-suspend [on\vert{}off\vert{}toggle]= | suspend (=toggle= by default)                       |
+| =hotkey-mode [NAME]=                   | the mode, or enter one (=default= leaves)                 |
+| =hotkey-send KEYS=                     | type keys, in Send syntax                                 |
+| =hotkey-send-text TEXT=                | type text                                                 |
+| =hotkey-call NAME [ARGS]=              | call a function (arguments shell-quoted)                  |
+| =hotkey-functions=                     | every function name                                       |
+| =hotkey-func-define NAME FORM=         | a function that runs a custom action (%i %a %t filled in) |
+| =hotkey-func-undefine NAME=            | and back                                                  |
+| =hotkey-context-set NAME 0\vert{}1=    | a boolean context                                         |
+| =hotkey-context-clear NAME=            | forget one                                                |
+| =hotkey-contexts=                      | every context name                                        |
+| =hotkey-history=                       | the last 64 inputs as JSON                                |
+| =hotkey-keystate KEY=                  | ={"down":..., "toggled":...}=                             |
+| =hotkey-capslock STATE= / =hotkey-numlock STATE= | on off toggle always-on always-off normal       |
+| =hotkey-input-start [NAME] [OPTIONS]=  | an input hook: =L5= =T2000= =V= =C=                       |
+| =hotkey-input-stop=                    | end it                                                    |
+| =hotkey-timers=                        | the timers as JSON                                        |
+| =hotkey-timer-enable ID=, =hotkey-timer-disable ID= | switch one                           |
+| =hotkey-cancel=                        | stop every running action list and pending send           |
+| =hotkey-reload=                        | read every source again                                   |
+| =hotkey-help=                          | the list                                                  |
+
+*Events* (=gowl-msg -s=, and in JSON =gowl-msg -s -j hotkey=; cmacs hears them as =module-event=): =hotkey fired ID=, =hotkey mode NAME=, =hotkey suspended on|off WHY=, =hotkey input NAME REASON TEXT=, =hotkey enabled ID= / =disabled ID=, =hotkey script PATH loaded=, =hotkey fault TEXT=.
+
+*** JSON-RPC
+:PROPERTIES:
+:CUSTOM_ID: hotkey-json-rpc
+:END:
+
+The module adds methods to the wire protocol (registered when an IPC server is there --- including one started after the module, as cmacs does --- and gone when the module is switched off):
+
+| Method          | Params                                        | Result                    |
+|-----------------+-----------------------------------------------+---------------------------|
+| =hotkey.list=   |                                               | the hotkeys               |
+| =hotkey.status= |                                               | the state                 |
+| =hotkey.add=    | =yaml= (string)                               | ={result}=                |
+| =hotkey.remove= | =id=                                          | ={result}=                |
+| =hotkey.set=    | =id= + =enabled= (bool or ="toggle"=), =suspended=, =mode= | the state    |
+| =hotkey.send=   | =keys= or =text=                              | ={result}=                |
+| =hotkey.fire=   | =id=                                          | ={result}=                |
+| =hotkey.call=   | =name=, =args= (strings)                      | ={result}=                |
+
+#+begin_src sh
+gowl-msg -c hotkey.list
+gowl-msg -c hotkey.set suspended=true
+gowl-msg -c hotkey.add 'yaml={key: F9, do: {notify: hi}}'
+gowl-msg -c hotkey.send keys='hello{Enter}'
+gowl-msg -s -j hotkey          # the events, as JSON
+#+end_src
+
+*** D-Bus
+:PROPERTIES:
+:CUSTOM_ID: hotkey-dbus
+:END:
+
+With =dbus: true=, standalone gowl owns =org.gowl.Hotkey1= at =/org/gowl/Hotkey1= on the session bus (under cmacs, the editor's =org.cmacs.Editor1.Compositor= =Hotkey= method serves instead).  Every reply is the IPC's.
+
+| Member                        | Signature    |
+|-------------------------------+--------------|
+| =Command(line)=               | =s= -> =s=  (any =hotkey-= command, prefix optional) |
+| =List()=, =Status()=          | -> =s=       |
+| =Add(yaml)=, =Remove(id)=     | =s= -> =s=   |
+| =SetEnabled(id, enabled)=     | =sb= -> =s=  |
+| =SetSuspended(suspended)=     | =b= -> =s=   |
+| =SetMode(mode)=               | =s= -> =s=   |
+| =Send(keys)=, =SendText(text)= | =s= -> =s=  |
+| =Fire(id)=                    | =s= -> =s=   |
+| =Call(name, args)=            | =sas= -> =s= |
+| signal =Fired(id, key)=, =Suspended(state, why)=, =ModeChanged(mode, -)=, =InputEnded(reason, text)=, =Fault(message, -)= | =ss= |
+
+#+begin_src sh
+gdbus call --session -d org.gowl.Hotkey1 -o /org/gowl/Hotkey1 \
+    -m org.gowl.Hotkey1.SetSuspended true
+gdbus call --session -d org.gowl.Hotkey1 -o /org/gowl/Hotkey1 \
+    -m org.gowl.Hotkey1.Command 'send-text hello'
+gdbus monitor --session -d org.gowl.Hotkey1
+#+end_src
+
+** Cookbook
+:PROPERTIES:
+:CUSTOM_ID: hotkey-cookbook
+:END:
+
+Each recipe is a file under =data/example-hotkey-cases/=, loaded by the test suite as shown here; paste it into =config.yaml=.
+
+*** A CapsLock layer
+#+caption: =data/example-hotkey-cases/capslock-layer.yaml=
+#+begin_src yaml
+# CapsLock as a navigation layer (the most-copied AutoHotkey script).
+# Held, it turns hjkl into arrows, u/i into Home/End, and d into Delete;
+# tapped alone it is Escape.  The Caps Lock light never comes on: a
+# swallowed CapsLock has its toggle undone.
+hotkey:
+  hotkeys:
+    - {key: "CapsLock & h", do: {send: "{Left}"}}
+    - {key: "CapsLock & j", do: {send: "{Down}"}}
+    - {key: "CapsLock & k", do: {send: "{Up}"}}
+    - {key: "CapsLock & l", do: {send: "{Right}"}}
+    - {key: "CapsLock & u", do: {send: "{Home}"}}
+    - {key: "CapsLock & i", do: {send: "{End}"}}
+    - {key: "CapsLock & d", do: {send: "{Del}"}}
+    # Shift held too: select as you move ({Blind} keeps the Shift)
+    - {key: "CapsLock & n", do: {send: "{Blind}{Left}"}}
+    - {key: "CapsLock", do: {send: "{Esc}"}}
+#+end_src
+
+*** Application chords
+#+caption: =data/example-hotkey-cases/launcher-chords.yaml=
+#+begin_src yaml
+# Application chords: Super+Alt and a letter starts (or, with the
+# focus-or-launch macro, focuses) an application.
+hotkey:
+  hotkeys:
+    - {key: "#!t", do: {action: spawn, arg: gst}}
+    - {key: "#!b", do: {run: [librewolf]}}
+    - {key: "#!e", do: {run: [emacsclient, -c]}}
+    - {key: "#!f", do: {run: [foot, -e, yazi]}}
+    # focus the mail window if it is open, else start it
+    - {key: "#!m", do: {macro: focus-or-launch, args: [org.example.Mail, mail-client]}}
+#+end_src
+
+*** Shortcuts for one application
+#+caption: =data/example-hotkey-cases/per-app-shortcuts.yaml=
+#+begin_src yaml
+# Shortcuts that only exist in one application (AutoHotkey's #HotIf
+# WinActive).  The same key does something else -- or nothing -- in
+# every other window.
+hotkey:
+  contexts:
+    librewolf: "app-id=librewolf"
+  hotkeys:
+    # Ctrl+Shift+d: duplicate the tab (address bar, Alt+Enter)
+    - {key: "^+d", context: librewolf, do: {send: "!d!{Enter}"}}
+    # F2: reopen the last closed tab
+    - {key: F2, context: librewolf, do: {send: "^+t"}}
+    # an inline condition instead of a named context
+    - key: F3
+      when: "app-id=librewolf and title=*YouTube*"
+      do: {send: "k"}        # play/pause the video
+#+end_src
+
+*** A mouse-button window switcher
+#+caption: =data/example-hotkey-cases/mouse-window-switcher.yaml=
+#+begin_src yaml
+# The side buttons of a mouse: back cycles through the terminals, forward
+# through the browsers; with the button held, the wheel steps tags.
+hotkey:
+  groups:
+    terminals: "app-id=gst or app-id=foot"
+    browsers: "app-id=librewolf or app-id=firefox*"
+  hotkeys:
+    - {key: XButton1, do: {window: group-activate, arg: terminals}}
+    - {key: XButton2, do: {window: group-activate, arg: browsers}}
+    - {key: "XButton1 & WheelUp", do: {action: focus-stack, arg: "-1"}}
+    - {key: "XButton1 & WheelDown", do: {action: focus-stack, arg: "1"}}
+#+end_src
+
+*** Volume on the wheel
+#+caption: =data/example-hotkey-cases/wheel-volume.yaml=
+#+begin_src yaml
+# Volume on the wheel while the forward button is held, mute on a click
+# of the wheel itself with Super held.
+hotkey:
+  hotkeys:
+    - {key: "XButton2 & WheelUp", do: {run: [wpctl, set-volume, "@DEFAULT_AUDIO_SINK@", 5%+]}}
+    - {key: "XButton2 & WheelDown", do: {run: [wpctl, set-volume, "@DEFAULT_AUDIO_SINK@", 5%-]}}
+    - {key: "#MButton", do: {run: [wpctl, set-mute, "@DEFAULT_AUDIO_SINK@", toggle]}}
+#+end_src
+
+*** Double-tap Shift for the menu
+#+caption: =data/example-hotkey-cases/double-tap-shift-menu.yaml=
+#+begin_src yaml
+# Tap Shift twice quickly: the menu.  Shift is never swallowed, so it
+# still capitalises; only two clean taps in 300 ms count.
+hotkey:
+  hotkeys:
+    - {key: LShift, double: 300, do: {command: "menu-toggle"}}
+#+end_src
+
+*** Hold Escape to lock
+#+caption: =data/example-hotkey-cases/long-press-escape-lock.yaml=
+#+begin_src yaml
+# Hold Escape for a second to lock the screen.  A quick Escape is put
+# back as an ordinary Escape, so nothing that uses it notices.
+hotkey:
+  hotkeys:
+    - {key: Esc, hold: 1s, do: {action: lock}}
+#+end_src
+
+*** Push to talk
+#+caption: =data/example-hotkey-cases/push-to-talk.yaml=
+#+begin_src yaml
+# Push to talk on a spare key (a foot pedal's F13): the microphone is on
+# only while the key is held.  The press and the release are separate
+# hotkeys; both swallow the key so no application sees it.
+hotkey:
+  hotkeys:
+    - {key: F13, do: {run: [wpctl, set-mute, "@DEFAULT_AUDIO_SOURCE@", "0"]}}
+    - {id: ptt-up, key: "F13 UP", do: {run: [wpctl, set-mute, "@DEFAULT_AUDIO_SOURCE@", "1"]}}
+#+end_src
+
+*** Game hotkeys that survive fullscreen
+#+caption: =data/example-hotkey-cases/game-hotkeys.yaml=
+#+begin_src yaml
+# Hotkeys for a game -- EverQuest here.  They work while the game is
+# fullscreen and inhibiting shortcuts: hotkeys are decided before any
+# bind and before shortcuts-inhibit, as AutoHotkey's hook is.  `$' keeps
+# the keys the hotkeys send from firing hotkeys again.
+hotkey:
+  contexts:
+    everquest: "app-id=eqgame.exe"
+  hotkeys:
+    # one key, a sequence: target the nearest, then auto-attack
+    - key: "$Numpad1"
+      context: everquest
+      do: {send: "{Tab}{Sleep 50}q", send-mode: event, key-delay: 30}
+    # sit / stand toggle on the mouse
+    - {key: "$XButton1", context: everquest, do: {send: "/sit{Enter}"}}
+    # suspend everything while chatting: one key off, the same key on
+    - {key: "$Pause", suspend-exempt: true, context: everquest, do: {suspend: toggle}}
+#+end_src
+
+*** Hotstrings
+#+caption: =data/example-hotkey-cases/hotstrings.yaml=
+#+begin_src yaml
+# Hotstrings, AutoHotkey's ::abbr::text, typed by the gabbrev module
+# (which must be enabled too).
+hotkey:
+  hotstrings:
+    - "::btw::by the way"              # after a space or punctuation
+    - ":*:;em::ada@example.com"        # at once, no end character
+    - ":?:ign::ing"                    # inside a word too
+    - ":C:AFAIK::As Far As I Know"     # this case only
+    - ":*:;sig::Best regards,{Enter}Ada"
+    # X: run actions instead of typing
+    - {hotstring: ":*X:;date::", do: {shell: "date +%F | wl-copy"}}
+#+end_src
+
+*** A resize mode
+#+caption: =data/example-hotkey-cases/resize-mode.yaml=
+#+begin_src yaml
+# A modal layer: Super+r enters `resize', where hjkl move and size the
+# focused window and every other key does nothing; Escape, Enter, or two
+# seconds without a key leave it.
+hotkey:
+  modes:
+    resize:
+      timeout: 2s
+      swallow: true
+      label: "RESIZE  hjkl move, HJKL size, Esc leave"
+      hotkeys:
+        - {key: h, do: {window: move-by, arg: "-40 0"}}
+        - {key: l, do: {window: move-by, arg: "40 0"}}
+        - {key: k, do: {window: move-by, arg: "0 -40"}}
+        - {key: j, do: {window: move-by, arg: "0 40"}}
+        - {key: "+h", do: {rpc: window.move_by, params: {dwidth: -40}}}
+        - {key: "+l", do: {rpc: window.move_by, params: {dwidth: 40}}}
+        - {key: Esc, do: {mode: default}}
+        - {key: Enter, do: {mode: default}}
+  hotkeys:
+    - {key: "#r", do: {mode: resize}}
+#+end_src
+
+*** A C snippet
+#+caption: =data/example-hotkey-cases/c-snippet-date.yaml=
+#+begin_src yaml
+# A C snippet: types today's date as ISO 8601 into the focused window.
+# Compiled once by crispy (later runs are instant) and called under the
+# fault guard, so a mistake in it costs the action, not the session.
+hotkey:
+  hotkeys:
+    - key: "#!d"
+      do:
+        c: |
+          g_autoptr(GDateTime) now = g_date_time_new_now_local();
+          g_autofree gchar *day = g_date_time_format(now, "%Y-%m-%d");
+          gowl_hotkey_send_text(comp, day);
+#+end_src
+
+*** Timers
+#+caption: =data/example-hotkey-cases/shell-timer.yaml=
+#+begin_src yaml
+# Timers: a reminder every 50 minutes, and a one-shot five minutes after
+# gowl starts.  A timer is skipped while hotkeys are suspended.
+hotkey:
+  timers:
+    - {id: stretch, every: 50m, do: {notify: "stand up and stretch"}}
+    - {id: sync-notes, once: 5m, do: {shell: "cd ~/Documents/notes && git pull -q"}}
+#+end_src
+
+*** React to windows
+#+caption: =data/example-hotkey-cases/window-open-toast.yaml=
+#+begin_src yaml
+# Event hooks (what AutoHotkey users build with SetWinEventHook): Steam
+# windows float and say so; focusing a terminal clears the urgent mark.
+hotkey:
+  on:
+    window-open:
+      - filter: "app-id=steam"
+        do: [{window: float}, {notify: "Steam opened"}]
+    focus:
+      - filter: "app-id=gst"
+        do: {window: urgent, arg: "off"}
+#+end_src
+
+*** Type a tag number
+#+caption: =data/example-hotkey-cases/input-hook-tag.yaml=
+#+begin_src yaml
+# An input hook (AutoHotkey's InputHook): Super+g, then type a tag number
+# and Enter (or wait three seconds) -- the tag is shown.  What was typed
+# is $GOWL_HOTKEY_INPUT to the actions after the input.
+hotkey:
+  hotkeys:
+    - key: "#g"
+      do:
+        - {input: tag, length: 2, timeout: 3s, end-keys: [Enter, Esc]}
+        - {shell: "gowl-msg -c tags.view tag=\"$GOWL_HOTKEY_INPUT\""}
+#+end_src
+
+*** Everything at once
+=data/example-hotkey.yaml=, a tour of every section:
+
+#+caption: =data/example-hotkey.yaml=
+#+begin_src yaml
+# gowl - example hotkey configuration (AutoHotkey for gowl)
+#
+# Put this in ~/.config/gowl/config.yaml (or keep the `hotkey:' part in a
+# file of its own and name it from `hotkey: include:').  Every hotkey is a
+# key -- in AutoHotkey's notation or gowl's -- and a list of actions.
+#
+# Full reference: docs/hotkey.org.  Every shipped example is loaded by
+# tests/test-hotkey-config.c, so nothing here is out of date.
+
+modules:
+  hotkey:
+    enabled: true                    # opt-in in standalone gowl
+    suspend-key: Super+Shift+Pause   # suspends every hotkey (not itself)
+    # key-delay: 0                   # ms between the keys a send types
+    # send-mode: input               # input: all at once; event: paced
+    # accept-synthetic: false        # true: a KVM's keys fire hotkeys too
+    # dbus: false                    # true: own org.gowl.Hotkey1
+    # scripts: [~/.config/gowl/hotkeys.c]   # crispy hotkey scripts
+  gabbrev:
+    enabled: true                    # hotstrings are typed by gabbrev
+  macro:
+    enabled: true                    # for the {macro: ...} actions
+
+hotkey:
+  # ---- where hotkeys apply (AutoHotkey's #HotIf) -----------------------
+  contexts:
+    browser: "app-id=librewolf or app-id=firefox* or app-id=org.mozilla.*"
+    terminal: "app-id=gst or app-id=foot"
+    # all of: the focused window, the window under the pointer, any window
+    youtube:
+      when: "title=*YouTube*"
+      absent: "app-id=org.example.Recorder"
+
+  # ---- window groups (GroupAdd), cycled by {window: group-activate} ---
+  groups:
+    terminals: "app-id=gst or app-id=foot"
+
+  # ---- hotkeys ---------------------------------------------------------
+  hotkeys:
+    # Super+Alt+t: a terminal -- AutoHotkey's #!t
+    - key: "#!t"
+      do: {action: spawn, arg: gst}
+
+    # the same, in gowl's notation, with an id for IPC
+    - id: browser
+      key: Super+Alt+b
+      description: a browser
+      do: {run: [librewolf]}
+
+    # CapsLock as a layer: vim arrows while it is held...
+    - {key: "CapsLock & h", do: {send: "{Left}"}}
+    - {key: "CapsLock & j", do: {send: "{Down}"}}
+    - {key: "CapsLock & k", do: {send: "{Up}"}}
+    - {key: "CapsLock & l", do: {send: "{Right}"}}
+    # ...and Escape when it is tapped alone
+    - {key: CapsLock, do: {send: "{Esc}"}}
+
+    # only in the browser: Ctrl+Shift+d duplicates the tab
+    - key: "^+d"
+      context: browser
+      do: {send: "!d!{Enter}"}
+
+    # ~: the window still gets the key -- here a log of every F1
+    - key: "~F1"
+      do: {shell: "date >> ~/.cache/f1-presses"}
+
+    # a double tap of Shift opens the menu; Shift still works
+    - key: LShift
+      double: 300
+      do: {command: "menu-toggle"}
+
+    # hold Escape for half a second: lock the screen; tap it: Escape
+    - key: Esc
+      hold: 500
+      do: {action: lock}
+
+    # several actions in order, waiting on the shell before the toast
+    - key: "#!s"
+      do:
+        - {shell: "grim -g \"$(slurp)\" ~/Pictures/shot.png", wait: true}
+        - {notify: "screenshot saved"}
+
+    # a window action on the focused window, and on a named one
+    - {key: "#f", do: {window: float}}
+    - {key: "#+m", do: {window: minimize, target: "app-id=org.example.Music"}}
+    - {key: "XButton1", do: {window: group-activate, arg: terminals}}
+
+    # the mouse: Ctrl+wheel zooms the focused window's text
+    - {key: "^WheelUp", do: {send: "^{+}"}}
+    - {key: "^WheelDown", do: {send: "^-"}}
+
+    # a function, written once below, called from several hotkeys
+    - {key: "#+t", do: {call: tidy}}
+
+    # a macro (docs/macros.org), told it was a hotkey that ran it
+    - {key: "#+p", do: {macro: float-center}}
+
+    # C, compiled once by crispy and run under the fault guard
+    - key: "#!d"
+      do:
+        c: |
+          g_autoptr(GDateTime) now = g_date_time_new_now_local();
+          g_autofree gchar *iso = g_date_time_format_iso8601(now);
+          gowl_hotkey_send_text(comp, iso);
+
+    # into a mode: resize until Escape, or two seconds of nothing
+    - {key: "#r", do: {mode: resize}}
+
+  # ---- remaps (a::b) ---------------------------------------------------
+  remaps:
+    AppsKey: RWin        # the Menu key is a second Super key
+    XButton2: MButton    # the forward button pastes the selection
+
+  # ---- modes -----------------------------------------------------------
+  modes:
+    resize:
+      timeout: 2s        # back to normal after two seconds of nothing
+      swallow: true      # keys with no hotkey here do nothing
+      label: Resize
+      hotkeys:
+        - {key: h, do: {window: move-by, arg: "-40 0"}}
+        - {key: l, do: {window: move-by, arg: "40 0"}}
+        - {key: Esc, do: {mode: default}}
+
+  # ---- hotstrings (typed by gabbrev) -----------------------------------
+  hotstrings:
+    - "::btw::by the way"
+    - ":*:;sig::Best regards,{Enter}Ada"
+    - {hotstring: ":*X:;up::", do: {shell: "notify-send \"$(uptime -p)\""}}
+
+  # ---- timers ----------------------------------------------------------
+  timers:
+    - id: stretch
+      every: 50m
+      do: {notify: "stand up and stretch"}
+
+  # ---- event hooks -----------------------------------------------------
+  on:
+    window-open:
+      - filter: "app-id=steam"
+        do: [{window: float}, {notify: "Steam is open"}]
+    startup:
+      - {notify: "hotkeys loaded"}
+
+  # ---- functions -------------------------------------------------------
+  functions:
+    tidy:
+      - {rpc: layout.set, params: {name: tile}}
+      - {notify: "tidied"}
+#+end_src
+
+** From AutoHotkey
+:PROPERTIES:
+:CUSTOM_ID: hotkey-from-ahk
+:END:
+
+| AutoHotkey                                   | gowl                                                          |
+|----------------------------------------------+---------------------------------------------------------------|
+| =#!t::Run "wt"=                              | ={key: "#!t", do: {run: [gst]}}=                              |
+| =CapsLock & j::Send "{Down}"=                | ={key: "CapsLock & j", do: {send: "{Down}"}}=                 |
+| =a::b=                                       | =remaps: {a: b}=                                              |
+| =~LButton::=, =$F1::=, =*^a::=, =a up::=     | the same symbols in =key:=                                    |
+| =#HotIf WinActive("ahk_exe firefox.exe")=    | =context:= / =when: "exec=*/firefox*"= (=ahk_class= is =app-id=) |
+| =#HotIf MouseIsOver(...)=                    | =over:=                                                       |
+| =#HotIf WinExist(...)=                       | =exists:= / =absent:=                                         |
+| =Hotkey("^x", fn)= at run time               | =hotkey-add=, =gowl_hotkey_define()=, =cmacs-gowl-hotkey-define= |
+| =Hotkey("^x", "Off")=                        | =hotkey-disable ID=, ={hotkey: disable, id: ID}=              |
+| =::btw::by the way=, =Hotstring()=           | =hotstrings:= (through gabbrev)                               |
+| =Send=, =SendText=, =SendEvent=, =SetKeyDelay= | =send:=, =send-text:=, =send-mode: event=, =key-delay:=     |
+| =SendLevel=, =#InputLevel=                   | =level:=, =send-level=                                        |
+| =Suspend=                                    | =suspend-key=, ={suspend: toggle}=, =hotkey-suspend=, =suspend-exempt:= |
+| =KeyWait=, =A_TimeSincePriorHotkey= idioms   | =hold:=, =double:=                                            |
+| =A_PriorHotkey=, =A_ThisHotkey=              | ={{prior}}=, ={{id}}= / ={{key}}=, =GOWL_HOTKEY_*=           |
+| =GetKeyState=, =KeyHistory=                  | =hotkey-keystate=, =hotkey-history=                           |
+| =SetCapsLockState "AlwaysOff"=               | ={capslock: always-off}=, =hotkey-capslock always-off=        |
+| =InputHook=                                  | ={input: ...}=, =hotkey-input-start=                          |
+| =SetTimer=                                   | =timers:=                                                     |
+| =OnMessage=, =SetWinEventHook=               | =on:=                                                         |
+| =WinActivate=, =WinMove=, =WinMinimize=, =WinClose=, =WinSetAlwaysOnTop= (sticky), =WinSetTransparent= | ={window: ...}= |
+| =GroupAdd=, =GroupActivate=                  | =groups:=, ={window: group-activate}=                         |
+| =Click=, =MouseMove=, =MouseClickDrag=       | ={mouse: click/move/drag}=                                    |
+| =A_Clipboard := "x"=                         | ={clipboard: "x"}=                                            |
+| =TrayTip=, =ToolTip=                         | ={notify: ...}=                                               |
+| =Run=, =RunWait=                             | =run:= / =shell:=, =wait: true=                               |
+| =Sleep=                                      | ={sleep: ...}=                                                |
+| functions                                    | =functions:=, C functions, Elisp functions                    |
+| =#Include=                                   | =include:=                                                    |
+| =Reload=                                     | ={reload: true}=, =hotkey-reload=; scripts reload on save     |
+| =PixelGetColor=, OCR                         | the screenshot module's commands, from =command:=             |
+| =MsgBox=, =InputBox=, =Gui=                  | =notify=; under cmacs any Elisp (=read-string=, ...)          |
+
+*Not available*, because Wayland gives a compositor no such thing or Linux has no such thing: controls inside windows (=ControlClick=, =ControlSend=, =ControlGetText= and the rest --- the Linux equivalent is AT-SPI, outside a compositor), window text (=WinGetText=), the registry, =DllCall= and COM (use C actions and scripts), =SendPlay=, =vk=/=sc= key names (use key names and =code:NN=), the caret and cursor-shape variables, =WinSetStyle= / =WinSetRegion=, and three-key combinations (AutoHotkey refuses them too).
+
+** Troubleshooting
+:PROPERTIES:
+:CUSTOM_ID: hotkey-troubleshooting
+:END:
+
+*A hotkey does not fire.*  =gowl-msg hotkey-history= after pressing it: the key's code and keysym, whether it was swallowed, and what fired.  No entry at all: the module is not loaded (=gowl-msg hotkey-status=) or hotkeys are suspended (=suspended=).  An entry that fired nothing: compare the keysym and modifiers with the hotkey's =canonical= form in =hotkey-list= --- =^a= does not fire for Control+Shift+a (=*^a= does) --- and check its =context=, =mode= and =enabled=.  =hotkey-problems= lists the hotkeys that never loaded.
+
+*Every key does nothing.*  A swallowing mode is entered (=gowl-msg hotkey-mode=; =hotkey-mode default= leaves) or a broad hotkey swallows: the suspend key (=Super+Shift+Pause=) suspends everything but itself, and =hotkey-suspend on= over IPC does the same.
+
+*Hotstrings type nothing.*  The gabbrev module is not loaded: =hotkey-status= says =hotstrings-active: false=.  A hotstring without =*= waits for an end character.
+
+*A sent key comes out wrong.*  The keyboard layout has no key for a character: it is typed by the compositor's text path instead, which needs the window to accept it; or an application drops fast keys: =send-mode: event= with =key-delay: 10=.
+
+*A C action is held back.*  It crashed or ran past =c-timeout=: =hotkey-status= shows the =last-error=; fix it and =hotkey-reload=.
+
+*Caps Lock still toggles.*  Only a /swallowed/ Caps Lock has its toggle undone; a =~CapsLock= passes through, by design.
+
+** Files
+:PROPERTIES:
+:CUSTOM_ID: hotkey-files
+:END:
+
+| File                                       | What                                                   |
+|--------------------------------------------+--------------------------------------------------------|
+| =src/hotkey/gowl-hotkey.h=, =.c=           | libgowl: registries, sources, calls, command wrappers  |
+| =src/hotkey/gowl-hotkey-spec.c=            | libgowl: the key notation                              |
+| =modules/hotkey/gowl-module-hotkey.c=      | the module: input, configuration, contexts, timers, hooks, IPC, JSON-RPC |
+| =modules/hotkey/gowl-hotkey-runner.c=      | actions, typing, modes, input hooks, C builds, scripts |
+| =modules/hotkey/gowl-hotkey-engine.c=      | what a key means (pure, tested directly)               |
+| =modules/hotkey/gowl-hotkey-model.c=       | reading the section (pure)                             |
+| =modules/hotkey/gowl-hotkey-send.c=        | Send syntax (pure)                                     |
+| =modules/hotkey/gowl-hotkey-hotstring.c=   | hotstrings to gabbrev (pure)                           |
+| =modules/hotkey/gowl-hotkey-script.c=      | building and calling crispy C under the guard          |
+| =modules/hotkey/gowl-hotkey-dbus.c=        | =org.gowl.Hotkey1=                                     |
+| =data/example-hotkey*.yaml=, =.c=, =data/example-hotkey-cases/= | the examples on this page         |
+| =tests/test-hotkey-*.c=, =tests/test-hotkey-*.sh= | spec, engine, model, send, hotstring, registry, config, module (headless, end to end), guards |

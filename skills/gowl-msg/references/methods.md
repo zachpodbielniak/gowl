@@ -108,6 +108,27 @@
 
 Screen-acting methods (focus, typing, keys, screenshots, tag views, pointer, spawn) return `-32002` while the session is locked.
 
+## Module methods: hotkey
+
+Present only while the opt-in `hotkey` module is loaded (`rpc.discover` lists them).
+
+| Method | Params | Result |
+|---|---|---|
+| `hotkey.list` | | array of hotkeys and remaps (`id`, `key`, `canonical`, `context`, `mode`, `enabled`, ...) |
+| `hotkey.status` | | `{active, suspended, mode, hotkeys, remaps, prior, capslock, numlock, ...}` |
+| `hotkey.add` | `yaml` (a hotkey entry or a `hotkey:` section) | `{result}` |
+| `hotkey.remove` | `id` | `{result}` |
+| `hotkey.set` | `id?` + `enabled?` (bool or `"toggle"`), `suspended?`, `mode?` | the status |
+| `hotkey.send` | `keys` (AutoHotkey Send syntax) or `text` | `{result}` |
+| `hotkey.fire` | `id` | `{result}` |
+| `hotkey.call` | `name`, `args?` (strings) | `{result}` |
+
+```bash
+gowl-msg -c hotkey.add 'yaml={key: F9, do: {notify: hi}}'
+gowl-msg -c hotkey.send keys='^a{Delete}'
+gowl-msg -c hotkey.set suspended=true
+```
+
 ## Objects
 
 Window:

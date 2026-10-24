@@ -35,7 +35,7 @@ INCLUDEDIR ?= $(PREFIX)/include
 # today, so adding a subsystem means adding one word here -- and
 # forgetting to is what left src/fx and src/barkit uninstalled.
 HEADER_SUBDIRS := core boxed config menu module interfaces ipc tray util \
-                  barkit fx protocols macro gabbrev
+                  barkit fx protocols macro gabbrev hotkey
 DATADIR ?= $(PREFIX)/share
 # Where `make install-skills' puts the agent skills under skills/: the
 # per-user skills directory Claude Code (and anything reading the same

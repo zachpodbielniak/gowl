@@ -86,6 +86,9 @@ G_BEGIN_DECLS
  * @GOWL_MACRO_TRIGGER_REMAP: an input-remap `{macro: ...}' target
  * @GOWL_MACRO_TRIGGER_VOICE: a spoken command (`macro-voice'); the
  *   detail is what was heard
+ * @GOWL_MACRO_TRIGGER_HOTKEY: a hotkey module action (`{macro: ...}'
+ *   on a hotkey, hotstring, timer or event hook); the detail is the
+ *   hotkey's id
  *
  * What started a run.  The detail string says more: the event name,
  * the remap rule and input, the IPC command line.
@@ -97,7 +100,8 @@ typedef enum {
 	GOWL_MACRO_TRIGGER_EVENT,
 	GOWL_MACRO_TRIGGER_TIMER,
 	GOWL_MACRO_TRIGGER_REMAP,
-	GOWL_MACRO_TRIGGER_VOICE
+	GOWL_MACRO_TRIGGER_VOICE,
+	GOWL_MACRO_TRIGGER_HOTKEY
 } GowlMacroTrigger;
 
 #define GOWL_TYPE_MACRO_TRIGGER (gowl_macro_trigger_get_type())

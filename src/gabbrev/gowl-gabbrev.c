@@ -846,25 +846,44 @@ gowl_gabbrev_source_free(GowlGabbrevSource *source)
 	if (source == NULL)
 		return;
 	g_free(source->text);
+	g_free(source->id);
 	g_free(source);
 }
 
+/* Adds a source; one with an @id replaces the source of the same id
+ * where it stood, so a re-added set keeps its place in the load order
+ * (later sources win between equal triggers). */
 static void
 add_source(
 	gboolean     is_file,
-	const gchar *text
+	const gchar *text,
+	const gchar *id
 ){
 	GowlGabbrevSource *s;
+	gboolean replaced = FALSE;
+	guint i;
 
 	s = g_new0(GowlGabbrevSource, 1);
 	s->is_file = is_file;
 	s->text = g_strdup(text);
+	s->id = g_strdup(id);
 	gowl_fault_guard_hold();
 	g_mutex_lock(&sources_lock);
 	if (sources == NULL)
 		sources = g_ptr_array_new_with_free_func(
 			(GDestroyNotify)gowl_gabbrev_source_free);
-	g_ptr_array_add(sources, s);
+	for (i = 0; id != NULL && i < sources->len; i++) {
+		GowlGabbrevSource *old = g_ptr_array_index(sources, i);
+
+		if (g_strcmp0(old->id, id) == 0) {
+			gowl_gabbrev_source_free(old);
+			g_ptr_array_index(sources, i) = s;
+			replaced = TRUE;
+			break;
+		}
+	}
+	if (!replaced)
+		g_ptr_array_add(sources, s);
 	g_mutex_unlock(&sources_lock);
 	gowl_fault_guard_release();
 	bump_generation();
@@ -891,7 +910,7 @@ void
 gowl_gabbrev_add_file(const gchar *path)
 {
 	g_return_if_fail(path != NULL && *path != '\0');
-	add_source(TRUE, path);
+	add_source(TRUE, path, NULL);
 }
 
 /**
@@ -924,8 +943,85 @@ gowl_gabbrev_add_yaml(
 		g_propagate_error(error, local);
 		return FALSE;
 	}
-	add_source(FALSE, yaml);
+	add_source(FALSE, yaml, NULL);
 	return TRUE;
+}
+
+/**
+ * gowl_gabbrev_add_yaml_source:
+ * @id: a name for the source, such as the module that owns it
+ * @yaml: a match file's text, as for gowl_gabbrev_add_yaml()
+ * @error: return location for a parse error
+ *
+ * Like gowl_gabbrev_add_yaml(), but the source has a name: adding again
+ * under the same @id REPLACES it (in its place in the load order), and
+ * gowl_gabbrev_remove_source() takes it out again without touching any
+ * other source.  This is how a module that owns some matches -- the
+ * hotkey module's hotstrings -- reloads them without disturbing the
+ * user's own:
+ *
+ * |[<!-- language="C" -->
+ * gowl_gabbrev_add_yaml_source("hotkey",
+ *     "matches:\n  - {trigger: btw, replace: by the way, word: true}\n",
+ *     &error);
+ * ]|
+ *
+ * Returns: %TRUE when the text parsed and was added
+ */
+gboolean
+gowl_gabbrev_add_yaml_source(
+	const gchar  *id,
+	const gchar  *yaml,
+	GError      **error
+){
+	g_autoptr(YamlParser) parser = NULL;
+	GError *local = NULL;
+
+	g_return_val_if_fail(id != NULL && *id != '\0', FALSE);
+	g_return_val_if_fail(yaml != NULL, FALSE);
+
+	/* Always with an error location: yaml-glib dereferences a NULL one
+	   on malformed input */
+	parser = yaml_parser_new();
+	if (!yaml_parser_load_from_data(parser, yaml, -1, &local)) {
+		g_propagate_error(error, local);
+		return FALSE;
+	}
+	add_source(FALSE, yaml, id);
+	return TRUE;
+}
+
+/**
+ * gowl_gabbrev_remove_source:
+ * @id: a name given to gowl_gabbrev_add_yaml_source()
+ *
+ * Takes that source out; every other source stays.
+ *
+ * Returns: %TRUE when there was one
+ */
+gboolean
+gowl_gabbrev_remove_source(const gchar *id)
+{
+	gboolean found = FALSE;
+	guint i;
+
+	g_return_val_if_fail(id != NULL, FALSE);
+	gowl_fault_guard_hold();
+	g_mutex_lock(&sources_lock);
+	for (i = 0; sources != NULL && i < sources->len; i++) {
+		GowlGabbrevSource *s = g_ptr_array_index(sources, i);
+
+		if (g_strcmp0(s->id, id) == 0) {
+			g_ptr_array_remove_index(sources, i);
+			found = TRUE;
+			break;
+		}
+	}
+	g_mutex_unlock(&sources_lock);
+	gowl_fault_guard_release();
+	if (found)
+		bump_generation();
+	return found;
 }
 
 /**
@@ -968,6 +1064,7 @@ gowl_gabbrev_dup_sources(void)
 
 		c->is_file = s->is_file;
 		c->text = g_strdup(s->text);
+		c->id = g_strdup(s->id);
 		g_ptr_array_add(out, c);
 	}
 	g_mutex_unlock(&sources_lock);

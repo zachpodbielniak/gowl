@@ -1,0 +1,11 @@
+# Hotstrings, AutoHotkey's ::abbr::text, typed by the gabbrev module
+# (which must be enabled too).
+hotkey:
+  hotstrings:
+    - "::btw::by the way"              # after a space or punctuation
+    - ":*:;em::ada@example.com"        # at once, no end character
+    - ":?:ign::ing"                    # inside a word too
+    - ":C:AFAIK::As Far As I Know"     # this case only
+    - ":*:;sig::Best regards,{Enter}Ada"
+    # X: run actions instead of typing
+    - {hotstring: ":*X:;date::", do: {shell: "date +%F | wl-copy"}}

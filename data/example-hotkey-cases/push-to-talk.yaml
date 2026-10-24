@@ -1,0 +1,7 @@
+# Push to talk on a spare key (a foot pedal's F13): the microphone is on
+# only while the key is held.  The press and the release are separate
+# hotkeys; both swallow the key so no application sees it.
+hotkey:
+  hotkeys:
+    - {key: F13, do: {run: [wpctl, set-mute, "@DEFAULT_AUDIO_SOURCE@", "0"]}}
+    - {id: ptt-up, key: "F13 UP", do: {run: [wpctl, set-mute, "@DEFAULT_AUDIO_SOURCE@", "1"]}}

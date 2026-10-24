@@ -143,6 +143,10 @@ void                gowl_gabbrev_add_file              (const gchar        *path
 gboolean            gowl_gabbrev_add_yaml              (const gchar        *yaml,
                                                         GError            **error);
 void                gowl_gabbrev_clear_sources         (void);
+gboolean            gowl_gabbrev_add_yaml_source       (const gchar        *id,
+                                                        const gchar        *yaml,
+                                                        GError            **error);
+gboolean            gowl_gabbrev_remove_source         (const gchar        *id);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GowlGabbrevRequest, gowl_gabbrev_request_unref)
 

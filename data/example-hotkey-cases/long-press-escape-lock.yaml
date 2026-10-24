@@ -1,0 +1,5 @@
+# Hold Escape for a second to lock the screen.  A quick Escape is put
+# back as an ordinary Escape, so nothing that uses it notices.
+hotkey:
+  hotkeys:
+    - {key: Esc, hold: 1s, do: {action: lock}}

@@ -84,6 +84,12 @@ static const gchar *const cmacs_modules[] = {
 	 * job timers on it, and a weak compositor pointer -- all of which
 	 * must be let go when the display goes, not when the module does. */
 	"gabbrev",
+	/* AutoHotkey: opt-in under cmacs, but when it is on it holds an
+	 * eventfd and timers on the event loop, a weak compositor pointer
+	 * with a weak ref beside it, signal handlers, JSON-RPC methods and
+	 * -- while a remap holds a modifier -- a listener on the keyboard
+	 * group, which wlroots aborts on if it is left there. */
+	"hotkey",
 	/* The tag transitions, all loaded by cmacs.  Each holds a host with
 	 * a GL context, captured desktops and a weak reference to the
 	 * compositor it registered with, and withdraws itself from that

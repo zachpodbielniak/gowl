@@ -685,6 +685,8 @@ gowl_config_init(void)
 
 =gowl_config_add_gabbrev_yaml(gowl_config, ...)= adds a section to the config object instead, like a second =gabbrev:= (it lasts until the config is replaced).  =data/example-gabbrev.c= is a complete example.
 
+*Named sources.*  =gowl_gabbrev_add_yaml_source(ID, YAML, &error)= adds matches under an id, and a later call with the same id *replaces* them in place; =gowl_gabbrev_remove_source(ID)= takes them away.  Everything else --- the configuration, the user's files --- is untouched, which =gowl_gabbrev_clear_sources()= cannot promise.  The hotkey module installs its hotstrings this way, as the source =hotkey= (see [[file:hotkey.org::#hotkey-hotstrings][hotkey.org]]).
+
 *** New variable types
 :PROPERTIES:
 :CUSTOM_ID: gabbrev-var-types

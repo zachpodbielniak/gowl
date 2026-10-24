@@ -292,6 +292,36 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
   a digit or a symbol never a word, short phrases ignored, Backspace in a
   word and past it, phrases already matched or triggers taken respected,
   proposals that never shadow (prefix either way), a bounded table
+- `test-hotkey-spec` -- the hotkey notation: every AutoHotkey prefix
+  (`# ! ^ + < > * ~ $`, `<^>!` as AltGr, `UP`, `a & b`), gowl's
+  `Super+Alt+x` reading to the same spec, key/button/wheel names and
+  `code:NN`, the canonical form round-tripping, and what is refused with
+  its own message (three-key combinations, wheel UP, a wheel prefix)
+- `test-hotkey-engine` -- what a key means, on a fake clock: swallowed
+  vs `~`, a release following its press's decision, wildcard and sides,
+  UP hotkeys, combinations (prefix swallowed, its own hotkey on a clean
+  release), lone modifiers, double taps and long presses put back in
+  order, priorities, modes, suspend, input levels and `$`, remaps
+- `test-hotkey-send` -- Send syntax: prefixes, `{Name N|down|up}`,
+  `{U+XXXX}`, `{Blind}`, `{Raw}`, `{Text}`, clicks, sleeps, bad braces
+- `test-hotkey-model` -- reading the `hotkey:` section: every action
+  kind, shorthand, ids, modes, contexts, includes (and their loops), and
+  one problem costing one entry
+- `test-hotkey-hotstring` -- AutoHotkey hotstrings into gabbrev YAML,
+  verified through gabbrev's own loader; every option that cannot be had
+  exactly is a warning, never a silent drop
+- `test-hotkey-registry` -- libgowl's half: functions, contexts,
+  sources and `gowl_hotkey_define()`, with the generation counter
+- `test-hotkey-config` -- the `hotkey:` config key, and every example
+  on docs/hotkey.org: `data/example-hotkey.yaml`, all fifteen cookbook
+  cases, `data/example-hotkey.c` and `data/example-hotkey-script.c`
+  compiled in
+- `test-hotkey-module` -- the real hotkey.so (with gabbrev.so and
+  macro.so) on a fake keyboard and pointer: what the client receives,
+  remaps holding a modifier across physical ones, Caps Lock layers that
+  never toggle, actions, modes, timers, hooks, input hooks, functions,
+  scripts rebuilt and taken back, faults contained, IPC, JSON-RPC and
+  `org.gowl.Hotkey1` under GTestDBus
 - `test-bar-gabbrev` -- the bar's gabbrev widget fed the module's replies:
   muted when off or absent, a count while expansions resolve, rows that
   cancel a job or accept a suggestion, `x' dismissing only a suggestion,
@@ -370,6 +400,19 @@ tests. These assert invariants no unit test can reach:
   after the lock screen and the confinement escape and BEFORE
   shortcuts-inhibit, the forwarded hook after the forward, and the
   broadcast module never touches the seat or GLib's default context
+- `test-hotkey-guard.sh` -- the hotkey module waits on nothing through
+  GLib's default context, never drives the seat, calls crispy code only
+  under the fault guard, never hands yaml-glib a NULL GError**,
+  unregisters its JSON-RPC methods on deactivate, passes a shell line as
+  written (values go in GOWL_HOTKEY_* variables), runs actions a loop
+  turn after the key, takes the group-modifier overlay listener off on
+  every way out, and never uses g_strescape() for Lisp
+- `test-hotkey-docs.sh` -- docs/hotkey.org is generated from
+  docs/hotkey.org.in and must equal a fresh generation (each
+  `@@FILE:PATH:LANG@@` line becomes the file verbatim, and those files
+  are the ones test-hotkey-config loads); every example file is on the
+  page; every IPC verb, action kind and hook event is documented.  After
+  editing the page or an example: `tests/test-hotkey-docs.sh --write`
 - `test-gabbrev-guard.sh` -- the gabbrev module waits on nothing through
   GLib's default context, never drives the seat itself, types a loop turn
   after the key that completed a trigger (never inside it), never hands
@@ -781,6 +824,19 @@ docs/                       # Documentation (architecture, building, configurati
   `read_text_from_source_pipe` has a deadline; `test-screenshot-guard.sh`
   holds both.  A test that reads the clipboard on the thread that
   dispatches the loop must read asynchronously (`test-mcp-grab`).
+- Never correct keyboard state from inside a key event.  xkb has already
+  applied the key before any `filter_key` runs (a swallowed Caps Lock has
+  still toggled), and `wlr_keyboard_group` copies its members' modifiers
+  and locks when they change, overwriting a correction made in the
+  event.  Use `gowl_compositor_set_lock_state()` from an idle after the
+  key, and hold an injected modifier with a listener on the group's
+  `events.modifiers` (the hotkey module's overlay) -- taken off on every
+  way out, or wlroots aborts at destroy.  `docs/architecture.org`,
+  *A swallowed key has still changed the keyboard*.
+- Never register JSON-RPC methods only at activate: under cmacs the IPC
+  server is created later (`gowl-start-ipc`).  Connect to the
+  compositor's `ipc-changed` signal and (re)install them there, as the
+  hotkey module does; unregister on deactivate.
 - `wlr_data_source_send()` owns the fd it is given; never close it after.
 - `tools/list` over MCP is paged -- follow `nextCursor` before concluding
   a tool is missing.  The clipboard tools sat unregistered behind a TODO

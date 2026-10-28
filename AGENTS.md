@@ -673,6 +673,51 @@ tests. These assert invariants no unit test can reach:
 > each next frame from `frame-rendered`, as the recording module does.
 > `tests/test-idle-output.c` checks it.
 
+## Versioning
+
+The version lives in `config.mk` (`VERSION_MAJOR`, `VERSION_MINOR`, `VERSION_MICRO`) and every
+release on master carries an annotated tag `v<MAJOR>.<MINOR>.<MICRO>` (e.g. `v0.4.0`) on the
+commit that sets it.
+
+- **Micro** (+1): every change landing on master that changes what is built: bug fixes, patches,
+  small features, options, polish (`fix`, `perf`, small `feat`, `refactor`). Changes that touch
+  only docs, tests or tooling (`docs`, `test`, `ci`, `chore`) do not bump; they ride with the
+  next release.
+- **Minor** (+1, micro back to 0): a major feature: a new subsystem or module family (the wire
+  protocol, gabbrev, hotkey, floatdesk), a new build backend (a wlroots version), or anything
+  that breaks compatibility with earlier versions (config keys, the module API/ABI and its
+  interfaces, IPC commands and JSON-RPC methods, signals, GIR API).
+- **Major**: never bumped without asking the user first. It also changes the soname
+  (`libgowl.so.$(VERSION_MAJOR)` in `config.mk`), so every out-of-tree module and embedder
+  (cmacs) must be rebuilt.
+
+One bump per landing, the highest kind it contains: a merge that brings in several changes
+bumps once (minor if any of them is a major feature, else micro).
+
+- **Every landing is released at once.** Each landing on master that changes the build bumps,
+  is tagged and pushed immediately; nothing that changes the build waits on master untagged for
+  a later release. A version bump is always pushed with its tag, even when nothing else was
+  asked to be pushed.
+- **Merging a branch** (the usual case): bump in the merge commit itself, so the tag marks the
+  merge and the branch never carries a version:
+
+  ```bash
+  git merge --no-ff --no-commit feat/x     # resolve conflicts if any
+  $EDITOR config.mk                        # bump VERSION_MINOR or VERSION_MICRO
+  make clean all && make test              # the targets the change needs
+  git commit                               # merge message names the new version
+  git tag -a v0.5.0 -m 'v0.5.0'
+  git push origin master v0.5.0
+  ```
+
+  Fast-forward merges have no commit to hold the bump; use `--no-ff`. A merge that lands only
+  docs/tests may fast-forward and is not tagged.
+- **Working directly on master**: bump `config.mk` in the change's own commit (or, for a run of
+  commits, in the last one), then tag that commit and push it with the tag.
+- Tag only a commit whose `config.mk` matches the tag, after `make clean all` and `make test`
+  pass with zero warnings; never move or delete a pushed tag; a broken release is fixed by the
+  next micro.
+
 ## Code Style
 
 - **C standard**: `gnu89` exclusively (`-std=gnu89`)

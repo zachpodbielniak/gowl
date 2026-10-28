@@ -2,6 +2,12 @@
 # Pattern rules and common build recipes
 
 # Wayland protocol headers (must be defined before use in dependency rules)
+# ldconfig after a live install. Linux rebuilds its cache from ld.so.conf;
+# FreeBSD's ldconfig run bare (or with a directory) *replaces* the loader
+# hints with that list, dropping every directory ports registered (FFmpeg,
+# gcc's runtime, ...) until the next boot -- -m merges LIBDIR in instead.
+LDCONFIG = $(if $(filter FreeBSD,$(shell uname -s)),ldconfig -m $(LIBDIR),ldconfig)
+
 PROTO_HDRS := \
 	xdg-shell-protocol.h \
 	wlr-layer-shell-unstable-v1-protocol.h \
@@ -515,7 +521,7 @@ install-lib: $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL)
 	cd $(DESTDIR)$(LIBDIR) && ln -sf $(LIB_SHARED_MAJOR) $(LIB_SHARED)
 	@if [ -z "$(DESTDIR)" ] && command -v ldconfig >/dev/null 2>&1; then \
 		echo "  Running ldconfig..."; \
-		ldconfig || true; \
+		$(LDCONFIG) || true; \
 	fi
 
 install-headers:

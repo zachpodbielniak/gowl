@@ -49,6 +49,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/wait.h>	/* WIFEXITED and friends: POSIX puts them here; glibc also has them in stdlib.h */
 
 #include "core/gowl-compositor.h"
 #include "core/gowl-client.h"

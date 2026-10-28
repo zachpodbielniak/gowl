@@ -42,6 +42,9 @@
 #include <errno.h>
 #include <setjmp.h>
 #include <pthread.h>
+#if defined(__FreeBSD__)
+#include <pthread_np.h>	/* pthread_getthreadid_np */
+#endif
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -296,7 +299,13 @@ gowl_fault_guard_thread_init(void)
 		memset(&sev, 0, sizeof sev);
 		sev.sigev_notify = SIGEV_THREAD_ID;
 		sev.sigev_signo = watchdog_signo;
+		/* The kernel thread id SIGEV_THREAD_ID targets: gettid(2) on
+		 * Linux, pthread_getthreadid_np(3) on FreeBSD. */
+#if defined(__FreeBSD__)
+		sev.sigev_notify_thread_id = (lwpid_t)pthread_getthreadid_np();
+#else
 		sev.sigev_notify_thread_id = (pid_t)syscall(SYS_gettid);
+#endif
 		if (timer_create(CLOCK_MONOTONIC, &sev, &t->timer) == 0)
 			t->has_timer = TRUE;
 	}

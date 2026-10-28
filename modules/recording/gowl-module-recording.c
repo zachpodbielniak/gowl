@@ -505,7 +505,10 @@ do_start(GowlModuleRecording *self,
 	 *
 	 * As an optimization, grow the pipe buffer to the kernel's max
 	 * (often 1MB on default systems, up to 16MB with permissions).
-	 * A larger buffer reduces blocking frequency. */
+	 * A larger buffer reduces blocking frequency. F_SETPIPE_SZ is
+	 * Linux-only; FreeBSD pipes grow on demand (kern.ipc.maxpipekva),
+	 * so there is nothing to ask for there. */
+#ifdef F_SETPIPE_SZ
 	{
 		gint desired_sizes[] = {
 			16 * 1024 * 1024,
@@ -522,6 +525,7 @@ do_start(GowlModuleRecording *self,
 				break;
 		}
 	}
+#endif
 
 	self->ffmpeg_stdin_fd = stdin_fd;
 	self->recording = TRUE;

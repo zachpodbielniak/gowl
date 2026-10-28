@@ -336,6 +336,12 @@ DEPFLAGS := -MMD -MP
 
 CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(CFLAGS_INC) $(CFLAGS_DEPS) $(DEPFLAGS)
 
+# POSIX timers (timer_create, used by the fault guard) are in librt on the
+# BSDs; glibc folded librt into libc in 2.34.
+ifneq ($(filter FreeBSD DragonFly NetBSD OpenBSD,$(shell uname -s)),)
+    LDFLAGS_DEPS += -lrt
+endif
+
 # Linker flags
 LDFLAGS := $(LDFLAGS_DEPS) $(LDFLAGS_ASAN)
 LDFLAGS_SHARED := -shared -Wl,-soname,libgowl.so.$(VERSION_MAJOR)

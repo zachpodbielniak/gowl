@@ -57,6 +57,9 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/types.h>
+#if defined(__FreeBSD__)
+#include <sys/ucred.h>	/* struct xucred, LOCAL_PEERCRED */
+#endif
 #include <fcntl.h>
 #include <wayland-server-core.h>
 
@@ -977,13 +980,49 @@ on_client_event(int fd, uint32_t mask, void *data)
 
 /* --- Listener readable callback --- */
 
+/*
+ * peer_credentials:
+ * @fd: a connected unix socket
+ * @pid: (out): the peer's pid, left alone when unknown
+ * @uid: (out): the peer's uid, left alone when unknown
+ *
+ * Asks the kernel who is on the other end of @fd: SO_PEERCRED on Linux,
+ * LOCAL_PEERCRED (a struct xucred, which carries the pid since FreeBSD 13)
+ * on FreeBSD.
+ */
+static void
+peer_credentials(int fd, gint *pid, guint *uid)
+{
+#if defined(__FreeBSD__)
+	struct xucred cred;
+	socklen_t cred_len = sizeof cred;
+
+	memset(&cred, 0, sizeof cred);
+	if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERCRED, &cred, &cred_len) == 0
+	    && cred.cr_version == XUCRED_VERSION && cred.cr_pid > 0) {
+		*pid = (gint)cred.cr_pid;
+		*uid = (guint)cred.cr_uid;
+	}
+#else
+	struct ucred cred;
+	socklen_t cred_len = sizeof cred;
+
+	memset(&cred, 0, sizeof cred);
+	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) == 0
+	    && cred.pid > 0) {
+		*pid = (gint)cred.pid;
+		*uid = (guint)cred.uid;
+	}
+#endif
+}
+
 /**
  * on_listen_readable:
  * @fd: the listening socket fd
  * @mask: wl_event mask
  * @data: pointer to GowlIpc
  *
- * Accepts a pending connection, records who it is (SO_PEERCRED), and
+ * Accepts a pending connection, records who it is (peer_credentials), and
  * starts watching it.
  */
 static int
@@ -992,8 +1031,6 @@ on_listen_readable(int fd, uint32_t mask, void *data)
 	GowlIpc *self;
 	GowlIpcClient *client;
 	int client_fd;
-	struct ucred cred;
-	socklen_t cred_len = sizeof cred;
 
 	self = (GowlIpc *)data;
 	(void)mask;
@@ -1022,12 +1059,7 @@ on_listen_readable(int fd, uint32_t mask, void *data)
 	client->caller.connection = ++self->next_connection;
 
 	/* Who is calling: what "my windows" means for this connection. */
-	memset(&cred, 0, sizeof cred);
-	if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) == 0
-	    && cred.pid > 0) {
-		client->caller.pid = (gint)cred.pid;
-		client->caller.uid = (guint)cred.uid;
-	}
+	peer_credentials(client_fd, &client->caller.pid, &client->caller.uid);
 
 	client->event_source = wl_event_loop_add_fd(
 		self->event_loop, client_fd,

@@ -13,6 +13,9 @@ PROTO_HDRS := \
 	wlr-layer-shell-unstable-v1-protocol.h \
 	cursor-shape-v1-protocol.h \
 	pointer-constraints-unstable-v1-protocol.h \
+	color-management-v1-protocol.h \
+	content-type-v1-protocol.h \
+	tearing-control-v1-protocol.h \
 	tablet-v2-protocol.h \
 	ext-image-copy-capture-v1-protocol.h \
 	ext-workspace-v1-protocol.h \
@@ -309,6 +312,22 @@ cursor-shape-v1-protocol.h:
 pointer-constraints-unstable-v1-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
 		$(WAYLAND_PROTOCOLS_DIR)/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml $@
+
+# The same 0.19 pattern for three staging protocols gowl gained
+# afterwards: wlr_color_management_v1.h, wlr_content_type_v1.h and
+# wlr_tearing_control_v1.h include their generated headers by bare
+# name.  Without these rules Fedora 43's deps build failed in the first.
+color-management-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		$(WAYLAND_PROTOCOLS_DIR)/staging/color-management/color-management-v1.xml $@
+
+content-type-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		$(WAYLAND_PROTOCOLS_DIR)/staging/content-type/content-type-v1.xml $@
+
+tearing-control-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		$(WAYLAND_PROTOCOLS_DIR)/staging/tearing-control/tearing-control-v1.xml $@
 
 # tablet-v2 graduated from unstable/ to stable/ in wayland-protocols
 # 1.41, under a different file name.  Take whichever this machine has

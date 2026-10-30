@@ -28,6 +28,7 @@
 #define GOWL_CORE_PRIVATE_H
 
 /* gowl public headers (forward decls + GObject type macros) */
+#include "gowl-wlroots-compat.h"	/* GOWL_HAVE_* capability flags */
 #include "gowl-types.h"
 #include "gowl-enums.h"
 #include "config/gowl-config.h"

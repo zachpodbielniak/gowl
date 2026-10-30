@@ -826,12 +826,22 @@ gowl_text_input_init(GowlCompositor *self)
 	relay->virtual_keyboard_mgr =
 		wlr_virtual_keyboard_manager_v1_create(self->wl_display);
 
+	/* wlroots 0.20 renamed both managers' "a new one arrived" signals
+	 * (text_input -> new_text_input, input_method -> new_input_method);
+	 * the payload is the same. */
 	relay->new_text_input.notify = on_new_text_input;
+	relay->new_input_method.notify = on_new_input_method;
+#if GOWL_HAVE_WLROOTS_0_20
 	wl_signal_add(&relay->text_input_mgr->events.new_text_input,
 	              &relay->new_text_input);
-	relay->new_input_method.notify = on_new_input_method;
 	wl_signal_add(&relay->input_method_mgr->events.new_input_method,
 	              &relay->new_input_method);
+#else
+	wl_signal_add(&relay->text_input_mgr->events.text_input,
+	              &relay->new_text_input);
+	wl_signal_add(&relay->input_method_mgr->events.input_method,
+	              &relay->new_input_method);
+#endif
 	relay->new_virtual_keyboard.notify = on_new_virtual_keyboard;
 	wl_signal_add(&relay->virtual_keyboard_mgr->events.new_virtual_keyboard,
 	              &relay->new_virtual_keyboard);

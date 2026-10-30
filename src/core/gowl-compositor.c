@@ -3027,8 +3027,13 @@ gowl_renderer_can_color_manage(struct wlr_renderer *renderer)
 {
 	if (renderer == NULL)
 		return FALSE;
+#if GOWL_HAVE_COLOR_TRANSFORMS
 	return renderer->features.input_color_transform
 	    && renderer->features.output_color_transform;
+#else
+	/* wlroots 0.19 renderers have no input colour transform. */
+	return FALSE;
+#endif
 }
 
 /* ── What shows through translucent windows ──────────────────────── */
@@ -4780,6 +4785,7 @@ gowl_compositor_start(
 		 * has asked for HDR anyway with `hdr-unmanaged' gets the old
 		 * list, because on that setting pass-through is the point.
 		 */
+#if GOWL_HAVE_COLOR_TRANSFORMS
 		if (self->renderer != NULL
 		    && gowl_renderer_can_color_manage(self->renderer)) {
 			size_t i, keep;
@@ -4801,6 +4807,7 @@ gowl_compositor_start(
 			}
 			n_tfs = keep;
 		}
+#endif
 
 		memset(&opts, 0, sizeof opts);
 		opts.features.parametric = true;
@@ -4830,8 +4837,10 @@ gowl_compositor_start(
 		/* The scene graph does the per-surface colour conversion; it
 		 * needs the manager to know what each surface declared. */
 		if (self->color_manager != NULL) {
+#if GOWL_HAVE_COLOR_TRANSFORMS
 			wlr_scene_set_color_manager_v1(self->scene,
 			                               self->color_manager);
+#endif
 			/* Logged because "the player will not play HDR" and
 			 * "the browser cannot declare sRGB" are the same
 			 * question -- what did we tell clients we can do --

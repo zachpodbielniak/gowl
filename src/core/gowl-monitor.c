@@ -836,6 +836,7 @@ gowl_monitor_get_scale(GowlMonitor *self)
  * wp-color-management-v1 and that wins for its own surface.
  */
 
+#if GOWL_HAVE_COLOR_TRANSFORMS
 /* Rec. ITU-R BT.2020 primaries and the D65 white point. */
 static const struct wlr_color_primaries gowl_bt2020_primaries = {
 	.red   = { .x = 0.708f, .y = 0.292f },
@@ -843,6 +844,7 @@ static const struct wlr_color_primaries gowl_bt2020_primaries = {
 	.blue  = { .x = 0.131f, .y = 0.046f },
 	.white = { .x = 0.3127f, .y = 0.3290f },
 };
+#endif
 
 /**
  * gowl_monitor_hdr_display_capable:
@@ -870,10 +872,15 @@ gowl_monitor_hdr_display_capable(GowlMonitor *self)
 
 	if (self->wlr_output == NULL)
 		return FALSE;
+#if GOWL_HAVE_COLOR_TRANSFORMS
 	return (self->wlr_output->supported_primaries
 	        & WLR_COLOR_NAMED_PRIMARIES_BT2020) != 0
 	    && (self->wlr_output->supported_transfer_functions
 	        & WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ) != 0;
+#else
+	/* wlroots 0.19 does not describe what an output supports. */
+	return FALSE;
+#endif
 }
 
 /**
@@ -1014,6 +1021,7 @@ gowl_monitor_set_hdr(
 	GowlMonitor *self,
 	gboolean     enable
 ){
+#if GOWL_HAVE_COLOR_TRANSFORMS
 	struct wlr_output_state state;
 	struct wlr_output_image_description desc;
 	guint32 chosen_format = 0;
@@ -1301,6 +1309,22 @@ gowl_monitor_set_hdr(
 	/* The whole output has to be redrawn in the new colour space. */
 	wlr_output_schedule_frame(self->wlr_output);
 	return TRUE;
+#else
+	/*
+	 * wlroots 0.19 cannot describe an HDR image to an output, nor say
+	 * whether one could take it (gowl_monitor_hdr_display_capable() is
+	 * FALSE there), so HDR is never on: turning it off already holds,
+	 * and turning it on is refused with the reason.
+	 */
+	g_return_val_if_fail(GOWL_IS_MONITOR(self), FALSE);
+
+	if (!enable)
+		return TRUE;
+	g_message("%s cannot do HDR: gowl was built against wlroots 0.19, "
+	          "which has no output image descriptions (0.20 does)",
+	          gowl_monitor_get_name(self));
+	return FALSE;
+#endif
 }
 
 /**

@@ -41,6 +41,15 @@
  *       sites read by intent ("can we window-capture?") rather than by
  *       version, and so a future wlroots that gains/loses the capability
  *       is a one-line change here.
+ *
+ *   GOWL_HAVE_COLOR_TRANSFORMS
+ *       1 when wlroots can colour-manage: renderer input/output colour
+ *       transforms, the advertised lists built from them
+ *       (wlr_color_manager_v1_*_list_from_renderer), the scene graph
+ *       converting per surface (wlr_scene_set_color_manager_v1) and an
+ *       output's supported primaries / transfer functions -- all 0.20.
+ *       On 0.19 the colour-management protocol is still offered, as the
+ *       pass-through lists, and HDR detection reports "not capable".
  */
 
 #ifndef GOWL_WLROOTS_COMPAT_H
@@ -69,5 +78,8 @@
 
 /* Per-window screencast capture capability.  Tracks 0.20 today. */
 #define GOWL_HAVE_CAPTURE_WINDOW GOWL_HAVE_WLROOTS_0_20
+
+/* Renderer colour transforms and HDR output description.  0.20. */
+#define GOWL_HAVE_COLOR_TRANSFORMS GOWL_HAVE_WLROOTS_0_20
 
 #endif /* GOWL_WLROOTS_COMPAT_H */

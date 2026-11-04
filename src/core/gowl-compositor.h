@@ -639,6 +639,35 @@ void gowl_compositor_set_outputs_powered (GowlCompositor *self, gboolean on);
 gboolean gowl_compositor_any_output_powered_off (GowlCompositor *self);
 
 /**
+ * gowl_compositor_monitor_wake_at:
+ * @self: a #GowlCompositor
+ * @monitor: the #GowlMonitor the effect draws on
+ * @at_us: g_get_monotonic_time() of the next frame the effect needs
+ *
+ * Ask for a frame on @monitor at @at_us rather than at the next vblank.
+ * For an effect throttled below the refresh rate: called from a
+ * scene-effect `frame' hook that then returns %FALSE, it keeps the
+ * output idle between the effect's own redraws instead of committing
+ * the unchanged scene every vblank.  The earliest request of a frame
+ * wins.  The frame arrives on the first vblank no earlier than half a
+ * refresh period before @at_us; see gowl_compositor_frame_slack_us().
+ */
+void gowl_compositor_monitor_wake_at (GowlCompositor *self,
+                                      GowlMonitor    *monitor,
+                                      gint64          at_us);
+
+/**
+ * gowl_compositor_frame_slack_us:
+ * @monitor: (nullable): a #GowlMonitor
+ *
+ * Returns: half of @monitor's refresh period in microseconds (half of
+ *   60 Hz when the mode does not say).  A throttle that treats a frame
+ *   this close to its deadline as due draws on the vblank nearest the
+ *   deadline, which is the one gowl_compositor_monitor_wake_at() wakes.
+ */
+gint64 gowl_compositor_frame_slack_us (GowlMonitor *monitor);
+
+/**
  * gowl_compositor_get_backdrop_style:
  * @self: a #GowlCompositor
  *

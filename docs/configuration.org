@@ -2218,6 +2218,8 @@ locked, the style changed. There is no version of an animated backdrop
 that does not do this, and =water-fps: 30= is half the cost of =60= for a
 difference nobody can see on something that moves as slowly as water.
 
+*It renders at its own rate, not the screen's.* Every animated backdrop --- water, rain, snow, leaves, fizz, soap, submerged, embers, dew --- draws when its throttle is due and then names the frame it needs next (=gowl_fx_throttle_live()=, =gowl_compositor_monitor_wake_at()=), so an output under a 30 fps backdrop commits thirty frames a second, not the unchanged scene on every vblank in between. Before that, a 120 Hz panel committed 120 times a second for thirty new pictures and could never drop into panel self-refresh. And a window only counts while it can be seen: one on a hidden tag, minimized or stowed in the scratchpad, or on an output that is powered off, no longer holds its output rendering (=gowl_fx_backdrop_client_shown()=).
+
 **** Liquid rain
 :PROPERTIES:
 :CUSTOM_ID: liquidrain

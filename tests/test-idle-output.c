@@ -23,7 +23,11 @@
  *    a bare needs_frame (how a screencopy asks), damage, a gamma ramp;
  *  - an effect still animating keeps it drawing, and so does whatever
  *    asks for its next frame from ::frame-rendered -- how the recording
- *    module gets a steady stream from an unchanging screen.
+ *    module gets a steady stream from an unchanging screen;
+ *  - an effect throttled below the refresh rate commits only the frames
+ *    it draws: gowl_fx_throttle_live() asks for a wake at its next draw
+ *    instead of answering "live" on every vblank in between, which is
+ *    what kept a laptop panel at full refresh under the rain backdrop.
  */
 
 #include <glib.h>
@@ -38,6 +42,7 @@
 #include "core/gowl-core-private.h"
 #include "interfaces/gowl-scene-effect.h"
 #include "module/gowl-module-manager.h"
+#include "fx/gowl-fx.h"
 
 /* ── A scene effect that counts its frames ─────────────────────── */
 
@@ -47,6 +52,9 @@ struct _IdleEffect {
 	gint       frame;        /* frame hooks run */
 	gint       frame_done;   /* frame_done hooks run */
 	gboolean   live;         /* answer "still animating" */
+	gint       fps;          /* > 0: throttled like a backdrop */
+	gint       draws;        /* throttled frames actually drawn */
+	gint64     next_draw_us; /* the throttle's next due frame */
 };
 
 static gboolean
@@ -55,7 +63,17 @@ ie_frame(GowlSceneEffect *e, GowlCompositor *c, GowlMonitor *m, gint64 now)
 	IdleEffect *self = IDLE_EFFECT(e);
 
 	self->frame++;
-	return self->live;
+	if (self->fps <= 0 || !self->live)
+		return self->live;
+
+	/* The shape every animated backdrop has: draw when due, then name
+	 * the next draw rather than asking for every vblank. */
+	if (self->next_draw_us == 0
+	    || gowl_fx_throttle_due(m, now, self->next_draw_us)) {
+		self->draws++;
+		self->next_draw_us = now + G_USEC_PER_SEC / self->fps;
+	}
+	return gowl_fx_throttle_live(c, m, TRUE, self->fps, self->next_draw_us);
 }
 
 static void
@@ -350,6 +368,43 @@ keeps_drawing_when_asked(void)
 	idle_stop(&t);
 }
 
+/*
+ * A throttled effect commits at its own rate, not the output's.
+ *
+ * 10 fps for a second on a 60 Hz output: about ten draws and about ten
+ * commits.  Before gowl_fx_throttle_live() the effect answered "live" on
+ * every vblank, so the output committed the unchanged scene ~60 times a
+ * second for its ten pictures.  And it keeps going without anybody else
+ * asking: the wake timer alone carries it from one draw to the next.
+ */
+static void
+throttled_effect_commits_at_its_rate(void)
+{
+	Idle    t;
+	guint32 seq;
+	gint    draws;
+
+	idle_start(&t);
+	assert_settles(&t);
+
+	t.effect->fps = 10;
+	t.effect->live = TRUE;
+	seq = t.output->commit_seq;
+	draws = t.effect->draws;
+	wlr_output_schedule_frame(t.output);
+	run_for(&t, 1000);
+
+	g_assert_cmpint(t.effect->draws - draws, >=, 7);
+	g_assert_cmpint(t.effect->draws - draws, <=, 13);
+	/* One commit per draw, give or take the one that started it. */
+	g_assert_cmpuint(t.output->commit_seq - seq, <=,
+	                 (guint32)(t.effect->draws - draws) + 3);
+
+	t.effect->live = FALSE;
+	assert_settles(&t);
+	idle_stop(&t);
+}
+
 /* ── Each case in a subprocess of its own ────────────────────────── */
 
 /*
@@ -431,6 +486,10 @@ static void test_keeps_drawing(void)
 {
 	in_subprocess(keeps_drawing_when_asked);
 }
+static void test_throttled(void)
+{
+	in_subprocess(throttled_effect_commits_at_its_rate);
+}
 static void test_failed_commit(void)
 {
 	in_subprocess(failed_commit_backs_off);
@@ -447,6 +506,8 @@ main(int argc, char **argv)
 	g_test_add_func("/idle-output/draws-on-demand", test_draws_on_demand);
 	g_test_add_func("/idle-output/keeps-drawing-when-asked",
 	                test_keeps_drawing);
+	g_test_add_func("/idle-output/throttled-effect-commits-at-its-rate",
+	                test_throttled);
 	g_test_add_func("/idle-output/failed-commit-backs-off",
 	                test_failed_commit);
 

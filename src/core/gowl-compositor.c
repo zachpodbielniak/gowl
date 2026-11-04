@@ -8839,6 +8839,72 @@ monitor_frame_retry(gpointer data)
 	return 0;
 }
 
+gint64
+gowl_compositor_frame_slack_us(GowlMonitor *monitor)
+{
+	gint32 refresh_mhz;
+
+	refresh_mhz = (monitor != NULL && monitor->wlr_output != NULL)
+		? monitor->wlr_output->refresh : 0;
+	if (refresh_mhz <= 0)
+		refresh_mhz = 60000;
+	/* period_us = 1e9 / mHz; half of it. */
+	return (gint64)(500000000LL / refresh_mhz);
+}
+
+void
+gowl_compositor_monitor_wake_at(GowlCompositor *self, GowlMonitor *monitor,
+                                gint64 at_us)
+{
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (monitor == NULL || at_us <= 0)
+		return;
+	if (monitor->effect_wake_us == 0 || at_us < monitor->effect_wake_us)
+		monitor->effect_wake_us = at_us;
+}
+
+static gint
+monitor_effect_wake(gpointer data)
+{
+	GowlMonitor *m = (GowlMonitor *)data;
+
+	if (m->wlr_output != NULL && m->scene_output != NULL)
+		wlr_output_schedule_frame(m->wlr_output);
+	return 0;
+}
+
+/*
+ * Arm the effect wake for the deadline the effects named this tick.
+ *
+ * Half a refresh period early, rounded UP to the timer's millisecond:
+ * the frame then lands on the first vblank at or after that instant,
+ * which a throttle using gowl_compositor_frame_slack_us() treats as
+ * due -- so the wake never produces a frame the effect then declines.
+ */
+static void
+monitor_effect_wake_arm(GowlMonitor *m, gint64 now_us)
+{
+	gint64 fire_us;
+	gint   delay_ms;
+
+	if (m->compositor == NULL || m->compositor->event_loop == NULL)
+		return;
+	if (m->effect_wake == NULL) {
+		m->effect_wake = wl_event_loop_add_timer(
+			m->compositor->event_loop, monitor_effect_wake, m);
+		if (m->effect_wake == NULL)
+			return;
+	}
+	fire_us = m->effect_wake_us - gowl_compositor_frame_slack_us(m);
+	delay_ms = fire_us > now_us
+		? (gint)((fire_us - now_us + 999) / 1000) : 1;
+	/* 0 would disarm the timer rather than fire it now. */
+	if (delay_ms < 1)
+		delay_ms = 1;
+	wl_event_source_timer_update(m->effect_wake, delay_ms);
+}
+
 static void
 on_monitor_frame(struct wl_listener *listener, void *data)
 {
@@ -8872,6 +8938,7 @@ on_monitor_frame(struct wl_listener *listener, void *data)
 	 * needed one more frame to appear.  At 180 ms and 60 Hz that is
 	 * two frames of an eleven-frame animation spent on nothing.
 	 */
+	m->effect_wake_us = 0;
 	m->effect_live = gowl_effects_frame(m->compositor, m,
 	                                   g_get_monotonic_time());
 
@@ -8969,6 +9036,13 @@ frame_done:
 		else
 			monitor_frame_retry_later(m);
 	}
+	/* Nothing needs the very next vblank, but a throttled effect named
+	 * the frame it does need: ask for that one, and leave the output
+	 * idle until then. */
+	else if (m->effect_wake_us != 0
+	         && m->commit_failures < GOWL_FRAME_FAILURES_BEFORE_BACKOFF) {
+		monitor_effect_wake_arm(m, g_get_monotonic_time());
+	}
 
 	/* Notify clients that a frame has been rendered -- or would have
 	 * been: a client waiting on a frame callback gets it either way. */
@@ -9021,6 +9095,10 @@ on_monitor_destroy(struct wl_listener *listener, void *data)
 	if (m->frame_retry != NULL) {
 		wl_event_source_remove(m->frame_retry);
 		m->frame_retry = NULL;
+	}
+	if (m->effect_wake != NULL) {
+		wl_event_source_remove(m->effect_wake);
+		m->effect_wake = NULL;
 	}
 	m->frame_retry_armed = FALSE;
 

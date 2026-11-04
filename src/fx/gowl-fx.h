@@ -2320,6 +2320,59 @@ void gowl_fx_vis_hide_layer (GowlFxVis      *vis,
  */
 gboolean gowl_fx_client_is_pinned (GowlClient *client);
 
+/**
+ * gowl_fx_backdrop_client_shown:
+ * @monitor: (nullable): the #GowlMonitor the backdrop draws on
+ * @client: a client
+ *
+ * Whether a backdrop behind @client can be seen at all right now: its
+ * scene node is enabled -- not on a hidden tag, not minimized, not a
+ * stowed scratchpad -- and its output is not powered off.  An animated
+ * backdrop skips a client that is not shown, keeping its node, so one
+ * translucent window parked on another tag no longer holds the output
+ * rendering forever; the REVEAL event redraws it when it comes back.
+ *
+ * Returns: %TRUE when what is drawn behind @client can reach the screen
+ */
+gboolean gowl_fx_backdrop_client_shown (GowlMonitor *monitor,
+                                        GowlClient  *client);
+
+/**
+ * gowl_fx_throttle_due:
+ * @monitor: (nullable): the #GowlMonitor being drawn
+ * @now_us: the frame's g_get_monotonic_time()
+ * @next_draw_us: when the throttled effect next wants to draw
+ *
+ * Returns: %TRUE when this frame is close enough to @next_draw_us to
+ *   draw on: within gowl_compositor_frame_slack_us(), so the frame that
+ *   gowl_compositor_monitor_wake_at() wakes is never declined.
+ */
+gboolean gowl_fx_throttle_due (GowlMonitor *monitor,
+                               gint64       now_us,
+                               gint64       next_draw_us);
+
+/**
+ * gowl_fx_throttle_live:
+ * @compositor: the #GowlCompositor
+ * @monitor: the #GowlMonitor being drawn
+ * @live: whether the effect has anything animating on @monitor
+ * @fps: the effect's throttle; 0 or less draws every frame
+ * @next_draw_us: when the effect next draws on @monitor
+ *
+ * What a throttled effect's `frame' hook should return.  Unthrottled,
+ * that is @live.  Throttled and live, it is %FALSE, with a wake asked
+ * for at @next_draw_us instead: the output then commits only the
+ * frames the effect actually draws, rather than the unchanged scene on
+ * every vblank in between.
+ *
+ * Returns: the value for the `frame' hook to return
+ */
+gboolean gowl_fx_throttle_live (GowlCompositor *compositor,
+                                GowlMonitor    *monitor,
+                                gboolean        live,
+                                gint            fps,
+                                gint64          next_draw_us);
+
 /* ── Capture ─────────────────────────────────────────────────────── */
 
 /**

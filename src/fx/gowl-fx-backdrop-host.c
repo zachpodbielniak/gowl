@@ -633,13 +633,19 @@ gowl_backdrop_host_frame(GowlBackdropHost *host, GowlCompositor *self,
 
 	src = host_source_for(host, m);
 	redraw = TRUE;
-	if (src != NULL && fps > 0 && now_us < src->next_draw_us)
+	if (src != NULL && fps > 0
+	    && !gowl_fx_throttle_due(m, now_us, src->next_draw_us))
 		redraw = FALSE;
 
 	for (l = self->clients; l != NULL; l = l->next) {
 		GowlClient *c = l->data;
 
 		if (c->mon != m)
+			continue;
+		/* Hidden tag, minimized, stowed, or a dark output: nothing
+		   drawn behind it can be seen, so drawing it only kept the
+		   output awake.  Its node stays; REVEAL redraws it. */
+		if (!gowl_fx_backdrop_client_shown(m, c))
 			continue;
 		if (host_update_client(host, self, c, redraw))
 			live = TRUE;
@@ -655,7 +661,12 @@ gowl_backdrop_host_frame(GowlBackdropHost *host, GowlCompositor *self,
 				: now_us;
 		}
 	}
-	return live;
+	/* Throttled, the next frame this needs is the next redraw, not
+	   the next vblank: everything between would commit an unchanged
+	   scene at full refresh. */
+	src = host_source_for(host, m);
+	return gowl_fx_throttle_live(self, m, live, fps,
+	                             src != NULL ? src->next_draw_us : 0);
 }
 
 gboolean

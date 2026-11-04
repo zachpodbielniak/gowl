@@ -854,6 +854,19 @@ struct _GowlMonitor {
 	struct wl_event_source *frame_retry;
 	gboolean frame_retry_armed;
 	/*
+	 * The next frame a throttled effect wants, and the timer that asks
+	 * for it.  An animated backdrop drawing at 30 fps used to answer
+	 * "live" on every vblank, which made this output render and commit
+	 * the whole, unchanged scene at full refresh between its redraws --
+	 * 120 commits a second for 30 new pictures, and a panel that could
+	 * never drop into self-refresh.  Instead the effect names WHEN it
+	 * next draws (gowl_compositor_monitor_wake_at()) and this timer,
+	 * on the compositor's own event loop like frame_retry, asks for
+	 * that frame and no other.  0 means nobody asked this tick.
+	 */
+	gint64 effect_wake_us;
+	struct wl_event_source *effect_wake;
+	/*
 	 * The PQ encode: the scene is rendered into `pq_scene' and then
 	 * encoded into `pq_out', which is what gets committed.  Two
 	 * swapchains rather than one because a shader cannot read and write

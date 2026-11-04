@@ -102,6 +102,38 @@ gowl_fx_client_is_pinned(GowlClient *client)
 	return client != NULL && (client->isembedded || client->isoverlay);
 }
 
+gboolean
+gowl_fx_backdrop_client_shown(GowlMonitor *monitor, GowlClient *client)
+{
+	if (client == NULL || client->scene == NULL)
+		return FALSE;
+	/* Disabled by arrange() for a hidden tag, and so for a minimized
+	 * window or a stowed scratchpad, which have no tags. */
+	if (!client->scene->node.enabled)
+		return FALSE;
+	if (monitor != NULL && monitor->powered_off)
+		return FALSE;
+	return TRUE;
+}
+
+gboolean
+gowl_fx_throttle_due(GowlMonitor *monitor, gint64 now_us, gint64 next_draw_us)
+{
+	return now_us + gowl_compositor_frame_slack_us(monitor) >= next_draw_us;
+}
+
+gboolean
+gowl_fx_throttle_live(GowlCompositor *compositor, GowlMonitor *monitor,
+                      gboolean live, gint fps, gint64 next_draw_us)
+{
+	if (!live)
+		return FALSE;
+	if (fps <= 0 || next_draw_us <= 0 || compositor == NULL)
+		return TRUE;
+	gowl_compositor_monitor_wake_at(compositor, monitor, next_draw_us);
+	return FALSE;
+}
+
 void
 gowl_fx_vis_show_tags(GowlFxVis      *vis,
                       GowlCompositor *compositor,

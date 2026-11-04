@@ -867,13 +867,19 @@ leaves_frame(GowlSceneEffect *effect, GowlCompositor *self, GowlMonitor *m,
 	 * each be held against their own clock. */
 	src = leaves_source_for(mod, m);
 	redraw = TRUE;
-	if (src != NULL && mod->style.fps > 0 && now_us < src->next_draw_us)
+	if (src != NULL && mod->style.fps > 0
+	    && !gowl_fx_throttle_due(m, now_us, src->next_draw_us))
 		redraw = FALSE;
 
 	for (l = self->clients; l != NULL; l = l->next) {
 		GowlClient *c = l->data;
 
 		if (c->mon != m)
+			continue;
+		/* Hidden tag, minimized, stowed, or a dark output: nothing
+		   drawn behind it can be seen, so drawing it only kept the
+		   output awake.  Its node stays; REVEAL redraws it. */
+		if (!gowl_fx_backdrop_client_shown(m, c))
 			continue;
 		if (leaves_update_client(mod, self, c, redraw))
 			live = TRUE;
@@ -889,7 +895,12 @@ leaves_frame(GowlSceneEffect *effect, GowlCompositor *self, GowlMonitor *m,
 				: now_us;
 		}
 	}
-	return live;
+	/* Throttled, the next frame this needs is the next redraw, not
+	   the next vblank: everything between would commit an unchanged
+	   scene at full refresh. */
+	src = leaves_source_for(mod, m);
+	return gowl_fx_throttle_live(self, m, live, mod->style.fps,
+	                             src != NULL ? src->next_draw_us : 0);
 }
 
 /*

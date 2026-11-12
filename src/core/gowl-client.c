@@ -1292,6 +1292,57 @@ gowl_client_set_anim_alpha(GowlClient *self, gfloat alpha)
 }
 
 /**
+ * gowl_client_get_pinned_alpha:
+ */
+gfloat
+gowl_client_get_pinned_alpha(GowlClient *self)
+{
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), 0.0f);
+
+	return self->pinned_alpha;
+}
+
+/**
+ * gowl_client_set_pinned_alpha:
+ */
+void
+gowl_client_set_pinned_alpha(
+	GowlClient *self,
+	gfloat      alpha
+){
+	g_return_if_fail(GOWL_IS_CLIENT(self));
+
+	/* Zero (or less) is "not pinned": a pinned fully transparent
+	 * window is not something anybody asks for, and the zero reading
+	 * keeps a freshly zeroed client unpinned for free. */
+	if (alpha <= 0.0f) {
+		self->pinned_alpha = 0.0f;
+		return;
+	}
+	if (alpha > 1.0f)
+		alpha = 1.0f;
+	self->pinned_alpha = alpha;
+	gowl_client_set_alpha(self, alpha);
+}
+
+/**
+ * gowl_client_focus_alpha:
+ */
+gfloat
+gowl_client_focus_alpha(
+	GowlClient *self,
+	gboolean    focused,
+	gfloat      focused_alpha,
+	gfloat      unfocused_alpha
+){
+	g_return_val_if_fail(GOWL_IS_CLIENT(self), focused_alpha);
+
+	if (self->pinned_alpha > 0.0f)
+		return self->pinned_alpha;
+	return focused ? focused_alpha : unfocused_alpha;
+}
+
+/**
  * gowl_client_set_alpha:
  */
 void

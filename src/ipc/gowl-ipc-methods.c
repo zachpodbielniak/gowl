@@ -1326,7 +1326,10 @@ m_window_set_opacity(GowlIpc *ipc, const GowlIpcCaller *caller,
 		            "opacity is 0.0 to 1.0, not %g", v);
 		return NULL;
 	}
-	gowl_client_set_alpha(c, (gfloat)v);
+	/* A per-window request: pinned, so focus dimming keeps it. */
+	gowl_client_set_pinned_alpha(c, (gfloat)v);
+	if (v <= 0.0)
+		gowl_client_set_alpha(c, 0.0f);
 	return window_node(self, c, caller);
 }
 

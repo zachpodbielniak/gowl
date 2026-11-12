@@ -368,6 +368,49 @@ void               gowl_client_set_alpha         (GowlClient  *self,
                                                    gfloat       alpha);
 
 /**
+ * gowl_client_get_pinned_alpha:
+ * @self: a #GowlClient
+ *
+ * Returns: the opacity pinned on this window, or 0.0 when none is
+ */
+gfloat             gowl_client_get_pinned_alpha  (GowlClient  *self);
+
+/**
+ * gowl_client_set_pinned_alpha:
+ * @self: a #GowlClient
+ * @alpha: the opacity to keep, 0.0 < @alpha <= 1.0; 0.0 or less unpins
+ *
+ * Pins this window's opacity: focus dimming (the `alpha' module) leaves
+ * it at @alpha instead of switching it between its focused and
+ * unfocused values.  Pinning also applies @alpha at once.  Unpinning
+ * leaves the current opacity as it is; the next focus change sets it.
+ *
+ * This is what a per-window opacity request means -- a window rule's
+ * `opacity', the IPC's window.set_opacity -- as opposed to
+ * gowl_client_set_alpha(), which only sets the current value.
+ */
+void               gowl_client_set_pinned_alpha  (GowlClient  *self,
+                                                   gfloat       alpha);
+
+/**
+ * gowl_client_focus_alpha:
+ * @self: a #GowlClient
+ * @focused: whether @self is the focused window
+ * @focused_alpha: the opacity a focused window gets
+ * @unfocused_alpha: the opacity an unfocused window gets
+ *
+ * The opacity focus dimming should give @self: its pinned opacity when
+ * it has one, otherwise @focused_alpha or @unfocused_alpha.  The one
+ * place that decision is made, so a module cannot forget the pin.
+ *
+ * Returns: the opacity to set
+ */
+gfloat             gowl_client_focus_alpha       (GowlClient  *self,
+                                                   gboolean     focused,
+                                                   gfloat       focused_alpha,
+                                                   gfloat       unfocused_alpha);
+
+/**
  * gowl_client_set_effect_alpha:
  * @self: a #GowlClient
  * @alpha: an opacity multiplier, 0.0 to 1.0

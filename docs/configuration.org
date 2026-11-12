@@ -3222,7 +3222,7 @@ Rules match clients by =app_id= and/or =title= and apply settings.
 | =pid=      | int    | =0=     | Match the client's process id               |
 | =no-focus= | bool   | =false= | Do not give the window the keyboard when it maps |
 | =fullscreen= | bool | =false= | Open the window fullscreen                  |
-| =opacity=  | float  | unset   | Opacity 0.05..1.0 (needs the =alpha= module's per-client alpha to show) |
+| =opacity=  | float  | unset   | Opacity 0.05..1.0, pinned: the =alpha= module's focus dimming keeps it on this window instead of switching it between =focused-alpha= and =unfocused-alpha= |
 | =no-blur=  | bool   | =false= | No frosted backdrop behind it (=blur= module) |
 | =no-shadow= | bool  | =false= | No drop shadow (=blur= module)               |
 | =no-anim=  | bool   | =false= | No open, close or move animation (=animation= module) |

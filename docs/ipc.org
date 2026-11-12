@@ -330,7 +330,7 @@ The window object:
 | =window.set_below=       | =id?=, =value?=: floating, but behind the tiles                          | window          |
 | =window.set_minimized=   | =id?=, =value?=, =monitor?=, =tags?=/=tag?= (where a restore lands)       | window          |
 | =window.set_urgent=      | =id?=, =value?=                                                          | window          |
-| =window.set_opacity=     | =id?=, =opacity= (0.0 -- 1.0)                                            | window          |
+| =window.set_opacity=     | =id?=, =opacity= (0.0 -- 1.0); pins it, so focus dimming keeps it (0.0 sets transparent and unpins) | window          |
 | =window.set_tags=        | =id?=, =tags=/=tag=: tags of its own output                              | window          |
 | =window.send_to_monitor= | =id?=, =monitor=, =tags?=/=tag?= (default: what that output shows)        | window          |
 | =window.swap=            | =id?=, =with=: two windows trade tiling slots                            | ={ok}=          |

@@ -1363,6 +1363,8 @@ modules:
 :END:
 The alpha module controls per-client window opacity. When the focused client changes, the previously focused client fades to =unfocused-alpha= and the newly focused client is set to =focused-alpha=.
 
+*Pinned opacity.* A window can have its opacity /pinned/, and then the module gives it that value whether it has focus or not. A window rule's =opacity=, the IPC's =window.set_opacity=, and the effects opt-out (=no-fx-apps=, =GOWL_NO_FX=1=, which pins 1.0 unless a rule pinned something else) all pin. That is what makes "keep this window opaque" hold: before pins, the module rewrote every window's opacity on each focus change, so a rule's opacity lasted until the next focus, and anything that put it back afterwards showed as a flash of the dimmed value. The decision lives in one call, =gowl_client_focus_alpha()=; =gowl_client_set_pinned_alpha()= pins (0.0 unpins). Unloading the module leaves pinned windows at their pinned value and everything else opaque. =dim-inactive= still darkens a pinned window when it is unfocused: that is a dark layer over the window, not its opacity.
+
 *Interfaces:* =GowlStartupHandler=, =GowlShutdownHandler=
 
 *Configuration keys:*
@@ -1387,7 +1389,7 @@ modules:
 *Implementation notes:*
 
 - Uses =gowl_client_set_alpha()= which walks the client's scene tree via =wlr_scene_node_for_each_buffer()= and calls =wlr_scene_buffer_set_opacity()= on each buffer.
-- Connects to the compositor's =focus-changed= signal to automatically apply alpha on focus changes.
+- Connects to the compositor's =focus-changed= signal to automatically apply alpha on focus changes, through =gowl_client_focus_alpha()= so a pinned window keeps its pin.
 - On deactivation, resets all clients to fully opaque (alpha 1.0) --- while the compositor is alive. The compositor pointer is a weak pointer, so a deactivate that runs after the compositor is finalized (the module manager is released last) finds =NULL= and does nothing; see [[#outliving-the-compositor][A module outlives the compositor]].
 - Applying configuration while running immediately re-applies alpha to all existing clients.
 

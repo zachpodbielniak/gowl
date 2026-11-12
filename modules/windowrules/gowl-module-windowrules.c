@@ -520,8 +520,11 @@ wr_apply_rules_to_client(
 		 * compositor's setmon(); after it, by the state change. */
 		if (rule->fullscreen && !gowl_client_get_fullscreen(c))
 			gowl_client_set_fullscreen(c, TRUE);
+		/* Pinned, not just set: the rule's opacity has to survive
+		 * focus dimming, which otherwise rewrites it on the next
+		 * focus change. */
 		if (rule->opacity > 0.0)
-			gowl_client_set_alpha(c, (gfloat)rule->opacity);
+			gowl_client_set_pinned_alpha(c, (gfloat)rule->opacity);
 		{
 			guint flags = gowl_client_get_rule_flags(c);
 

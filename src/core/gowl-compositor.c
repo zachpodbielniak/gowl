@@ -7315,6 +7315,10 @@ gowl_compositor_reparent_client(
  * game and a window covered by a `no-blur' rule look identical to the
  * modules, which is right, because they want the same thing.
  *
+ * It also pins the window fully opaque (gowl_client_set_pinned_alpha()),
+ * so the alpha module's focus dimming leaves it alone -- unless a rule
+ * already pinned an opacity of its own.
+ *
  * Never CLEARS a flag.  A rule that switched an effect off stays off;
  * this only ever adds.
  */
@@ -7345,6 +7349,12 @@ gowl_compositor_apply_fx_optout(
 		return;
 
 	client->rule_flags = flags | want;
+	/* No effects includes the translucency of focus dimming: a game
+	 * at 90% opacity shows the desktop through it.  Pinned so the
+	 * alpha module keeps it -- unless a rule already pinned a value of
+	 * its own, which wins as the flags above never clear a rule's. */
+	if (gowl_client_get_pinned_alpha(client) <= 0.0f)
+		gowl_client_set_pinned_alpha(client, 1.0f);
 	g_debug("fx: no effects for '%s' (pid %d)",
 	        client->app_id != NULL ? client->app_id : "(no app_id)",
 	        (gint)gowl_client_get_pid(client));

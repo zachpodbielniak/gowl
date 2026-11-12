@@ -248,14 +248,19 @@ alpha_on_focus_changed(GowlCompositor *comp,
 	client = (client_obj != NULL) ? GOWL_CLIENT(client_obj) : NULL;
 
 	/* Dim the previously focused client (skip embedded — they render
-	 * on top of their parent, not over the wallpaper) */
+	 * on top of their parent, not over the wallpaper).  A window with
+	 * a pinned opacity gets that instead, every time: setting it to
+	 * the focus value and letting something else put it back is the
+	 * flash a pinned window must never show. */
 	if (prev != NULL && prev != client
 	    && !gowl_client_get_embedded(prev))
-		gowl_client_set_alpha(prev, self->unfocused_alpha);
+		gowl_client_set_alpha(prev, gowl_client_focus_alpha(prev, FALSE,
+		                      self->focused_alpha, self->unfocused_alpha));
 
 	/* Brighten the newly focused client */
 	if (client != NULL && !gowl_client_get_embedded(client))
-		gowl_client_set_alpha(client, self->focused_alpha);
+		gowl_client_set_alpha(client, gowl_client_focus_alpha(client, TRUE,
+		                      self->focused_alpha, self->unfocused_alpha));
 
 	if (self->dim_inactive) {
 		if (prev != NULL && prev != client)
@@ -291,10 +296,8 @@ alpha_apply_initial(GowlModuleAlpha *self)
 		if (gowl_client_get_embedded(c))
 			continue;
 
-		if (c == focused)
-			gowl_client_set_alpha(c, self->focused_alpha);
-		else
-			gowl_client_set_alpha(c, self->unfocused_alpha);
+		gowl_client_set_alpha(c, gowl_client_focus_alpha(c, c == focused,
+		                      self->focused_alpha, self->unfocused_alpha));
 	}
 
 	self->prev_focused = focused;
@@ -314,8 +317,12 @@ alpha_reset_all(GowlModuleAlpha *self)
 
 	clients = gowl_compositor_get_clients(comp);
 
+	/* Opaque again -- except a pinned window, whose opacity was asked
+	 * for per window and has nothing to do with focus dimming. */
 	for (l = clients; l != NULL; l = l->next)
-		gowl_client_set_alpha(GOWL_CLIENT(l->data), 1.0f);
+		gowl_client_set_alpha(GOWL_CLIENT(l->data),
+		                      gowl_client_focus_alpha(GOWL_CLIENT(l->data),
+		                                              TRUE, 1.0f, 1.0f));
 }
 
 /* --- Attaching to the compositor --- */

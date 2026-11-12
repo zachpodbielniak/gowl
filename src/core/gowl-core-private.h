@@ -1074,6 +1074,13 @@ struct _GowlClient {
 	 * client_is_unmanaged(). */
 	gboolean isunmanaged;
 	gfloat   alpha;          /* opacity: 0.0 (transparent) to 1.0 (opaque) */
+	/* Opacity this window keeps whatever has focus, or 0.0 for none.
+	 * Set by an explicit per-window request -- a rule's `opacity', the
+	 * IPC's window.set_opacity, the effects opt-out -- and honoured by
+	 * the alpha module's focus dimming.  Without it the module rewrote
+	 * a window's opacity on every focus change, and anything putting it
+	 * back afterwards showed as a flash.  See gowl_client_focus_alpha(). */
+	gfloat   pinned_alpha;
 
 	/*
 	 * A second opacity, multiplied with the one above rather than

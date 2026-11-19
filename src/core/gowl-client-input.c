@@ -885,12 +885,21 @@ gowl_compositor_deliver_key(
 	if (!delivery_allowed(self, client))
 		return FALSE;
 
+	/*
+	 * ACTIVATE exists for X11 clients only.  Without XWayland support
+	 * there is no xwayland_surface member and no X11 client, so every
+	 * delivery goes through the seat.
+	 */
+#ifdef GOWL_HAVE_XWAYLAND
 	if (delivery == GOWL_KEY_DELIVERY_AUTO)
 		delivery = client->xwayland_surface != NULL
 		           ? GOWL_KEY_DELIVERY_ACTIVATE : GOWL_KEY_DELIVERY_SEAT;
 	if (delivery == GOWL_KEY_DELIVERY_ACTIVATE
 	    && client->xwayland_surface == NULL)
 		delivery = GOWL_KEY_DELIVERY_SEAT;
+#else
+	(void)delivery;
+#endif
 
 #ifdef GOWL_HAVE_XWAYLAND
 	if (delivery == GOWL_KEY_DELIVERY_ACTIVATE) {

@@ -1,0 +1,120 @@
+* Reading and Replacing a Text Field
+:PROPERTIES:
+:CUSTOM_ID: text-field
+:END:
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: text-field-overview
+:END:
+An application with a text field describes it to the compositor over text-input-v3 so that an input method can work: the text around the cursor, where the cursor is, what is selected.  gowl relays that to the input method (=src/core/gowl-text-input.c=).  Two functions let code /inside/ the compositor --- a module, or an embedder such as cmacs --- use the same state directly:
+
+- =gowl_compositor_read_text_field()= reads the focused field: its text, its cursor, its selection.
+- =gowl_compositor_replace_text()= replaces text around the cursor, the way an input method does: one =delete_surrounding_text= reaching both ways from the cursor and one =commit_string=, applied by the application together on =done=.
+
+=gowl_compositor_commit_text()=, which the gabbrev module uses, is =replace_text= deleting nothing after the cursor; its signature and behaviour are unchanged.
+
+Together they are "edit this field somewhere else": read it, change the text, and replace exactly what was read (=cursor= bytes before, the rest after).  cmacs builds =cmacs-gowl-edit-field= on them.  No keys are typed and the clipboard is not touched, so any character arrives whatever the keymap, and the application sees a single edit it can undo as one.
+
+Both run on the compositor thread and call back there.  Neither blocks.
+
+** The API
+:PROPERTIES:
+:CUSTOM_ID: text-field-api
+:END:
+#+begin_src c
+GowlTextCommitResult
+gowl_compositor_read_text_field(
+    GowlCompositor        *self,
+    GowlClient            *client,
+    GowlTextFieldReadFunc  func,
+    gpointer               user_data
+);
+
+GowlTextCommitResult
+gowl_compositor_replace_text(
+    GowlCompositor     *self,
+    GowlClient         *client,
+    guint               delete_before,
+    guint               delete_after,
+    const gchar        *text,
+    GowlTextCommitFunc  func,
+    gpointer            user_data
+);
+#+end_src
+
+=client= must hold the keyboard focus.  The result is the one =commit_text= has always returned:
+
+| Result                         | =read_text_field=                                    | =replace_text=                                                  |
+|--------------------------------+------------------------------------------------------+-----------------------------------------------------------------|
+| =GOWL_TEXT_COMMIT_UNAVAILABLE= | no text input reaches the window; =func= not called  | nothing sent; =func= not called                                 |
+| =GOWL_TEXT_COMMIT_SENT=        | =func= has already run, before the call returned     | the edit went; =func= is *not* called                           |
+| =GOWL_TEXT_COMMIT_PENDING=     | =func= runs later, exactly once                      | =func= runs later, exactly once, with whether it was delivered  |
+
+The read's callback is given a =GowlTextFieldInfo=, valid only during the call:
+
+| Field             | Meaning                                                                                              |
+|-------------------+------------------------------------------------------------------------------------------------------|
+| =status=          | =GOWL_TEXT_FIELD_OK=, =_NO_FIELD= (the client never enabled a text input) or =_NO_SURROUNDING=       |
+| =text=            | the surrounding text, valid UTF-8; =NULL= unless =status= is OK                                      |
+| =cursor=          | the cursor, in bytes from the start of =text=, on a character boundary                               |
+| =anchor=          | the other end of the selection, likewise; equal to =cursor= when nothing is selected                 |
+| =complete=        | =FALSE= when =text= is long enough to be a window of the field (see below)                           |
+| =content_hint=    | the field's content-hint bits, 0 when the client gave none; reported even when the text is not      |
+| =content_purpose= | its content purpose, 0 when none; 8 is a password, 9 a PIN                                           |
+
+A reader that shows or stores the text should refuse a field whose purpose is password or PIN, or whose hint has =hidden_text= (0x40) or =sensitive_data= (0x80): the application is saying the text is a secret.
+
+** Borrowing a text input
+:PROPERTIES:
+:CUSTOM_ID: text-field-borrow
+:END:
+With an input method running, the relay has already entered the focused window's text input and the application has enabled it: a read is answered at once from what it last committed, and an edit is sent at once.
+
+With no input method, gowl does not enter text inputs at all --- an application entered with nobody behind it would wait on an input method that is not there.  For one read or one edit it /borrows/ one of the focused client's text inputs:
+
+1. =enter= is sent for the client's surface.
+2. The client, if a text field has its focus, enables the text input and commits its state: surrounding text, cursor, content type.
+3. gowl reads that state, or sends the edit.
+4. =leave= is sent.
+
+A client that has not enabled the text input within =GOWL_TEXT_COMMIT_WAIT_MS= (250 ms) had no text field focused.  A read then reports =GOWL_TEXT_FIELD_NO_FIELD=; an edit reports undelivered.  A client that enabled it but sent no surrounding text is given the same time to send some, then reported as =GOWL_TEXT_FIELD_NO_SURROUNDING=.
+
+Only one operation waits on a text input at a time.  A second, while the first waits, is =GOWL_TEXT_COMMIT_UNAVAILABLE=.
+
+The wait is a timer on the compositor's =wl_event_loop=, never GLib's default context.  At shutdown a waiting operation is dropped /without/ its callback: its owner is going away too, and an embedder that keeps per-request state must release it when it stops the compositor.
+
+** Whole field or window: the heuristic
+:PROPERTIES:
+:CUSTOM_ID: text-field-partial
+:END:
+The compositor cannot know whether the text it was given is the whole field.  It can only know when it was certainly cut:
+
+- text-input-v3 limits surrounding text to 4000 bytes, and a client with more sends a window around the cursor.  Toolkits cut that window at the limit or within a few characters of it.  So text of =GOWL_TEXT_SURROUNDING_PARTIAL_BYTES= (3900) bytes or more is reported with =complete = FALSE=.
+- Anything shorter is reported with =complete = TRUE=, which means "not known to be cut" and /not/ "the whole field".  A single-line entry sends all it has.  Some multi-line widgets send the paragraph around the cursor however long the field is.
+
+Either way the offsets are true of the text that was given, so replacing exactly that text --- =cursor= bytes before, =strlen(text) - cursor= after --- is always sound.  What a caller must not do is treat the text as the document.
+
+Offsets a client sends past the end of its text, or inside a UTF-8 sequence, are pulled back to the nearest character boundary before the reader sees them.  Text that is not valid UTF-8 is reported as =GOWL_TEXT_FIELD_NO_SURROUNDING=: repairing it would move every offset.
+
+** Long text
+:PROPERTIES:
+:CUSTOM_ID: text-field-chunks
+:END:
+A Wayland message is at most 4096 bytes on the wire, and libwayland answers a longer one by disconnecting the client it was for.  =commit_string= carries its text in one message, so =replace_text= cuts text into pieces of at most =GOWL_TEXT_EDIT_CHUNK_BYTES= (3072) bytes, on character boundaries:
+
+- the first piece goes with the deletions, as one =done=;
+- each later piece goes after the client has committed the state the previous one left, so its =done= carries a serial the client accepts, and is inserted at the cursor, which the previous piece left at its own end.
+
+An edit in more than one piece is =GOWL_TEXT_COMMIT_PENDING= even on a text input that was enabled already.  If the client stops answering part way, the callback reports undelivered and part of the text is in the field; the 250 ms wait restarts with each piece.
+
+This also covers =gowl_compositor_commit_text()=: an expansion longer than one message used to be sent as one.
+
+** Files
+:PROPERTIES:
+:CUSTOM_ID: text-field-files
+:END:
+| File                             | What is in it                                                        |
+|----------------------------------+----------------------------------------------------------------------|
+| =src/core/gowl-text-input.c=     | the relay, the borrow, =read_text_field=, =replace_text=, the chunks |
+| =src/core/gowl-compositor.h=     | =GowlTextFieldInfo=, =GowlTextFieldStatus=, the declarations         |
+| =docs/gabbrev.org=               | the other caller: =backend: text-input=                              |

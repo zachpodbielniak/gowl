@@ -1592,6 +1592,107 @@ GowlTextCommitResult gowl_compositor_commit_text (GowlCompositor     *self,
                                                 gpointer            user_data);
 
 /**
+ * GowlTextFieldStatus:
+ * @GOWL_TEXT_FIELD_OK: the field was read
+ * @GOWL_TEXT_FIELD_NO_FIELD: the client never enabled a text input:
+ *   nothing that takes text has its focus
+ * @GOWL_TEXT_FIELD_NO_SURROUNDING: a text field is there, but the
+ *   client did not say what is in it (or said it in something that is
+ *   not UTF-8)
+ *
+ * How gowl_compositor_read_text_field() went.
+ */
+typedef enum {
+	GOWL_TEXT_FIELD_OK = 0,
+	GOWL_TEXT_FIELD_NO_FIELD,
+	GOWL_TEXT_FIELD_NO_SURROUNDING
+} GowlTextFieldStatus;
+
+/**
+ * GowlTextFieldInfo:
+ * @status: whether the rest means anything
+ * @text: (nullable): the surrounding text, UTF-8; %NULL unless @status
+ *   is %GOWL_TEXT_FIELD_OK.  Valid only during the callback
+ * @cursor: the cursor, in bytes from the start of @text, on a
+ *   character boundary
+ * @anchor: the other end of the selection, the same way; equal to
+ *   @cursor when nothing is selected
+ * @complete: %FALSE when @text is long enough to be a window cut at
+ *   the protocol's 4000-byte limit rather than all the client had;
+ *   %TRUE is "not known to be cut", never a promise of the whole field
+ * @content_hint: the field's zwp_text_input_v3 content hint bits, 0
+ *   when the client gave none
+ * @content_purpose: its content purpose, 0 (normal) when the client
+ *   gave none; 8 is a password, 9 a PIN
+ *
+ * A text field as its application describes it, for
+ * gowl_compositor_read_text_field().
+ */
+typedef struct {
+	GowlTextFieldStatus  status;
+	const gchar         *text;
+	guint                cursor;
+	guint                anchor;
+	gboolean             complete;
+	guint                content_hint;
+	guint                content_purpose;
+} GowlTextFieldInfo;
+
+/**
+ * GowlTextFieldReadFunc:
+ * @info: the field; valid only during the call
+ * @user_data: the data given with the function
+ *
+ * The answer to gowl_compositor_read_text_field(), on the compositor
+ * thread.
+ */
+typedef void (*GowlTextFieldReadFunc) (const GowlTextFieldInfo *info,
+                                       gpointer                 user_data);
+
+/**
+ * gowl_compositor_replace_text:
+ * @self: a #GowlCompositor
+ * @client: the focused window
+ * @delete_before: bytes before the cursor to remove first
+ * @delete_after: bytes after the cursor to remove first
+ * @text: (nullable): UTF-8 text to insert
+ * @func: (scope async) (nullable): the outcome of a pending edit
+ * @user_data: (closure func): data for @func
+ *
+ * gowl_compositor_commit_text() deleting on both sides of the cursor,
+ * so that the text gowl_compositor_read_text_field() reported can be
+ * replaced as one edit.  Long text goes in several messages.
+ *
+ * Returns: sent, pending (@func is called later), or unavailable
+ */
+GowlTextCommitResult gowl_compositor_replace_text (GowlCompositor     *self,
+                                                GowlClient         *client,
+                                                guint               delete_before,
+                                                guint               delete_after,
+                                                const gchar        *text,
+                                                GowlTextCommitFunc  func,
+                                                gpointer            user_data);
+
+/**
+ * gowl_compositor_read_text_field:
+ * @self: a #GowlCompositor
+ * @client: the focused window
+ * @func: (scope async): given the field's text, cursor and selection
+ * @user_data: (closure func): data for @func
+ *
+ * Reads @client's focused text field through text-input-v3
+ * surrounding text, entering its text input for the read when no
+ * input method is running.
+ *
+ * Returns: sent (@func has run), pending (@func is called later), or
+ *   unavailable (@func is not called)
+ */
+GowlTextCommitResult gowl_compositor_read_text_field (GowlCompositor        *self,
+                                                GowlClient            *client,
+                                                GowlTextFieldReadFunc  func,
+                                                gpointer               user_data);
+
+/**
  * gowl_compositor_deliver_key:
  * @self: a #GowlCompositor
  * @client: the window; it keeps no focus afterwards

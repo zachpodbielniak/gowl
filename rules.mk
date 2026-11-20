@@ -443,8 +443,11 @@ $(OUTDIR)/gowl.pc: gowl.pc.in | $(OUTDIR)
 		-e 's|@XWAYLAND_PC@|$(GOWL_PC_XWAYLAND)|g' \
 		$< > $@
 
-# Version header generation
-src/gowl-version.h: src/gowl-version.h.in
+# Version header generation.  config.mk is a prerequisite because the
+# version lives there: without it a bump left the old header in place,
+# and every file including it warned that the -D on its command line
+# redefined GOWL_VERSION_MICRO.
+src/gowl-version.h: src/gowl-version.h.in config.mk
 	sed \
 		-e 's|@GOWL_VERSION_MAJOR@|$(VERSION_MAJOR)|g' \
 		-e 's|@GOWL_VERSION_MINOR@|$(VERSION_MINOR)|g' \

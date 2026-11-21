@@ -6,13 +6,15 @@
 :PROPERTIES:
 :CUSTOM_ID: input-remap-overview
 :END:
-Some input devices should have their keys or buttons mean something else --- /on that device only/. A USB foot pedal that presents itself as a HID keyboard sends =KEY_A= and =KEY_B=; remapping those globally would break the real keyboard. gowl remaps per *physical device*: a rule names the devices it applies to, and every other keyboard or mouse that sends the same codes is untouched.
+Some input devices should have their keys, buttons or sticks mean something else --- /on that device only/. A USB foot pedal that presents itself as a HID keyboard sends =KEY_A= and =KEY_B=; remapping those globally would break the real keyboard. gowl remaps per *physical device*: a rule names the devices it applies to, and every other keyboard or mouse that sends the same codes is untouched.
 
 The feature has three parts:
 
 - *=GowlInputRemapper=* --- an interface the core asks two questions: /does this device need to be claimed?/ and /what does this input on a claimed device turn into?/
 - *The core* --- keeps claimed keyboards out of the shared keyboard group, hears them on their own listeners, and delivers what the remapper decides through the compositor's normal key and button decisions.
-- *The =inputremap= module* --- the opt-in implementation: rules from the YAML =input-remap:= section, the C config, and runtime rules over IPC, MCP, D-Bus and Elisp.
+- *The =inputremap= module* --- the opt-in implementation: rules from the YAML =input-remap:= section, the C config, and runtime rules over IPC, MCP, D-Bus and Elisp.  It also owns the *virtual gamepads* (see [[#input-remap-virtual-pad][Virtual pads]]).
+
+Game controllers take part on both sides.  As *sources*, a gamepad's buttons and stick directions map to keys, clicks and actions like a pedal's, and a stick can move the pointer or scroll (see [[#input-remap-controllers][Game controllers as sources]]).  As *outputs*, keys and the mouse can drive a virtual gamepad that a game reads like a real one.
 
 With the module not loaded, the compositor's input path is exactly what it was before the feature existed. Every hook is a =NULL= check that returns before touching any state, and =tests/test-input-remap-fastpath.sh= holds that in place.
 
@@ -31,7 +33,14 @@ Every remap is *one physical press to at most one output*, and the release mirro
 
 The motivation is game input rules such as World of Warcraft's "one keypress, one action": a foot pedal that clicks once per press is a hardware remap, while a pedal that plays a sequence is automation.
 
-*Two targets are outside the guarantee, on purpose and visibly*: the callback target (C config, and Elisp in cmacs) and the macro target (={macro: NAME}=, which runs a [[file:macros.org][gowl macro]] on the press). Both run arbitrary code by design; the guarantee covers every other target, and the code is trusted to keep to it itself. A pedal that plays a sequence through a macro is automation as far as a game is concerned --- keep macro targets for things around the game, not in it.
+*Some targets are outside the guarantee, on purpose and visibly*:
+
+- the callback target (C config, and Elisp in cmacs) and the macro target (={macro: NAME}=, which runs a [[file:macros.org][gowl macro]] on the press) run arbitrary code by design;
+- the *continuous* targets --- ={pointer: x}= and ={scroll: vertical}= on a stick, and a virtual stick that follows the mouse (=REL_X: {stick: right}=) --- produce output for as long as their input is deflected: a held stick is many motion events, not one.  They exist because a stick /is/ continuous; there is no one-press reading of "push the stick halfway".  =inputremap-list= names every one of them in its =continuous= field, so nobody has to read the YAML to find them.
+
+The guarantee covers every other target, and the code is trusted to keep to it itself. A pedal that plays a sequence through a macro is automation as far as a game is concerned --- keep macro targets for things around the game, not in it.
+
+What stays inside the guarantee, and is worth saying because it looks analog: a stick /direction/ used as a key (=ABS_X+: {key: KEY_D}=) is one press when it crosses its threshold and one release when it comes back --- see [[#input-remap-thresholds][Stick directions as keys]].  And a key held on a virtual stick (=KEY_W: {stick: left, y: -1}=) is one press to one held state: the stick is deflected while the key is down and centred when it comes up.
 
 ** Quick start: the WoW foot pedal
 :PROPERTIES:
@@ -102,9 +111,12 @@ A rule has a name, a =match:= block saying which devices it applies to, and a =m
     vendor: 0x1a86        # or separately (always hex)
     product: e026
     sysname: "event*"     # kernel sysname
-    type: keyboard        # keyboard | pointer | any (default any)
+    type: keyboard        # keyboard | pointer | gamepad | joystick | any (default any)
   unmatched: pass         # pass (default) | drop: inputs the map does not name
   log: false              # log every remap this rule makes
+  grab: false             # game controllers: take the device from everything else
+  analog: { ... }         # game controllers and virtual sticks: see Analog settings
+  virtual-pad: { name: NAME }   # the gamepad stick/trigger/pad-button targets drive
   map:
     INPUT: TARGET
 #+end_src
@@ -129,6 +141,10 @@ A rule may match several devices, and a device may be matched by several rules (
 | Friendly button names                       | =left=, =middle=, =right=, =side=, =extra=, =forward=, =back=, =task= |
 | Wheel notches (pointers)                    | =WHEEL_UP=, =WHEEL_DOWN=, =WHEEL_LEFT=, =WHEEL_RIGHT= |
 | Raw evdev codes                             | =30=, =0x110=            |
+| Gamepad buttons (any =BTN_*=, or a friendly name) | =BTN_SOUTH=, =pad-a=, =left-bumper= |
+| A stick or hat direction (digital)          | =ABS_X+=, =ABS_Y-=, =left-stick-up=, =dpad-left= |
+| A whole axis (continuous targets only)      | =ABS_RX=, =right-stick-x=, =left-trigger= |
+| Pointer motion (stick-follow targets only)  | =REL_X=, =REL_Y=, =mouse-x=, =mouse-y= |
 
 The evdev names come from the kernel headers at build time (=gowl-evdev-names.inc=, generated from =<linux/input-event-codes.h>=), so every =KEY_*= and =BTN_*= the kernel defines is accepted. Names are case-insensitive.
 
@@ -148,6 +164,12 @@ A wheel notch counts in whole notches (120 value120 units), so a high-resolution
 | ={action: tag-view, arg: "256"}=        | One compositor action, on press                          |
 | ={command: "scratchpad-toggle"}=        | One command line through module IPC, on press            |
 | ={macro: sort-windows, args: "x"}=      | Run a gowl macro, on press (outside one-to-one)          |
+| ={pointer: x}= (whole axis only)        | Move the pointer while the stick is deflected (continuous) |
+| ={scroll: vertical}= (whole axis only)  | Scroll in wheel notches while deflected (continuous)     |
+| ={stick: left, x: -1}=                  | Hold the virtual pad's stick left while held             |
+| ={stick: right}= (=REL_X=/=REL_Y= only) | The virtual stick follows the mouse (continuous)         |
+| ={trigger: right, value: 1.0}=          | Pull the virtual pad's trigger while held                |
+| ={pad-button: BTN_SOUTH}=               | Hold the virtual pad's button while held                 |
 | /callback/ (C, and Elisp in cmacs)      | Arbitrary code, on press and on release                  |
 
 - *Keys.* A keysym (=Page_Up=, =9=) is resolved against the live keymap at the moment of the press; if the symbol sits on a shifted level, Shift is added. A =KEY_*= name is the keycode itself. Modifiers are held in the shared xkb state for the key and released with it, and a modifier that is already physically held is not pressed twice.
@@ -165,6 +187,192 @@ A wheel notch counts in whole notches (120 value120 units), so a high-resolution
 Rules come from two layers: the *config* layer (the =input-remap:= list, replaced wholesale on reload) and the *runtime* layer (=inputremap-add= and friends). A runtime rule shadows a config rule of the same name.
 
 For one input on one device, the rules are walked newest first --- runtime before config, later before earlier --- and the first rule that /matches the device and mentions the input/ decides it. When no matching rule mentions the input, the highest-priority rule that matches the device decides by its =unmatched:= setting. When no rule matches the device, it is not claimed at all.
+
+** Game controllers as sources
+:PROPERTIES:
+:CUSTOM_ID: input-remap-controllers
+:END:
+A gamepad is not a libinput device: udev tags it =ID_INPUT_JOYSTICK=, libinput leaves it alone, and games open =/dev/input/eventN= themselves.  So the compositor never sees one --- until a rule asks for it.  Then the core (=src/core/gowl-input-remap-pad.c=) finds it, reads it, and feeds what it does through the same decisions a pedal's keys take.
+
+*** Finding them
+:PROPERTIES:
+:CUSTOM_ID: input-remap-controllers-discovery
+:END:
+- Nothing happens without an active remapper: no scan, no watch, no open.  =tests/test-input-remap-fastpath.sh= holds it.
+- With one, the core reads =/sys/class/input/event*= --- the name, the =id/vendor= and =id/product=, the capability bitmaps --- *without opening anything*, and watches =/dev/input= with inotify for hotplug.  No libudev: gowl does not link it, and sysfs plus inotify is all it needs.
+- A node is a *gamepad* when it has the gamepad buttons (=BTN_SOUTH= and friends), a *joystick* when it has joystick buttons, or X/Y plus a joystick-only axis (Z, RX, RY, RZ, throttle, rudder, hats).  Anything with a pen, a touch, =BTN_0= (a tablet pad) or relative axes (a mouse) is libinput's, and so is any node libinput already has open.
+- gowl's own virtual pads (named =gowl virtual pad: ...=) are never read back.
+- A keyboard can have a joystick node of its own --- the ZSA Voyager exposes one --- and it is simply another device, with its own =event= node and the keyboard's vendor:product; =type: joystick= picks it.
+
+*** Opening them
+:PROPERTIES:
+:CUSTOM_ID: input-remap-controllers-open
+:END:
+A controller is *opened only when a rule claims it* --- the same =match:= as any other device, with =type: gamepad= or =type: joystick= to narrow it.  It is opened through the compositor's seat session (libseat: logind or seatd hand over the fd, and revoke it when the VT is left) when gowl runs as a session, else with a plain =open()=.  gowl never opens one as root without a session.
+
+The one exception is *identify mode*: while =inputremap-identify= listens, every controller is open read-only and never grabbed, so pressing a button or pushing a stick on one no rule names yet tells you its codes.  Identify ends, and they are closed.
+
+*** Grab
+:PROPERTIES:
+:CUSTOM_ID: input-remap-controllers-grab
+:END:
+=grab: true= on the rule that decides a controller takes it with =EVIOCGRAB=: while gowl holds it, nothing else reads it --- the game included.  That is the point when the controller is remapped /for/ the game (its stick turned into keys, say), and the reason it is off by default: merely matching a controller must never take it away from a game.  Releasing the claim (rule removed, module disabled) releases the grab.
+
+A device's =grab= and =analog= settings come from the *highest-priority rule that matches it*, the same rule whose =unmatched:= applies.
+
+*** Analog settings
+:PROPERTIES:
+:CUSTOM_ID: input-remap-analog
+:END:
+#+begin_src yaml
+analog:
+  deadzone: 0.15        # default: the device's own `flat', at least 0.05
+  press: 0.5            # a stick direction presses here...
+  release: 0.35         # ...and releases below here (must be lower)
+  invert: [ABS_Y]       # axes read reversed
+  centred: [ABS_Z]      # an axis starting at 0 that rests in the middle
+  pointer-speed: 1200   # px/s at full deflection
+  pointer-curve: 2.0    # speed = deflection ^ curve: fine near the centre
+  pointer-accel: 0.0    # extra speed per second held, as a fraction (cap 4x)
+  scroll-rate: 8        # wheel notches/s at full deflection
+  mouse-gain: 0.02      # virtual-stick deflection per pixel of mouse motion
+  mouse-idle-ms: 100    # a mouse-driven stick recentres this long after the mouse stops
+#+end_src
+
+Every axis is calibrated from =EVIOCGABS= (min, max, flat, fuzz) and normalised: sticks and hats to [-1, 1], split at the middle of their range so =0..255= resting at 128 and =-32768..32767= read the same; triggers (=ABS_Z=, =ABS_RZ=, gas, brake, throttle with an unsigned range) to [0, 1].  Inside the deadzone an axis is 0; beyond it the remaining travel is rescaled, so the output still runs smoothly from 0.  The loader refuses a deadzone above 0.95, a release at or above the press threshold, and out-of-range speeds and curves.
+
+*** Stick directions as keys
+:PROPERTIES:
+:CUSTOM_ID: input-remap-thresholds
+:END:
+=ABS_X+= is the stick pushed right, =ABS_X-= left; on a hat (the d-pad) the same.  A direction is *pressed* when the axis crosses =press= and *released* when it falls back below =release=: the gap is hysteresis, so a stick resting near the threshold does not chatter a key on and off.  One crossing is one press, routed through the ordinary key/button/action targets, so everything those guarantee --- the release mirroring the press, no repeats, the lock-aware pipelines --- holds.  Opposite directions of one axis are independent inputs; a diagonal is two keys, as on a keyboard.
+
+A bare axis name given a digital target means its positive direction: =right-trigger: {button: left}= clicks when the trigger is pulled past =press=.
+
+*** Sticks as the pointer
+:PROPERTIES:
+:CUSTOM_ID: input-remap-continuous
+:END:
+A *whole* axis can take =pointer: x|y= or =scroll: vertical|horizontal=.  While it is out of its deadzone, an 8 ms tick on the compositor's event loop moves the pointer at =pointer-speed × deflection^pointer-curve= (plus =pointer-accel= for each second held), or scrolls whole wheel notches (value120, 120 each) at =scroll-rate=.  When every such axis is centred the tick is not re-armed: *no timer runs at rest*.
+
+The motion takes the path real relative motion takes (=compositor_handle_motion_relative()=): a locked pointer stays put and its client reads the relative stream, a confined one slides along its region, InputCapture sees it at a barrier, and the recorder records it.  The scroll goes through the same decision a wheel's does --- recorder, mousebinds, the bar, module handlers, the client.  These are the declared continuous exceptions (see [[#input-remap-one-to-one][the one-to-one rule]]).
+
+** Virtual pads
+:PROPERTIES:
+:CUSTOM_ID: input-remap-virtual-pad
+:END:
+Wayland has no gamepad protocol: a game reads its controllers from =/dev/input=.  The only way to give a game a stick is a real input device, so the module makes one through =/dev/uinput= --- a *virtual pad*.
+
+#+begin_src yaml
+virtual-pad:
+  name: game                 # the device is "gowl virtual pad: game"
+  id: "1209:0007"            # default: pid.codes' test range
+  buttons: [BTN_SOUTH, BTN_EAST]          # default: an Xbox-style set
+  axes: [ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_RY, ABS_RZ, ABS_HAT0X, ABS_HAT0Y]
+#+end_src
+
+- A rule declares at most one pad, and its =stick=, =trigger= and =pad-button= targets drive it; the loader refuses those targets in a rule that declares none.  Rules naming the same pad share one device (the first declaration's layout).
+- It is *created lazily*, on the first press that drives it --- loading a rule makes nothing --- and *destroyed* when no rule declares it any more, when the module is disabled, and when the compositor stops.  =tests/test-input-remap-uinput-guard.sh= holds every way out.
+- Sticks report =-32768..32767=, triggers =0..255=, the d-pad hat =-1..1=, bus =BUS_VIRTUAL=.
+- *Keys onto a stick*: each held input contributes its deflection, and the stick is derived from what is held.  Opposite directions cancel (both held is centre); W+D is up-right *normalised onto the unit circle*, not the corner --- a game reading the magnitude would otherwise move 41% faster diagonally.  Releasing a key takes back exactly its contribution.  This is one press to one held state: inside the one-to-one rule.
+- *The mouse onto a stick* (=REL_X: {stick: right}=, =REL_Y: {stick: right}=): each motion event deflects the stick by =mouse-gain= per pixel, and a timer returns it to centre =mouse-idle-ms= after the mouse stops.  The cursor does not move for a component a rule takes.  Continuous: a declared exception.
+- Nothing new is pressed on a virtual pad while the session is locked (a pad reaches a game without passing the lock screen); releases still go through.
+
+*** Permissions
+:PROPERTIES:
+:CUSTOM_ID: input-remap-permissions
+:END:
+- *Reading a controller* needs read access to its =/dev/input/eventN=.  On a desktop, udev's =uaccess= tag gives the logged-in user an ACL on joystick nodes; under a seat session gowl asks libseat instead, which needs no ACL.
+- *Making a virtual pad* needs write access to =/dev/uinput=.  Many distributions grant it to the active session by a =uaccess= rule (=getfacl /dev/uinput= shows =user:YOU:rw-=); otherwise a udev rule such as =KERNEL=="uinput", TAG+="uaccess"=, or the =input= group.
+- *Without it*, the rule still loads.  The first press logs the reason once (=cannot open /dev/uinput: Permission denied (needs write access ...)=), the socket gets =EVENT inputremap pad-error NAME=, =inputremap-status= carries =pad-error="..."=, and nothing else happens --- no crash, no retry loop.
+- The live session's remapper only ever opens a controller a rule matches, so a test pad (=1209:0008=, say) is invisible to it unless one of your rules names that id.
+
+*** Worked examples
+:PROPERTIES:
+:CUSTOM_ID: input-remap-pad-examples
+:END:
+*Left stick as WASD* --- a game that only takes the keyboard, played on a pad, with the pad hidden from the game:
+
+#+begin_src yaml
+input-remap:
+  - name: stick-wasd
+    match: { id: "045e:028e", type: gamepad }
+    grab: true
+    analog: { press: 0.5, release: 0.3 }
+    map:
+      left-stick-up:    { key: KEY_W }
+      left-stick-left:  { key: KEY_A }
+      left-stick-down:  { key: KEY_S }
+      left-stick-right: { key: KEY_D }
+      pad-a:            { key: KEY_SPACE }
+      right-trigger:    { button: left }
+#+end_src
+
+*Right stick as the mouse* --- the couch, a browser, a pad:
+
+#+begin_src yaml
+  - name: pad-mouse
+    match: { id: "045e:028e", type: gamepad }
+    analog: { pointer-speed: 1500, pointer-curve: 2.0, scroll-rate: 12 }
+    map:
+      right-stick-x: { pointer: x }
+      right-stick-y: { pointer: y }
+      left-stick-y:  { scroll: vertical }
+      pad-a:         { button: left }
+      pad-b:         { button: right }
+#+end_src
+
+*A keypad as a controller* --- a game that only reads gamepads, played from a dedicated keypad while the main keyboard is untouched:
+
+#+begin_src yaml
+  - name: keypad-pad
+    match: { id: "1234:5678", type: keyboard }
+    unmatched: drop
+    virtual-pad: { name: keypad }
+    map:
+      KEY_KP8:     { stick: left, y: -1 }
+      KEY_KP2:     { stick: left, y: 1 }
+      KEY_KP4:     { stick: left, x: -1 }
+      KEY_KP6:     { stick: left, x: 1 }
+      KEY_KP0:     { pad-button: BTN_SOUTH }
+      KEY_KPENTER: { trigger: right }
+#+end_src
+
+*Mouse-look on a controller game* --- a trackball as the right stick:
+
+#+begin_src yaml
+  - name: trackball-look
+    match: { name: "*Trackball*", type: pointer }
+    virtual-pad: { name: look }
+    analog: { mouse-gain: 0.03, mouse-idle-ms: 80 }
+    map:
+      mouse-x: { stick: right }
+      mouse-y: { stick: right }
+#+end_src
+
+The same rules from C use =gowl_input_remap_rule_set_virtual_pad()= (first), =_map_stick()=, =_map_stick_follow()=, =_map_trigger()=, =_map_pad_button()=, =_map_pointer()=, =_map_scroll()=, =_set_grab()= and =_set_analog()= (start from =gowl_input_remap_analog_init()=).  Inputs are =GOWL_INPUT_REMAP_ABS_INPUT(ABS_X, GOWL_INPUT_REMAP_ABS_POS)= and friends.
+
+*** Friendly names
+:PROPERTIES:
+:CUSTOM_ID: input-remap-pad-aliases
+:END:
+| Name                                    | Input                       |
+|-----------------------------------------+-----------------------------|
+| =left-stick-left= / =-right= / =-up= / =-down= | =ABS_X-= / =ABS_X+= / =ABS_Y-= / =ABS_Y+= |
+| =right-stick-left= ... =right-stick-down= | =ABS_RX-= ... =ABS_RY+=    |
+| =left-stick-x=, =left-stick-y=          | =ABS_X=, =ABS_Y= (whole)    |
+| =right-stick-x=, =right-stick-y=        | =ABS_RX=, =ABS_RY= (whole)  |
+| =left-trigger=, =right-trigger=         | =ABS_Z=, =ABS_RZ=           |
+| =dpad-up= / =-down= / =-left= / =-right= | =ABS_HAT0Y-= / =ABS_HAT0Y+= / =ABS_HAT0X-= / =ABS_HAT0X+= |
+| =pad-a= (=pad-south=), =pad-b= (=pad-east=) | =BTN_SOUTH=, =BTN_EAST=  |
+| =pad-x= (=pad-west=), =pad-y= (=pad-north=) | =BTN_WEST=, =BTN_NORTH=  |
+| =left-bumper=, =right-bumper=           | =BTN_TL=, =BTN_TR=          |
+| =left-trigger-button=, =right-trigger-button= | =BTN_TL2=, =BTN_TR2=  |
+| =pad-select=, =pad-start=, =pad-guide=  | =BTN_SELECT=, =BTN_START=, =BTN_MODE= |
+| =left-stick-press=, =right-stick-press= | =BTN_THUMBL=, =BTN_THUMBR=  |
+| =mouse-x=, =mouse-y=                    | =REL_X=, =REL_Y=            |
+
+Button names are *positional*, as the kernel's gamepad documentation defines them: =BTN_SOUTH= is the bottom face button whatever its label (A on Xbox, Cross on PlayStation, B on Nintendo).  Drivers have not always agreed about =BTN_X=/=BTN_Y=; run =inputremap-identify= and press the button to see what yours sends.  Pad aliases carry a =pad-= prefix so =a= and =x= stay free for keyboard keys.
 
 ** How it works
 :PROPERTIES:
@@ -187,10 +395,17 @@ struct _GowlInputRemapperInterface {
 	void                 (*device_changed) (GowlInputRemapper          *self,
 	                                        const GowlInputDeviceInfo  *info,
 	                                        gboolean                    claimed);
+	gboolean             (*render_pad)     (GowlInputRemapper          *self,
+	                                        GowlInputRemapRule         *rule,
+	                                        const GowlInputRemapTarget *target,
+	                                        const GowlInputRemapEvent  *event,
+	                                        gdouble                     amount);
 };
 #+end_src
 
-=GowlInputDeviceInfo= is a plain value (id, type, name, sysname, vendor, product, claimed), so rules are matched and tested without wlroots. =map_event= returns the deciding rule (a reference) and its one target; =NULL= means pass. The module manager classifies implementations like every other interface; =gowl_module_manager_get_input_remapper()= returns the first *active* one.
+=GowlInputDeviceInfo= is a plain value (id, type, name, sysname, vendor, product, claimed), so rules are matched and tested without wlroots. =map_event= returns the deciding rule (a reference) and its one target; =NULL= means pass. The module manager classifies implementations like every other interface; =gowl_module_manager_get_input_remapper()= returns the first *active* one.  =render_pad= (optional) receives the stick, trigger and pad-button targets: the core keeps the held table and the lock rule, the implementation owns the virtual pads.
+
+A game controller has no =wlr_input_device=, so the core gives it a /device-less/ record (=gowl_input_remap_core_source_new()=); its edges arrive as =GOWL_INPUT_REMAP_EVENT_PAD= through =gowl_input_remap_core_source_edge()= and take the same decide / held / release path as a pedal's.  Motion on a claimed pointer is offered first to =gowl_input_remap_core_motion()= (=REL_X=/=REL_Y= inputs), which is =NULL=-fast when nothing is claimed.
 
 *** Claiming a keyboard
 :PROPERTIES:
@@ -216,6 +431,8 @@ A pointer is never detached: =wlr_cursor= already passes every button with its d
 | Module enabled / disabled           | Re-evaluated; disabling releases everything                         |
 | Config reloaded                     | Re-evaluated against the new config's rules                         |
 | Device unplugged                    | Anything it held is released; its record freed                      |
+| Controller node deleted (inotify)   | The same: released, its grab and fd gone                            |
+| VT left / regained (seat session)   | The session revokes controller fds; =active= re-opens them           |
 | Compositor teardown                 | =gowl_input_remap_core_finish()= drops every record and listener    |
 
 Re-evaluation walks every connected device. A newly claimed keyboard leaves the group --- wlroots releases on the group any key it still held, so nothing is stuck --- and a released one rejoins.
@@ -264,9 +481,10 @@ Every surface --- the socket (=gowl-msg=), MCP, the cmacs D-Bus interface and El
 
 | Command                          | Reply                                                          |
 |----------------------------------+----------------------------------------------------------------|
-| =inputremap-status=              | =OK enabled=1 rules=N claimed=M log=claim identifying=0=       |
-| =inputremap-devices=             | =OK [{id, type, name, vendor-product, sysname, claimed}, ...]= |
-| =inputremap-list=                | =OK [{name, source, mappings, yaml, devices: [ids]}, ...]=     |
+| =inputremap-status=              | =OK enabled=1 rules=N claimed=M log=claim identifying=0 pads=P [pad-error="..."]= |
+| =inputremap-devices=             | =OK [{id, type, name, vendor-product, sysname, claimed}, ...]=; a controller adds =axes= (name, min, max, flat, fuzz, centred, value once open), =buttons=, =open=, =grabbed= |
+| =inputremap-list=                | =OK [{name, source, mappings, yaml, continuous: ["ABS_RX: {pointer: x}"], virtual-pad, devices: [ids]}, ...]= |
+| =inputremap-pads=                | =OK [{name, device, vendor-product, created, failed, holds}, ...]= |
 | =inputremap-add RULE=            | =OK added NAME= / =OK replaced NAME=; RULE is flow YAML or JSON |
 | =inputremap-remove NAME=         | =OK removed NAME=                                              |
 | =inputremap-clear=               | =OK cleared N= (runtime rules only)                            |
@@ -274,7 +492,7 @@ Every surface --- the socket (=gowl-msg=), MCP, the cmacs D-Bus interface and El
 | =inputremap-enable= / =-disable= | Claim / release everything without unloading                   |
 | =inputremap-log [LEVEL]=         | Show or set the log level                                      |
 | =inputremap-identify [SECONDS]=  | =OK listening N=                                               |
-| =inputremap-identify-result=     | =OK {device, input, code}=, =OK pending= or =OK none=          |
+| =inputremap-identify-result=     | =OK {device, input, code[, value]}=, =OK pending= or =OK none= (a stick direction reports =ABS_X+= and how far it was pushed) |
 | =inputremap-identify-cancel=     | =OK cancelled=                                                 |
 
 #+begin_src bash
@@ -295,6 +513,7 @@ EVENT inputremap release 12 1a86:e026
 EVENT inputremap match wow-pedals 12 KEY_A
 EVENT inputremap identified {"device":{...},"input":"KEY_A","code":30}
 EVENT inputremap identify-timeout
+EVENT inputremap pad-error NAME
 #+end_example
 
 ** C config
@@ -340,7 +559,7 @@ A compiled config that maps a callback is kept loaded for the life of the sessio
 :PROPERTIES:
 :CUSTOM_ID: input-remap-mcp
 :END:
-The MCP module exposes =input_remap_list_devices=, =input_remap_list=, =input_remap_status=, =input_remap_add= (a =rule= object or a =yaml= string), =input_remap_remove=, =input_remap_identify= and =input_remap_identify_result=. Each is a thin wrapper over the IPC words above, so the same validator refuses the same macros everywhere. See [[file:mcp.org][mcp.org]].
+The MCP module exposes =input_remap_list_devices=, =input_remap_list=, =input_remap_status=, =input_remap_add= (a =rule= object or a =yaml= string), =input_remap_remove=, =input_remap_identify=, =input_remap_identify_result= and =input_remap_pads=. Each is a thin wrapper over the IPC words above, so the same validator refuses the same macros everywhere. See [[file:mcp.org][mcp.org]].
 
 ** Tests
 :PROPERTIES:
@@ -351,13 +570,22 @@ The MCP module exposes =input_remap_list_devices=, =input_remap_list=, =input_re
 | =test-input-remap-rule=              | Names, parsing, NOT_ONE_TO_ONE refusals, matching, the mapping table, round trip, the config section, the shipped example |
 | =test-input-remap-engine=            | Claiming, priority, shadowing, unmatched, pass-through without rules |
 | =test-input-remap-claim=             | A headless compositor with the real module and software devices: unchanged without the module, claim/release on hotplug and on rule change, every output, release mirrors press, the escape hatch, unplug while held, pointer buttons and wheel notches |
-| =test-input-remap-fastpath.sh=       | The hooks stay inert without a remapper, and outputs never bypass the pipeline |
+| =test-input-remap-fastpath.sh=       | The hooks stay inert without a remapper, and outputs never bypass the pipeline; no controller is scanned without a remapper or opened outside the claim/identify decision, and nothing of it touches GLib's default context or the seat |
+| =test-input-remap-analog=            | The pure arithmetic: normalising signed, unsigned-centred and trigger ranges, the deadzone, hysteresis, combining keys on the unit circle, the speed curve and its cap, the output mapping |
+| =test-input-remap-pad-rule=          | Axis/direction names and aliases, bare axes as their + direction, continuous targets only on whole axes, virtual-pad targets and their refusals, analog validation, the round trip |
+| =test-input-remap-gamepad=           | A real uinput gamepad read by a headless compositor: listed and claimed, a stick direction as one key press through hysteresis, a button as a click, the stick moving the pointer and scrolling (and stopping), never opened without a rule; a keypad driving a virtual pad read back with =EVIOCGABS= (W+D on the unit circle, A+D cancelling, a button, a half trigger); the pad destroyed on disable and on rule removal, and none left in =/proc/bus/input/devices=.  Skips without a writable =/dev/uinput= |
+| =test-input-remap-uinput-guard.sh=   | Every way out (rule gone, disable, compositor stop, finalize) destroys the virtual pads, after the claims were re-decided; gowl never reads its own pads back |
 
 ** Limits
 :PROPERTIES:
 :CUSTOM_ID: input-remap-limits
 :END:
 - A remapped key's modifiers are pushed through the shared xkb state and =wl_keyboard.modifiers=, not a group =modifiers= signal; an input method grab sees the key but not a separate modifier event, as with injected keys.
-- Pointer motion is never remapped, and neither is touchpad scrolling.
+- Pointer motion is remapped only onto a virtual stick (=REL_X=/=REL_Y=); touchpad scrolling never is.
+- Controllers are read on Linux only (evdev, uinput and inotify; the build probes for them, =EVDEV_PADS=0= turns them off).  Elsewhere the rest of the remapper is unchanged and controller rules match nothing.
+- An axis that starts at 0 is read as a trigger, except ABS_X/Y/RX/RY and hats; a cheap pad that puts its right stick on =ABS_Z= needs =analog: {centred: [ABS_Z]}=.
+- One rule's =analog:= and =grab:= apply to a whole device: the highest-priority rule matching it.
+- Virtual pads report =BUS_VIRTUAL=; a game with a hard-coded controller list may want a real vendor:product in =id:=.
+- Force feedback (rumble) is neither read from nor written to virtual pads.
 - A device that is not a libinput device (headless, virtual) has no vendor, product or sysname; match it by name.
 - Clients repeat a held key themselves (=wl_keyboard.repeat_info=); a remapped key held down repeats in the application exactly as the physical key would. gowl generates none.

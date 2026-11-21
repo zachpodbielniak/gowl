@@ -21,7 +21,7 @@
  *
  * Tools: input_remap_list_devices, input_remap_list, input_remap_add,
  *        input_remap_remove, input_remap_status, input_remap_identify,
- *        input_remap_identify_result
+ *        input_remap_identify_result, input_remap_pads
  *
  * Every tool is a thin wrapper over the inputremap module's IPC words
  * (`inputremap-devices', `inputremap-add', ...), run on the compositor
@@ -165,6 +165,17 @@ tool_status(
 }
 
 static McpToolResult *
+tool_pads(
+	GowlModuleMcp *module,
+	JsonObject    *arguments,
+	gpointer       user_data
+){
+	(void)arguments;
+	(void)user_data;
+	return run_ipc(module, "inputremap-pads");
+}
+
+static McpToolResult *
 tool_identify_result(
 	GowlModuleMcp *module,
 	JsonObject    *arguments,
@@ -277,6 +288,7 @@ GOWL_MCP_IR_HANDLER(handle_add, tool_add)
 GOWL_MCP_IR_HANDLER(handle_remove, tool_remove)
 GOWL_MCP_IR_HANDLER(handle_identify, tool_identify)
 GOWL_MCP_IR_HANDLER(handle_identify_result, tool_identify_result)
+GOWL_MCP_IR_HANDLER(handle_pads, tool_pads)
 
 /* ========================================================================== */
 /* Registration                                                               */
@@ -322,9 +334,11 @@ gowl_mcp_register_inputremap_tools(
 	g_return_if_fail(module != NULL);
 
 	register_tool(server, module, "input_remap_list_devices",
-		"Every connected keyboard and pointer: id, type, name, "
+		"Every connected keyboard, pointer and game controller: id, "
+		"type (keyboard, pointer, gamepad, joystick), name, "
 		"vendor-product (hex, as lsusb prints it), sysname and whether "
-		"an input-remap rule claims it. Use it to find a device's "
+		"an input-remap rule claims it; a controller also lists its "
+		"axes (ranges once open) and buttons. Use it to find a device's "
 		"identity for a rule's `match:'.",
 		TRUE, empty_schema(), handle_list_devices);
 
@@ -355,13 +369,23 @@ gowl_mcp_register_inputremap_tools(
 		json_builder_set_member_name(b, "description");
 		json_builder_add_string_value(b,
 			"The rule: {name, match: {name|id|vendor|product|sysname|"
-			"type}, map: {INPUT: TARGET}, unmatched: pass|drop, log}. "
-			"INPUT is KEY_*, BTN_*, left/middle/right/side/extra or "
-			"WHEEL_UP/DOWN/LEFT/RIGHT. TARGET is \"drop\", \"pass\" or "
-			"exactly one of {key: \"Super+9\"}, {button: middle}, "
-			"{action: tag-view, arg: \"256\"}, {command: \"...\"}, "
-			"{macro: NAME, args: \"...\"} (a gowl macro, on press -- "
-			"the one declarative target outside one-to-one).");
+			"type: keyboard|pointer|gamepad|joystick}, map: {INPUT: "
+			"TARGET}, unmatched: pass|drop, log, grab, analog: {deadzone, "
+			"press, release, invert, pointer-speed, pointer-curve, "
+			"scroll-rate, mouse-gain, mouse-idle-ms}, virtual-pad: "
+			"{name}}. INPUT is KEY_*, BTN_* (BTN_SOUTH...), "
+			"left/middle/right/side/extra, WHEEL_UP/DOWN/LEFT/RIGHT, a "
+			"stick direction ABS_X+ / ABS_X- (left-stick-left, dpad-up, "
+			"...), a whole axis ABS_RX, or REL_X/REL_Y (mouse motion). "
+			"TARGET is \"drop\", \"pass\" or exactly one of {key: "
+			"\"Super+9\"}, {button: middle}, {action: tag-view, arg: "
+			"\"256\"}, {command: \"...\"}, {macro: NAME}, {stick: "
+			"left|right|dpad, x|y: -1..1}, {trigger: left|right, value}, "
+			"{pad-button: BTN_SOUTH} (these three drive the rule's "
+			"virtual pad), or -- on a whole axis -- {pointer: x|y}, "
+			"{scroll: vertical|horizontal}. Macros, pointer, scroll and "
+			"a stick following REL_X/REL_Y are the declared exceptions "
+			"to one-to-one.");
 		json_builder_end_object(b);
 		add_string_property(b, "yaml",
 			"The same rule as one line of flow-style YAML, instead of "
@@ -422,8 +446,9 @@ gowl_mcp_register_inputremap_tools(
 		json_builder_end_object(b);
 
 		register_tool(server, module, "input_remap_identify",
-			"Start listening for the next key or button press on any "
-			"device, without consuming it. Ask the person to press the "
+			"Start listening for the next key, button or stick direction "
+			"on any device (game controllers included), without "
+			"consuming it. Ask the person to press the "
 			"device, then call input_remap_identify_result.",
 			FALSE, json_builder_get_root(b), handle_identify);
 	}
@@ -434,6 +459,13 @@ gowl_mcp_register_inputremap_tools(
 		"use in a rule's `map:'. \"pending\" while still listening, "
 		"\"none\" if it timed out.",
 		TRUE, empty_schema(), handle_identify_result);
+
+	register_tool(server, module, "input_remap_pads",
+		"The virtual gamepads the input remapper drives (outputs of "
+		"stick, trigger and pad-button targets): name, device name, "
+		"vendor-product, whether the uinput device exists, whether "
+		"creating it failed, and how many inputs hold it.",
+		TRUE, empty_schema(), handle_pads);
 
 	g_debug("inputremap tools registered");
 }

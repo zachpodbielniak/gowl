@@ -30,6 +30,7 @@
 #include "gowl-input-remap-rule.h"
 #include "gowl-input-remap-rule-private.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <linux/input-event-codes.h>
@@ -80,6 +81,94 @@ static const GowlEvdevName wheel_names[] = {
 	{ NULL, 0 }
 };
 
+/*
+ * Absolute axes a game controller reports.  Spelled out rather than
+ * generated: gowl-evdev-names.inc carries KEY_ and BTN_ only, and the
+ * list of axes a pad can have is short and stable.
+ */
+static const GowlEvdevName abs_names[] = {
+	{ "ABS_X",        ABS_X        },
+	{ "ABS_Y",        ABS_Y        },
+	{ "ABS_Z",        ABS_Z        },
+	{ "ABS_RX",       ABS_RX       },
+	{ "ABS_RY",       ABS_RY       },
+	{ "ABS_RZ",       ABS_RZ       },
+	{ "ABS_THROTTLE", ABS_THROTTLE },
+	{ "ABS_RUDDER",   ABS_RUDDER   },
+	{ "ABS_WHEEL",    ABS_WHEEL    },
+	{ "ABS_GAS",      ABS_GAS      },
+	{ "ABS_BRAKE",    ABS_BRAKE    },
+	{ "ABS_HAT0X",    ABS_HAT0X    },
+	{ "ABS_HAT0Y",    ABS_HAT0Y    },
+	{ "ABS_HAT1X",    ABS_HAT1X    },
+	{ "ABS_HAT1Y",    ABS_HAT1Y    },
+	{ "ABS_HAT2X",    ABS_HAT2X    },
+	{ "ABS_HAT2Y",    ABS_HAT2Y    },
+	{ "ABS_HAT3X",    ABS_HAT3X    },
+	{ "ABS_HAT3Y",    ABS_HAT3Y    },
+	{ "ABS_MISC",     ABS_MISC     },
+	{ NULL, 0 }
+};
+
+/*
+ * Friendly names for game-controller inputs.  Button names are
+ * POSITIONAL, as the kernel's gamepad documentation defines them
+ * (BTN_SOUTH is the bottom face button whatever its label says), and
+ * prefixed `pad-' so `a' and `x' stay free for keyboard keys.  A bare
+ * stick or trigger name is the whole axis; given a digital target it
+ * means the positive direction, like a bare ABS_ name.
+ */
+static const GowlEvdevName pad_aliases[] = {
+	{ "left-stick-left",    GOWL_INPUT_REMAP_ABS_INPUT(ABS_X,     GOWL_INPUT_REMAP_ABS_NEG)   },
+	{ "left-stick-right",   GOWL_INPUT_REMAP_ABS_INPUT(ABS_X,     GOWL_INPUT_REMAP_ABS_POS)   },
+	{ "left-stick-up",      GOWL_INPUT_REMAP_ABS_INPUT(ABS_Y,     GOWL_INPUT_REMAP_ABS_NEG)   },
+	{ "left-stick-down",    GOWL_INPUT_REMAP_ABS_INPUT(ABS_Y,     GOWL_INPUT_REMAP_ABS_POS)   },
+	{ "right-stick-left",   GOWL_INPUT_REMAP_ABS_INPUT(ABS_RX,    GOWL_INPUT_REMAP_ABS_NEG)   },
+	{ "right-stick-right",  GOWL_INPUT_REMAP_ABS_INPUT(ABS_RX,    GOWL_INPUT_REMAP_ABS_POS)   },
+	{ "right-stick-up",     GOWL_INPUT_REMAP_ABS_INPUT(ABS_RY,    GOWL_INPUT_REMAP_ABS_NEG)   },
+	{ "right-stick-down",   GOWL_INPUT_REMAP_ABS_INPUT(ABS_RY,    GOWL_INPUT_REMAP_ABS_POS)   },
+	{ "left-stick-x",       GOWL_INPUT_REMAP_ABS_INPUT(ABS_X,     GOWL_INPUT_REMAP_ABS_WHOLE) },
+	{ "left-stick-y",       GOWL_INPUT_REMAP_ABS_INPUT(ABS_Y,     GOWL_INPUT_REMAP_ABS_WHOLE) },
+	{ "right-stick-x",      GOWL_INPUT_REMAP_ABS_INPUT(ABS_RX,    GOWL_INPUT_REMAP_ABS_WHOLE) },
+	{ "right-stick-y",      GOWL_INPUT_REMAP_ABS_INPUT(ABS_RY,    GOWL_INPUT_REMAP_ABS_WHOLE) },
+	{ "left-trigger",       GOWL_INPUT_REMAP_ABS_INPUT(ABS_Z,     GOWL_INPUT_REMAP_ABS_WHOLE) },
+	{ "right-trigger",      GOWL_INPUT_REMAP_ABS_INPUT(ABS_RZ,    GOWL_INPUT_REMAP_ABS_WHOLE) },
+	{ "dpad-up",            GOWL_INPUT_REMAP_ABS_INPUT(ABS_HAT0Y, GOWL_INPUT_REMAP_ABS_NEG)   },
+	{ "dpad-down",          GOWL_INPUT_REMAP_ABS_INPUT(ABS_HAT0Y, GOWL_INPUT_REMAP_ABS_POS)   },
+	{ "dpad-left",          GOWL_INPUT_REMAP_ABS_INPUT(ABS_HAT0X, GOWL_INPUT_REMAP_ABS_NEG)   },
+	{ "dpad-right",         GOWL_INPUT_REMAP_ABS_INPUT(ABS_HAT0X, GOWL_INPUT_REMAP_ABS_POS)   },
+	{ "pad-a",              BTN_SOUTH  },
+	{ "pad-south",          BTN_SOUTH  },
+	{ "pad-b",              BTN_EAST   },
+	{ "pad-east",           BTN_EAST   },
+	{ "pad-x",              BTN_WEST   },
+	{ "pad-west",           BTN_WEST   },
+	{ "pad-y",              BTN_NORTH  },
+	{ "pad-north",          BTN_NORTH  },
+	{ "left-bumper",        BTN_TL     },
+	{ "right-bumper",       BTN_TR     },
+	{ "left-trigger-button",  BTN_TL2  },
+	{ "right-trigger-button", BTN_TR2  },
+	{ "pad-select",         BTN_SELECT },
+	{ "pad-start",          BTN_START  },
+	{ "pad-guide",          BTN_MODE   },
+	{ "left-stick-press",   BTN_THUMBL },
+	{ "right-stick-press",  BTN_THUMBR },
+	{ "mouse-x",            GOWL_INPUT_REMAP_REL_X },
+	{ "mouse-y",            GOWL_INPUT_REMAP_REL_Y },
+	{ NULL, 0 }
+};
+
+/* The buttons and axes a virtual pad exposes when its declaration lists
+ * none: an Xbox-style controller, the layout games expect. */
+static const guint32 default_pad_buttons[] = {
+	BTN_SOUTH, BTN_EAST, BTN_NORTH, BTN_WEST, BTN_TL, BTN_TR, BTN_TL2,
+	BTN_TR2, BTN_SELECT, BTN_START, BTN_MODE, BTN_THUMBL, BTN_THUMBR
+};
+static const guint32 default_pad_axes[] = {
+	ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_RY, ABS_RZ, ABS_HAT0X, ABS_HAT0Y
+};
+
 /* Modifier names for a key target.  The keybind parser has the same
  * table but warns on a miss; a rule wants a GError instead. */
 static const GowlEvdevName modifier_names[] = {
@@ -125,6 +214,11 @@ struct _GowlInputRemapTarget {
 	GowlInputRemapCallback   callback;
 	gpointer                 user_data;
 	GDestroyNotify           destroy;
+	/* stick / trigger / pointer / scroll targets */
+	guint                    side;       /* GOWL_INPUT_REMAP_SIDE_* */
+	guint                    component;  /* GOWL_INPUT_REMAP_COMPONENT_* */
+	gdouble                  value;      /* deflection while held */
+	gboolean                 follow;     /* stick follows pointer motion */
 };
 
 struct _GowlInputRemapRule {
@@ -137,6 +231,16 @@ struct _GowlInputRemapRule {
 	GowlInputRemapDeviceType  match_type;
 	gboolean                  drop_unmatched;
 	gboolean                  log;
+	/* game controllers: grab the evdev node, and how axes are read */
+	gboolean                  grab;
+	GowlInputRemapAnalog      analog;
+	/* the virtual pad this rule's stick/trigger/pad-button targets
+	 * drive; NULL when it declares none */
+	gchar                    *pad_name;
+	guint16                   pad_vendor;
+	guint16                   pad_product;
+	GArray                   *pad_buttons;   /* guint32 BTN_* */
+	GArray                   *pad_axes;      /* guint32 ABS_* */
 	/* GUINT_TO_POINTER(input code) -> GowlInputRemapTarget* (owned) */
 	GHashTable               *map;
 };
@@ -156,14 +260,88 @@ target_free(gpointer data)
 	g_free(t);
 }
 
-/* A valid rule input: a real evdev key/button code or a wheel notch.
- * 0 is KEY_RESERVED, never emitted by hardware. */
+/* A valid rule input: a real evdev key/button code, a wheel notch, an
+ * absolute axis (whole or one direction) or pointer motion.  0 is
+ * KEY_RESERVED, never emitted by hardware. */
 static gboolean
 input_is_valid(guint32 input)
 {
 	return (input > 0 && input <= KEY_MAX)
 	       || (input >= GOWL_BUTTON_WHEEL_UP
-	           && input <= GOWL_BUTTON_WHEEL_RIGHT);
+	           && input <= GOWL_BUTTON_WHEEL_RIGHT)
+	       || GOWL_INPUT_REMAP_INPUT_IS_ABS(input)
+	       || GOWL_INPUT_REMAP_INPUT_IS_REL(input);
+}
+
+/* Whether @kind is driven continuously rather than by one press. */
+static gboolean
+kind_is_continuous_input(GowlInputRemapTargetKind kind)
+{
+	return kind == GOWL_INPUT_REMAP_TARGET_POINTER
+	       || kind == GOWL_INPUT_REMAP_TARGET_SCROLL;
+}
+
+/* A whole axis given a digital target means its positive direction: a
+ * trigger pulled, a stick pushed right or down. */
+static guint32
+normalise_input(
+	guint32                  input,
+	GowlInputRemapTargetKind kind
+){
+	if (GOWL_INPUT_REMAP_INPUT_IS_ABS(input)
+	    && GOWL_INPUT_REMAP_ABS_DIR(input) == GOWL_INPUT_REMAP_ABS_WHOLE
+	    && !kind_is_continuous_input(kind))
+		return GOWL_INPUT_REMAP_ABS_INPUT(GOWL_INPUT_REMAP_ABS_OF(input),
+		                                  GOWL_INPUT_REMAP_ABS_POS);
+	return input;
+}
+
+/* A digital target (one press, one output) cannot take pointer motion:
+ * motion has no press.  Only a stick-follow target, drop or pass can. */
+static gboolean
+check_digital_input(
+	guint32   input,
+	GError  **error
+){
+	if (!GOWL_INPUT_REMAP_INPUT_IS_REL(input))
+		return TRUE;
+	g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+	            GOWL_INPUT_REMAP_ERROR_INVALID,
+	            "pointer motion (REL_X/REL_Y) has no press; it can only "
+	            "drive a virtual stick ({stick: left|right})");
+	return FALSE;
+}
+
+/* Stick, trigger and pad-button targets drive the rule's virtual pad,
+ * which must be declared first. */
+static gboolean
+check_has_pad(
+	GowlInputRemapRule  *self,
+	GError             **error
+){
+	if (self->pad_name != NULL)
+		return TRUE;
+	g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+	            GOWL_INPUT_REMAP_ERROR_INVALID,
+	            "rule `%s' maps to a virtual pad but declares none "
+	            "(`virtual-pad: {name: NAME}')", self->name);
+	return FALSE;
+}
+
+/* Whether the rule's virtual pad exposes ABS code @abs. */
+static gboolean
+pad_has_axis(
+	GowlInputRemapRule *self,
+	guint32             abs
+){
+	guint i;
+
+	if (self->pad_axes == NULL)
+		return TRUE;
+	for (i = 0; i < self->pad_axes->len; i++)
+		if (g_array_index(self->pad_axes, guint32, i) == abs)
+			return TRUE;
+	return FALSE;
 }
 
 static gboolean
@@ -188,6 +366,7 @@ store_target(
 	guint32               input,
 	GowlInputRemapTarget *target
 ){
+	input = normalise_input(input, target->kind);
 	g_hash_table_replace(self->map, GUINT_TO_POINTER(input), target);
 }
 
@@ -356,6 +535,7 @@ gowl_input_remap_rule_new(const gchar *name)
 	self->ref_count = 1;
 	self->name = g_strdup(name);
 	self->match_type = GOWL_INPUT_REMAP_DEVICE_ANY;
+	gowl_input_remap_analog_init(&self->analog);
 	self->map = g_hash_table_new_full(g_direct_hash, g_direct_equal,
 	                                  NULL, target_free);
 	return self;
@@ -393,6 +573,9 @@ gowl_input_remap_rule_unref(GowlInputRemapRule *self)
 	g_free(self->name);
 	g_free(self->match_name);
 	g_free(self->match_sysname);
+	g_free(self->pad_name);
+	g_clear_pointer(&self->pad_buttons, g_array_unref);
+	g_clear_pointer(&self->pad_axes, g_array_unref);
 	g_free(self);
 }
 
@@ -691,7 +874,7 @@ gowl_input_remap_rule_map_key(
 
 	g_return_val_if_fail(self != NULL, FALSE);
 
-	if (!check_input(input, error))
+	if (!check_input(input, error) || !check_digital_input(input, error))
 		return FALSE;
 	if (keycode == 0 && keysym == XKB_KEY_NoSymbol) {
 		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
@@ -747,7 +930,7 @@ gowl_input_remap_rule_map_button(
 
 	g_return_val_if_fail(self != NULL, FALSE);
 
-	if (!check_input(input, error))
+	if (!check_input(input, error) || !check_digital_input(input, error))
 		return FALSE;
 	if (button < BTN_MISC || button > KEY_MAX
 	    || (button >= KEY_OK && button < BTN_DPAD_UP)) {
@@ -791,7 +974,7 @@ gowl_input_remap_rule_map_action(
 
 	g_return_val_if_fail(self != NULL, FALSE);
 
-	if (!check_input(input, error))
+	if (!check_input(input, error) || !check_digital_input(input, error))
 		return FALSE;
 	klass = (GEnumClass *)g_type_class_ref(GOWL_TYPE_ACTION);
 	known = g_enum_get_value(klass, (gint)action) != NULL;
@@ -832,7 +1015,7 @@ gowl_input_remap_rule_map_command(
 
 	g_return_val_if_fail(self != NULL, FALSE);
 
-	if (!check_input(input, error))
+	if (!check_input(input, error) || !check_digital_input(input, error))
 		return FALSE;
 	if (command == NULL || *command == '\0') {
 		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
@@ -918,7 +1101,7 @@ gowl_input_remap_rule_map_macro(
 
 	g_return_val_if_fail(self != NULL, FALSE);
 
-	if (!check_input(input, error))
+	if (!check_input(input, error) || !check_digital_input(input, error))
 		return FALSE;
 	if (name == NULL || *name == '\0' || strpbrk(name, "\n\r") != NULL
 	    || (args != NULL && strpbrk(args, "\n\r") != NULL)) {
@@ -977,6 +1160,701 @@ gowl_input_remap_rule_map_pass(
 	t = g_new0(GowlInputRemapTarget, 1);
 	t->kind = GOWL_INPUT_REMAP_TARGET_PASS;
 	store_target(self, input, t);
+}
+
+/* --- Game controllers and virtual pads --- */
+
+/**
+ * gowl_input_remap_analog_init:
+ * @analog: (out caller-allocates): the settings to fill
+ *
+ * Fills @analog with the defaults every rule starts with: deadzone from
+ * the device, press at 0.5, release at 0.35, nothing inverted, 1200
+ * px/s pointer speed on a square curve without acceleration, 8 scroll
+ * notches per second, 0.02 stick per pixel of mouse motion and a 100 ms
+ * return to centre.
+ */
+void
+gowl_input_remap_analog_init(GowlInputRemapAnalog *analog)
+{
+	g_return_if_fail(analog != NULL);
+
+	memset(analog, 0, sizeof *analog);
+	analog->deadzone = -1.0;
+	analog->press = 0.5;
+	analog->release = 0.35;
+	analog->pointer_speed = 1200.0;
+	analog->pointer_curve = 2.0;
+	analog->pointer_accel = 0.0;
+	analog->scroll_rate = 8.0;
+	analog->mouse_gain = 0.02;
+	analog->mouse_idle_ms = 100;
+}
+
+/**
+ * gowl_input_remap_rule_set_grab:
+ * @self: a #GowlInputRemapRule
+ * @grab: %TRUE to grab a matched game controller (EVIOCGRAB) so that
+ *   nothing else -- the game included -- reads it while the rule holds
+ *   it
+ *
+ * Only game controllers are grabbed; keyboards and pointers are claimed
+ * through the compositor as before.  Off by default: merely matching a
+ * controller must never take it away from a game.
+ */
+void
+gowl_input_remap_rule_set_grab(
+	GowlInputRemapRule *self,
+	gboolean            grab
+){
+	g_return_if_fail(self != NULL);
+	self->grab = grab ? TRUE : FALSE;
+}
+
+/**
+ * gowl_input_remap_rule_get_grab:
+ * @self: a #GowlInputRemapRule
+ *
+ * Returns: whether a matched game controller is grabbed
+ */
+gboolean
+gowl_input_remap_rule_get_grab(GowlInputRemapRule *self)
+{
+	g_return_val_if_fail(self != NULL, FALSE);
+	return self->grab;
+}
+
+/**
+ * gowl_input_remap_rule_get_analog:
+ * @self: a #GowlInputRemapRule
+ * @out: (out caller-allocates): the rule's analog settings
+ */
+void
+gowl_input_remap_rule_get_analog(
+	GowlInputRemapRule   *self,
+	GowlInputRemapAnalog *out
+){
+	g_return_if_fail(self != NULL);
+	g_return_if_fail(out != NULL);
+	*out = self->analog;
+}
+
+/**
+ * gowl_input_remap_rule_set_analog:
+ * @self: a #GowlInputRemapRule
+ * @analog: the settings; start from gowl_input_remap_analog_init()
+ * @error: return location for a #GError
+ *
+ * Validates and stores @analog.  Refused: a deadzone above 0.95, a press
+ * threshold outside (0, 1], a release at or above the press threshold
+ * (the gap is what stops a resting stick chattering), a curve outside
+ * [0.5, 5], a pointer speed outside (0, 20000], a negative
+ * acceleration, a scroll rate outside (0, 120], a mouse gain outside
+ * (0, 1], and a return to centre outside [10, 5000] ms.
+ *
+ * Returns: %TRUE when stored
+ */
+gboolean
+gowl_input_remap_rule_set_analog(
+	GowlInputRemapRule         *self,
+	const GowlInputRemapAnalog *analog,
+	GError                    **error
+){
+	const gchar *what;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+	g_return_val_if_fail(analog != NULL, FALSE);
+
+	what = NULL;
+	if (analog->deadzone > 0.95 || isnan(analog->deadzone))
+		what = "deadzone must be at most 0.95 (or negative: from the device)";
+	else if (!(analog->press > 0.0 && analog->press <= 1.0))
+		what = "press must be in (0, 1]";
+	else if (!(analog->release >= 0.0 && analog->release < analog->press))
+		what = "release must be in [0, press): the gap stops a resting "
+		       "stick chattering";
+	else if (!(analog->pointer_curve >= 0.5 && analog->pointer_curve <= 5.0))
+		what = "pointer-curve must be in [0.5, 5]";
+	else if (!(analog->pointer_speed > 0.0 && analog->pointer_speed <= 20000.0))
+		what = "pointer-speed must be in (0, 20000] pixels per second";
+	else if (!(analog->pointer_accel >= 0.0 && analog->pointer_accel <= 10.0))
+		what = "pointer-accel must be in [0, 10]";
+	else if (!(analog->scroll_rate > 0.0 && analog->scroll_rate <= 120.0))
+		what = "scroll-rate must be in (0, 120] notches per second";
+	else if (!(analog->mouse_gain > 0.0 && analog->mouse_gain <= 1.0))
+		what = "mouse-gain must be in (0, 1]";
+	else if (analog->mouse_idle_ms < 10 || analog->mouse_idle_ms > 5000)
+		what = "mouse-idle-ms must be in [10, 5000]";
+	if (what != NULL) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID, "rule `%s': analog %s",
+		            self->name, what);
+		return FALSE;
+	}
+	self->analog = *analog;
+	return TRUE;
+}
+
+/**
+ * gowl_input_remap_rule_set_virtual_pad:
+ * @self: a #GowlInputRemapRule
+ * @name: the pad's name; the device is called "gowl virtual pad: NAME".
+ *   Rules naming the same pad share one device.
+ * @vendor: its USB vendor id, or 0 for gowl's (%GOWL_INPUT_REMAP_PAD_VENDOR)
+ * @product: its product id, or 0 for gowl's
+ * @error: return location for a #GError
+ *
+ * Declares the virtual gamepad this rule's stick, trigger and
+ * pad-button targets drive.  It is created through /dev/uinput on its
+ * first use, not here, and destroyed when no rule declares it any more.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_input_remap_rule_set_virtual_pad(
+	GowlInputRemapRule  *self,
+	const gchar         *name,
+	guint16              vendor,
+	guint16              product,
+	GError             **error
+){
+	const gchar *p;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+
+	if (name == NULL || *name == '\0' || strlen(name) > 48) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "a virtual pad needs a name of 1..48 characters");
+		return FALSE;
+	}
+	for (p = name; *p != '\0'; p++) {
+		if (!g_ascii_isalnum(*p) && strchr("-_. ", *p) == NULL) {
+			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+			            GOWL_INPUT_REMAP_ERROR_INVALID,
+			            "virtual pad name `%s': letters, digits, `-', "
+			            "`_', `.' and spaces only", name);
+			return FALSE;
+		}
+	}
+	g_free(self->pad_name);
+	self->pad_name = g_strdup(name);
+	self->pad_vendor = vendor != 0 ? vendor : GOWL_INPUT_REMAP_PAD_VENDOR;
+	self->pad_product = product != 0 ? product : GOWL_INPUT_REMAP_PAD_PRODUCT;
+	return TRUE;
+}
+
+/**
+ * gowl_input_remap_rule_get_virtual_pad:
+ * @self: a #GowlInputRemapRule
+ *
+ * Returns: (transfer none) (nullable): the declared virtual pad's name
+ */
+const gchar *
+gowl_input_remap_rule_get_virtual_pad(GowlInputRemapRule *self)
+{
+	g_return_val_if_fail(self != NULL, NULL);
+	return self->pad_name;
+}
+
+/**
+ * gowl_input_remap_rule_get_virtual_pad_vendor:
+ * @self: a #GowlInputRemapRule
+ *
+ * Returns: the virtual pad's vendor id (0 without a pad)
+ */
+guint16
+gowl_input_remap_rule_get_virtual_pad_vendor(GowlInputRemapRule *self)
+{
+	g_return_val_if_fail(self != NULL, 0);
+	return self->pad_vendor;
+}
+
+/**
+ * gowl_input_remap_rule_get_virtual_pad_product:
+ * @self: a #GowlInputRemapRule
+ *
+ * Returns: the virtual pad's product id (0 without a pad)
+ */
+guint16
+gowl_input_remap_rule_get_virtual_pad_product(GowlInputRemapRule *self)
+{
+	g_return_val_if_fail(self != NULL, 0);
+	return self->pad_product;
+}
+
+/* A list of codes into a fresh array, each checked by @ok. */
+static GArray *
+codes_to_array(
+	const guint32  *codes,
+	guint           n,
+	gboolean      (*ok)(guint32 code),
+	const gchar    *what,
+	GError        **error
+){
+	GArray *out;
+	guint i;
+
+	if (n == 0 || n > 64) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "a virtual pad lists 1..64 %s", what);
+		return NULL;
+	}
+	out = g_array_sized_new(FALSE, FALSE, sizeof(guint32), n);
+	for (i = 0; i < n; i++) {
+		if (!ok(codes[i])) {
+			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+			            GOWL_INPUT_REMAP_ERROR_UNKNOWN_CODE,
+			            "0x%x is not one of the %s a virtual pad can have",
+			            codes[i], what);
+			g_array_unref(out);
+			return NULL;
+		}
+		g_array_append_val(out, codes[i]);
+	}
+	return out;
+}
+
+static gboolean
+pad_button_ok(guint32 code)
+{
+	/* the joystick and gamepad ranges, and the d-pad buttons */
+	return (code >= BTN_JOYSTICK && code < BTN_DIGI)
+	       || (code >= BTN_DPAD_UP && code <= BTN_DPAD_RIGHT)
+	       || (code >= BTN_TRIGGER_HAPPY && code <= BTN_TRIGGER_HAPPY40);
+}
+
+static gboolean
+pad_axis_ok(guint32 code)
+{
+	return code <= ABS_BRAKE || (code >= ABS_HAT0X && code <= ABS_HAT3Y);
+}
+
+/**
+ * gowl_input_remap_rule_set_virtual_pad_buttons:
+ * @self: a #GowlInputRemapRule with a virtual pad
+ * @buttons: (array length=n_buttons): BTN_* codes
+ * @n_buttons: how many
+ * @error: return location for a #GError
+ *
+ * The buttons the virtual pad exposes, instead of the default Xbox-style
+ * set.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_input_remap_rule_set_virtual_pad_buttons(
+	GowlInputRemapRule  *self,
+	const guint32       *buttons,
+	guint                n_buttons,
+	GError             **error
+){
+	GArray *a;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+	if (!check_has_pad(self, error))
+		return FALSE;
+	a = codes_to_array(buttons, n_buttons, pad_button_ok, "buttons", error);
+	if (a == NULL)
+		return FALSE;
+	g_clear_pointer(&self->pad_buttons, g_array_unref);
+	self->pad_buttons = a;
+	return TRUE;
+}
+
+/**
+ * gowl_input_remap_rule_get_virtual_pad_buttons:
+ * @self: a #GowlInputRemapRule
+ *
+ * Returns: (transfer full) (element-type guint32): the buttons the
+ *   virtual pad exposes (the default set unless the rule lists its own)
+ */
+GArray *
+gowl_input_remap_rule_get_virtual_pad_buttons(GowlInputRemapRule *self)
+{
+	GArray *out;
+
+	g_return_val_if_fail(self != NULL, NULL);
+	if (self->pad_buttons != NULL)
+		return g_array_ref(self->pad_buttons);
+	out = g_array_new(FALSE, FALSE, sizeof(guint32));
+	g_array_append_vals(out, default_pad_buttons,
+	                    G_N_ELEMENTS(default_pad_buttons));
+	return out;
+}
+
+/**
+ * gowl_input_remap_rule_set_virtual_pad_axes:
+ * @self: a #GowlInputRemapRule with a virtual pad
+ * @axes: (array length=n_axes): ABS_* codes
+ * @n_axes: how many
+ * @error: return location for a #GError
+ *
+ * The axes the virtual pad exposes, instead of the default two sticks,
+ * two triggers and the d-pad hat.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_input_remap_rule_set_virtual_pad_axes(
+	GowlInputRemapRule  *self,
+	const guint32       *axes,
+	guint                n_axes,
+	GError             **error
+){
+	GArray *a;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+	if (!check_has_pad(self, error))
+		return FALSE;
+	a = codes_to_array(axes, n_axes, pad_axis_ok, "axes", error);
+	if (a == NULL)
+		return FALSE;
+	g_clear_pointer(&self->pad_axes, g_array_unref);
+	self->pad_axes = a;
+	return TRUE;
+}
+
+/**
+ * gowl_input_remap_rule_get_virtual_pad_axes:
+ * @self: a #GowlInputRemapRule
+ *
+ * Returns: (transfer full) (element-type guint32): the axes the virtual
+ *   pad exposes
+ */
+GArray *
+gowl_input_remap_rule_get_virtual_pad_axes(GowlInputRemapRule *self)
+{
+	GArray *out;
+
+	g_return_val_if_fail(self != NULL, NULL);
+	if (self->pad_axes != NULL)
+		return g_array_ref(self->pad_axes);
+	out = g_array_new(FALSE, FALSE, sizeof(guint32));
+	g_array_append_vals(out, default_pad_axes, G_N_ELEMENTS(default_pad_axes));
+	return out;
+}
+
+/**
+ * gowl_input_remap_rule_has_continuous:
+ * @self: a #GowlInputRemapRule
+ *
+ * Returns: whether any target of @self is continuous (pointer, scroll,
+ *   or a stick following the mouse) -- the declared exceptions to the
+ *   one-to-one rule, which `inputremap-list' reports
+ */
+gboolean
+gowl_input_remap_rule_has_continuous(GowlInputRemapRule *self)
+{
+	GHashTableIter iter;
+	gpointer value;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+	g_hash_table_iter_init(&iter, self->map);
+	while (g_hash_table_iter_next(&iter, NULL, &value))
+		if (gowl_input_remap_target_is_continuous(value))
+			return TRUE;
+	return FALSE;
+}
+
+/* The virtual-pad ABS code a stick/trigger target drives. */
+static guint32
+pad_target_axis(
+	guint kind_is_trigger,
+	guint side,
+	guint component
+){
+	if (kind_is_trigger)
+		return side == GOWL_INPUT_REMAP_SIDE_RIGHT ? ABS_RZ : ABS_Z;
+	if (side == GOWL_INPUT_REMAP_SIDE_DPAD)
+		return component == GOWL_INPUT_REMAP_COMPONENT_Y ? ABS_HAT0Y : ABS_HAT0X;
+	if (side == GOWL_INPUT_REMAP_SIDE_RIGHT)
+		return component == GOWL_INPUT_REMAP_COMPONENT_Y ? ABS_RY : ABS_RX;
+	return component == GOWL_INPUT_REMAP_COMPONENT_Y ? ABS_Y : ABS_X;
+}
+
+/**
+ * gowl_input_remap_rule_map_pointer:
+ * @self: a #GowlInputRemapRule
+ * @input: a WHOLE absolute axis (GOWL_INPUT_REMAP_ABS_INPUT(ABS_X,
+ *   GOWL_INPUT_REMAP_ABS_WHOLE))
+ * @component: %GOWL_INPUT_REMAP_COMPONENT_X or _Y: which way the
+ *   pointer moves
+ * @error: return location for a #GError
+ *
+ * The axis moves the pointer for as long as it is out of its deadzone,
+ * at the rule's analog speed.  CONTINUOUS: outside the one-to-one rule,
+ * by declaration.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_input_remap_rule_map_pointer(
+	GowlInputRemapRule  *self,
+	guint32              input,
+	guint                component,
+	GError             **error
+){
+	GowlInputRemapTarget *t;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+	if (!GOWL_INPUT_REMAP_INPUT_IS_ABS(input)
+	    || GOWL_INPUT_REMAP_ABS_DIR(input) != GOWL_INPUT_REMAP_ABS_WHOLE) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "a pointer target needs a whole analog axis (ABS_X, "
+		            "right-stick-x, ...), not a key or a direction");
+		return FALSE;
+	}
+	if (component > GOWL_INPUT_REMAP_COMPONENT_Y) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "a pointer target is x or y");
+		return FALSE;
+	}
+	t = g_new0(GowlInputRemapTarget, 1);
+	t->kind = GOWL_INPUT_REMAP_TARGET_POINTER;
+	t->component = component;
+	store_target(self, input, t);
+	return TRUE;
+}
+
+/**
+ * gowl_input_remap_rule_map_scroll:
+ * @self: a #GowlInputRemapRule
+ * @input: a WHOLE absolute axis
+ * @horizontal: %TRUE to scroll sideways
+ * @error: return location for a #GError
+ *
+ * The axis scrolls, in whole wheel notches at the rule's scroll rate,
+ * for as long as it is out of its deadzone.  Continuous, like
+ * gowl_input_remap_rule_map_pointer().
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_input_remap_rule_map_scroll(
+	GowlInputRemapRule  *self,
+	guint32              input,
+	gboolean             horizontal,
+	GError             **error
+){
+	GowlInputRemapTarget *t;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+	if (!GOWL_INPUT_REMAP_INPUT_IS_ABS(input)
+	    || GOWL_INPUT_REMAP_ABS_DIR(input) != GOWL_INPUT_REMAP_ABS_WHOLE) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "a scroll target needs a whole analog axis (ABS_RY, "
+		            "right-stick-y, ...), not a key or a direction");
+		return FALSE;
+	}
+	t = g_new0(GowlInputRemapTarget, 1);
+	t->kind = GOWL_INPUT_REMAP_TARGET_SCROLL;
+	t->component = horizontal ? GOWL_INPUT_REMAP_COMPONENT_X
+	                          : GOWL_INPUT_REMAP_COMPONENT_Y;
+	store_target(self, input, t);
+	return TRUE;
+}
+
+/**
+ * gowl_input_remap_rule_map_stick:
+ * @self: a #GowlInputRemapRule with a virtual pad
+ * @input: a key, button or stick direction
+ * @side: %GOWL_INPUT_REMAP_SIDE_LEFT, _RIGHT or _DPAD
+ * @component: %GOWL_INPUT_REMAP_COMPONENT_X or _Y
+ * @value: the deflection while held, [-1, 1], not 0 (evdev's +Y is down)
+ * @error: return location for a #GError
+ *
+ * While @input is held, that component of the virtual stick is
+ * deflected by @value; on release it returns.  Several held inputs on
+ * one stick combine: opposite directions cancel and a diagonal is
+ * normalised onto the unit circle.  One press, one held state: inside
+ * the one-to-one rule.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_input_remap_rule_map_stick(
+	GowlInputRemapRule  *self,
+	guint32              input,
+	guint                side,
+	guint                component,
+	gdouble              value,
+	GError             **error
+){
+	GowlInputRemapTarget *t;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+	if (!check_input(input, error) || !check_digital_input(input, error)
+	    || !check_has_pad(self, error))
+		return FALSE;
+	if (side > GOWL_INPUT_REMAP_SIDE_DPAD
+	    || component > GOWL_INPUT_REMAP_COMPONENT_Y
+	    || !(value >= -1.0 && value <= 1.0) || value == 0.0) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "a stick target is left, right or dpad, x or y, "
+		            "and a deflection in [-1, 1] other than 0");
+		return FALSE;
+	}
+	if (!pad_has_axis(self, pad_target_axis(FALSE, side, component))) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "virtual pad `%s' has no axis for that stick",
+		            self->pad_name);
+		return FALSE;
+	}
+	t = g_new0(GowlInputRemapTarget, 1);
+	t->kind = GOWL_INPUT_REMAP_TARGET_STICK;
+	t->side = side;
+	t->component = component;
+	t->value = value;
+	store_target(self, input, t);
+	return TRUE;
+}
+
+/**
+ * gowl_input_remap_rule_map_stick_follow:
+ * @self: a #GowlInputRemapRule with a virtual pad
+ * @input: %GOWL_INPUT_REMAP_REL_X or %GOWL_INPUT_REMAP_REL_Y
+ * @side: %GOWL_INPUT_REMAP_SIDE_LEFT or _RIGHT
+ * @error: return location for a #GError
+ *
+ * Mouse-look onto a controller: the claimed pointer's motion along
+ * @input deflects that component of the stick (the rule's mouse gain
+ * per pixel), which returns to centre once the mouse has been still for
+ * the rule's mouse-idle-ms.  The pointer itself does not move.
+ * CONTINUOUS: a declared exception to the one-to-one rule.
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_input_remap_rule_map_stick_follow(
+	GowlInputRemapRule  *self,
+	guint32              input,
+	guint                side,
+	GError             **error
+){
+	GowlInputRemapTarget *t;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+	if (!GOWL_INPUT_REMAP_INPUT_IS_REL(input)) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "a stick that follows the mouse takes REL_X or REL_Y "
+		            "(mouse-x, mouse-y); a key needs `x:' or `y:'");
+		return FALSE;
+	}
+	if (!check_has_pad(self, error))
+		return FALSE;
+	if (side > GOWL_INPUT_REMAP_SIDE_RIGHT) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "the mouse can drive the left or right stick");
+		return FALSE;
+	}
+	t = g_new0(GowlInputRemapTarget, 1);
+	t->kind = GOWL_INPUT_REMAP_TARGET_STICK;
+	t->side = side;
+	t->component = input == GOWL_INPUT_REMAP_REL_Y
+	               ? GOWL_INPUT_REMAP_COMPONENT_Y : GOWL_INPUT_REMAP_COMPONENT_X;
+	t->follow = TRUE;
+	store_target(self, input, t);
+	return TRUE;
+}
+
+/**
+ * gowl_input_remap_rule_map_trigger:
+ * @self: a #GowlInputRemapRule with a virtual pad
+ * @input: a key, button or stick direction
+ * @side: %GOWL_INPUT_REMAP_SIDE_LEFT or _RIGHT
+ * @value: how far the trigger is pulled while held, (0, 1]
+ * @error: return location for a #GError
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_input_remap_rule_map_trigger(
+	GowlInputRemapRule  *self,
+	guint32              input,
+	guint                side,
+	gdouble              value,
+	GError             **error
+){
+	GowlInputRemapTarget *t;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+	if (!check_input(input, error) || !check_digital_input(input, error)
+	    || !check_has_pad(self, error))
+		return FALSE;
+	if (side > GOWL_INPUT_REMAP_SIDE_RIGHT
+	    || !(value > 0.0 && value <= 1.0)) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "a trigger target is left or right, pulled (0, 1]");
+		return FALSE;
+	}
+	if (!pad_has_axis(self, pad_target_axis(TRUE, side, 0))) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "virtual pad `%s' has no axis for that trigger",
+		            self->pad_name);
+		return FALSE;
+	}
+	t = g_new0(GowlInputRemapTarget, 1);
+	t->kind = GOWL_INPUT_REMAP_TARGET_TRIGGER;
+	t->side = side;
+	t->value = value;
+	store_target(self, input, t);
+	return TRUE;
+}
+
+/**
+ * gowl_input_remap_rule_map_pad_button:
+ * @self: a #GowlInputRemapRule with a virtual pad
+ * @input: a key, button or stick direction
+ * @button: the virtual pad's BTN_* to hold while @input is held
+ * @error: return location for a #GError
+ *
+ * Returns: %TRUE on success
+ */
+gboolean
+gowl_input_remap_rule_map_pad_button(
+	GowlInputRemapRule  *self,
+	guint32              input,
+	guint32              button,
+	GError             **error
+){
+	GowlInputRemapTarget *t;
+	g_autoptr(GArray) buttons = NULL;
+	gboolean found;
+	guint i;
+
+	g_return_val_if_fail(self != NULL, FALSE);
+	if (!check_input(input, error) || !check_digital_input(input, error)
+	    || !check_has_pad(self, error))
+		return FALSE;
+	buttons = gowl_input_remap_rule_get_virtual_pad_buttons(self);
+	found = FALSE;
+	for (i = 0; i < buttons->len; i++)
+		if (g_array_index(buttons, guint32, i) == button)
+			found = TRUE;
+	if (!found) {
+		g_autofree gchar *n = gowl_input_remap_code_to_name(button);
+
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_UNKNOWN_CODE,
+		            "virtual pad `%s' has no button %s", self->pad_name, n);
+		return FALSE;
+	}
+	t = g_new0(GowlInputRemapTarget, 1);
+	t->kind = GOWL_INPUT_REMAP_TARGET_PAD_BUTTON;
+	t->code = button;
+	store_target(self, input, t);
+	return TRUE;
 }
 
 /**
@@ -1164,6 +2042,93 @@ gowl_input_remap_target_get_macro_args(const GowlInputRemapTarget *self)
 }
 
 /**
+ * gowl_input_remap_target_get_side:
+ * @self: a #GowlInputRemapTarget
+ *
+ * Returns: a stick or trigger target's %GOWL_INPUT_REMAP_SIDE_*
+ */
+guint
+gowl_input_remap_target_get_side(const GowlInputRemapTarget *self)
+{
+	g_return_val_if_fail(self != NULL, 0);
+	return self->side;
+}
+
+/**
+ * gowl_input_remap_target_get_component:
+ * @self: a #GowlInputRemapTarget
+ *
+ * Returns: a stick or pointer target's %GOWL_INPUT_REMAP_COMPONENT_*;
+ *   for a scroll target, _X when it scrolls horizontally
+ */
+guint
+gowl_input_remap_target_get_component(const GowlInputRemapTarget *self)
+{
+	g_return_val_if_fail(self != NULL, 0);
+	return self->component;
+}
+
+/**
+ * gowl_input_remap_target_get_value:
+ * @self: a #GowlInputRemapTarget
+ *
+ * Returns: a stick or trigger target's deflection while held
+ */
+gdouble
+gowl_input_remap_target_get_value(const GowlInputRemapTarget *self)
+{
+	g_return_val_if_fail(self != NULL, 0.0);
+	return self->value;
+}
+
+/**
+ * gowl_input_remap_target_is_follow:
+ * @self: a #GowlInputRemapTarget
+ *
+ * Returns: whether a stick target follows pointer motion
+ */
+gboolean
+gowl_input_remap_target_is_follow(const GowlInputRemapTarget *self)
+{
+	g_return_val_if_fail(self != NULL, FALSE);
+	return self->follow;
+}
+
+/**
+ * gowl_input_remap_target_is_continuous:
+ * @self: a #GowlInputRemapTarget
+ *
+ * The declared exceptions to the one-to-one rule: pointer and scroll
+ * targets, and a stick following the mouse, produce output for as long
+ * as their input is deflected rather than once per press.
+ *
+ * Returns: whether @self is continuous
+ */
+gboolean
+gowl_input_remap_target_is_continuous(const GowlInputRemapTarget *self)
+{
+	g_return_val_if_fail(self != NULL, FALSE);
+	return kind_is_continuous_input(self->kind)
+	       || (self->kind == GOWL_INPUT_REMAP_TARGET_STICK && self->follow);
+}
+
+/**
+ * gowl_input_remap_target_is_pad:
+ * @self: a #GowlInputRemapTarget
+ *
+ * Returns: whether @self drives the rule's virtual pad (stick, trigger
+ *   or pad button)
+ */
+gboolean
+gowl_input_remap_target_is_pad(const GowlInputRemapTarget *self)
+{
+	g_return_val_if_fail(self != NULL, FALSE);
+	return self->kind == GOWL_INPUT_REMAP_TARGET_STICK
+	       || self->kind == GOWL_INPUT_REMAP_TARGET_TRIGGER
+	       || self->kind == GOWL_INPUT_REMAP_TARGET_PAD_BUTTON;
+}
+
+/**
  * gowl_input_remap_target_invoke:
  * @self: a callback target
  * @rule: the rule it belongs to
@@ -1225,6 +2190,17 @@ append_quoted(
 		g_string_append_c(out, *p);
 	}
 	g_string_append_c(out, '"');
+}
+
+/* A number the YAML loader reads back exactly, whatever the locale. */
+static void
+append_number(
+	GString *out,
+	gdouble  v
+){
+	gchar buf[G_ASCII_DTOSTR_BUF_SIZE];
+
+	g_string_append(out, g_ascii_formatd(buf, sizeof buf, "%g", v));
 }
 
 /* The value half of a map entry, in the YAML form the loader reads. */
@@ -1295,6 +2271,42 @@ append_target_yaml(
 		}
 		g_string_append_c(out, '}');
 		return;
+	case GOWL_INPUT_REMAP_TARGET_POINTER:
+		g_string_append_printf(out, "{pointer: %s}",
+		                       t->component == GOWL_INPUT_REMAP_COMPONENT_Y
+		                       ? "y" : "x");
+		return;
+	case GOWL_INPUT_REMAP_TARGET_SCROLL:
+		g_string_append_printf(out, "{scroll: %s}",
+		                       t->component == GOWL_INPUT_REMAP_COMPONENT_X
+		                       ? "horizontal" : "vertical");
+		return;
+	case GOWL_INPUT_REMAP_TARGET_STICK: {
+		static const gchar *const sides[] = { "left", "right", "dpad" };
+
+		g_string_append_printf(out, "{stick: %s", sides[MIN(t->side, 2u)]);
+		if (!t->follow) {
+			g_string_append_printf(out, ", %s: ",
+			                       t->component == GOWL_INPUT_REMAP_COMPONENT_Y
+			                       ? "y" : "x");
+			append_number(out, t->value);
+		}
+		g_string_append_c(out, '}');
+		return;
+	}
+	case GOWL_INPUT_REMAP_TARGET_TRIGGER:
+		g_string_append_printf(out, "{trigger: %s, value: ",
+		                       t->side == GOWL_INPUT_REMAP_SIDE_RIGHT
+		                       ? "right" : "left");
+		append_number(out, t->value);
+		g_string_append_c(out, '}');
+		return;
+	case GOWL_INPUT_REMAP_TARGET_PAD_BUTTON: {
+		g_autofree gchar *n = gowl_input_remap_code_to_name(t->code);
+
+		g_string_append_printf(out, "{pad-button: %s}", n);
+		return;
+	}
 	case GOWL_INPUT_REMAP_TARGET_CALLBACK:
 	default:
 		/* Code has no text form.  Written so a listing shows it;
@@ -1302,6 +2314,110 @@ append_target_yaml(
 		g_string_append(out, "{callback: native}");
 		return;
 	}
+}
+
+/* One ABS bitmask as a flow list, `[ABS_Y, ABS_RY]'. */
+static void
+append_abs_mask(
+	GString     *out,
+	const gchar *key,
+	guint64      mask
+){
+	guint i;
+	gboolean first;
+
+	g_string_append_printf(out, ", %s: [", key);
+	first = TRUE;
+	for (i = 0; i < GOWL_INPUT_REMAP_ABS_COUNT; i++) {
+		if ((mask & ((guint64)1 << i)) == 0)
+			continue;
+		{
+			g_autofree gchar *n = gowl_input_remap_code_to_name(
+				GOWL_INPUT_REMAP_ABS_INPUT(i, GOWL_INPUT_REMAP_ABS_WHOLE));
+
+			g_string_append_printf(out, "%s%s", first ? "" : ", ", n);
+			first = FALSE;
+		}
+	}
+	g_string_append_c(out, ']');
+}
+
+/* `, analog: {...}' with only the settings that differ from the
+ * defaults, so a rule that never mentions analog lists without it. */
+static void
+append_analog_yaml(
+	GString                    *out,
+	const GowlInputRemapAnalog *a
+){
+	GowlInputRemapAnalog d;
+	GString *body;
+
+	gowl_input_remap_analog_init(&d);
+	body = g_string_new(NULL);
+#define ANALOG_NUM(field, key) \
+	if (a->field != d.field) { \
+		g_string_append(body, ", " key ": "); \
+		append_number(body, (gdouble)a->field); \
+	}
+	ANALOG_NUM(deadzone, "deadzone")
+	ANALOG_NUM(press, "press")
+	ANALOG_NUM(release, "release")
+	ANALOG_NUM(pointer_speed, "pointer-speed")
+	ANALOG_NUM(pointer_curve, "pointer-curve")
+	ANALOG_NUM(pointer_accel, "pointer-accel")
+	ANALOG_NUM(scroll_rate, "scroll-rate")
+	ANALOG_NUM(mouse_gain, "mouse-gain")
+	ANALOG_NUM(mouse_idle_ms, "mouse-idle-ms")
+#undef ANALOG_NUM
+	if (a->invert != 0)
+		append_abs_mask(body, "invert", a->invert);
+	if (a->centred != 0)
+		append_abs_mask(body, "centred", a->centred);
+	if (body->len > 0)
+		g_string_append_printf(out, ", analog: {%s}", body->str + 2);
+	g_string_free(body, TRUE);
+}
+
+/* `, virtual-pad: {...}' when the rule declares one. */
+static void
+append_pad_yaml(
+	GString            *out,
+	GowlInputRemapRule *self
+){
+	guint i;
+
+	if (self->pad_name == NULL)
+		return;
+	g_string_append(out, ", virtual-pad: {name: ");
+	append_quoted(out, self->pad_name);
+	if (self->pad_vendor != GOWL_INPUT_REMAP_PAD_VENDOR
+	    || self->pad_product != GOWL_INPUT_REMAP_PAD_PRODUCT)
+		g_string_append_printf(out, ", id: \"%04x:%04x\"",
+		                       (guint)self->pad_vendor,
+		                       (guint)self->pad_product);
+	if (self->pad_buttons != NULL) {
+		g_string_append(out, ", buttons: [");
+		for (i = 0; i < self->pad_buttons->len; i++) {
+			g_autofree gchar *n = gowl_input_remap_code_to_name(
+				g_array_index(self->pad_buttons, guint32, i));
+
+			g_string_append_printf(out, "%s%s", i == 0 ? "" : ", ", n);
+		}
+		g_string_append_c(out, ']');
+	}
+	if (self->pad_axes != NULL) {
+		g_string_append(out, ", axes: [");
+		for (i = 0; i < self->pad_axes->len; i++) {
+			g_autofree gchar *n = gowl_input_remap_code_to_name(
+				GOWL_INPUT_REMAP_ABS_INPUT(
+					g_array_index(self->pad_axes, guint32, i),
+					GOWL_INPUT_REMAP_ABS_WHOLE));
+
+			g_string_append_printf(out, "%s%s", i == 0 ? "" : ", ", n);
+		}
+		g_string_append_c(out, ']');
+	}
+	g_string_append_c(out, '}');
 }
 
 /**
@@ -1370,16 +2486,26 @@ gowl_input_remap_rule_to_yaml(GowlInputRemapRule *self)
 		append_quoted(out, self->match_sysname);
 		first = FALSE;
 	}
-	if (self->match_type != GOWL_INPUT_REMAP_DEVICE_ANY)
+	if (self->match_type != GOWL_INPUT_REMAP_DEVICE_ANY) {
+		GEnumClass *klass;
+		GEnumValue *val;
+
+		klass = (GEnumClass *)g_type_class_ref(GOWL_TYPE_INPUT_REMAP_DEVICE_TYPE);
+		val = g_enum_get_value(klass, (gint)self->match_type);
 		g_string_append_printf(out, "%stype: %s", first ? "" : ", ",
-		                       self->match_type == GOWL_INPUT_REMAP_DEVICE_KEYBOARD
-		                       ? "keyboard" : "pointer");
+		                       val != NULL ? val->value_nick : "any");
+		g_type_class_unref(klass);
+	}
 	g_string_append_c(out, '}');
 
 	if (self->drop_unmatched)
 		g_string_append(out, ", unmatched: drop");
 	if (self->log)
 		g_string_append(out, ", log: true");
+	if (self->grab)
+		g_string_append(out, ", grab: true");
+	append_analog_yaml(out, &self->analog);
+	append_pad_yaml(out, self);
 
 	/* map: in input order, so two listings of one rule are equal */
 	g_string_append(out, ", map: {");
@@ -1474,6 +2600,40 @@ gowl_input_remap_code_from_name(
 		*out_code = code;
 		return TRUE;
 	}
+
+	/* Game-controller inputs: ABS_X, ABS_X+, ABS_X-, REL_X, aliases */
+	{
+		g_autofree gchar *alias = g_ascii_strdown(name, -1);
+		gsize len;
+		guint dir;
+
+		g_strdelimit(alias, "_", '-');
+		if (lookup_table(pad_aliases, alias, FALSE, &code)) {
+			*out_code = code;
+			return TRUE;
+		}
+		if (g_strcmp0(norm, "REL_X") == 0) {
+			*out_code = GOWL_INPUT_REMAP_REL_X;
+			return TRUE;
+		}
+		if (g_strcmp0(norm, "REL_Y") == 0) {
+			*out_code = GOWL_INPUT_REMAP_REL_Y;
+			return TRUE;
+		}
+		/* The sign is read off the name as given: `norm' has had its
+		 * `-' turned into `_' for the KEY_/BTN_ lookups above. */
+		len = strlen(name);
+		dir = GOWL_INPUT_REMAP_ABS_WHOLE;
+		if (len > 1 && (name[len - 1] == '+' || name[len - 1] == '-')) {
+			dir = name[len - 1] == '+' ? GOWL_INPUT_REMAP_ABS_POS
+			                           : GOWL_INPUT_REMAP_ABS_NEG;
+			norm[len - 1] = '\0';
+		}
+		if (lookup_table(abs_names, norm, FALSE, &code)) {
+			*out_code = GOWL_INPUT_REMAP_ABS_INPUT(code, dir);
+			return TRUE;
+		}
+	}
 	if (parse_number(name, G_MAXUINT32, &n) && input_is_valid((guint32)n)) {
 		*out_code = (guint32)n;
 		return TRUE;
@@ -1496,6 +2656,26 @@ gowl_input_remap_code_to_name(guint32 code)
 	for (e = wheel_names; e->name != NULL; e++)
 		if (e->code == code)
 			return g_strdup(e->name);
+	if (code == GOWL_INPUT_REMAP_REL_X)
+		return g_strdup("REL_X");
+	if (code == GOWL_INPUT_REMAP_REL_Y)
+		return g_strdup("REL_Y");
+	if (GOWL_INPUT_REMAP_INPUT_IS_ABS(code)) {
+		guint32 abs;
+		guint dir;
+
+		abs = GOWL_INPUT_REMAP_ABS_OF(code);
+		dir = GOWL_INPUT_REMAP_ABS_DIR(code);
+		for (e = abs_names; e->name != NULL; e++)
+			if (e->code == abs)
+				return g_strdup_printf("%s%s", e->name,
+				                       dir == GOWL_INPUT_REMAP_ABS_POS ? "+"
+				                       : dir == GOWL_INPUT_REMAP_ABS_NEG ? "-"
+				                       : "");
+		return g_strdup_printf("ABS_0x%02x%s", abs,
+		                       dir == GOWL_INPUT_REMAP_ABS_POS ? "+"
+		                       : dir == GOWL_INPUT_REMAP_ABS_NEG ? "-" : "");
+	}
 	for (e = evdev_names; e->name != NULL; e++)
 		if (e->code == code)
 			return g_strdup(e->name);
@@ -1698,6 +2878,57 @@ parse_action(
 	return TRUE;
 }
 
+/* `left', `right' (and `dpad' for a stick). */
+static gboolean
+parse_side(
+	const gchar  *text,
+	gboolean      allow_dpad,
+	guint        *out,
+	GError      **error
+){
+	if (g_ascii_strcasecmp(text, "left") == 0)
+		*out = GOWL_INPUT_REMAP_SIDE_LEFT;
+	else if (g_ascii_strcasecmp(text, "right") == 0)
+		*out = GOWL_INPUT_REMAP_SIDE_RIGHT;
+	else if (allow_dpad && g_ascii_strcasecmp(text, "dpad") == 0)
+		*out = GOWL_INPUT_REMAP_SIDE_DPAD;
+	else {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "`%s' -- left or right%s", text,
+		            allow_dpad ? " (or dpad)" : "");
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/* A number scalar in [@lo, @hi], read in the C locale. */
+static gboolean
+parse_unit_number(
+	YamlNode     *node,
+	const gchar  *what,
+	gdouble       lo,
+	gdouble       hi,
+	gdouble      *out,
+	GError      **error
+){
+	const gchar *text;
+	gchar *end;
+	gdouble v;
+
+	if (!require_scalar(node, what, &text, error))
+		return FALSE;
+	v = g_ascii_strtod(text, &end);
+	if (end == text || *end != '\0' || isnan(v) || v < lo || v > hi) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "`%s: %s' is not a number in [%g, %g]", what, text, lo, hi);
+		return FALSE;
+	}
+	*out = v;
+	return TRUE;
+}
+
 /*
  * One `map:' entry.  The value is `drop', `pass', or a mapping holding
  * EXACTLY ONE of key / button / action / command (plus `arg' with an
@@ -1790,7 +3021,12 @@ parse_map_entry(
 		if (g_strcmp0(k, "key") == 0 || g_strcmp0(k, "button") == 0
 		    || g_strcmp0(k, "action") == 0
 		    || g_strcmp0(k, "command") == 0
-		    || g_strcmp0(k, "macro") == 0)
+		    || g_strcmp0(k, "macro") == 0
+		    || g_strcmp0(k, "pointer") == 0
+		    || g_strcmp0(k, "scroll") == 0
+		    || g_strcmp0(k, "stick") == 0
+		    || g_strcmp0(k, "trigger") == 0
+		    || g_strcmp0(k, "pad-button") == 0)
 			kinds++;
 		else if (g_strcmp0(k, "callback") == 0) {
 			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
@@ -1799,7 +3035,9 @@ parse_map_entry(
 			            "from C (gowl_input_remap_rule_map_callback) "
 			            "or, in cmacs, from Elisp", input_name);
 			return FALSE;
-		} else if (g_strcmp0(k, "arg") != 0 && g_strcmp0(k, "args") != 0) {
+		} else if (g_strcmp0(k, "arg") != 0 && g_strcmp0(k, "args") != 0
+		           && g_strcmp0(k, "x") != 0 && g_strcmp0(k, "y") != 0
+		           && g_strcmp0(k, "value") != 0) {
 			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
 			            GOWL_INPUT_REMAP_ERROR_INVALID,
 			            "unknown key `%s' in the mapping for %s",
@@ -1811,7 +3049,8 @@ parse_map_entry(
 		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
 		            GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE,
 		            "the mapping for %s names %u outputs; exactly one "
-		            "of key, button, action, command or macro", input_name,
+		            "of key, button, action, command, macro, pointer, "
+		            "scroll, stick, trigger or pad-button", input_name,
 		            kinds);
 		return FALSE;
 	}
@@ -1837,7 +3076,120 @@ parse_map_entry(
 		return FALSE;
 	}
 
+	/* x/y go with a stick, value with a trigger; and a stick takes one
+	 * of x or y (two would be two outputs) */
+	if ((yaml_mapping_has_member(m, "x") || yaml_mapping_has_member(m, "y"))
+	    && !yaml_mapping_has_member(m, "stick")) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "`x'/`y' for %s only go with `stick'", input_name);
+		return FALSE;
+	}
+	if (yaml_mapping_has_member(m, "value")
+	    && !yaml_mapping_has_member(m, "trigger")) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "`value' for %s only goes with `trigger'", input_name);
+		return FALSE;
+	}
+
 	/* Exactly one kind is present: build it */
+	if (yaml_mapping_has_member(m, "pointer")
+	    || yaml_mapping_has_member(m, "scroll")) {
+		gboolean is_pointer;
+
+		is_pointer = yaml_mapping_has_member(m, "pointer");
+		if (!require_scalar(yaml_mapping_get_member(m,
+		                        is_pointer ? "pointer" : "scroll"),
+		                    is_pointer ? "pointer" : "scroll", &text, error))
+			return FALSE;
+		if (is_pointer) {
+			if (g_ascii_strcasecmp(text, "x") != 0
+			    && g_ascii_strcasecmp(text, "y") != 0) {
+				g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+				            GOWL_INPUT_REMAP_ERROR_INVALID,
+				            "`pointer: %s' -- x or y", text);
+				return FALSE;
+			}
+			return gowl_input_remap_rule_map_pointer(rule, input,
+				g_ascii_strcasecmp(text, "y") == 0
+				? GOWL_INPUT_REMAP_COMPONENT_Y
+				: GOWL_INPUT_REMAP_COMPONENT_X, error);
+		}
+		if (g_ascii_strcasecmp(text, "vertical") != 0
+		    && g_ascii_strcasecmp(text, "horizontal") != 0) {
+			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+			            GOWL_INPUT_REMAP_ERROR_INVALID,
+			            "`scroll: %s' -- vertical or horizontal", text);
+			return FALSE;
+		}
+		return gowl_input_remap_rule_map_scroll(rule, input,
+			g_ascii_strcasecmp(text, "horizontal") == 0, error);
+	}
+	if (yaml_mapping_has_member(m, "stick")) {
+		guint side;
+		gboolean has_x;
+		gboolean has_y;
+		gdouble value;
+
+		if (!require_scalar(yaml_mapping_get_member(m, "stick"), "stick",
+		                    &text, error)
+		    || !parse_side(text, TRUE, &side, error))
+			return FALSE;
+		has_x = yaml_mapping_has_member(m, "x");
+		has_y = yaml_mapping_has_member(m, "y");
+		if (GOWL_INPUT_REMAP_INPUT_IS_REL(input) && !has_x && !has_y)
+			return gowl_input_remap_rule_map_stick_follow(rule, input, side,
+			                                              error);
+		if (has_x == has_y) {
+			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+			            has_x ? GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE
+			                  : GOWL_INPUT_REMAP_ERROR_INVALID,
+			            "the stick target for %s needs exactly one of "
+			            "`x:' or `y:' (a diagonal is two keys, which "
+			            "combine)", input_name);
+			return FALSE;
+		}
+		if (!parse_unit_number(yaml_mapping_get_member(m, has_x ? "x" : "y"),
+		                       has_x ? "x" : "y", -1.0, 1.0, &value, error))
+			return FALSE;
+		return gowl_input_remap_rule_map_stick(rule, input, side,
+			has_x ? GOWL_INPUT_REMAP_COMPONENT_X : GOWL_INPUT_REMAP_COMPONENT_Y,
+			value, error);
+	}
+	if (yaml_mapping_has_member(m, "trigger")) {
+		guint side;
+		gdouble value;
+
+		if (!require_scalar(yaml_mapping_get_member(m, "trigger"), "trigger",
+		                    &text, error)
+		    || !parse_side(text, FALSE, &side, error))
+			return FALSE;
+		value = 1.0;
+		if (yaml_mapping_has_member(m, "value")
+		    && !parse_unit_number(yaml_mapping_get_member(m, "value"),
+		                          "value", 0.0, 1.0, &value, error))
+			return FALSE;
+		return gowl_input_remap_rule_map_trigger(rule, input, side, value,
+		                                         error);
+	}
+	if (yaml_mapping_has_member(m, "pad-button")) {
+		guint32 button;
+
+		if (!require_scalar(yaml_mapping_get_member(m, "pad-button"),
+		                    "pad-button", &text, error))
+			return FALSE;
+		if (!gowl_input_remap_code_from_name(text, &button)
+		    || button > KEY_MAX) {
+			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+			            GOWL_INPUT_REMAP_ERROR_UNKNOWN_CODE,
+			            "`%s' is not a pad button (BTN_SOUTH, pad-a, "
+			            "left-bumper, ...)", text);
+			return FALSE;
+		}
+		return gowl_input_remap_rule_map_pad_button(rule, input, button,
+		                                            error);
+	}
 	if (yaml_mapping_has_member(m, "key")) {
 		guint32 keycode;
 		guint32 keysym;
@@ -1980,12 +3332,18 @@ parse_match(
 			else if (g_ascii_strcasecmp(v, "pointer") == 0
 			         || g_ascii_strcasecmp(v, "mouse") == 0)
 				rule->match_type = GOWL_INPUT_REMAP_DEVICE_POINTER;
+			else if (g_ascii_strcasecmp(v, "gamepad") == 0
+			         || g_ascii_strcasecmp(v, "controller") == 0)
+				rule->match_type = GOWL_INPUT_REMAP_DEVICE_GAMEPAD;
+			else if (g_ascii_strcasecmp(v, "joystick") == 0)
+				rule->match_type = GOWL_INPUT_REMAP_DEVICE_JOYSTICK;
 			else if (g_ascii_strcasecmp(v, "any") == 0)
 				rule->match_type = GOWL_INPUT_REMAP_DEVICE_ANY;
 			else {
 				g_set_error(error, GOWL_INPUT_REMAP_ERROR,
 				            GOWL_INPUT_REMAP_ERROR_INVALID,
-				            "`type: %s' -- keyboard, pointer or any", v);
+				            "`type: %s' -- keyboard, pointer, gamepad, "
+				            "joystick or any", v);
 				return FALSE;
 			}
 		} else {
@@ -2004,6 +3362,276 @@ parse_match(
 		return FALSE;
 	}
 	return TRUE;
+}
+
+/* A list of names (a YAML sequence, or one comma-separated scalar),
+ * each resolved by @resolve into @out. */
+static gboolean
+parse_name_list(
+	YamlNode     *node,
+	const gchar  *what,
+	gboolean    (*resolve)(const gchar *name, guint32 *out),
+	GArray       *out,
+	GError      **error
+){
+	g_auto(GStrv) parts = NULL;
+	guint i;
+	guint n;
+
+	if (node != NULL && yaml_node_get_node_type(node) == YAML_NODE_SEQUENCE) {
+		YamlSequence *seq;
+
+		seq = yaml_node_get_sequence(node);
+		n = seq != NULL ? yaml_sequence_get_length(seq) : 0;
+		parts = g_new0(gchar *, n + 1);
+		for (i = 0; i < n; i++) {
+			const gchar *t = node_scalar(yaml_sequence_get_element(seq, i));
+
+			parts[i] = g_strdup(t != NULL ? t : "");
+		}
+	} else {
+		const gchar *t;
+
+		if (!require_scalar(node, what, &t, error))
+			return FALSE;
+		parts = g_strsplit(t, ",", -1);
+	}
+	for (i = 0; parts[i] != NULL; i++) {
+		guint32 code;
+
+		g_strstrip(parts[i]);
+		if (*parts[i] == '\0')
+			continue;
+		if (!resolve(parts[i], &code)) {
+			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+			            GOWL_INPUT_REMAP_ERROR_UNKNOWN_CODE,
+			            "`%s' in `%s' is not one", parts[i], what);
+			return FALSE;
+		}
+		g_array_append_val(out, code);
+	}
+	return TRUE;
+}
+
+/* An axis name (ABS_X, left-stick-x) to its ABS code. */
+static gboolean
+resolve_axis(
+	const gchar *name,
+	guint32     *out
+){
+	guint32 input;
+
+	if (!gowl_input_remap_code_from_name(name, &input)
+	    || !GOWL_INPUT_REMAP_INPUT_IS_ABS(input))
+		return FALSE;
+	*out = GOWL_INPUT_REMAP_ABS_OF(input);
+	return TRUE;
+}
+
+/* A pad button name (BTN_SOUTH, pad-a) to its code. */
+static gboolean
+resolve_pad_button(
+	const gchar *name,
+	guint32     *out
+){
+	guint32 code;
+
+	if (!gowl_input_remap_code_from_name(name, &code) || code > KEY_MAX)
+		return FALSE;
+	*out = code;
+	return TRUE;
+}
+
+/* `virtual-pad: {name, id | vendor/product, buttons, axes}'. */
+static gboolean
+parse_virtual_pad(
+	GowlInputRemapRule  *rule,
+	YamlNode            *node,
+	GError             **error
+){
+	YamlMapping *m;
+	const gchar *name;
+	guint16 vendor;
+	guint16 product;
+	guint n;
+	guint i;
+
+	m = node != NULL ? yaml_node_get_mapping(node) : NULL;
+	if (m == NULL) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "`virtual-pad:' is a mapping, {name: NAME}");
+		return FALSE;
+	}
+	n = yaml_mapping_get_size(m);
+	for (i = 0; i < n; i++) {
+		const gchar *k = yaml_mapping_get_key(m, i);
+
+		if (g_strcmp0(k, "name") != 0 && g_strcmp0(k, "id") != 0
+		    && g_strcmp0(k, "vendor") != 0 && g_strcmp0(k, "product") != 0
+		    && g_strcmp0(k, "buttons") != 0 && g_strcmp0(k, "axes") != 0) {
+			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+			            GOWL_INPUT_REMAP_ERROR_INVALID,
+			            "unknown virtual-pad key `%s' (name, id, vendor, "
+			            "product, buttons, axes)", k);
+			return FALSE;
+		}
+	}
+	if (!require_scalar(yaml_mapping_get_member(m, "name"), "virtual-pad name",
+	                    &name, error))
+		return FALSE;
+	vendor = 0;
+	product = 0;
+	if (yaml_mapping_has_member(m, "id")) {
+		const gchar *v;
+		guint a;
+		guint b;
+		gchar tail;
+
+		if (!require_scalar(yaml_mapping_get_member(m, "id"), "id", &v, error))
+			return FALSE;
+		if (sscanf(v, "%4x:%4x%c", &a, &b, &tail) != 2) {
+			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+			            GOWL_INPUT_REMAP_ERROR_INVALID,
+			            "virtual-pad `id: %s' is not VENDOR:PRODUCT in hex", v);
+			return FALSE;
+		}
+		vendor = (guint16)a;
+		product = (guint16)b;
+	}
+	for (i = 0; i < 2; i++) {
+		const gchar *key = i == 0 ? "vendor" : "product";
+		const gchar *v;
+		guint16 num;
+
+		if (!yaml_mapping_has_member(m, key))
+			continue;
+		if (!require_scalar(yaml_mapping_get_member(m, key), key, &v, error))
+			return FALSE;
+		if (!parse_hex_id(v, &num)) {
+			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+			            GOWL_INPUT_REMAP_ERROR_INVALID,
+			            "virtual-pad `%s: %s' is not a 16-bit hex id", key, v);
+			return FALSE;
+		}
+		if (i == 0)
+			vendor = num;
+		else
+			product = num;
+	}
+	if (!gowl_input_remap_rule_set_virtual_pad(rule, name, vendor, product,
+	                                           error))
+		return FALSE;
+	if (yaml_mapping_has_member(m, "buttons")) {
+		g_autoptr(GArray) codes = g_array_new(FALSE, FALSE, sizeof(guint32));
+
+		if (!parse_name_list(yaml_mapping_get_member(m, "buttons"),
+		                     "buttons", resolve_pad_button, codes, error)
+		    || !gowl_input_remap_rule_set_virtual_pad_buttons(rule,
+		           (const guint32 *)(gpointer)codes->data, codes->len, error))
+			return FALSE;
+	}
+	if (yaml_mapping_has_member(m, "axes")) {
+		g_autoptr(GArray) codes = g_array_new(FALSE, FALSE, sizeof(guint32));
+
+		if (!parse_name_list(yaml_mapping_get_member(m, "axes"),
+		                     "axes", resolve_axis, codes, error)
+		    || !gowl_input_remap_rule_set_virtual_pad_axes(rule,
+		           (const guint32 *)(gpointer)codes->data, codes->len, error))
+			return FALSE;
+	}
+	return TRUE;
+}
+
+/* `analog: {deadzone, press, release, invert, centred, pointer-speed,
+ * pointer-curve, pointer-accel, scroll-rate, mouse-gain,
+ * mouse-idle-ms}'; validated as a whole by set_analog. */
+static gboolean
+parse_analog(
+	GowlInputRemapRule  *rule,
+	YamlNode            *node,
+	GError             **error
+){
+	static const struct {
+		const gchar *key;
+		gsize        offset;
+		gdouble      lo;
+		gdouble      hi;
+	} nums[] = {
+		{ "deadzone",      G_STRUCT_OFFSET(GowlInputRemapAnalog, deadzone),      -1.0, 1.0 },
+		{ "press",         G_STRUCT_OFFSET(GowlInputRemapAnalog, press),          0.0, 1.0 },
+		{ "release",       G_STRUCT_OFFSET(GowlInputRemapAnalog, release),        0.0, 1.0 },
+		{ "pointer-speed", G_STRUCT_OFFSET(GowlInputRemapAnalog, pointer_speed),  0.0, 1e9 },
+		{ "pointer-curve", G_STRUCT_OFFSET(GowlInputRemapAnalog, pointer_curve),  0.0, 1e9 },
+		{ "pointer-accel", G_STRUCT_OFFSET(GowlInputRemapAnalog, pointer_accel),  0.0, 1e9 },
+		{ "scroll-rate",   G_STRUCT_OFFSET(GowlInputRemapAnalog, scroll_rate),    0.0, 1e9 },
+		{ "mouse-gain",    G_STRUCT_OFFSET(GowlInputRemapAnalog, mouse_gain),     0.0, 1e9 },
+	};
+	GowlInputRemapAnalog a;
+	YamlMapping *m;
+	guint n;
+	guint i;
+	guint j;
+
+	m = node != NULL ? yaml_node_get_mapping(node) : NULL;
+	if (m == NULL) {
+		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+		            GOWL_INPUT_REMAP_ERROR_INVALID,
+		            "`analog:' is a mapping of settings");
+		return FALSE;
+	}
+	gowl_input_remap_rule_get_analog(rule, &a);
+	n = yaml_mapping_get_size(m);
+	for (i = 0; i < n; i++) {
+		const gchar *k = yaml_mapping_get_key(m, i);
+		YamlNode *v = yaml_mapping_get_value(m, i);
+		gboolean known;
+
+		known = FALSE;
+		for (j = 0; j < G_N_ELEMENTS(nums); j++) {
+			if (g_strcmp0(k, nums[j].key) != 0)
+				continue;
+			if (!parse_unit_number(v, k, nums[j].lo, nums[j].hi,
+			                       (gdouble *)(gpointer)((guint8 *)&a
+			                                             + nums[j].offset),
+			                       error))
+				return FALSE;
+			known = TRUE;
+		}
+		if (known)
+			continue;
+		if (g_strcmp0(k, "mouse-idle-ms") == 0) {
+			gdouble ms;
+
+			if (!parse_unit_number(v, k, 0.0, 1e6, &ms, error))
+				return FALSE;
+			a.mouse_idle_ms = (guint)ms;
+		} else if (g_strcmp0(k, "invert") == 0
+		           || g_strcmp0(k, "centred") == 0
+		           || g_strcmp0(k, "centered") == 0) {
+			g_autoptr(GArray) axes = g_array_new(FALSE, FALSE, sizeof(guint32));
+			guint64 mask;
+
+			if (!parse_name_list(v, k, resolve_axis, axes, error))
+				return FALSE;
+			mask = 0;
+			for (j = 0; j < axes->len; j++)
+				mask |= (guint64)1 << g_array_index(axes, guint32, j);
+			if (g_strcmp0(k, "invert") == 0)
+				a.invert = mask;
+			else
+				a.centred = mask;
+		} else {
+			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
+			            GOWL_INPUT_REMAP_ERROR_INVALID,
+			            "unknown analog key `%s' (deadzone, press, release, "
+			            "invert, centred, pointer-speed, pointer-curve, "
+			            "pointer-accel, scroll-rate, mouse-gain, "
+			            "mouse-idle-ms)", k);
+			return FALSE;
+		}
+	}
+	return gowl_input_remap_rule_set_analog(rule, &a, error);
 }
 
 /**
@@ -2054,11 +3682,13 @@ gowl_input_remap_rule_new_from_node(
 		}
 		if (g_strcmp0(k, "name") != 0 && g_strcmp0(k, "match") != 0
 		    && g_strcmp0(k, "map") != 0 && g_strcmp0(k, "unmatched") != 0
-		    && g_strcmp0(k, "log") != 0) {
+		    && g_strcmp0(k, "log") != 0 && g_strcmp0(k, "grab") != 0
+		    && g_strcmp0(k, "analog") != 0
+		    && g_strcmp0(k, "virtual-pad") != 0) {
 			g_set_error(error, GOWL_INPUT_REMAP_ERROR,
 			            GOWL_INPUT_REMAP_ERROR_INVALID,
 			            "unknown rule key `%s' (name, match, map, "
-			            "unmatched, log)", k);
+			            "unmatched, log, grab, analog, virtual-pad)", k);
 			return NULL;
 		}
 	}
@@ -2101,6 +3731,23 @@ gowl_input_remap_rule_new_from_node(
 		            || g_ascii_strcasecmp(v, "yes") == 0
 		            || g_strcmp0(v, "1") == 0;
 	}
+
+	if (yaml_mapping_has_member(m, "grab")) {
+		if (!require_scalar(yaml_mapping_get_member(m, "grab"), "grab", &v,
+		                    error))
+			return NULL;
+		rule->grab = g_ascii_strcasecmp(v, "true") == 0
+		             || g_ascii_strcasecmp(v, "yes") == 0
+		             || g_strcmp0(v, "1") == 0;
+	}
+	/* The pad before the map: stick targets are checked against it */
+	if (yaml_mapping_has_member(m, "virtual-pad")
+	    && !parse_virtual_pad(rule, yaml_mapping_get_member(m, "virtual-pad"),
+	                          error))
+		return NULL;
+	if (yaml_mapping_has_member(m, "analog")
+	    && !parse_analog(rule, yaml_mapping_get_member(m, "analog"), error))
+		return NULL;
 
 	/* map: may be empty -- a rule that only claims a device and drops
 	 * or passes everything is legitimate (unmatched: drop mutes one) */

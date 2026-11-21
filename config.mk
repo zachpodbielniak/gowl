@@ -9,7 +9,7 @@
 # Version
 VERSION_MAJOR := 0
 VERSION_MINOR := 5
-VERSION_MICRO := 3
+VERSION_MICRO := 4
 VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 
 # Installation directories
@@ -281,6 +281,19 @@ ifeq ($(XWAYLAND_SYNC_AVAILABLE),1)
     CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags $(DEPS_XWAYLAND_SYNC) 2>/dev/null)
     LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs $(DEPS_XWAYLAND_SYNC) 2>/dev/null)
 endif
+endif
+
+# Game controllers as input-remap sources, and virtual pads as outputs
+# (src/core/gowl-input-remap-pad.c, modules/inputremap/gowl-inputremap-
+# vpad.c).  Needs the kernel's evdev and uinput headers and inotify --
+# Linux.  A system without them (FreeBSD's evdev lives elsewhere and has
+# no inotify) builds the rest of the input remapper unchanged; the
+# controller entry points compile to no-ops.  `make EVDEV_PADS=0' turns
+# it off by hand.
+EVDEV_PADS ?= $(shell printf '\043include <linux/input.h>\n\043include <linux/uinput.h>\n\043include <sys/inotify.h>\nint main(void) { return EVIOCGRAB != 0 && UI_DEV_SETUP != 0 && IN_CLOEXEC != 0 ? 0 : 1; }\n' \
+	| $(CC) -x c -fsyntax-only - 2>/dev/null && echo 1 || echo 0)
+ifeq ($(EVDEV_PADS),1)
+    CFLAGS_BASE += -DGOWL_HAVE_EVDEV_PADS=1
 endif
 
 # Add libdecor flags if available

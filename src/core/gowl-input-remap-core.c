@@ -50,6 +50,15 @@
  *     rules say.
  *   - While the session is locked, actions, commands and callbacks do
  *     not run; keys and buttons go through the lock-aware pipelines.
+ *     Virtual-pad outputs do not start while locked either (a uinput
+ *     pad reaches games without passing the lock screen).
+ *
+ * Game controllers are not wlroots devices (libinput ignores joysticks),
+ * so gowl-input-remap-pad.c finds and reads them itself and hands their
+ * digital edges -- buttons, and stick directions crossing their press
+ * threshold -- to this file as DEVICE-LESS records (`device' NULL),
+ * through gowl_input_remap_core_source_*().  From there they take the
+ * same decide / held / release-mirrors-press path as a pedal.
  */
 
 #include "gowl-core-private.h"
@@ -81,8 +90,10 @@ typedef struct {
 	guint                     n_mod_keys;
 } GowlRemapHeld;
 
-/* One keyboard or pointer the remap core knows about. */
-typedef struct {
+/* One keyboard, pointer or game controller the remap core knows about.
+ * `device' is NULL for a game controller (see gowl-input-remap-pad.c),
+ * which has no wlr_input_device. */
+struct _GowlRemapDevice {
 	GowlCompositor          *compositor;
 	struct wlr_input_device *device;
 	GowlInputDeviceInfo     *info;
@@ -98,7 +109,7 @@ typedef struct {
 	GHashTable              *held;
 	/* sub-notch wheel travel, per axis, in value120 units */
 	gint32                   wheel_acc[2];
-} GowlRemapDevice;
+};
 
 /* identify mode state (self->remap_identify) */
 typedef struct {
@@ -131,6 +142,34 @@ held_free(gpointer data)
 		return;
 	g_clear_pointer(&h->rule, gowl_input_remap_rule_unref);
 	g_free(h);
+}
+
+/* The event kind a device's inputs arrive as. */
+static GowlInputRemapEventKind
+device_event_kind(GowlRemapDevice *rd)
+{
+	if (rd->device == NULL)
+		return GOWL_INPUT_REMAP_EVENT_PAD;
+	return rd->device->type == WLR_INPUT_DEVICE_KEYBOARD
+	       ? GOWL_INPUT_REMAP_EVENT_KEY : GOWL_INPUT_REMAP_EVENT_BUTTON;
+}
+
+/* A virtual-pad target, handed to the remapper that owns the pads.
+ * Returns whether a pad was driven. */
+static gboolean
+render_pad(
+	GowlCompositor             *self,
+	GowlInputRemapRule         *rule,
+	const GowlInputRemapTarget *target,
+	const GowlInputRemapEvent  *ev,
+	gdouble                     amount
+){
+	GowlInputRemapper *r;
+
+	r = active_remapper(self);
+	if (r == NULL || rule == NULL || target == NULL)
+		return FALSE;
+	return gowl_input_remapper_render_pad(r, rule, target, ev, amount);
 }
 
 static gboolean
@@ -481,9 +520,28 @@ apply_press(
 	locked = self->locked;
 
 	switch (h->kind) {
+	case GOWL_INPUT_REMAP_TARGET_STICK:
+	case GOWL_INPUT_REMAP_TARGET_TRIGGER:
+	case GOWL_INPUT_REMAP_TARGET_PAD_BUTTON:
+		/* A virtual pad reaches a game without passing the lock
+		 * screen, so nothing new is pressed on one while locked.
+		 * out_code records that the press was rendered, so the
+		 * release lets go of exactly what was taken. */
+		if (locked)
+			return;
+		h->out_code = render_pad(self, h->rule, h->target, ev, 1.0) ? 1 : 0;
+		return;
+	case GOWL_INPUT_REMAP_TARGET_POINTER:
+	case GOWL_INPUT_REMAP_TARGET_SCROLL:
+		/* Continuous targets are driven by the pad reader's tick from
+		 * the whole axis; a press cannot reach one (the rule model
+		 * refuses it), and if it did it is nothing. */
+		return;
 	case GOWL_INPUT_REMAP_TARGET_PASS:
 		/* Pointers pass by letting the caller carry on; only a
-		 * claimed keyboard's own keys are fed from here. */
+		 * claimed keyboard's own keys are fed from here.  A game
+		 * controller's input passes by being left alone: the game
+		 * reads the device itself. */
 		if (ev->kind == GOWL_INPUT_REMAP_EVENT_KEY) {
 			h->out_code = ev->code;
 			feed_key(self, ev->code, TRUE, ev->time_msec);
@@ -590,6 +648,17 @@ apply_release(
 		if (!self->locked)
 			gowl_input_remap_target_invoke(h->target, h->rule, ev, self);
 		return;
+	case GOWL_INPUT_REMAP_TARGET_STICK:
+	case GOWL_INPUT_REMAP_TARGET_TRIGGER:
+	case GOWL_INPUT_REMAP_TARGET_PAD_BUTTON:
+		/* Released even while locked: the press may predate the lock,
+		 * and a pad button left held is a stuck input in the game. */
+		if (h->out_code != 0)
+			render_pad(self, h->rule, h->target, ev, 0.0);
+		h->out_code = 0;
+		return;
+	case GOWL_INPUT_REMAP_TARGET_POINTER:
+	case GOWL_INPUT_REMAP_TARGET_SCROLL:
 	case GOWL_INPUT_REMAP_TARGET_DROP:
 	case GOWL_INPUT_REMAP_TARGET_ACTION:
 	case GOWL_INPUT_REMAP_TARGET_COMMAND:
@@ -769,9 +838,7 @@ remap_device_release(GowlRemapDevice *rd)
 
 		h = (GowlRemapHeld *)value;
 		memset(&ev, 0, sizeof ev);
-		ev.kind = rd->device->type == WLR_INPUT_DEVICE_KEYBOARD
-		          ? GOWL_INPUT_REMAP_EVENT_KEY
-		          : GOWL_INPUT_REMAP_EVENT_BUTTON;
+		ev.kind = device_event_kind(rd);
 		ev.code = GPOINTER_TO_UINT(key);
 		ev.pressed = FALSE;
 		ev.device_id = rd->info->id;
@@ -896,6 +963,11 @@ void
 gowl_compositor_input_remap_reevaluate(GowlCompositor *self)
 {
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	/* Game controllers first: they are not in the seat, and their own
+	 * fast path returns at once when no remapper is active and none
+	 * was ever looked for (gowl-input-remap-pad.c). */
+	gowl_input_remap_pads_reevaluate(self);
 
 	if (self->wlr_kb_group == NULL)
 		return;
@@ -1091,8 +1163,8 @@ list_device(
  * gowl_compositor_list_input_devices:
  * @self: a #GowlCompositor
  *
- * Every connected keyboard and pointer, with the identity a remap rule
- * matches on and whether it is claimed.  What `inputremap-devices'
+ * Every connected keyboard, pointer and game controller, with the
+ * identity a remap rule matches on and whether it is claimed.  What `inputremap-devices'
  * prints, for finding a pedal's vendor:product.
  *
  * Returns: (transfer full) (element-type GowlInputDeviceInfo): the
@@ -1109,7 +1181,28 @@ gowl_compositor_list_input_devices(GowlCompositor *self)
 	ctx.out = g_ptr_array_new_with_free_func(
 		(GDestroyNotify)gowl_input_device_info_free);
 	gowl_input_config_foreach_device(self, list_device, &ctx);
+	/* and the game controllers, which wlroots does not know */
+	gowl_input_remap_pads_list(self, ctx.out);
 	return ctx.out;
+}
+
+/**
+ * gowl_compositor_input_remap_describe_device:
+ * @self: a #GowlCompositor
+ * @id: a device id
+ *
+ * See the header: a game controller's axes and buttons, as JSON, for
+ * `inputremap-devices'.
+ *
+ * Returns: (transfer full) (nullable): the JSON object, or %NULL
+ */
+gchar *
+gowl_compositor_input_remap_describe_device(
+	GowlCompositor *self,
+	guint           id
+){
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+	return gowl_input_remap_pads_describe(self, id);
 }
 
 /* --- identify mode --- */
@@ -1239,6 +1332,10 @@ gowl_compositor_input_remap_identify_start(
 	id->func = func;
 	id->user_data = user_data;
 	gowl_input_config_foreach_device(self, identify_attach_device, self);
+	/* Game controllers are opened read-only (never grabbed) for as
+	 * long as identify mode lasts: asked for by the user, it is the
+	 * one way to learn a controller's codes before any rule names it. */
+	gowl_input_remap_pads_identify(self, TRUE);
 	return TRUE;
 }
 
@@ -1262,6 +1359,7 @@ gowl_compositor_input_remap_identify_stop(GowlCompositor *self)
 			identify_detach((GowlRemapDevice *)value);
 	}
 	g_clear_pointer(&self->remap_identify, g_free);
+	gowl_input_remap_pads_identify(self, FALSE);
 }
 
 /**
@@ -1279,6 +1377,8 @@ gowl_input_remap_core_finish(GowlCompositor *self)
 	gpointer value;
 
 	g_clear_pointer(&self->remap_identify, g_free);
+	/* Game controllers: closed, ungrabbed, their tick removed */
+	gowl_input_remap_pads_finish(self);
 	if (self->remap_devices == NULL)
 		return;
 	g_hash_table_iter_init(&iter, self->remap_devices);
@@ -1293,4 +1393,219 @@ gowl_input_remap_core_finish(GowlCompositor *self)
 		remap_device_free(rd);
 	}
 	g_clear_pointer(&self->remap_devices, g_hash_table_unref);
+}
+
+/* --- device-less sources (game controllers) --- */
+
+/**
+ * gowl_input_remap_core_source_new: (skip)
+ * @self: the compositor
+ * @info: (transfer full): the controller's identity, marked claimed
+ *
+ * A record for an input source that is not a wlroots device -- a game
+ * controller read by gowl-input-remap-pad.c.  Its edges go through
+ * gowl_input_remap_core_source_edge(), the same decision a pedal's take.
+ *
+ * Returns: (transfer full): the record; free with
+ *   gowl_input_remap_core_source_free()
+ */
+GowlRemapDevice *
+gowl_input_remap_core_source_new(
+	GowlCompositor      *self,
+	GowlInputDeviceInfo *info
+){
+	GowlRemapDevice *rd;
+
+	rd = g_new0(GowlRemapDevice, 1);
+	rd->compositor = self;
+	rd->device = NULL;
+	rd->info = info;
+	rd->info->claimed = TRUE;
+	rd->held = g_hash_table_new_full(g_direct_hash, g_direct_equal,
+	                                 NULL, held_free);
+	wl_list_init(&rd->destroy.link);
+	wl_list_init(&rd->key.link);
+	wl_list_init(&rd->identify_key.link);
+	wl_list_init(&rd->identify_button.link);
+	return rd;
+}
+
+/**
+ * gowl_input_remap_core_source_edge: (skip)
+ * @rd: a device-less record
+ * @ev: one press or release (kind %GOWL_INPUT_REMAP_EVENT_PAD)
+ *
+ * Decides and delivers one edge exactly as a claimed pedal's: the
+ * remapper's target, the held table, the release mirroring the press.
+ * Identify mode sees the press too.
+ */
+void
+gowl_input_remap_core_source_edge(
+	GowlRemapDevice           *rd,
+	const GowlInputRemapEvent *ev
+){
+	g_return_if_fail(rd != NULL && ev != NULL);
+
+	if (rd->compositor->remap_identify != NULL)
+		identify_emit(rd, ev);
+	handle_edge(rd, ev, FALSE);
+}
+
+/**
+ * gowl_input_remap_core_source_has_held: (skip)
+ * @rd: a device-less record
+ * @code: an input code
+ *
+ * Returns: whether @code is down on @rd, as far as the held table knows
+ */
+gboolean
+gowl_input_remap_core_source_has_held(
+	GowlRemapDevice *rd,
+	guint32          code
+){
+	return rd != NULL
+	       && g_hash_table_contains(rd->held, GUINT_TO_POINTER(code));
+}
+
+/**
+ * gowl_input_remap_core_source_info: (skip)
+ * @rd: a device-less record
+ *
+ * Returns: (transfer none): its identity
+ */
+GowlInputDeviceInfo *
+gowl_input_remap_core_source_info(GowlRemapDevice *rd)
+{
+	return rd != NULL ? rd->info : NULL;
+}
+
+/**
+ * gowl_input_remap_core_source_free: (skip)
+ * @rd: (nullable): a device-less record
+ *
+ * Releases everything @rd holds -- each release mirrors its press --
+ * then frees it.  The identity it was given is freed with it.
+ */
+void
+gowl_input_remap_core_source_free(GowlRemapDevice *rd)
+{
+	if (rd == NULL)
+		return;
+	remap_device_release(rd);
+	remap_device_free(rd);
+}
+
+/**
+ * gowl_input_remap_core_identify_pad: (skip)
+ * @self: the compositor
+ * @info: a game controller observed (not claimed) during identify mode
+ * @ev: the press it made
+ *
+ * Reports a press on a controller no rule holds.  Identify mode only.
+ */
+void
+gowl_input_remap_core_identify_pad(
+	GowlCompositor            *self,
+	const GowlInputDeviceInfo *info,
+	const GowlInputRemapEvent *ev
+){
+	GowlRemapIdentify *id;
+
+	id = (GowlRemapIdentify *)self->remap_identify;
+	if (id != NULL && id->func != NULL && ev->pressed)
+		id->func(self, info, ev, id->user_data);
+}
+
+/* --- pointer motion onto a virtual stick --- */
+
+/*
+ * One motion component offered to the rules of a claimed pointer.
+ * Returns whether a rule took it (a stick that follows the mouse).
+ */
+static gboolean
+motion_component(
+	GowlRemapDevice *rd,
+	guint32          code,
+	gdouble          amount,
+	guint32          time_msec,
+	gboolean        *out_mentioned
+){
+	GowlInputRemapper *r;
+	GowlInputRemapEvent ev;
+	const GowlInputRemapTarget *target;
+	g_autoptr(GowlInputRemapRule) rule = NULL;
+
+	r = active_remapper(rd->compositor);
+	if (r == NULL)
+		return FALSE;
+	memset(&ev, 0, sizeof ev);
+	ev.kind = GOWL_INPUT_REMAP_EVENT_MOTION;
+	ev.code = code;
+	ev.pressed = FALSE;      /* motion has no press: never logged as one */
+	ev.time_msec = time_msec;
+	ev.device_id = rd->info->id;
+	ev.value = amount;
+	target = NULL;
+	rule = gowl_input_remapper_map_event(r, rd->info, &ev, &target);
+	if (rule == NULL || target == NULL)
+		return FALSE;
+	*out_mentioned = TRUE;
+	if (gowl_input_remap_target_get_kind(target) == GOWL_INPUT_REMAP_TARGET_DROP)
+		return TRUE;
+	if (gowl_input_remap_target_get_kind(target) != GOWL_INPUT_REMAP_TARGET_STICK
+	    || !gowl_input_remap_target_is_follow(target))
+		return FALSE;
+	if (amount != 0.0 && !rd->compositor->locked)
+		render_pad(rd->compositor, rule, target, &ev, amount);
+	return TRUE;
+}
+
+/**
+ * gowl_input_remap_core_motion: (skip)
+ * @self: the compositor
+ * @dev: the pointer the motion came from
+ * @dx: horizontal motion, pixels
+ * @dy: vertical motion, pixels
+ * @time_msec: event time
+ *
+ * Relative motion on a claimed pointer whose rule maps REL_X or REL_Y
+ * to a stick that follows the mouse ("mouse-look on a controller").
+ * Such motion drives the stick and does not move the cursor; a
+ * component no rule mentions still moves it.
+ *
+ * Returns: %TRUE when the motion was consumed; %FALSE (at once, when no
+ *   pointer is claimed) to move the cursor the normal way
+ */
+gboolean
+gowl_input_remap_core_motion(
+	GowlCompositor          *self,
+	struct wlr_input_device *dev,
+	gdouble                  dx,
+	gdouble                  dy,
+	guint32                  time_msec
+){
+	GowlRemapDevice *rd;
+	gboolean took_x;
+	gboolean took_y;
+	gboolean mentioned;
+
+	rd = claimed_pointer(self, dev);
+	if (rd == NULL)
+		return FALSE;
+
+	mentioned = FALSE;
+	took_x = motion_component(rd, GOWL_INPUT_REMAP_REL_X, dx, time_msec,
+	                          &mentioned);
+	took_y = motion_component(rd, GOWL_INPUT_REMAP_REL_Y, dy, time_msec,
+	                          &mentioned);
+	if (!mentioned)
+		return FALSE;
+	if (self->idle_mgr != NULL)
+		gowl_idle_manager_note_activity(self->idle_mgr);
+	/* What the rules left alone still moves the cursor, through the
+	 * same path as any relative motion */
+	if ((!took_x && dx != 0.0) || (!took_y && dy != 0.0))
+		gowl_compositor_remap_handle_motion(self, took_x ? 0.0 : dx,
+		                                    took_y ? 0.0 : dy, time_msec);
+	return TRUE;
 }

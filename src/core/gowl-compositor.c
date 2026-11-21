@@ -13791,21 +13791,59 @@ input_capture_emit_motion(GowlCompositor *self, guint32 time_msec,
 	gowl_input_capture_emit(self->input_capture, &ev);
 }
 
+static void compositor_handle_motion_relative(GowlCompositor          *self,
+                                              struct wlr_input_device *device,
+                                              gdouble                  dx,
+                                              gdouble                  dy,
+                                              gdouble                  udx,
+                                              gdouble                  udy,
+                                              guint32                  time_msec);
+
 static void
 on_cursor_motion(struct wl_listener *listener, void *data)
 {
 	GowlCompositor *self;
 	struct wlr_pointer_motion_event *event;
-	gboolean was_active;
 
 	self = wl_container_of(listener, self, cursor_motion);
 	event = (struct wlr_pointer_motion_event *)data;
 
+	/* Motion on a claimed pointer whose rule drives a virtual stick
+	 * with it (FALSE at once when nothing is claimed). */
+	if (gowl_input_remap_core_motion(self, &event->pointer->base,
+	                                 event->delta_x, event->delta_y,
+	                                 event->time_msec))
+		return;
+
+	compositor_handle_motion_relative(self, &event->pointer->base,
+	                                  event->delta_x, event->delta_y,
+	                                  event->unaccel_dx, event->unaccel_dy,
+	                                  event->time_msec);
+}
+
+/*
+ * The relative-motion decision: InputCapture barriers, the relative
+ * stream, pointer constraints, focus.  Real motion and a stick remapped
+ * to `pointer:' (gowl_compositor_remap_handle_motion) both end here.
+ * @device is the physical pointer, or %NULL for remapped motion.
+ */
+static void
+compositor_handle_motion_relative(
+	GowlCompositor          *self,
+	struct wlr_input_device *device,
+	gdouble                  dx,
+	gdouble                  dy,
+	gdouble                  udx,
+	gdouble                  udy,
+	guint32                  time_msec
+){
+	gboolean was_active;
+
 	/* Record the RAW delta before wlr_cursor_move clamps the cursor to
 	 * the layout; motionnotify tests prev + this delta against barriers so
 	 * a push past a screen edge still registers as a crossing. */
-	self->cap_motion_dx = event->delta_x;
-	self->cap_motion_dy = event->delta_y;
+	self->cap_motion_dx = dx;
+	self->cap_motion_dy = dy;
 
 	/* Was capture already active BEFORE this motion?  The motion that
 	 * crosses the barrier activates capture *inside* motionnotify; that
@@ -13816,24 +13854,24 @@ on_cursor_motion(struct wl_listener *listener, void *data)
 	/* Relative motion goes out first and unconditionally: a locked
 	 * client reads only this, so gating it on the cursor actually
 	 * moving would leave it with no input at all. */
-	relative_pointer_send(self, event->time_msec,
-	                      event->delta_x, event->delta_y,
-	                      event->unaccel_dx, event->unaccel_dy);
+	relative_pointer_send(self, time_msec,
+	                      dx, dy,
+	                      udx, udy);
 
 	/* A locked pointer does not move.  A confined one moves as far as
 	 * the region allows, sliding along its edge.  Everything else moves
 	 * normally. */
 	{
-		gdouble tx = self->wlr_cursor->x + event->delta_x;
-		gdouble ty = self->wlr_cursor->y + event->delta_y;
+		gdouble tx = self->wlr_cursor->x + dx;
+		gdouble ty = self->wlr_cursor->y + dy;
 
 		if (constraint_resolve_target(self, &tx, &ty))
-			wlr_cursor_move(self->wlr_cursor, &event->pointer->base,
+			wlr_cursor_move(self->wlr_cursor, device,
 			                tx - self->wlr_cursor->x,
 			                ty - self->wlr_cursor->y);
 	}
-	gowl_compositor_motionnotify(self, event->time_msec);
-	recording_note_motion(self, event->delta_x, event->delta_y);
+	gowl_compositor_motionnotify(self, time_msec);
+	recording_note_motion(self, dx, dy);
 	/* Stream the relative delta to deskflow's ei egress ONLY if capture
 	 * was already active before this motion.  Never forward the motion
 	 * that *activated* capture: deskflow handles the D-Bus Activated
@@ -13847,8 +13885,8 @@ on_cursor_motion(struct wl_listener *listener, void *data)
 	 * re-crossings from happening and the next physical motion streams
 	 * cleanly. */
 	if (was_active)
-		input_capture_emit_motion(self, event->time_msec,
-		                          event->delta_x, event->delta_y);
+		input_capture_emit_motion(self, time_msec,
+		                          dx, dy);
 }
 
 static void
@@ -14223,6 +14261,9 @@ on_cursor_button(struct wl_listener *listener, void *data)
 	                         event->time_msec, FALSE);
 }
 
+static void compositor_handle_axis(GowlCompositor                *self,
+                                   struct wlr_pointer_axis_event *event);
+
 static void
 on_cursor_axis(struct wl_listener *listener, void *data)
 {
@@ -14237,6 +14278,20 @@ on_cursor_axis(struct wl_listener *listener, void *data)
 	if (gowl_input_remap_core_axis(self, event))
 		return;
 
+	compositor_handle_axis(self, event);
+}
+
+/*
+ * The scroll decision: recorder, InputCapture, mousebinds, the bar,
+ * module handlers, then the focused client.  A real wheel and a stick
+ * remapped to scroll (gowl_compositor_remap_handle_axis) both end here;
+ * nothing below reads event->pointer.
+ */
+static void
+compositor_handle_axis(
+	GowlCompositor                *self,
+	struct wlr_pointer_axis_event *event
+){
 	if (self->idle_mgr != NULL)
 		gowl_idle_manager_note_activity(self->idle_mgr);
 
@@ -14340,6 +14395,56 @@ on_cursor_axis(struct wl_listener *listener, void *data)
 	                             event->delta_discrete,
 	                             event->source,
 	                             event->relative_direction);
+}
+
+/*
+ * The motion decision for a per-device remap (a stick mapped to
+ * `pointer:', or the part of a claimed mouse's motion no rule took):
+ * real motion -- constraints, the relative stream, InputCapture -- with
+ * no device to map it through, then framed, since it has no wlr_cursor
+ * frame of its own.
+ */
+void
+gowl_compositor_remap_handle_motion(
+	GowlCompositor *self,
+	gdouble         dx,
+	gdouble         dy,
+	guint32         time_msec
+){
+	if (self->wlr_cursor == NULL)
+		return;
+	compositor_handle_motion_relative(self, NULL, dx, dy, dx, dy, time_msec);
+	gowl_compositor_inject_frame(self);
+}
+
+/*
+ * The scroll decision for a per-device remap (a stick mapped to
+ * `scroll:'): one wheel notch as a real wheel sends it, value120 and
+ * all, through compositor_handle_axis(), then framed -- it has no
+ * wlr_cursor frame of its own.
+ */
+void
+gowl_compositor_remap_handle_axis(
+	GowlCompositor *self,
+	gboolean        horizontal,
+	gdouble         delta,
+	gint32          value120,
+	guint32         time_msec
+){
+	struct wlr_pointer_axis_event ev;
+
+	if (self->wlr_seat == NULL)
+		return;
+	memset(&ev, 0, sizeof ev);
+	ev.time_msec = time_msec;
+	ev.source = WL_POINTER_AXIS_SOURCE_WHEEL;
+	ev.orientation = horizontal ? WL_POINTER_AXIS_HORIZONTAL_SCROLL
+	                            : WL_POINTER_AXIS_VERTICAL_SCROLL;
+	ev.relative_direction = WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL;
+	ev.delta = delta;
+	ev.delta_discrete = value120;
+	compositor_handle_axis(self, &ev);
+	gowl_compositor_inject_frame(self);
 }
 
 static void

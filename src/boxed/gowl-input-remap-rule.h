@@ -81,6 +81,94 @@ GQuark gowl_input_remap_error_quark (void);
 #define GOWL_BUTTON_WHEEL_RIGHT (0x10003)
 #endif
 
+/*
+ * Game-controller inputs, as input codes, above the wheel notches.
+ *
+ * An absolute axis is three inputs: the WHOLE axis (continuous, for the
+ * `pointer:' and `scroll:' targets), and its positive and negative
+ * DIRECTIONS (digital: pressed while the stick is pushed past the
+ * rule's press threshold, released below its release threshold).
+ * `ABS_X' names the whole axis, `ABS_X+' and `ABS_X-' its directions;
+ * a bare axis name given a digital target means its positive direction
+ * (a trigger pulled).  Pad buttons need no new codes: BTN_SOUTH and
+ * friends are evdev key codes already.
+ *
+ * Pointer motion on a claimed pointer is two inputs, REL_X and REL_Y,
+ * which only a stick-follow target (mouse-look onto a virtual stick)
+ * can take.
+ */
+#define GOWL_INPUT_REMAP_ABS_COUNT   (64)
+#define GOWL_INPUT_REMAP_ABS_BASE    (0x20000)
+#define GOWL_INPUT_REMAP_ABS_WHOLE   (0)
+#define GOWL_INPUT_REMAP_ABS_POS     (1)
+#define GOWL_INPUT_REMAP_ABS_NEG     (2)
+#define GOWL_INPUT_REMAP_ABS_INPUT(abs, dir) \
+	((guint32)(GOWL_INPUT_REMAP_ABS_BASE + ((guint32)(abs) << 2) + (guint32)(dir)))
+#define GOWL_INPUT_REMAP_INPUT_IS_ABS(input) \
+	((input) >= GOWL_INPUT_REMAP_ABS_BASE \
+	 && (input) < GOWL_INPUT_REMAP_ABS_BASE + (GOWL_INPUT_REMAP_ABS_COUNT << 2) \
+	 && (((input) - GOWL_INPUT_REMAP_ABS_BASE) & 3) != 3)
+#define GOWL_INPUT_REMAP_ABS_OF(input)  (((input) - GOWL_INPUT_REMAP_ABS_BASE) >> 2)
+#define GOWL_INPUT_REMAP_ABS_DIR(input) (((input) - GOWL_INPUT_REMAP_ABS_BASE) & 3)
+#define GOWL_INPUT_REMAP_REL_X       (0x30000)
+#define GOWL_INPUT_REMAP_REL_Y       (0x30001)
+#define GOWL_INPUT_REMAP_INPUT_IS_REL(input) \
+	((input) == GOWL_INPUT_REMAP_REL_X || (input) == GOWL_INPUT_REMAP_REL_Y)
+
+/* Virtual-pad sides and components, for stick and trigger targets. */
+#define GOWL_INPUT_REMAP_SIDE_LEFT   (0)
+#define GOWL_INPUT_REMAP_SIDE_RIGHT  (1)
+#define GOWL_INPUT_REMAP_SIDE_DPAD   (2)
+#define GOWL_INPUT_REMAP_COMPONENT_X (0)
+#define GOWL_INPUT_REMAP_COMPONENT_Y (1)
+
+/* The id a virtual pad gets when its declaration names none: pid.codes'
+ * test range, which no shipping product uses. */
+#define GOWL_INPUT_REMAP_PAD_VENDOR  (0x1209)
+#define GOWL_INPUT_REMAP_PAD_PRODUCT (0x0007)
+/* Every virtual pad's device name starts with this, which is also how
+ * gowl recognises its own pads and never reads one back as an input. */
+#define GOWL_INPUT_REMAP_PAD_NAME_PREFIX "gowl virtual pad: "
+
+/**
+ * GowlInputRemapAnalog:
+ * @deadzone: the deadzone, [0, 0.95]; negative means "from the
+ *   device's own flat" (the default)
+ * @press: the deflection that presses a stick direction, (0, 1]
+ *   (default 0.5)
+ * @release: the deflection below which it releases, [0, @press)
+ *   (default 0.35)
+ * @invert: one bit per ABS code: axes read reversed
+ * @centred: one bit per ABS code: axes read as centred even though
+ *   their range starts at 0 (a cheap pad's right stick on ABS_Z)
+ * @pointer_speed: pointer speed at full deflection, pixels per second
+ *   (default 1200)
+ * @pointer_curve: the speed curve exponent (default 2.0)
+ * @pointer_accel: extra speed per second held, as a fraction of
+ *   @pointer_speed (default 0: none)
+ * @scroll_rate: scroll notches per second at full deflection (default 8)
+ * @mouse_gain: stick deflection per pixel of mouse motion, for a
+ *   stick-follow target (default 0.02)
+ * @mouse_idle_ms: a mouse-driven stick returns to centre this long after
+ *   the last motion (default 100)
+ *
+ * The analog settings of one rule: how it reads a controller's axes
+ * and how fast its continuous targets run.
+ */
+typedef struct {
+	gdouble deadzone;
+	gdouble press;
+	gdouble release;
+	guint64 invert;
+	guint64 centred;
+	gdouble pointer_speed;
+	gdouble pointer_curve;
+	gdouble pointer_accel;
+	gdouble scroll_rate;
+	gdouble mouse_gain;
+	guint   mouse_idle_ms;
+} GowlInputRemapAnalog;
+
 /* --- GowlInputRemapEvent --- */
 
 #define GOWL_TYPE_INPUT_REMAP_EVENT (gowl_input_remap_event_get_type())
@@ -93,6 +181,9 @@ GQuark gowl_input_remap_error_quark (void);
  * @time_msec: the event timestamp in milliseconds
  * @device_id: the compositor-assigned id of the device it came from
  *   (see #GowlInputDeviceInfo)
+ * @value: for %GOWL_INPUT_REMAP_EVENT_MOTION the motion in pixels; for
+ *   a %GOWL_INPUT_REMAP_EVENT_PAD axis direction the normalised
+ *   deflection that pressed or released it; otherwise 0
  *
  * One physical input on a claimed device, as handed to a
  * #GowlInputRemapper and to a %GOWL_INPUT_REMAP_TARGET_CALLBACK.
@@ -105,6 +196,7 @@ struct _GowlInputRemapEvent {
 	gboolean                pressed;
 	guint32                 time_msec;
 	guint                   device_id;
+	gdouble                 value;
 };
 
 GType                gowl_input_remap_event_get_type (void) G_GNUC_CONST;
@@ -119,7 +211,7 @@ void                 gowl_input_remap_event_free     (GowlInputRemapEvent       
  * GowlInputDeviceInfo:
  * @id: compositor-assigned id, stable for as long as the device stays
  *   plugged in
- * @type: keyboard or pointer
+ * @type: keyboard, pointer, gamepad or joystick
  * @name: (nullable): the device name libinput reports
  * @sysname: (nullable): the kernel sysname ("event5"), or %NULL for a
  *   device that is not a libinput device (headless, virtual)
@@ -217,6 +309,36 @@ void                gowl_input_remap_rule_set_log            (GowlInputRemapRule
                                                               gboolean            log);
 gboolean            gowl_input_remap_rule_get_log            (GowlInputRemapRule *self);
 
+/* Game controllers and virtual pads */
+void                gowl_input_remap_rule_set_grab           (GowlInputRemapRule         *self,
+                                                              gboolean                    grab);
+gboolean            gowl_input_remap_rule_get_grab           (GowlInputRemapRule         *self);
+void                gowl_input_remap_rule_get_analog         (GowlInputRemapRule         *self,
+                                                              GowlInputRemapAnalog       *out);
+gboolean            gowl_input_remap_rule_set_analog         (GowlInputRemapRule         *self,
+                                                              const GowlInputRemapAnalog *analog,
+                                                              GError                    **error);
+void                gowl_input_remap_analog_init             (GowlInputRemapAnalog       *analog);
+gboolean            gowl_input_remap_rule_set_virtual_pad    (GowlInputRemapRule         *self,
+                                                              const gchar                *name,
+                                                              guint16                     vendor,
+                                                              guint16                     product,
+                                                              GError                    **error);
+const gchar        *gowl_input_remap_rule_get_virtual_pad    (GowlInputRemapRule         *self);
+guint16             gowl_input_remap_rule_get_virtual_pad_vendor  (GowlInputRemapRule    *self);
+guint16             gowl_input_remap_rule_get_virtual_pad_product (GowlInputRemapRule    *self);
+gboolean            gowl_input_remap_rule_set_virtual_pad_buttons (GowlInputRemapRule    *self,
+                                                                   const guint32         *buttons,
+                                                                   guint                  n_buttons,
+                                                                   GError               **error);
+GArray             *gowl_input_remap_rule_get_virtual_pad_buttons (GowlInputRemapRule    *self);
+gboolean            gowl_input_remap_rule_set_virtual_pad_axes    (GowlInputRemapRule    *self,
+                                                                   const guint32         *axes,
+                                                                   guint                  n_axes,
+                                                                   GError               **error);
+GArray             *gowl_input_remap_rule_get_virtual_pad_axes    (GowlInputRemapRule    *self);
+gboolean            gowl_input_remap_rule_has_continuous     (GowlInputRemapRule         *self);
+
 /* Mappings: each replaces whatever @input mapped to before */
 gboolean            gowl_input_remap_rule_map_key      (GowlInputRemapRule     *self,
                                                         guint32                 input,
@@ -247,6 +369,33 @@ gboolean            gowl_input_remap_rule_map_macro    (GowlInputRemapRule     *
                                                         const gchar            *name,
                                                         const gchar            *args,
                                                         GError                **error);
+gboolean            gowl_input_remap_rule_map_pointer  (GowlInputRemapRule     *self,
+                                                        guint32                 input,
+                                                        guint                   component,
+                                                        GError                **error);
+gboolean            gowl_input_remap_rule_map_scroll   (GowlInputRemapRule     *self,
+                                                        guint32                 input,
+                                                        gboolean                horizontal,
+                                                        GError                **error);
+gboolean            gowl_input_remap_rule_map_stick    (GowlInputRemapRule     *self,
+                                                        guint32                 input,
+                                                        guint                   side,
+                                                        guint                   component,
+                                                        gdouble                 value,
+                                                        GError                **error);
+gboolean            gowl_input_remap_rule_map_stick_follow (GowlInputRemapRule *self,
+                                                        guint32                 input,
+                                                        guint                   side,
+                                                        GError                **error);
+gboolean            gowl_input_remap_rule_map_trigger  (GowlInputRemapRule     *self,
+                                                        guint32                 input,
+                                                        guint                   side,
+                                                        gdouble                 value,
+                                                        GError                **error);
+gboolean            gowl_input_remap_rule_map_pad_button (GowlInputRemapRule   *self,
+                                                        guint32                 input,
+                                                        guint32                 button,
+                                                        GError                **error);
 void                gowl_input_remap_rule_map_drop     (GowlInputRemapRule     *self,
                                                         guint32                 input);
 void                gowl_input_remap_rule_map_pass     (GowlInputRemapRule     *self,
@@ -267,6 +416,12 @@ guint32                  gowl_input_remap_target_get_modifiers (const GowlInputR
 GowlAction               gowl_input_remap_target_get_action    (const GowlInputRemapTarget *self);
 const gchar             *gowl_input_remap_target_get_arg       (const GowlInputRemapTarget *self);
 const gchar             *gowl_input_remap_target_get_macro_args(const GowlInputRemapTarget *self);
+guint                    gowl_input_remap_target_get_side      (const GowlInputRemapTarget *self);
+guint                    gowl_input_remap_target_get_component (const GowlInputRemapTarget *self);
+gdouble                  gowl_input_remap_target_get_value     (const GowlInputRemapTarget *self);
+gboolean                 gowl_input_remap_target_is_follow     (const GowlInputRemapTarget *self);
+gboolean                 gowl_input_remap_target_is_continuous (const GowlInputRemapTarget *self);
+gboolean                 gowl_input_remap_target_is_pad        (const GowlInputRemapTarget *self);
 void                     gowl_input_remap_target_invoke        (const GowlInputRemapTarget *self,
                                                                 GowlInputRemapRule         *rule,
                                                                 const GowlInputRemapEvent  *event,

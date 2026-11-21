@@ -81,8 +81,11 @@ check_tap() {
 check_tap compositor_handle_key    recording_note
 check_tap on_kb_modifiers          recording_note
 check_tap compositor_handle_button recording_note
-check_tap on_cursor_axis           recording_note
-check_tap on_cursor_motion         recording_note_motion
+# The wheel and relative-motion decisions were factored out of their
+# listeners so a stick remapped to `scroll:'/`pointer:' takes the same
+# path (gowl-input-remap-pad.c); the taps live in the shared halves.
+check_tap compositor_handle_axis   recording_note
+check_tap compositor_handle_motion_relative recording_note_motion
 check_tap on_cursor_motion_abs     recording_note_motion
 
 # A tap in a function injection also flows through must be conditional on

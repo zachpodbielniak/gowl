@@ -422,6 +422,9 @@ struct _GowlCompositor {
 	guint                         remap_next_id;
 	gboolean                      remap_feeding;
 	gpointer                      remap_identify;
+	/* Game controllers (gowl-input-remap-pad.c): NULL until a remapper
+	 * is active, so a session without one never looks at /dev/input. */
+	gpointer                      remap_pads;
 
 	/* A configured gesture in progress.  A finger count with any
 	 * gesture bound is claimed for the whole gesture, like a module
@@ -1441,6 +1444,32 @@ gboolean gowl_input_remap_core_button      (GowlCompositor *self, struct wlr_inp
 gboolean gowl_input_remap_core_axis        (GowlCompositor *self, struct wlr_pointer_axis_event *event);
 gboolean gowl_input_remap_core_has_claimed_keyboard(GowlCompositor *self);
 void     gowl_input_remap_core_finish      (GowlCompositor *self);
+gboolean gowl_input_remap_core_motion      (GowlCompositor *self, struct wlr_input_device *dev,
+                                            gdouble dx, gdouble dy, guint32 time_msec);
+
+/* Device-less remap sources: game controllers, which wlroots never
+ * sees (libinput ignores joysticks).  gowl-input-remap-pad.c reads them
+ * and feeds their edges through the same decision a pedal's take. */
+typedef struct _GowlRemapDevice GowlRemapDevice;
+GowlRemapDevice     *gowl_input_remap_core_source_new     (GowlCompositor *self,
+                                                           GowlInputDeviceInfo *info);
+void                 gowl_input_remap_core_source_edge    (GowlRemapDevice *rd,
+                                                           const GowlInputRemapEvent *ev);
+gboolean             gowl_input_remap_core_source_has_held(GowlRemapDevice *rd, guint32 code);
+GowlInputDeviceInfo *gowl_input_remap_core_source_info    (GowlRemapDevice *rd);
+void                 gowl_input_remap_core_source_free    (GowlRemapDevice *rd);
+void                 gowl_input_remap_core_identify_pad   (GowlCompositor *self,
+                                                           const GowlInputDeviceInfo *info,
+                                                           const GowlInputRemapEvent *ev);
+
+/* gowl-input-remap-pad.c.  Every entry returns at once when no remapper
+ * is active and no controller was ever looked for; on a build without
+ * the evdev/uinput headers they are empty. */
+void     gowl_input_remap_pads_reevaluate  (GowlCompositor *self);
+void     gowl_input_remap_pads_list        (GowlCompositor *self, GPtrArray *out);
+void     gowl_input_remap_pads_identify    (GowlCompositor *self, gboolean on);
+void     gowl_input_remap_pads_finish      (GowlCompositor *self);
+gchar   *gowl_input_remap_pads_describe    (GowlCompositor *self, guint id);
 
 /* The two compositor decisions the remap core feeds, exported from
  * gowl-compositor.c (where they are static) for it alone. */
@@ -1448,6 +1477,13 @@ void     gowl_compositor_remap_handle_key   (GowlCompositor *self, guint32 keyco
                                              guint32 state, guint32 time_msec);
 void     gowl_compositor_remap_handle_button(GowlCompositor *self, guint32 button,
                                              guint32 state, guint32 time_msec);
+/* ...and the motion and scroll decisions, for a stick driving the
+ * pointer: the same path wlr_cursor's motion and axis events take. */
+void     gowl_compositor_remap_handle_motion(GowlCompositor *self, gdouble dx,
+                                             gdouble dy, guint32 time_msec);
+void     gowl_compositor_remap_handle_axis  (GowlCompositor *self, gboolean horizontal,
+                                             gdouble delta, gint32 value120,
+                                             guint32 time_msec);
 
 /* wlr-foreign-toplevel-management: gowl-foreign-toplevel.c */
 void     gowl_foreign_toplevel_init        (GowlCompositor *self);

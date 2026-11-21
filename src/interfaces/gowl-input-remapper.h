@@ -43,6 +43,13 @@ G_DECLARE_INTERFACE(GowlInputRemapper, gowl_input_remapper, GOWL, INPUT_REMAPPER
  *   per gowl_input_remap_rule_get_drop_unmatched().
  * @device_changed: (nullable): told when the core claims or releases a
  *   device, for logging and IPC events.  Optional.
+ * @render_pad: (nullable): drive a virtual gamepad for a target the core
+ *   does not render itself (%GOWL_INPUT_REMAP_TARGET_STICK, _TRIGGER,
+ *   _PAD_BUTTON).  Called with @event's press, then with its release (the
+ *   same target: the core's held table mirrors it); for a stick that
+ *   follows the mouse, once per motion event with @amount the motion in
+ *   pixels.  Returns %FALSE when nothing could be driven (no virtual pad
+ *   was available).  Optional: a remapper without it has no pad targets.
  *
  * Per-device input remapping.  The core owns the devices and the event
  * delivery; the implementation owns the rules.  Only the first active
@@ -64,6 +71,11 @@ struct _GowlInputRemapperInterface {
 	void                 (*device_changed) (GowlInputRemapper          *self,
 	                                        const GowlInputDeviceInfo  *info,
 	                                        gboolean                    claimed);
+	gboolean             (*render_pad)     (GowlInputRemapper          *self,
+	                                        GowlInputRemapRule         *rule,
+	                                        const GowlInputRemapTarget *target,
+	                                        const GowlInputRemapEvent  *event,
+	                                        gdouble                     amount);
 };
 
 gboolean            gowl_input_remapper_claims_device  (GowlInputRemapper           *self,
@@ -75,6 +87,11 @@ GowlInputRemapRule *gowl_input_remapper_map_event      (GowlInputRemapper       
 void                gowl_input_remapper_device_changed (GowlInputRemapper           *self,
                                                         const GowlInputDeviceInfo   *info,
                                                         gboolean                     claimed);
+gboolean            gowl_input_remapper_render_pad     (GowlInputRemapper           *self,
+                                                        GowlInputRemapRule          *rule,
+                                                        const GowlInputRemapTarget  *target,
+                                                        const GowlInputRemapEvent   *event,
+                                                        gdouble                      amount);
 
 G_END_DECLS
 

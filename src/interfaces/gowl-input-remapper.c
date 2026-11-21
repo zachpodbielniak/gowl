@@ -102,3 +102,37 @@ gowl_input_remapper_device_changed(
 	if (iface->device_changed != NULL)
 		iface->device_changed(self, info, claimed);
 }
+
+/**
+ * gowl_input_remapper_render_pad:
+ * @self: a #GowlInputRemapper
+ * @rule: the rule that decided the input
+ * @target: a stick, trigger or pad-button target of @rule
+ * @event: the physical input (its press or its release; for a stick
+ *   following the mouse, a %GOWL_INPUT_REMAP_EVENT_MOTION)
+ * @amount: 1 on a press and 0 on a release; for motion, the pixels moved
+ *
+ * Hands a virtual-pad target to the implementation, which owns the
+ * virtual pads.  Called on the compositor thread; must not block.
+ *
+ * Returns: %TRUE when a pad was driven
+ */
+gboolean
+gowl_input_remapper_render_pad(
+	GowlInputRemapper          *self,
+	GowlInputRemapRule         *rule,
+	const GowlInputRemapTarget *target,
+	const GowlInputRemapEvent  *event,
+	gdouble                     amount
+){
+	GowlInputRemapperInterface *iface;
+
+	g_return_val_if_fail(GOWL_IS_INPUT_REMAPPER(self), FALSE);
+	g_return_val_if_fail(rule != NULL && target != NULL && event != NULL,
+	                     FALSE);
+
+	iface = GOWL_INPUT_REMAPPER_GET_IFACE(self);
+	if (iface->render_pad == NULL)
+		return FALSE;
+	return iface->render_pad(self, rule, target, event, amount);
+}

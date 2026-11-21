@@ -597,6 +597,13 @@ GType gowl_focus_reason_get_type(void) G_GNUC_CONST;
  *   key events; a HID foot pedal is usually one).
  * @GOWL_INPUT_REMAP_DEVICE_POINTER: A pointer (mouse, trackball,
  *   touchpad, or a pedal that reports mouse buttons).
+ * @GOWL_INPUT_REMAP_DEVICE_GAMEPAD: A game controller: an evdev node
+ *   with the gamepad buttons (BTN_SOUTH and friends).  libinput never
+ *   opens these; the remap core reads them itself, and only when a
+ *   rule matches one.
+ * @GOWL_INPUT_REMAP_DEVICE_JOYSTICK: Any other joystick-like evdev node
+ *   (flight sticks, a keyboard's joystick interface): analog axes or
+ *   joystick buttons without the gamepad layout.
  *
  * The kind of physical device an input-remap rule matches, and the
  * kind reported for a connected device by #GowlInputDeviceInfo.
@@ -604,7 +611,9 @@ GType gowl_focus_reason_get_type(void) G_GNUC_CONST;
 typedef enum {
 	GOWL_INPUT_REMAP_DEVICE_ANY,
 	GOWL_INPUT_REMAP_DEVICE_KEYBOARD,
-	GOWL_INPUT_REMAP_DEVICE_POINTER
+	GOWL_INPUT_REMAP_DEVICE_POINTER,
+	GOWL_INPUT_REMAP_DEVICE_GAMEPAD,
+	GOWL_INPUT_REMAP_DEVICE_JOYSTICK
 } GowlInputRemapDeviceType;
 
 #define GOWL_TYPE_INPUT_REMAP_DEVICE_TYPE (gowl_input_remap_device_type_get_type())
@@ -631,6 +640,22 @@ GType gowl_input_remap_device_type_get_type(void) G_GNUC_CONST;
  * @GOWL_INPUT_REMAP_TARGET_MACRO: Run a macro (the opt-in macro module)
  *   on press.  A macro may do many things, so this is outside the
  *   one-to-one guarantee, like a callback.
+ * @GOWL_INPUT_REMAP_TARGET_POINTER: Move the pointer along one axis for
+ *   as long as an analog stick axis is deflected.  CONTINUOUS: a held
+ *   stick produces many motion events, so this is a declared exception
+ *   to the one-to-one rule, like a macro.
+ * @GOWL_INPUT_REMAP_TARGET_SCROLL: Scroll (value120 notches at a rate)
+ *   for as long as an analog axis is deflected.  Continuous, like
+ *   @GOWL_INPUT_REMAP_TARGET_POINTER.
+ * @GOWL_INPUT_REMAP_TARGET_STICK: Deflect one component of a virtual
+ *   gamepad's stick.  From a key or button: deflected while held, back
+ *   to centre on release (one press, one held state).  From pointer
+ *   motion (REL_X/REL_Y): the stick follows the mouse -- continuous, a
+ *   declared exception.
+ * @GOWL_INPUT_REMAP_TARGET_TRIGGER: Pull a virtual gamepad's trigger
+ *   while the input is held.
+ * @GOWL_INPUT_REMAP_TARGET_PAD_BUTTON: Hold a virtual gamepad's button
+ *   while the input is held.
  *
  * What a remapped input turns into.  Every kind produces at most one
  * output per physical press, and the release mirrors the press.  There
@@ -644,7 +669,12 @@ typedef enum {
 	GOWL_INPUT_REMAP_TARGET_ACTION,
 	GOWL_INPUT_REMAP_TARGET_COMMAND,
 	GOWL_INPUT_REMAP_TARGET_CALLBACK,
-	GOWL_INPUT_REMAP_TARGET_MACRO
+	GOWL_INPUT_REMAP_TARGET_MACRO,
+	GOWL_INPUT_REMAP_TARGET_POINTER,
+	GOWL_INPUT_REMAP_TARGET_SCROLL,
+	GOWL_INPUT_REMAP_TARGET_STICK,
+	GOWL_INPUT_REMAP_TARGET_TRIGGER,
+	GOWL_INPUT_REMAP_TARGET_PAD_BUTTON
 } GowlInputRemapTargetKind;
 
 #define GOWL_TYPE_INPUT_REMAP_TARGET_KIND (gowl_input_remap_target_kind_get_type())
@@ -658,13 +688,20 @@ GType gowl_input_remap_target_kind_get_type(void) G_GNUC_CONST;
  * @GOWL_INPUT_REMAP_EVENT_BUTTON: A button on a pointer device.
  * @GOWL_INPUT_REMAP_EVENT_AXIS: One wheel notch on a pointer device;
  *   delivered as a press immediately followed by its release.
+ * @GOWL_INPUT_REMAP_EVENT_PAD: A button, or an analog axis direction
+ *   crossing its press threshold, on a game controller (a
+ *   %GOWL_INPUT_REMAP_DEVICE_GAMEPAD or _JOYSTICK device).
+ * @GOWL_INPUT_REMAP_EVENT_MOTION: Relative pointer motion on a claimed
+ *   pointer, offered to a stick-follow target (`REL_X'/`REL_Y').
  *
  * The kind of physical input a #GowlInputRemapEvent describes.
  */
 typedef enum {
 	GOWL_INPUT_REMAP_EVENT_KEY,
 	GOWL_INPUT_REMAP_EVENT_BUTTON,
-	GOWL_INPUT_REMAP_EVENT_AXIS
+	GOWL_INPUT_REMAP_EVENT_AXIS,
+	GOWL_INPUT_REMAP_EVENT_PAD,
+	GOWL_INPUT_REMAP_EVENT_MOTION
 } GowlInputRemapEventKind;
 
 #define GOWL_TYPE_INPUT_REMAP_EVENT_KIND (gowl_input_remap_event_kind_get_type())

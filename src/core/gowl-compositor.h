@@ -1838,9 +1838,23 @@ void       gowl_compositor_input_remap_reevaluate     (GowlCompositor *self);
  * @self: a #GowlCompositor
  *
  * Returns: (transfer full) (element-type GowlInputDeviceInfo): every
- *   connected keyboard and pointer, with its remap identity
+ *   connected keyboard, pointer and game controller, with its remap
+ *   identity
  */
 GPtrArray *gowl_compositor_list_input_devices         (GowlCompositor *self);
+
+/**
+ * gowl_compositor_input_remap_describe_device:
+ * @self: a #GowlCompositor
+ * @id: a device id from gowl_compositor_list_input_devices()
+ *
+ * Returns: (transfer full) (nullable): for a game controller, a JSON
+ *   object with its axes (name, min, max, flat, fuzz, and the current
+ *   normalised value when it is open), its buttons, whether it is
+ *   open and grabbed; %NULL for any other device
+ */
+gchar     *gowl_compositor_input_remap_describe_device (GowlCompositor *self,
+                                                        guint           id);
 
 /**
  * gowl_compositor_input_remap_identify_start:

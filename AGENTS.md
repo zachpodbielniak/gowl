@@ -230,6 +230,10 @@ Test binaries are in `build/release/` (or `build/debug/` with DEBUG=1):
 - `test-input-recorder` -- Input recording: consent gate, bounded ring,
   motion coalescing, self-stop deadline, secret-suppression policy,
   payload shape, and the config-to-recorder wiring
+- `test-input-remap-analog` / `-pad-rule` / `-gamepad` -- controller
+  arithmetic, the rule model's controller shapes, and a real uinput
+  source pad plus virtual pad end to end (skips without writable
+  /dev/uinput)
 
 - `test-broadcast-engine` -- the broadcast module's routing engine and
   its data model: key names and ranges, team/rule parsing and refusals,
@@ -394,6 +398,8 @@ tests. These assert invariants no unit test can reach:
   `compositor_handle_key()` / `compositor_handle_button()` as real input
   and never straight to the seat, key repeat is never armed for it, and
   a claimed keyboard still recognises Super+Escape
+- `test-input-remap-uinput-guard.sh` -- every way out destroys the
+  virtual pads; gowl never reads its own pads back
 
 - `test-input-observer-guard.sh` -- every `GowlInputObserver` hook is
   behind `gowl_module_manager_has_input_observers()`, the filter sits
@@ -456,6 +462,11 @@ tests. These assert invariants no unit test can reach:
 > mid-press cannot strand a key. A new hook in `gowl-compositor.c` must
 > return at once when `gowl_module_manager_get_input_remapper()` is
 > `NULL`. See `docs/input-remap.org`.
+> Game controllers are read by `src/core/gowl-input-remap-pad.c` only
+> while a remapper is active, and opened only when claimed or during
+> identify; continuous targets (pointer, scroll, a stick following the
+> mouse) are declared exceptions, listed in `inputremap-list`'s
+> `continuous` field.
 
 > **Macro code only ever runs under the fault guard, and never makes the
 > compositor wait.** Every call into a macro (the body, its constructors,

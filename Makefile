@@ -46,6 +46,7 @@ LIB_SRCS := \
 	src/boxed/gowl-input-zone.c \
 	src/boxed/gowl-input-barrier.c \
 	src/boxed/gowl-input-remap-rule.c \
+	src/boxed/gowl-input-remap-analog.c \
 	src/boxed/gowl-broadcast.c \
 	src/module/gowl-module.c \
 	src/module/gowl-module-manager.c \
@@ -165,6 +166,7 @@ LIB_SRCS := \
 	src/core/gowl-text-input.c \
 	src/core/gowl-input-config.c \
 	src/core/gowl-input-remap-core.c \
+	src/core/gowl-input-remap-pad.c \
 	src/core/gowl-client-input.c \
 	src/core/gowl-xwayland-sync.c \
 	src/macro/gowl-macro.c \
@@ -816,6 +818,11 @@ $(OUTDIR)/test-input-remap-claim: $(OUTDIR)/modules/inputremap.so $(OUTDIR)/modu
 $(OUTDIR)/test-clipboard-history: $(OUTDIR)/modules/clipboard.so
 $(OBJDIR)/tests/test-clipboard-history.o: TEST_CFLAGS += -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
 $(OBJDIR)/tests/test-input-remap-claim.o: TEST_CFLAGS += -DGOWL_TEST_INPUTREMAP_MODULE='"$(abspath $(OUTDIR)/modules/inputremap.so)"' -DGOWL_TEST_MODULE_DIR='"$(abspath $(OUTDIR)/modules)"'
+# Game controllers end to end: a uinput source pad read by the core, a
+# keypad driving a uinput virtual pad through the real module.  Skips
+# itself where /dev/uinput is not writable.
+$(OUTDIR)/test-input-remap-gamepad: $(OUTDIR)/modules/inputremap.so
+$(OBJDIR)/tests/test-input-remap-gamepad.o: TEST_CFLAGS += -DGOWL_TEST_INPUTREMAP_MODULE='"$(abspath $(OUTDIR)/modules/inputremap.so)"'
 # The engine test includes the module's pure rule engine directly.
 $(OBJDIR)/tests/test-input-remap-engine.o: modules/inputremap/gowl-inputremap-engine.c modules/inputremap/gowl-inputremap-engine.h
 # An interactive resize paced to the client: a real Wayland client that

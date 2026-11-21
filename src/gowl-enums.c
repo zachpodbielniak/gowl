@@ -560,6 +560,10 @@ gowl_input_remap_device_type_get_type(void)
 			  "GOWL_INPUT_REMAP_DEVICE_KEYBOARD", "keyboard" },
 			{ GOWL_INPUT_REMAP_DEVICE_POINTER,
 			  "GOWL_INPUT_REMAP_DEVICE_POINTER", "pointer" },
+			{ GOWL_INPUT_REMAP_DEVICE_GAMEPAD,
+			  "GOWL_INPUT_REMAP_DEVICE_GAMEPAD", "gamepad" },
+			{ GOWL_INPUT_REMAP_DEVICE_JOYSTICK,
+			  "GOWL_INPUT_REMAP_DEVICE_JOYSTICK", "joystick" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static(
@@ -600,6 +604,16 @@ gowl_input_remap_target_kind_get_type(void)
 			  "GOWL_INPUT_REMAP_TARGET_CALLBACK", "callback" },
 			{ GOWL_INPUT_REMAP_TARGET_MACRO,
 			  "GOWL_INPUT_REMAP_TARGET_MACRO", "macro" },
+			{ GOWL_INPUT_REMAP_TARGET_POINTER,
+			  "GOWL_INPUT_REMAP_TARGET_POINTER", "pointer" },
+			{ GOWL_INPUT_REMAP_TARGET_SCROLL,
+			  "GOWL_INPUT_REMAP_TARGET_SCROLL", "scroll" },
+			{ GOWL_INPUT_REMAP_TARGET_STICK,
+			  "GOWL_INPUT_REMAP_TARGET_STICK", "stick" },
+			{ GOWL_INPUT_REMAP_TARGET_TRIGGER,
+			  "GOWL_INPUT_REMAP_TARGET_TRIGGER", "trigger" },
+			{ GOWL_INPUT_REMAP_TARGET_PAD_BUTTON,
+			  "GOWL_INPUT_REMAP_TARGET_PAD_BUTTON", "pad-button" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static(
@@ -630,6 +644,10 @@ gowl_input_remap_event_kind_get_type(void)
 			  "GOWL_INPUT_REMAP_EVENT_BUTTON", "button" },
 			{ GOWL_INPUT_REMAP_EVENT_AXIS,
 			  "GOWL_INPUT_REMAP_EVENT_AXIS", "axis" },
+			{ GOWL_INPUT_REMAP_EVENT_PAD,
+			  "GOWL_INPUT_REMAP_EVENT_PAD", "pad" },
+			{ GOWL_INPUT_REMAP_EVENT_MOTION,
+			  "GOWL_INPUT_REMAP_EVENT_MOTION", "motion" },
 			{ 0, NULL, NULL }
 		};
 		GType type_id = g_enum_register_static(

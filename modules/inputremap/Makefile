@@ -8,12 +8,12 @@ LIBDIR ?= .
 
 # The rule engine is its own file so the tests can link it without the
 # module's compositor half.
-SRC = gowl-module-$(MODULE_NAME).c gowl-inputremap-engine.c
+SRC = gowl-module-$(MODULE_NAME).c gowl-inputremap-engine.c gowl-inputremap-vpad.c
 OUT = $(OUTDIR)/$(MODULE_NAME).so
 
 all: $(OUT)
 
-$(OUT): gowl-inputremap-engine.h
+$(OUT): $(SRC) gowl-inputremap-engine.h gowl-inputremap-vpad.h
 	$(CC) $(CFLAGS) -o $@ $(SRC) $(LDFLAGS) -L$(LIBDIR) -lgowl $(PKG_LIBS)
 
 clean:

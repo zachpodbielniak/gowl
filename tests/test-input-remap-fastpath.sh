@@ -76,10 +76,21 @@ if require_fn "$comp" on_cursor_button; then
 fi
 if require_fn "$comp" on_cursor_axis; then
 	hook=$(line_of "$comp" on_cursor_axis 'gowl_input_remap_core_axis[[:space:]]*\(')
-	tap=$(line_of "$comp" on_cursor_axis 'recording_note[[:space:]]*\(')
-	if [ "$hook" -eq 0 ] || [ "$tap" -eq 0 ] || [ "$hook" -ge "$tap" ]; then
+	old=$(line_of "$comp" on_cursor_axis 'compositor_handle_axis[[:space:]]*\(')
+	if [ "$hook" -eq 0 ] || [ "$old" -eq 0 ] || [ "$hook" -ge "$old" ]; then
 		echo "FAIL: on_cursor_axis must ask gowl_input_remap_core_axis()"
-		echo "      first and keep its recorder tap after it."
+		echo "      first and still hand the scroll to"
+		echo "      compositor_handle_axis() (where the recorder tap is)."
+		fail=1
+	fi
+fi
+if require_fn "$comp" on_cursor_motion; then
+	hook=$(line_of "$comp" on_cursor_motion 'gowl_input_remap_core_motion[[:space:]]*\(')
+	old=$(line_of "$comp" on_cursor_motion 'compositor_handle_motion_relative[[:space:]]*\(')
+	if [ "$hook" -eq 0 ] || [ "$old" -eq 0 ] || [ "$hook" -ge "$old" ]; then
+		echo "FAIL: on_cursor_motion must ask gowl_input_remap_core_motion()"
+		echo "      first (a mouse driving a virtual stick) and still"
+		echo "      hand the motion to compositor_handle_motion_relative()."
 		fail=1
 	fi
 fi
@@ -109,6 +120,52 @@ if require_fn "$core" gowl_compositor_input_remap_reevaluate; then
 		echo "      seat alone when there is nothing to re-decide."
 		fail=1
 	fi
+fi
+
+if require_fn "$core" gowl_input_remap_core_motion; then
+	if ! body "$core" gowl_input_remap_core_motion \
+		| grep -qE 'claimed_pointer\(self, dev\)'; then
+		echo "FAIL: gowl_input_remap_core_motion must go through"
+		echo "      claimed_pointer(), which is NULL at once while no"
+		echo "      device has been seen by a remapper."
+		fail=1
+	fi
+fi
+
+# 3b. Game controllers: nothing under /dev/input is looked at without an
+#     active remapper, and a controller is opened only when claimed (or
+#     while the user runs identify mode).
+pad="$root/src/core/gowl-input-remap-pad.c"
+if require_fn "$pad" gowl_input_remap_pads_reevaluate; then
+	if ! body "$pad" gowl_input_remap_pads_reevaluate \
+		| grep -qE 'r == NULL && self->remap_pads == NULL'; then
+		echo "FAIL: gowl_input_remap_pads_reevaluate must return before"
+		echo "      scanning /dev/input when no remapper is active and"
+		echo "      none ever was."
+		fail=1
+	fi
+fi
+calls=$(grep -vE '^[[:space:]]*[*/]' "$pad" | grep -cE '[^_a-z]pad_open[[:space:]]*\(' || true)
+if [ "$calls" -ne 1 ] \
+	|| ! body "$pad" pad_apply | tr '\n' ' ' \
+		| grep -qE 'if \(want_open\(pad\)\)[[:space:]]*pad_open\(pad\)'; then
+	echo "FAIL: gowl-input-remap-pad.c opens a controller outside the"
+	echo "      claim/identify decision: pad_open() must have exactly one"
+	echo "      call, in pad_apply(), behind want_open()."
+	fail=1
+fi
+if grep -vE '^[[:space:]]*[*/]' "$pad" \
+	| grep -qE 'g_timeout_add|g_idle_add|g_unix_fd_add|g_io_add_watch'; then
+	echo "FAIL: gowl-input-remap-pad.c registers on GLib's default"
+	echo "      context; controllers are read on the wl_event_loop."
+	fail=1
+fi
+if grep -vE '^[[:space:]]*[*/]' "$pad" \
+	| grep -qE 'wlr_seat_pointer_notify|wlr_seat_keyboard_notify|wlr_cursor_move'; then
+	echo "FAIL: gowl-input-remap-pad.c drives the seat or the cursor"
+	echo "      itself; stick motion and scroll go through"
+	echo "      gowl_compositor_remap_handle_motion()/_axis()."
+	fail=1
 fi
 
 # 4. Remapped output takes the compositor's decisions, as real input.

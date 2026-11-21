@@ -40,6 +40,13 @@
  *   inputremap-identify-result      what identify found (JSON)
  *   inputremap-identify-cancel      stop listening
  *   inputremap-log LEVEL            none, claim, match or all
+ *   inputremap-pads                 the virtual gamepads (JSON)
+ *
+ * Game controllers are sources too (the core reads them; see
+ * src/core/gowl-input-remap-pad.c), and virtual gamepads are outputs:
+ * this module owns those, through /dev/uinput (gowl-inputremap-vpad.c),
+ * creating one on its first use and destroying it when no rule declares
+ * it, when the module is disabled and when the compositor goes.
  *
  * Replies are one line: "OK ..." or "ERROR ...".  Structured replies
  * are "OK " followed by JSON.
@@ -65,6 +72,7 @@
 #include "ipc/gowl-ipc.h"
 
 #include "gowl-inputremap-engine.h"
+#include "gowl-inputremap-vpad.h"
 
 #define IR_PREFIX                "inputremap-"
 #define IR_DEFAULT_IDENTIFY_SECS (10)
@@ -104,6 +112,7 @@ struct _GowlModuleInputremap {
 
 	GowlInputRemapEngine   *engine;
 	gboolean                enabled;
+	GowlInputRemapVpads    *vpads;            /* virtual gamepads (outputs) */
 
 	GowlInputRemapLogLevel  log_level;
 	gchar                  *log_path;
@@ -263,11 +272,18 @@ ir_sync_config(GowlModuleInputremap *self)
 		gowl_config_get_input_remap_rules(current));
 }
 
+/* Every claim re-decided, then every virtual pad no rule declares any
+ * more destroyed -- after, so the releases the re-decision makes still
+ * reach the pad they pressed. */
 static void
 ir_reevaluate(GowlModuleInputremap *self)
 {
+	g_autoptr(GPtrArray) rules = NULL;
+
 	if (self->compositor != NULL)
 		gowl_compositor_input_remap_reevaluate(self->compositor);
+	rules = gowl_input_remap_engine_get_rules(self->engine);
+	gowl_inputremap_vpads_sync(self->vpads, self->enabled ? rules : NULL);
 }
 
 /* The same config object re-read in place (a YAML load into it). */
@@ -285,6 +301,25 @@ ir_on_config_reloaded(
 }
 
 /* --- GowlInputRemapper --- */
+
+/* "keyboard", "pointer", "gamepad" or "joystick". */
+static const gchar *
+ir_type_name(GowlInputRemapDeviceType type)
+{
+	switch (type) {
+	case GOWL_INPUT_REMAP_DEVICE_KEYBOARD:
+		return "keyboard";
+	case GOWL_INPUT_REMAP_DEVICE_POINTER:
+		return "pointer";
+	case GOWL_INPUT_REMAP_DEVICE_GAMEPAD:
+		return "gamepad";
+	case GOWL_INPUT_REMAP_DEVICE_JOYSTICK:
+		return "joystick";
+	case GOWL_INPUT_REMAP_DEVICE_ANY:
+	default:
+		return "any";
+	}
+}
 
 static gboolean
 ir_claims_device(
@@ -356,13 +391,44 @@ ir_device_changed(
 	if (self->log_level >= IR_LOG_CLAIM)
 		ir_log(self, "%s device %u %s %04x:%04x %s \"%s\"",
 		       claimed ? "claimed" : "released", info->id,
-		       info->type == GOWL_INPUT_REMAP_DEVICE_KEYBOARD
-		       ? "keyboard" : "pointer",
+		       ir_type_name(info->type),
 		       (guint)info->vendor, (guint)info->product,
 		       info->sysname != NULL ? info->sysname : "-",
 		       info->name != NULL ? info->name : "");
 	ir_event(self, "%s %u %04x:%04x", claimed ? "claim" : "release",
 	         info->id, (guint)info->vendor, (guint)info->product);
+}
+
+/* A stick, trigger or pad-button target: onto the rule's virtual pad.
+ * Releases are honoured even while disabled -- they let go of what an
+ * earlier press took. */
+static gboolean
+ir_render_pad(
+	GowlInputRemapper          *remapper,
+	GowlInputRemapRule         *rule,
+	const GowlInputRemapTarget *target,
+	const GowlInputRemapEvent  *event,
+	gdouble                     amount
+){
+	GowlModuleInputremap *self;
+	gboolean ok;
+	const gchar *before;
+
+	self = GOWL_MODULE_INPUTREMAP(remapper);
+	if (!self->enabled && amount > 0.0
+	    && event->kind != GOWL_INPUT_REMAP_EVENT_MOTION)
+		return FALSE;
+	before = gowl_inputremap_vpads_get_error(self->vpads);
+	ok = gowl_inputremap_vpads_render(self->vpads, rule, target, event, amount);
+	/* No /dev/uinput: said once, in the log and as an event, and kept
+	 * for inputremap-status; the rule stays loaded. */
+	if (!ok && gowl_inputremap_vpads_get_error(self->vpads) != NULL
+	    && gowl_inputremap_vpads_get_error(self->vpads) != before) {
+		ir_log(self, "%s", gowl_inputremap_vpads_get_error(self->vpads));
+		ir_event(self, "pad-error %s",
+		         gowl_input_remap_rule_get_virtual_pad(rule));
+	}
+	return ok;
 }
 
 static void
@@ -371,16 +437,19 @@ ir_remapper_init(GowlInputRemapperInterface *iface)
 	iface->claims_device  = ir_claims_device;
 	iface->map_event      = ir_map_event;
 	iface->device_changed = ir_device_changed;
+	iface->render_pad     = ir_render_pad;
 }
 
 /* --- JSON replies --- */
 
 static void
 ir_json_device(
+	GowlModuleInputremap      *self,
 	JsonBuilder               *b,
 	const GowlInputDeviceInfo *info
 ){
 	g_autofree gchar *id = NULL;
+	g_autofree gchar *detail = NULL;
 
 	id = g_strdup_printf("%04x:%04x", (guint)info->vendor,
 	                     (guint)info->product);
@@ -388,9 +457,7 @@ ir_json_device(
 	json_builder_set_member_name(b, "id");
 	json_builder_add_int_value(b, info->id);
 	json_builder_set_member_name(b, "type");
-	json_builder_add_string_value(b,
-		info->type == GOWL_INPUT_REMAP_DEVICE_KEYBOARD ? "keyboard"
-		                                              : "pointer");
+	json_builder_add_string_value(b, ir_type_name(info->type));
 	json_builder_set_member_name(b, "name");
 	json_builder_add_string_value(b, info->name != NULL ? info->name : "");
 	json_builder_set_member_name(b, "vendor-product");
@@ -402,6 +469,31 @@ ir_json_device(
 		json_builder_add_null_value(b);
 	json_builder_set_member_name(b, "claimed");
 	json_builder_add_boolean_value(b, info->claimed);
+	/* A game controller also lists its axes (with ranges once open) and
+	 * buttons: what a rule's map: can name on it. */
+	if (self != NULL && self->compositor != NULL)
+		detail = gowl_compositor_input_remap_describe_device(self->compositor,
+		                                                     info->id);
+	if (detail != NULL) {
+		g_autoptr(JsonParser) parser = json_parser_new();
+
+		if (json_parser_load_from_data(parser, detail, -1, NULL)) {
+			JsonObject *o = json_node_get_object(json_parser_get_root(parser));
+
+			json_builder_set_member_name(b, "axes");
+			json_builder_add_value(b, json_node_copy(
+				json_object_get_member(o, "axes")));
+			json_builder_set_member_name(b, "buttons");
+			json_builder_add_value(b, json_node_copy(
+				json_object_get_member(o, "buttons")));
+			json_builder_set_member_name(b, "open");
+			json_builder_add_boolean_value(b,
+				json_object_get_boolean_member(o, "open"));
+			json_builder_set_member_name(b, "grabbed");
+			json_builder_add_boolean_value(b,
+				json_object_get_boolean_member(o, "grabbed"));
+		}
+	}
 	json_builder_end_object(b);
 }
 
@@ -435,12 +527,25 @@ ir_cmd_status(GowlModuleInputremap *self)
 			if (((GowlInputDeviceInfo *)g_ptr_array_index(devices, i))->claimed)
 				claimed++;
 	}
-	return g_strdup_printf("OK enabled=%d rules=%u claimed=%u log=%s "
-	                       "identifying=%d",
-	                       self->enabled ? 1 : 0,
-	                       gowl_input_remap_engine_get_n_rules(self->engine),
-	                       claimed, ir_log_names[self->log_level],
-	                       self->identifying ? 1 : 0);
+	/* pads= and pad-error= are appended, so a reader of the older
+	 * five fields still finds them where they were */
+	{
+		const gchar *err = gowl_inputremap_vpads_get_error(self->vpads);
+		g_autofree gchar *qerr = NULL;
+
+		if (err != NULL)
+			qerr = g_strescape(err, NULL);
+		return g_strdup_printf("OK enabled=%d rules=%u claimed=%u log=%s "
+		                       "identifying=%d pads=%u%s%s%s",
+		                       self->enabled ? 1 : 0,
+		                       gowl_input_remap_engine_get_n_rules(self->engine),
+		                       claimed, ir_log_names[self->log_level],
+		                       self->identifying ? 1 : 0,
+		                       gowl_inputremap_vpads_count(self->vpads),
+		                       qerr != NULL ? " pad-error=\"" : "",
+		                       qerr != NULL ? qerr : "",
+		                       qerr != NULL ? "\"" : "");
+	}
 }
 
 static gchar *
@@ -456,7 +561,7 @@ ir_cmd_devices(GowlModuleInputremap *self)
 	b = json_builder_new();
 	json_builder_begin_array(b);
 	for (i = 0; i < devices->len; i++)
-		ir_json_device(b, g_ptr_array_index(devices, i));
+		ir_json_device(self, b, g_ptr_array_index(devices, i));
 	json_builder_end_array(b);
 	return ir_json_finish(b);
 }
@@ -492,6 +597,36 @@ ir_cmd_list(GowlModuleInputremap *self)
 		json_builder_add_int_value(b, gowl_input_remap_rule_get_n_mappings(r));
 		json_builder_set_member_name(b, "yaml");
 		json_builder_add_string_value(b, yaml);
+		/* The declared exceptions to one-to-one, named so nobody has to
+		 * read the YAML to find them: continuous targets (a stick moving
+		 * the pointer or scrolling, the mouse driving a stick). */
+		json_builder_set_member_name(b, "continuous");
+		json_builder_begin_array(b);
+		{
+			g_autoptr(GArray) inputs = gowl_input_remap_rule_get_inputs(r);
+			guint k;
+
+			for (k = 0; k < inputs->len; k++) {
+				guint32 code = g_array_index(inputs, guint32, k);
+				const GowlInputRemapTarget *t;
+
+				t = gowl_input_remap_rule_lookup(r, code);
+				if (t != NULL && gowl_input_remap_target_is_continuous(t)) {
+					g_autofree gchar *in = gowl_input_remap_code_to_name(code);
+					g_autofree gchar *out = gowl_input_remap_target_to_string(t);
+					g_autofree gchar *line = g_strdup_printf("%s: %s", in, out);
+
+					json_builder_add_string_value(b, line);
+				}
+			}
+		}
+		json_builder_end_array(b);
+		json_builder_set_member_name(b, "virtual-pad");
+		if (gowl_input_remap_rule_get_virtual_pad(r) != NULL)
+			json_builder_add_string_value(b,
+				gowl_input_remap_rule_get_virtual_pad(r));
+		else
+			json_builder_add_null_value(b);
 		/* the connected devices this rule matches */
 		json_builder_set_member_name(b, "devices");
 		json_builder_begin_array(b);
@@ -590,6 +725,16 @@ ir_cmd_set_enabled(
 }
 
 static gchar *
+ir_cmd_pads(GowlModuleInputremap *self)
+{
+	g_autoptr(JsonBuilder) b = NULL;
+
+	b = json_builder_new();
+	gowl_inputremap_vpads_to_json(self->vpads, b);
+	return ir_json_finish(b);
+}
+
+static gchar *
 ir_cmd_log(
 	GowlModuleInputremap *self,
 	const gchar          *args
@@ -641,11 +786,16 @@ ir_on_identified(
 	b = json_builder_new();
 	json_builder_begin_object(b);
 	json_builder_set_member_name(b, "device");
-	ir_json_device(b, info);
+	ir_json_device(self, b, info);
 	json_builder_set_member_name(b, "input");
 	json_builder_add_string_value(b, input);
 	json_builder_set_member_name(b, "code");
 	json_builder_add_int_value(b, event->code);
+	if (event->kind == GOWL_INPUT_REMAP_EVENT_PAD) {
+		/* a stick direction says how far it was pushed */
+		json_builder_set_member_name(b, "value");
+		json_builder_add_double_value(b, event->value);
+	}
 	json_builder_end_object(b);
 	root = json_builder_get_root(b);
 	gen = json_generator_new();
@@ -772,6 +922,8 @@ ir_handle_command(
 		return ir_cmd_set_enabled(self, FALSE);
 	if (g_strcmp0(verb, "log") == 0)
 		return ir_cmd_log(self, args);
+	if (g_strcmp0(verb, "pads") == 0)
+		return ir_cmd_pads(self);
 	if (g_strcmp0(verb, "identify") == 0)
 		return ir_cmd_identify(self, args);
 	if (g_strcmp0(verb, "identify-result") == 0)
@@ -783,8 +935,8 @@ ir_handle_command(
 	return g_strdup_printf("ERROR unknown command %s; the input remapper "
 	                       "knows " IR_PREFIX "status, -devices, -list, "
 	                       "-add, -remove, -clear, -reload, -enable, "
-	                       "-disable, -log, -identify, -identify-result "
-	                       "and -identify-cancel", command);
+	                       "-disable, -log, -pads, -identify, "
+	                       "-identify-result and -identify-cancel", command);
 }
 
 static void
@@ -872,6 +1024,8 @@ ir_deactivate(GowlModule *mod)
 	ir_identify_stop(self);
 	self->enabled = FALSE;
 	ir_reevaluate(self);
+	/* Every virtual pad goes with the module: a game sees it unplugged */
+	gowl_inputremap_vpads_destroy_all(self->vpads);
 }
 
 static const gchar *
@@ -885,15 +1039,15 @@ static const gchar *
 ir_get_description(GowlModule *mod)
 {
 	(void)mod;
-	return "Per-device input remapping (keys, buttons, wheel; one press, "
-	       "one output)";
+	return "Per-device input remapping (keys, buttons, wheel, game "
+	       "controllers and virtual pads; one press, one output)";
 }
 
 static const gchar *
 ir_get_version(GowlModule *mod)
 {
 	(void)mod;
-	return "0.1.0";
+	return "0.2.0";
 }
 
 /* --- GowlStartupHandler --- */
@@ -914,6 +1068,10 @@ ir_display_destroyed(
 		self->identify_timer = NULL;
 	}
 	self->identifying = FALSE;
+	/* The compositor stops: its virtual pads go, and their decay
+	 * timers with the loop they were on. */
+	gowl_inputremap_vpads_set_loop(self->vpads, NULL);
+	gowl_inputremap_vpads_destroy_all(self->vpads);
 	wl_list_remove(&self->display_destroy.link);
 	wl_list_init(&self->display_destroy.link);
 }
@@ -935,6 +1093,8 @@ ir_on_startup(
 	display = gowl_compositor_get_wl_display(self->compositor);
 	if (display != NULL && wl_list_empty(&self->display_destroy.link))
 		wl_display_add_destroy_listener(display, &self->display_destroy);
+	gowl_inputremap_vpads_set_loop(self->vpads,
+		gowl_compositor_get_event_loop(self->compositor));
 
 	ir_sync_config(self);
 	ir_reevaluate(self);
@@ -967,6 +1127,7 @@ gowl_module_inputremap_finalize(GObject *object)
 		g_object_remove_weak_pointer(G_OBJECT(self->compositor),
 		                             (gpointer *)&self->compositor);
 	gowl_input_remap_engine_free(self->engine);
+	gowl_inputremap_vpads_free(self->vpads);
 	ir_close_log(self);
 	g_free(self->log_path);
 	g_free(self->identify_result);
@@ -999,6 +1160,7 @@ gowl_module_inputremap_init(GowlModuleInputremap *self)
 	wl_list_init(&self->display_destroy.link);
 	self->display_destroy.notify = ir_display_destroyed;
 	self->engine = gowl_input_remap_engine_new();
+	self->vpads = gowl_inputremap_vpads_new();
 	self->enabled = FALSE;
 	self->log_level = IR_LOG_CLAIM;
 	self->identify_secs = IR_DEFAULT_IDENTIFY_SECS;

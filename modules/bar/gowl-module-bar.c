@@ -64,7 +64,12 @@
 #include "barkit/gowl-bar-theme.h"
 #include "barkit/gowl-bar-toast.h"
 
+#include <json-glib/json-glib.h>
+
+#include "ipc/gowl-ipc.h"
+
 #include "bar-internal.h"
+#include "bar-slots.h"
 #include "bar-sysinfo.h"
 
 #include <xkbcommon/xkbcommon-keysyms.h>
@@ -187,6 +192,18 @@ typedef struct {
 	volatile gint  async_inflight;
 	gulong         changed_id;
 	gulong         panel_changed_id;
+
+	/*
+	 * The pushed slot this item shows, or NULL for an ordinary widget.
+	 * The slot points back (BarSlot.item), and bar_item_free() is the
+	 * one place that link is cut, so a slot can never be left holding
+	 * an item that has gone -- whichever of a dozen paths freed it.
+	 */
+	BarSlot       *pushed;
+	/* TRUE when the slot machinery made this item, and so places it
+	   and removes it.  FALSE for a `slot:ID' the user wrote into a
+	   widget list: the list decides where that one sits. */
+	gboolean       pushed_owned;
 } BarItem;
 
 /* Per-monitor scene surface for one bar slot. */
@@ -219,6 +236,14 @@ typedef struct {
 	gchar          *anchor_id;  /* what the config asked for */
 
 	GHashTable     *surfaces;   /* monitor name -> BarSurface* */
+
+	/*
+	 * Which output the items' `slot' rectangles were last laid out
+	 * for; identity only, never dereferenced.  The bar is laid out per
+	 * output and the result lives in the items, so a hit test has to
+	 * know whose layout it is reading -- see bar_ensure_layout().
+	 */
+	gpointer        laid_out_for;
 
 	/*
 	 * Every `<widget>.<key>' setting this bar has been given, by
@@ -379,6 +404,19 @@ struct _GowlModuleBar {
 	/* Elisp-driven values, addressed by name.  Kept for the widget
 	   data channel the editor already uses. */
 	GHashTable       *widget_data;
+
+	/*
+	 * Pushed bar items (bar-slots.h).  The table outlives the items:
+	 * a slot whose item was dropped -- its plugin held back, its bar
+	 * rebuilt -- is put back by bar_slots_sync().
+	 */
+	BarSlotStore     *slots;
+	gboolean          slot_plugin_warned;
+
+	/* The IPC server the slot methods are registered on, held weakly;
+	   NULL when they are not registered anywhere. */
+	GowlIpc          *ipc;
+	gulong            ipc_changed_id;
 };
 
 static void bar_provider_iface_init(GowlBarProviderInterface *iface);
@@ -817,6 +855,13 @@ bar_item_free(gpointer data)
 	if (item == NULL)
 		return;
 
+	/* Cut the slot's link here and nowhere else: this is the only way
+	   an item dies. */
+	if (item->pushed != NULL) {
+		item->pushed->item = NULL;
+		item->pushed = NULL;
+	}
+
 	if (item->plugin != NULL) {
 		if (item->changed_id != 0)
 			g_signal_handler_disconnect(item->plugin,
@@ -1133,6 +1178,7 @@ bar_create_surface(GowlModuleBar *self, GowlBarInstance *bar,
 		gpointer previous = bar_plugin_serve_all(bar, monitor);
 
 		buf = bar_render_slot(self, bar, mon_w, bar->bar_height);
+		bar->laid_out_for = monitor;
 		bar_items_serve(bar, previous);
 	}
 	surf_y = bar_surface_y(bar, mon_y, mon_h);
@@ -1159,6 +1205,9 @@ bar_instance_destroy_surfaces(GowlBarInstance *bar)
 {
 	if (bar->surfaces != NULL)
 		g_hash_table_remove_all(bar->surfaces);
+	/* Whatever output the items were laid out for, its surface has
+	   gone; the next hit test lays out again. */
+	bar->laid_out_for = NULL;
 }
 
 static void
@@ -1318,6 +1367,7 @@ bar_redraw_all(GowlModuleBar *self)
 
 			buf = bar_render_slot(self, bar, surface->width,
 			                      surface->height);
+			bar->laid_out_for = mon;
 			wlr_scene_buffer_set_buffer(surface->scene_buf,
 			                            &buf->base);
 			wlr_buffer_drop(&buf->base);
@@ -3534,7 +3584,10 @@ bar_set_region(GowlModuleBar *self, GowlBarInstance *bar,
 	for (i = 0; i < bar->items->len; i++) {
 		BarItem *item = g_ptr_array_index(bar->items, i);
 
-		if (item->region != region) {
+		/* A pushed slot is not part of any widget list, so replacing
+		   a list does not take it: it would vanish on every
+		   configuration reload and its owner would never know. */
+		if (item->region != region || item->pushed_owned) {
 			g_ptr_array_add(next, item);
 			continue;
 		}
@@ -3620,7 +3673,9 @@ bar_region_remove(GowlModuleBar *self, GowlBarInstance *bar,
 		gboolean  drop = FALSE;
 		guint     j;
 
-		if (item->region == region) {
+		/* A pushed slot goes by `bar-slot-remove', which also tells
+		   the table; taken out here it would only be put back. */
+		if (item->region == region && !item->pushed_owned) {
 			for (j = 0; parts[j] != NULL; j++) {
 				if (parts[j][0] == '\0')
 					continue;
@@ -3676,6 +3731,743 @@ bar_resolve_anchor(GowlBarInstance *bar)
 			return;
 		}
 	}
+}
+
+/* ----------------------------------------------------------------
+ * Slots
+ * ---------------------------------------------------------------- */
+
+/*
+ * Bar items whose content is pushed from outside (bar-slots.h is the
+ * model; bar-plugins-slots.c the widget).  What is here is the part
+ * that needs the bars: putting a slot's item where it asked to be,
+ * keeping it there across configuration, and taking it away.
+ *
+ * Two kinds of item can show a slot, told apart by BarItem.pushed_owned:
+ *
+ *  - one this code made, because `bar-slot-set' named a bar, a region
+ *    and an order.  It is not in any widget list, so bar_set_region()
+ *    and bar_region_remove() leave it alone and only `bar-slot-remove'
+ *    (or its owner's `bar-slot-clear', or its time-to-live) removes it;
+ *
+ *  - a `slot:ID' the user wrote into a widget list.  That one sits
+ *    exactly where the list put it, between the neighbours the user
+ *    chose, and a push to ID fills it.  The list owns its place and
+ *    its life; removing the slot only empties it.
+ *
+ * Under cmacs every function here runs with the gowl lock held, on
+ * whichever thread took it; none of them blocks and none reaches Lisp.
+ */
+
+#define BAR_SLOT_SPEC_PREFIX "slot:"
+
+static GowlBarInstance *
+bar_slot_bar(GowlModuleBar *self, const BarSlot *slot)
+{
+	return &self->bars[(slot->bar == 1) ? GOWL_BAR_POSITION_BOTTOM
+	                                    : GOWL_BAR_POSITION_TOP];
+}
+
+/* Which bar holds @item, or NULL. */
+static GowlBarInstance *
+bar_item_bar(GowlModuleBar *self, BarItem *item)
+{
+	gint bi;
+
+	for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++) {
+		if (g_ptr_array_find(self->bars[bi].items, item, NULL))
+			return &self->bars[bi];
+	}
+	return NULL;
+}
+
+/*
+ * Write a slot's content into the plugin that shows it.
+ *
+ * The same two calls bar_forward_setting() makes for a
+ * `<widget>.<key>' setting -- store, then configure -- so a slot is
+ * pushed along the path every pushed setting has always taken.  A NULL
+ * value unsets the key.
+ */
+static void
+bar_slot_apply_to(GowlBarPlugin *plugin, const BarSlot *slot)
+{
+	gowl_bar_plugin_set_setting(plugin, "text", slot->text);
+	gowl_bar_plugin_set_setting(plugin, "icon", slot->icon);
+	gowl_bar_plugin_set_setting(plugin, "role", slot->role);
+	gowl_bar_plugin_set_setting(plugin, "tooltip", slot->tooltip);
+	gowl_bar_plugin_set_setting(plugin, "urgency",
+	                            bar_slot_urgency_name(slot->urgency));
+	gowl_bar_plugin_set_setting(plugin, "output", slot->output);
+	gowl_bar_plugin_set_setting(plugin, "click",
+	                            slot->click ? "true" : "false");
+	gowl_bar_plugin_set_setting(plugin, "owner", slot->owner);
+	gowl_bar_plugin_configure(plugin, NULL);
+}
+
+/* Empty a `slot:ID' the user placed, when its slot is removed: it
+   measures to nothing and waits for the next push. */
+static void
+bar_slot_blank(GowlBarPlugin *plugin)
+{
+	gowl_bar_plugin_set_setting(plugin, "text", NULL);
+	gowl_bar_plugin_set_setting(plugin, "icon", NULL);
+	gowl_bar_plugin_set_setting(plugin, "role", NULL);
+	gowl_bar_plugin_set_setting(plugin, "tooltip", NULL);
+	gowl_bar_plugin_set_setting(plugin, "urgency", NULL);
+	gowl_bar_plugin_set_setting(plugin, "output", NULL);
+	gowl_bar_plugin_set_setting(plugin, "click", NULL);
+	gowl_bar_plugin_set_setting(plugin, "owner", NULL);
+	gowl_bar_plugin_configure(plugin, NULL);
+}
+
+/* Take @item off whichever bar holds it and free it.  bar_item_free()
+   cuts the slot's link, so the slot is left unplaced, not dangling. */
+static void
+bar_slot_item_remove(GowlModuleBar *self, BarItem *item)
+{
+	GowlBarInstance *bar;
+
+	bar = bar_item_bar(self, item);
+	if (bar == NULL)
+		return;
+
+	if (self->panel.item == item)
+		bar_panel_clear_state(self);
+	/* The tooltip remembers an item by its index, which is about to
+	   name something else. */
+	bar_tip_hide(self);
+
+	g_ptr_array_remove(bar->items, item);
+	bar_resolve_anchor(bar);
+}
+
+/*
+ * Put @bar's items in the order slots ask for.
+ *
+ * Within each region: the slots this code made whose order is negative,
+ * by order; then every other item exactly as it was; then the slots
+ * whose order is zero or more, by order.  Equal orders keep creation
+ * order.  The region's own widgets are never moved relative to each
+ * other, which is what lets a slot be added to a bar somebody else
+ * configured.
+ *
+ * In the right region "before" means nearer the screen edge, as it does
+ * in `widgets-right': that list reads outward from the edge.
+ */
+static void
+bar_slots_arrange(GowlModuleBar *self, GowlBarInstance *bar)
+{
+	GPtrArray *next;
+	gint       region, pass;
+	guint      i;
+	gboolean   any;
+
+	/* Nothing of ours on this bar: its order is the user's, as given. */
+	any = FALSE;
+	for (i = 0; i < bar->items->len && !any; i++) {
+		BarItem *item = g_ptr_array_index(bar->items, i);
+
+		any = (item->pushed_owned && item->pushed != NULL);
+	}
+	if (!any)
+		return;
+
+	next = g_ptr_array_new();
+
+	for (region = 0; region < GOWL_BAR_REGION_COUNT; region++) {
+		for (pass = 0; pass < 3; pass++) {
+			guint first = next->len;
+			guint a, b;
+
+			for (i = 0; i < bar->items->len; i++) {
+				BarItem  *item = g_ptr_array_index(bar->items, i);
+				gboolean  placed_here;
+
+				if ((gint)item->region != region)
+					continue;
+				placed_here = (item->pushed_owned &&
+				               item->pushed != NULL);
+				if (pass == 1) {
+					if (placed_here)
+						continue;
+				} else {
+					if (!placed_here)
+						continue;
+					if ((item->pushed->order < 0) != (pass == 0))
+						continue;
+				}
+				g_ptr_array_add(next, item);
+			}
+
+			if (pass == 1)
+				continue;
+
+			/* An insertion sort over the handful just added: it
+			   is stable, and there are at most BAR_SLOTS_MAX. */
+			for (a = first + 1; a < next->len; a++) {
+				BarItem *moving = g_ptr_array_index(next, a);
+
+				b = a;
+				while (b > first) {
+					BarItem *before;
+
+					before = g_ptr_array_index(next, b - 1);
+					if (bar_slot_compare(before->pushed,
+					                     moving->pushed) <= 0)
+						break;
+					next->pdata[b] = before;
+					b--;
+				}
+				next->pdata[b] = moving;
+			}
+		}
+	}
+
+	/*
+	 * Already in order -- the usual case, since this runs after every
+	 * configuration -- or, impossibly, an item that fell in no region:
+	 * leave the bar exactly as it is.  Doing the swap anyway would
+	 * hide the tooltip on every setting pushed to any widget.
+	 */
+	if (next->len != bar->items->len ||
+	    memcmp(next->pdata, bar->items->pdata,
+	           next->len * sizeof(gpointer)) == 0) {
+		g_ptr_array_free(next, TRUE);
+		return;
+	}
+
+	/* Every item moved across; the old array must not free them. */
+	g_ptr_array_set_free_func(bar->items, NULL);
+	g_ptr_array_free(bar->items, TRUE);
+	g_ptr_array_set_free_func(next, bar_item_free);
+	bar->items = next;
+
+	/* Indices changed under the anchor and under the tooltip. */
+	bar_resolve_anchor(bar);
+	bar_tip_hide(self);
+}
+
+/* Make an item for @slot on the bar it asked for.  Appended; the caller
+   arranges.  NULL when the `slot' plugin cannot be had -- unloaded, or
+   held back after a fault -- which is said once, not on every push. */
+static BarItem *
+bar_slot_item_create(GowlModuleBar *self, BarSlot *slot)
+{
+	g_autoptr(GError) error = NULL;
+	g_autofree gchar *spec = NULL;
+	GowlBarInstance *bar;
+	GowlBarPlugin *plugin;
+	BarItem *item;
+
+	bar  = bar_slot_bar(self, slot);
+	spec = g_strconcat(BAR_SLOT_SPEC_PREFIX, slot->id, NULL);
+
+	plugin = gowl_bar_registry_instantiate(self->registry, spec, &error);
+	if (plugin == NULL) {
+		if (!self->slot_plugin_warned) {
+			self->slot_plugin_warned = TRUE;
+			g_warning("gowl-bar: bar slots cannot be shown: %s",
+			          error->message);
+		}
+		return NULL;
+	}
+	self->slot_plugin_warned = FALSE;
+
+	gowl_bar_plugin_set_host(plugin, GOWL_BAR_HOST(self));
+	bar_slot_apply_to(plugin, slot);
+
+	if (!gowl_bar_plugin_activate(plugin, &error)) {
+		g_warning("gowl-bar: slot '%s' declined to run: %s", slot->id,
+		          (error != NULL) ? error->message : "no reason given");
+		gowl_bar_plugin_set_host(plugin, NULL);
+		g_object_unref(plugin);
+		return NULL;
+	}
+
+	item = bar_item_new(self, plugin, spec, slot->region);
+	item->pushed       = slot;
+	item->pushed_owned = TRUE;
+	slot->item       = item;
+	g_ptr_array_add(bar->items, item);
+	return item;
+}
+
+/*
+ * Give one `slot:ID' the user placed to the slot of that id, if there
+ * is one and nothing the user placed is showing it yet.  An item this
+ * code made for the slot gives way: the user's list says where it goes.
+ *
+ * One at a time, because taking the old item away shifts the array
+ * being walked.
+ *
+ * Returns: %TRUE when an item was adopted
+ */
+static gboolean
+bar_slots_adopt_one(GowlModuleBar *self)
+{
+	gint  bi;
+	guint i;
+
+	for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++) {
+		GowlBarInstance *bar = &self->bars[bi];
+
+		for (i = 0; i < bar->items->len; i++) {
+			BarItem *item = g_ptr_array_index(bar->items, i);
+			BarSlot *slot;
+
+			if (item->pushed != NULL ||
+			    !g_str_has_prefix(item->spec, BAR_SLOT_SPEC_PREFIX))
+				continue;
+			slot = bar_slot_store_lookup(self->slots,
+				item->spec + strlen(BAR_SLOT_SPEC_PREFIX));
+			if (slot == NULL)
+				continue;
+			if (slot->item != NULL) {
+				BarItem *old = slot->item;
+
+				/* Listed twice: the first one has it. */
+				if (!old->pushed_owned)
+					continue;
+				bar_slot_item_remove(self, old);
+			}
+
+			item->pushed       = slot;
+			item->pushed_owned = FALSE;
+			slot->item       = item;
+			bar_slot_apply_to(item->plugin, slot);
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/*
+ * Make the bars agree with the table: every slot shown by exactly one
+ * item.  Run after anything that can add or drop items behind the
+ * table's back -- a configuration (which may have listed a `slot:ID',
+ * or rebuilt the region one was listed in) and a set.
+ *
+ * With every slot already placed and in order this is a pass or two
+ * over the items and one over the slots, comparing pointers.
+ */
+static void
+bar_slots_sync(GowlModuleBar *self)
+{
+	g_autoptr(GPtrArray) list = NULL;
+	gint     bi;
+	guint    i;
+
+	if (self->slots == NULL || bar_slot_store_size(self->slots) == 0)
+		return;
+
+	while (bar_slots_adopt_one(self))
+		;
+
+	list = bar_slot_store_list(self->slots);
+	for (i = 0; i < list->len; i++) {
+		BarSlot *slot = g_ptr_array_index(list, i);
+
+		if (slot->item == NULL)
+			bar_slot_item_create(self, slot);
+	}
+
+	/* Both bars, every time: a region rebuilt by a configuration put
+	   its new widgets after the slots that survived it, and a slot
+	   whose order is zero or more belongs after them.  A bar already
+	   in order is left untouched. */
+	for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++)
+		bar_slots_arrange(self, &self->bars[bi]);
+}
+
+/* Repaint after a slot changed.  Direct, not the pending flag: a push
+   arrives on a thread that owns the compositor, exactly as a
+   configuration does, and a count that updates up to five seconds late
+   is not a status. */
+static void
+bar_slots_redraw(GowlModuleBar *self)
+{
+	if (self->compositor != NULL)
+		bar_redraw_all(self);
+}
+
+/**
+ * bar_slot_set:
+ * @self: the module
+ * @params: the request (see bar_slot_store_set())
+ * @out_created: (out) (optional): whether the slot is new
+ * @error: return location for a #GError
+ *
+ * Creates or updates one slot and shows the result.
+ *
+ * Updating what an existing slot SAYS is a hash lookup, eight settings
+ * and a repaint.  Only a slot that is new, or that asked to move, costs
+ * a pass over its bar's items.
+ *
+ * Returns: (transfer none) (nullable): the slot, or %NULL with @error
+ */
+static BarSlot *
+bar_slot_set(GowlModuleBar *self, JsonObject *params, gboolean *out_created,
+             GError **error)
+{
+	BarSlot  *slot;
+	BarItem  *item;
+	gboolean  created = FALSE;
+	gboolean  moved = FALSE;
+
+	slot = bar_slot_store_set(self->slots, params, g_get_monotonic_time(),
+	                          &created, &moved, error);
+	if (slot == NULL)
+		return NULL;
+
+	/* A slot the user's list placed stays where the list put it; one
+	   this code placed follows its bar, region and order. */
+	item = slot->item;
+	if (item != NULL && moved && item->pushed_owned) {
+		GowlBarInstance *want = bar_slot_bar(self, slot);
+
+		if (bar_item_bar(self, item) != want) {
+			/* Another bar is another array: remove, and let the
+			   sync below make it again where it belongs. */
+			bar_slot_item_remove(self, item);
+		} else {
+			item->region = slot->region;
+			bar_slots_arrange(self, want);
+		}
+	}
+
+	if (slot->item != NULL)
+		bar_slot_apply_to(((BarItem *)slot->item)->plugin, slot);
+	else
+		bar_slots_sync(self);
+
+	bar_slots_redraw(self);
+
+	if (out_created != NULL)
+		*out_created = created;
+	return slot;
+}
+
+/* Take @slot off its bar and out of the table.  No repaint. */
+static void
+bar_slot_drop(GowlModuleBar *self, BarSlot *slot)
+{
+	g_autofree gchar *id = NULL;
+	BarItem *item = slot->item;
+
+	if (item != NULL) {
+		if (item->pushed_owned) {
+			bar_slot_item_remove(self, item);
+		} else {
+			item->pushed = NULL;
+			slot->item = NULL;
+			bar_slot_blank(item->plugin);
+		}
+	}
+
+	/* The table's key is the slot's own id, which the removal frees. */
+	id = g_strdup(slot->id);
+	bar_slot_store_remove(self->slots, id);
+}
+
+/**
+ * bar_slot_remove:
+ * @self: the module
+ * @id: (nullable): the slot
+ * @owner: (nullable): when given and not empty, the slot must be this
+ *   owner's
+ * @error: return location for a #GError
+ *
+ * Removes one slot.  Without @owner anything may be removed: that is
+ * the user at a shell, who outranks every pusher.
+ *
+ * Returns: %TRUE if it was removed
+ */
+static gboolean
+bar_slot_remove(GowlModuleBar *self, const gchar *id, const gchar *owner,
+                GError **error)
+{
+	BarSlot *slot;
+
+	slot = bar_slot_store_lookup(self->slots, id);
+	if (slot == NULL) {
+		g_set_error(error, GOWL_IPC_ERROR, GOWL_IPC_ERROR_NOT_FOUND,
+		            "no bar slot named `%s'", (id != NULL) ? id : "");
+		return FALSE;
+	}
+	if (owner != NULL && owner[0] != '\0' &&
+	    strcmp(slot->owner, owner) != 0) {
+		g_set_error(error, GOWL_IPC_ERROR, GOWL_IPC_ERROR_REFUSED,
+		            "slot `%s' is not `%s's", slot->id, owner);
+		return FALSE;
+	}
+
+	bar_slot_drop(self, slot);
+	bar_slots_redraw(self);
+	return TRUE;
+}
+
+/**
+ * bar_slots_remove_matching:
+ * @self: the module
+ * @owner: (nullable): only this owner's slots, or %NULL for anyone's
+ * @expired_at: only slots due at this monotonic time, or 0 for any
+ *
+ * Removes every slot that matches: an owner clearing up after itself,
+ * or the tick retiring slots whose owner stopped pushing.
+ *
+ * Returns: how many were removed
+ */
+static guint
+bar_slots_remove_matching(GowlModuleBar *self, const gchar *owner,
+                          gint64 expired_at)
+{
+	g_autoptr(GPtrArray) ids = NULL;
+	guint i, removed;
+
+	if (self->slots == NULL || bar_slot_store_size(self->slots) == 0)
+		return 0;
+
+	ids = bar_slot_store_select(self->slots, owner, expired_at);
+	removed = 0;
+	for (i = 0; i < ids->len; i++) {
+		BarSlot *slot;
+
+		slot = bar_slot_store_lookup(self->slots,
+		                             g_ptr_array_index(ids, i));
+		if (slot == NULL)
+			continue;
+		bar_slot_drop(self, slot);
+		removed++;
+	}
+	if (removed > 0)
+		bar_slots_redraw(self);
+	return removed;
+}
+
+/* --- The same four operations, as JSON-RPC methods ----------------- */
+
+static JsonNode *
+bar_rpc_slot_set(GowlIpc *ipc, const GowlIpcCaller *caller,
+                 JsonObject *params, gpointer data, GError **error)
+{
+	GowlModuleBar *self = GOWL_MODULE_BAR(data);
+	BarSlot  *slot;
+	JsonNode *node;
+	gboolean  created = FALSE;
+
+	(void)ipc;
+	(void)caller;
+
+	slot = bar_slot_set(self, params, &created, error);
+	if (slot == NULL)
+		return NULL;
+	node = bar_slot_to_json(slot);
+	json_object_set_boolean_member(json_node_get_object(node), "created",
+	                               created);
+	return node;
+}
+
+static JsonNode *
+bar_rpc_slot_remove(GowlIpc *ipc, const GowlIpcCaller *caller,
+                    JsonObject *params, gpointer data, GError **error)
+{
+	GowlModuleBar *self = GOWL_MODULE_BAR(data);
+	const gchar *owner = NULL;
+	JsonNode *node;
+
+	(void)ipc;
+	(void)caller;
+
+	if (json_object_has_member(params, "owner"))
+		owner = json_object_get_string_member(params, "owner");
+	if (!bar_slot_remove(self,
+	                     json_object_get_string_member(params, "id"),
+	                     owner, error))
+		return NULL;
+
+	node = json_node_new(JSON_NODE_VALUE);
+	json_node_set_boolean(node, TRUE);
+	return node;
+}
+
+static JsonNode *
+bar_rpc_slot_clear(GowlIpc *ipc, const GowlIpcCaller *caller,
+                   JsonObject *params, gpointer data, GError **error)
+{
+	GowlModuleBar *self = GOWL_MODULE_BAR(data);
+	const gchar *owner = NULL;
+	gboolean all = FALSE;
+	JsonNode *node;
+
+	(void)ipc;
+	(void)caller;
+
+	if (json_object_has_member(params, "owner"))
+		owner = json_object_get_string_member(params, "owner");
+	if (json_object_has_member(params, "all"))
+		all = json_object_get_boolean_member(params, "all");
+
+	/* "Everything" has to be asked for by name.  A missing owner that
+	   meant all of them would turn one forgotten parameter into an
+	   empty bar. */
+	if (!all && owner == NULL) {
+		g_set_error(error, GOWL_IPC_ERROR, GOWL_IPC_ERROR_INVALID_PARAMS,
+		            "name an `owner', or pass `all': true");
+		return NULL;
+	}
+
+	node = json_node_new(JSON_NODE_VALUE);
+	json_node_set_int(node,
+		bar_slots_remove_matching(self, all ? NULL : owner, 0));
+	return node;
+}
+
+static JsonNode *
+bar_rpc_slot_list(GowlIpc *ipc, const GowlIpcCaller *caller,
+                  JsonObject *params, gpointer data, GError **error)
+{
+	GowlModuleBar *self = GOWL_MODULE_BAR(data);
+	const gchar *owner = NULL;
+
+	(void)ipc;
+	(void)caller;
+	(void)error;
+
+	if (json_object_has_member(params, "owner"))
+		owner = json_object_get_string_member(params, "owner");
+	return bar_slot_store_to_json(self->slots, owner);
+}
+
+static const GowlIpcParam bar_rpc_slot_set_params[] = {
+	{ "id", GOWL_IPC_PARAM_STRING, TRUE,
+	  "the slot's name: 1 to 64 of A-Z a-z 0-9 _ . -" },
+	{ "text", GOWL_IPC_PARAM_STRING, FALSE,
+	  "what it says; cut at 256 bytes" },
+	{ "icon", GOWL_IPC_PARAM_STRING, FALSE,
+	  "a glyph drawn before the text" },
+	{ "role", GOWL_IPC_PARAM_STRING, FALSE,
+	  "a theme role for its colour (text, accent, red, ...); \"\" for "
+	  "the urgency's own" },
+	{ "tooltip", GOWL_IPC_PARAM_STRING, FALSE, "hover text" },
+	{ "urgency", GOWL_IPC_PARAM_STRING, FALSE, "low, normal or critical" },
+	{ "click", GOWL_IPC_PARAM_BOOL, FALSE,
+	  "report clicks as the `bar' event \"slot-click ...\"" },
+	{ "bar", GOWL_IPC_PARAM_STRING, FALSE, "top (the default) or bottom" },
+	{ "region", GOWL_IPC_PARAM_STRING, FALSE,
+	  "left, center or right (the default)" },
+	{ "order", GOWL_IPC_PARAM_INT, FALSE,
+	  "place among the region's slots; negative sorts before the "
+	  "region's own widgets" },
+	{ "output", GOWL_IPC_PARAM_STRING, FALSE,
+	  "the one output to show on; \"\" for all" },
+	{ "owner", GOWL_IPC_PARAM_STRING, FALSE,
+	  "who it belongs to; an update must name the same owner" },
+	{ "ttl", GOWL_IPC_PARAM_INT, FALSE,
+	  "seconds after the last push at which it removes itself; 0 never" },
+	{ NULL, 0, FALSE, NULL }
+};
+
+static const GowlIpcParam bar_rpc_slot_remove_params[] = {
+	{ "id", GOWL_IPC_PARAM_STRING, TRUE, "the slot" },
+	{ "owner", GOWL_IPC_PARAM_STRING, FALSE,
+	  "refuse unless the slot is this owner's" },
+	{ NULL, 0, FALSE, NULL }
+};
+
+static const GowlIpcParam bar_rpc_slot_clear_params[] = {
+	{ "owner", GOWL_IPC_PARAM_STRING, FALSE, "remove this owner's slots" },
+	{ "all", GOWL_IPC_PARAM_BOOL, FALSE, "remove every slot" },
+	{ NULL, 0, FALSE, NULL }
+};
+
+static const GowlIpcParam bar_rpc_slot_list_params[] = {
+	{ "owner", GOWL_IPC_PARAM_STRING, FALSE, "only this owner's slots" },
+	{ NULL, 0, FALSE, NULL }
+};
+
+static const struct {
+	const gchar        *name;
+	const gchar        *summary;
+	const GowlIpcParam *params;
+	const gchar        *result;
+	GowlIpcMethodFunc   func;
+} bar_rpc_methods[] = {
+	{ "bar.slot.set",
+	  "Create a bar slot, or change what one shows or where it sits",
+	  bar_rpc_slot_set_params, "the slot, with {created}",
+	  bar_rpc_slot_set },
+	{ "bar.slot.remove", "Remove one bar slot",
+	  bar_rpc_slot_remove_params, "true", bar_rpc_slot_remove },
+	{ "bar.slot.clear", "Remove an owner's bar slots, or all of them",
+	  bar_rpc_slot_clear_params, "how many were removed",
+	  bar_rpc_slot_clear },
+	{ "bar.slot.list", "The bar slots, in the order the bar shows them",
+	  bar_rpc_slot_list_params,
+	  "[{id, owner, bar, region, order, output, text, icon, role, "
+	  "tooltip, urgency, click, ttl, placed}]", bar_rpc_slot_list },
+	{ NULL, NULL, NULL, NULL, NULL }
+};
+
+static void
+bar_rpc_uninstall(GowlModuleBar *self)
+{
+	guint i;
+
+	if (self->ipc == NULL)
+		return;
+	for (i = 0; bar_rpc_methods[i].name != NULL; i++)
+		gowl_ipc_unregister_method(self->ipc, bar_rpc_methods[i].name);
+	g_object_remove_weak_pointer(G_OBJECT(self->ipc),
+	                             (gpointer *)&self->ipc);
+	self->ipc = NULL;
+}
+
+/* Register the methods on the compositor's IPC server, if it has one
+   and they are not on it already. */
+static void
+bar_rpc_install(GowlModuleBar *self)
+{
+	GowlIpc *ipc;
+	guint i;
+
+	if (self->compositor == NULL)
+		return;
+	ipc = gowl_compositor_get_ipc(GOWL_COMPOSITOR(self->compositor));
+	if (ipc == NULL || ipc == self->ipc)
+		return;
+	bar_rpc_uninstall(self);
+
+	for (i = 0; bar_rpc_methods[i].name != NULL; i++)
+		gowl_ipc_register_method(ipc, bar_rpc_methods[i].name,
+		                         bar_rpc_methods[i].summary,
+		                         bar_rpc_methods[i].params,
+		                         bar_rpc_methods[i].result,
+		                         bar_rpc_methods[i].func, self, NULL);
+	gowl_ipc_declare_event(ipc, "bar",
+	                       "the bar module: slot-click ID BUTTON "
+	                       "MODIFIERS OUTPUT OWNER when a slot made with "
+	                       "click: true is clicked");
+
+	/* Weakly: the server is the embedder's to release, and may go
+	   before this module does. */
+	self->ipc = ipc;
+	g_object_add_weak_pointer(G_OBJECT(ipc), (gpointer *)&self->ipc);
+}
+
+/* The compositor was given another IPC server.  Under cmacs that is
+   the usual order of things: the socket is started from Lisp, after
+   every module has started. */
+static void
+bar_on_ipc_changed(GowlCompositor *comp, GowlIpc *ipc, gpointer user_data)
+{
+	GowlModuleBar *self = GOWL_MODULE_BAR(user_data);
+
+	(void)comp;
+	(void)ipc;
+
+	bar_rpc_uninstall(self);
+	bar_rpc_install(self);
 }
 
 /* Forward a `<target>.<key>' or legacy `<plugin>-<key>' setting to the
@@ -4095,6 +4887,10 @@ bar_configure(GowlModule *mod, gpointer config)
 			&self->bars[GOWL_BAR_POSITION_BOTTOM], bottom);
 	}
 
+	/* A configuration may have listed a `slot:ID', or rebuilt the
+	   region one was listed in: put every pushed slot back on show. */
+	bar_slots_sync(self);
+
 	if (self->tick_timer != NULL)
 		wl_event_source_timer_update(self->tick_timer,
 		                             bar_tick_ms(self));
@@ -4173,6 +4969,10 @@ bar_tick(void *data)
 	if (gowl_bar_toast_stack_expire(self->toasts, g_get_monotonic_time()))
 		g_atomic_int_set(&self->redraw_pending, 1);
 
+	/* A slot with a time-to-live whose owner stopped pushing: what is
+	   left on the bar is the last thing a dead process said. */
+	bar_slots_remove_matching(self, NULL, g_get_monotonic_time());
+
 	if (self->panel.dirty_signature != NULL) {
 		g_clear_pointer(&self->panel.dirty_signature, g_free);
 		bar_panel_rebuild(self);
@@ -4231,6 +5031,34 @@ bar_item_at(GowlBarInstance *bar, gint x, gint *out_local_x)
 		}
 	}
 	return NULL;
+}
+
+/*
+ * Make the items' rectangles describe @monitor's copy of the bar.
+ *
+ * A layout is per output -- outputs differ in width, and a widget may
+ * show on one of them and not another (a slot with an `output', the
+ * tag row's width) -- but its result is parked in the items, so it
+ * describes whichever output was drawn LAST.  A click on any other
+ * screen was hit-tested against that one's geometry and could land on
+ * the neighbouring widget.
+ *
+ * With one output this never does anything: the only layout there is,
+ * is that output's.
+ */
+static void
+bar_ensure_layout(GowlModuleBar *self, GowlBarInstance *bar,
+                  gpointer monitor, gint mon_w)
+{
+	gpointer previous;
+
+	if (bar->laid_out_for == monitor || mon_w <= 0)
+		return;
+
+	previous = bar_plugin_serve_all(bar, monitor);
+	bar_layout_slot(self, bar, mon_w);
+	bar_items_serve(bar, previous);
+	bar->laid_out_for = monitor;
 }
 
 /* Set a slider's value from a pointer x inside its track. */
@@ -4395,6 +5223,7 @@ bar_handle_button(GowlBarProvider *provider, gpointer monitor, gint x, gint y,
 	   panel would be drawn underneath it. */
 	bar_tip_hide(self);
 
+	bar_ensure_layout(self, bar, monitor, mon_w);
 	item = bar_item_at(bar, x, &local_x);
 	if (item == NULL) {
 		/* Empty bar space: consumed so a stray click does not
@@ -4516,8 +5345,11 @@ bar_handle_motion(GowlBarProvider *provider, gpointer monitor, gint x, gint y)
 					? GOWL_BAR_POSITION_TOP
 					: GOWL_BAR_POSITION_BOTTOM;
 			gint local_x = 0;
-			BarItem *hit = bar_item_at(bar, x, &local_x);
+			BarItem *hit;
 			gint idx = -1;
+
+			bar_ensure_layout(self, bar, monitor, mon_w);
+			hit = bar_item_at(bar, x, &local_x);
 
 			if (hit != NULL) {
 				guint i;
@@ -4603,6 +5435,7 @@ bar_handle_axis(GowlBarProvider *provider, gpointer monitor, gint x, gint y,
 	if (bar == NULL)
 		return FALSE;
 
+	bar_ensure_layout(self, bar, monitor, mon_w);
 	item = bar_item_at(bar, x, &local_x);
 	if (item == NULL)
 		return FALSE;
@@ -4949,6 +5782,8 @@ bar_tag_at(GowlBarProvider *provider, gpointer monitor, gint x, gint y)
 	if (bar == NULL)
 		return -1;
 
+	bar_ensure_layout(self, bar, monitor, mon_w);
+
 	for (i = 0; i < bar->items->len; i++) {
 		BarItem *item = g_ptr_array_index(bar->items, i);
 		const gchar *name;
@@ -4998,6 +5833,32 @@ bar_keybind_iface_init(GowlKeybindHandlerInterface *iface)
 /* ----------------------------------------------------------------
  * IPC
  * ---------------------------------------------------------------- */
+
+/* The first two whitespace-separated words of @args, as copies; NULL
+   for a word that is not there. */
+static void
+bar_split_two(const gchar *args, gchar **first, gchar **second)
+{
+	g_auto(GStrv) parts = NULL;
+	guint i, n;
+
+	*first  = NULL;
+	*second = NULL;
+	if (args == NULL)
+		return;
+
+	parts = g_strsplit_set(args, " \t\n", -1);
+	n = 0;
+	for (i = 0; parts[i] != NULL; i++) {
+		if (parts[i][0] == '\0')
+			continue;
+		if (n == 0)
+			*first = g_strdup(parts[i]);
+		else if (n == 1)
+			*second = g_strdup(parts[i]);
+		n++;
+	}
+}
 
 static gchar *
 bar_handle_command(GowlIpcHandler *handler, const gchar *command,
@@ -5208,6 +6069,96 @@ bar_handle_command(GowlIpcHandler *handler, const gchar *command,
 		return g_strdup("ok\n");
 	}
 
+	if (strcmp(command, "bar-slot-set") == 0) {
+		g_autoptr(JsonNode) root = NULL;
+		g_autoptr(JsonObject) built = NULL;
+		JsonObject *params;
+		BarSlot *slot;
+		gboolean created = FALSE;
+
+		if (args == NULL)
+			args = "";
+		while (g_ascii_isspace(*args))
+			args++;
+
+		if (args[0] == '{') {
+			/* The whole of a slot, as a JSON object. */
+			root = json_from_string(args, &error);
+			if (root == NULL || !JSON_NODE_HOLDS_OBJECT(root))
+				return g_strdup_printf("error: %s\n",
+					(error != NULL) ? error->message
+					                : "a slot is a JSON object");
+			params = json_node_get_object(root);
+		} else {
+			/* `ID TEXT...' -- what a shell one-liner wants: the
+			   first word names the slot, the rest of the line is
+			   what it says. */
+			g_autofree gchar *id = NULL;
+			const gchar *rest = args;
+
+			while (*rest != '\0' && !g_ascii_isspace(*rest))
+				rest++;
+			id = g_strndup(args, (gsize)(rest - args));
+			while (g_ascii_isspace(*rest))
+				rest++;
+			if (id[0] == '\0')
+				return g_strdup("error: usage: bar-slot-set ID "
+				                "TEXT... | bar-slot-set {JSON}\n");
+			built = json_object_new();
+			json_object_set_string_member(built, "id", id);
+			json_object_set_string_member(built, "text", rest);
+			params = built;
+		}
+
+		slot = bar_slot_set(self, params, &created, &error);
+		if (slot == NULL)
+			return g_strdup_printf("error: %s\n", error->message);
+		return g_strdup_printf("%s %s\n",
+		                       created ? "created" : "updated", slot->id);
+	}
+
+	if (strcmp(command, "bar-slot-remove") == 0) {
+		g_autofree gchar *id = NULL;
+		g_autofree gchar *owner = NULL;
+
+		/* ID [OWNER] */
+		bar_split_two(args, &id, &owner);
+		if (id == NULL)
+			return g_strdup("error: usage: bar-slot-remove ID "
+			                "[OWNER]\n");
+		if (!bar_slot_remove(self, id, owner, &error))
+			return g_strdup_printf("error: %s\n", error->message);
+		return g_strdup_printf("removed %s\n", id);
+	}
+
+	if (strcmp(command, "bar-slot-clear") == 0) {
+		g_autofree gchar *owner = NULL;
+		g_autofree gchar *extra = NULL;
+		gboolean all;
+
+		/* OWNER, or --all.  Never "all of them" by omission. */
+		bar_split_two(args, &owner, &extra);
+		if (owner == NULL)
+			return g_strdup("error: usage: bar-slot-clear OWNER | "
+			                "bar-slot-clear --all\n");
+		all = (strcmp(owner, "--all") == 0);
+		return g_strdup_printf("removed %u\n",
+			bar_slots_remove_matching(self, all ? NULL : owner, 0));
+	}
+
+	if (strcmp(command, "bar-slot-list") == 0) {
+		g_autofree gchar *owner = NULL;
+		g_autofree gchar *extra = NULL;
+		g_autofree gchar *text = NULL;
+		g_autoptr(JsonNode) node = NULL;
+
+		/* [OWNER] -- one line of JSON, an array in bar order. */
+		bar_split_two(args, &owner, &extra);
+		node = bar_slot_store_to_json(self->slots, owner);
+		text = json_to_string(node, FALSE);
+		return g_strdup_printf("%s\n", text);
+	}
+
 	return NULL;
 }
 
@@ -5254,6 +6205,11 @@ bar_disconnect_signals(GowlModuleBar *self)
 		                            self->renderer_replaced_id);
 		self->renderer_replaced_id = 0;
 	}
+	if (self->ipc_changed_id != 0) {
+		g_signal_handler_disconnect(self->compositor,
+		                            self->ipc_changed_id);
+		self->ipc_changed_id = 0;
+	}
 }
 
 /*
@@ -5289,6 +6245,7 @@ bar_forget_compositor(GowlModuleBar *self)
 	self->client_added_id      = 0;
 	self->client_removed_id    = 0;
 	self->renderer_replaced_id = 0;
+	self->ipc_changed_id       = 0;
 
 	self->tick_timer = NULL;
 	self->tip.timer  = NULL;
@@ -5311,6 +6268,14 @@ bar_forget_compositor(GowlModuleBar *self)
 			surface->scene_buf = NULL;
 		}
 	}
+
+	/* The IPC server is a different object and may well outlive the
+	   compositor; the methods come off it either way.  Held weakly, so
+	   if it went first this is a no-op. */
+	bar_rpc_uninstall(self);
+
+	for (bi = 0; bi < GOWL_BAR_POSITION_COUNT; bi++)
+		self->bars[bi].laid_out_for = NULL;
 
 	self->compositor     = NULL;
 	self->env.compositor = NULL;
@@ -5352,6 +6317,10 @@ bar_teardown(GowlModuleBar *self)
 		                    bar_on_compositor_gone, self);
 		bar_disconnect_signals(self);
 	}
+
+	/* A method left registered would be called with this module as
+	   its user data after the module had let go of everything. */
+	bar_rpc_uninstall(self);
 
 	if (self->tick_timer != NULL) {
 		wl_event_source_remove(self->tick_timer);
@@ -5517,6 +6486,18 @@ bar_on_startup(GowlStartupHandler *handler, gpointer compositor)
 	self->renderer_replaced_id = g_signal_connect(compositor,
 		"renderer-replaced", G_CALLBACK(bar_on_renderer_replaced), self);
 
+	/* The slot methods go on whatever IPC server there is now, and
+	   follow the compositor to the next one: registering only here
+	   would miss cmacs, which starts its socket later. */
+	if (self->ipc_changed_id == 0)
+		self->ipc_changed_id = g_signal_connect(compositor,
+			"ipc-changed", G_CALLBACK(bar_on_ipc_changed), self);
+	bar_rpc_install(self);
+
+	/* Slots pushed before there was a compositor, or kept across a
+	   deactivate, go back on show. */
+	bar_slots_sync(self);
+
 	monitors = gowl_compositor_get_monitors(comp);
 	for (l = monitors; l != NULL; l = l->next) {
 		GowlMonitor *mon = GOWL_MONITOR(l->data);
@@ -5606,6 +6587,9 @@ gowl_module_bar_finalize(GObject *object)
 	g_clear_object(&self->toasts);
 	g_clear_pointer(&self->sysinfo, bar_sysinfo_free);
 	g_clear_pointer(&self->widget_data, g_hash_table_unref);
+	/* After the items above: freeing an item is what cuts its slot's
+	   link, and a slot freed first would be written to by that. */
+	g_clear_pointer(&self->slots, bar_slot_store_free);
 	g_free(self->state_dir);
 	g_free(self->plugin_dir);
 	g_free(self->notify_discard);
@@ -5949,6 +6933,9 @@ gowl_module_bar_init(GowlModuleBar *self)
 	bar_register_assistant_plugins(self->registry);
 	bar_register_wowgold_plugins(self->registry);
 	bar_register_gabbrev_plugins(self->registry);
+	bar_register_slot_plugins(self->registry);
+
+	self->slots = bar_slot_store_new();
 
 	g_signal_connect(self->registry, "plugin-unloaded",
 	                 G_CALLBACK(bar_on_plugin_unloaded), self);

@@ -89,6 +89,9 @@ void bar_register_assistant_plugins   (GowlBarRegistry *registry);
 void bar_register_wowgold_plugins     (GowlBarRegistry *registry);
 void bar_register_gabbrev_plugins     (GowlBarRegistry *registry);
 
+/* The widget behind every pushed bar item; see bar-slots.h. */
+void bar_register_slot_plugins        (GowlBarRegistry *registry);
+
 /* --- The output a widget is being run for -------------------------- */
 
 /**

@@ -170,6 +170,28 @@ gowl-msg hotkey-send 'hello{Enter}'
 gowl-msg -c hotkey.set suspended=true
 #+end_src
 
+* Bar slots
+:PROPERTIES:
+:CUSTOM_ID: bar-slots
+:END:
+
+With the =bar= module loaded, the =bar-slot-= words create, fill and remove *slots*: bar items whose content is pushed from outside. =bar-slot-set ID TEXT...= (or =bar-slot-set {JSON}= with any of =id=, =text=, =icon=, =role=, =tooltip=, =urgency=, =click=, =bar=, =region=, =order=, =output=, =owner=, =ttl=), =-remove ID [OWNER]=, =-clear OWNER|--all= and =-list [OWNER]=.  Event: =EVENT bar slot-click ID BUTTON MODIFIERS OUTPUT OWNER=, for a slot made with =click: true=.  It also adds the JSON-RPC methods =bar.slot.set=, =.remove=, =.clear= and =.list=.  See [[file:bar.org::#slots][bar.org]] for what each key means.
+
+#+begin_src bash
+gowl-msg bar-slot-set mail 3 unread
+gowl-msg -c bar.slot.set id=ci text='2 failing' role=peach urgency=critical owner=ci-watch ttl=120
+gowl-msg -c bar.slot.clear owner=ci-watch
+#+end_src
+
+| Method            | Parameters                                                                                                   | Result                                    |
+|-------------------+--------------------------------------------------------------------------------------------------------------+-------------------------------------------|
+| =bar.slot.set=    | =id= (required), =text=, =icon=, =role=, =tooltip=, =urgency=, =click=, =bar=, =region=, =order=, =output=, =owner=, =ttl= | the slot, with =created=                  |
+| =bar.slot.remove= | =id= (required), =owner=                                                                                     | =true=                                    |
+| =bar.slot.clear=  | =owner=, or =all: true=                                                                                      | how many were removed                     |
+| =bar.slot.list=   | =owner=                                                                                                      | an array of slots, in the order the bar shows them |
+
+A request that names a slot that is not there is =-32001=; one refused because the slot is another owner's, or because there are already 64, is =-32002=; a bad value is =-32602=.  The wire protocol's string parameters do not take =null=, so a field is cleared with =""=.  A click arrives as the event =bar=, ={"args": "slot-click ci left - eDP-1 ci-watch", "words": [...]}=.
+
 * From a module
 
 A module implementing =GowlIpcHandler= answers its own command names; =gowl_compositor_run_command()= is the shared entry point for the =ipc-command= keybind action, cmacs's =gowl-run-command=, MCP and this socket, so a command means the same thing from each.  Core commands are answered first (=src/ipc/gowl-ipc-core.c=), then the modules.  =gowl_ipc_push_event()= adds an event.
@@ -454,7 +476,7 @@ Methods that act on the screen -- focus, typing, keys, screenshots, viewing tags
 | =backdrop.changed= | the translucency backdrop changed                  | ={style}=                                |
 | =transition.changed= | the tag transition was selected                  | ={name, label}=                          |
 | =command=          | a module command ran, from any source              | ={line}=                                 |
-| a module's name    | a module's own event: =macro=, =broadcast=, =inputremap=, =screenshot=, ... | ={args, words[]}= |
+| a module's name    | a module's own event: =macro=, =broadcast=, =inputremap=, =screenshot=, =bar= (a [[#bar-slots][slot]] was clicked), ... | ={args, words[]}= |
 
 =window.changed= names what changed in =changed=: any of =geometry=, =tags=, =monitor=, =floating=, =fullscreen=, =minimized=, =sticky=, =below=, =urgent=, =visible=. It is computed by comparing each window against what was last announced -- after every arrange, and after every frame while somebody is subscribed to it, because a floating window dragged with the mouse is drawn but never arranged -- so one user action can produce several (floating a window re-tiles its neighbours, each announced). A window's first appearance is =window.added=, never a =window.changed=. =tags.changed=, =layout.changed= and =monitor.changed= are computed the same way after every arrange, which every one of those changes ends in, whichever path made it; the text events =tags= and =layout= therefore have no JSON form of their own.
 

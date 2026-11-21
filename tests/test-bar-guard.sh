@@ -314,4 +314,40 @@ for f in modules/bar/bar-plugins-netshares.c modules/bar/bar-netshares-model.c; 
 	fi
 done
 
+# 13. A slot's click is reported, never run.
+#
+# A slot's content comes from whoever holds the IPC socket (or from
+# cmacs), so the one thing the widget that draws it must never do is
+# act on it: no spawn, no command, no shell.  A click goes out as a
+# module event and what it means is decided in the owner's process.
+# The table's two refusals are held here too, because both fail
+# silently: a hex colour would simply be drawn (and stay that colour
+# across a palette change), and a table with no cap is one client's
+# loop becoming the compositor's memory.  And the items the slot code
+# places must stay out of the widget-list paths, or every configuration
+# reload would take them off the bar with nothing to say so.
+slotp=modules/bar/bar-plugins-slots.c
+slotm=modules/bar/bar-slots.c
+if grep -nE 'gowl_bar_plugin_spawn|bar_spawn_shell|bar_run_(argv|shell)|g_spawn|system\(|popen\(' "$slotp" >&2; then
+	fail "$slotp runs something; a slot's click is reported, never run"
+fi
+grep -q 'gowl_compositor_emit_module_event' "$slotp" ||
+	fail "$slotp no longer reports a click as a module event"
+grep -q 'gowl_bar_theme_color_from_name' "$slotm" ||
+	fail "$slotm no longer checks that a slot's role is a theme role"
+if grep -n 'gowl_bar_color_parse\|set_color_rgba' "$slotm" "$slotp" >&2; then
+	fail "a slot takes a theme role, never a literal colour"
+fi
+grep -q 'g_hash_table_size(store->slots) >= BAR_SLOTS_MAX' "$slotm" ||
+	fail "$slotm no longer caps the number of slots"
+awk '/^bar_set_region\(/,/^}/' modules/bar/gowl-module-bar.c \
+	| grep -q 'pushed_owned' ||
+	fail "bar_set_region() frees pushed slots again; a config reload would empty them"
+awk '/^bar_region_remove\(/,/^}/' modules/bar/gowl-module-bar.c \
+	| grep -q 'pushed_owned' ||
+	fail "bar_region_remove() frees pushed slots again"
+awk '/^bar_item_free\(/,/^}/' modules/bar/gowl-module-bar.c \
+	| grep -q 'pushed->item = NULL' ||
+	fail "bar_item_free() no longer cuts a slot's link; the slot would point at a freed item"
+
 echo "PASS: bar source guards"

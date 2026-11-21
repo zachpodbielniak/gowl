@@ -796,6 +796,9 @@ $(OUTDIR)/test-layout: TEST_LDFLAGS += -L$(OUTDIR)/modules -l:tile.so -l:monocle
 # configuration actually produces is testable here.
 $(OUTDIR)/test-bar-module: $(OUTDIR)/modules/bar.so
 $(OBJDIR)/tests/test-bar-module.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"'
+# Bar slots (pushed bar items) through the same module, the same way.
+$(OUTDIR)/test-bar-slots: $(OUTDIR)/modules/bar.so
+$(OBJDIR)/tests/test-bar-slots.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"'
 $(OUTDIR)/test-tray-menu-panel: $(OUTDIR)/modules/bar.so
 $(OBJDIR)/tests/test-tray-menu-panel.o: TEST_CFLAGS += -DGOWL_TEST_BAR_MODULE='"$(abspath $(OUTDIR)/modules/bar.so)"'
 

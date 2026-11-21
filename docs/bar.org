@@ -21,6 +21,7 @@ This document covers configuring the bar, then writing a plugin.
 - A click on a widget opens its *panel*: a dropdown the plugin describes and the bar renders, hit-tests, scrolls and gives keyboard navigation to.
 - *Toasts*: on-screen notifications the bar owns. A toast can name a panel, so "Wi-Fi is not configured" becomes one click away from the network dropdown.
 - Plugins load from a search path --- =~/.config/gowl/bar-plugins/= by default, extendable with =plugin-dir= --- as a compiled =.so= *or as a plain =.c= file*, compiled on demand through crispy --- no build system, no install step, and =gowl bar-plugin-reload= to pick up an edit without restarting.
+- *Slots*: bar items created and filled at run time by something outside the bar --- a script on the IPC socket, cmacs --- with text, a glyph, a theme role, hover text and an urgency, and clicks reported back to whoever owns them. See [[#slots][Slots]].
 - Every colour is a named *theme role* resolved out of the session palette, so one =palette:= setting restyles the bar, its panels, its toasts, and every third-party widget in it.
 - A plugin that faults is caught, unloaded and reported rather than taking the session down. See [[#containment][Containment]] for what that does and does not promise.
 
@@ -599,8 +600,139 @@ modules:
 | =cmd=     | The first line of a command's output; =on-click=, =command-right=, =command-middle= |
 | =label=   | Static text                                                 |
 | =spacer=  | Fixed empty width, optionally a divider rule                |
+| =slot=    | A place for pushed content; see [[#slots][Slots]]                     |
 
 A command line that uses anything only a shell understands --- =$(...)=, a variable, a pipe, =&&=, a redirection, a glob --- is run through =sh -c=. One that does not is run directly, as an argv, with =~= expanded. So the example above works as written: it used to be split into words and handed to =wf-recorder= with a literal =$(slurp)= as its geometry. The same rule applies to every command a shipped widget runs and to =gowl_bar_plugin_spawn()=. =cmd= strips every ANSI escape from the line it shows, not only the colour ones; an =ESC [ K= used to swallow the text up to the next letter =m=.
+
+** Slots
+:PROPERTIES:
+:CUSTOM_ID: slots
+:END:
+
+Every widget above finds out what to show by itself: it reads =/proc=, runs a command, asks the compositor. A *slot* is told. Something outside the bar creates it, says where it goes, and pushes what it shows whenever that changes --- an unread count, the number of failing CI runs, the task you are supposed to be doing.
+
+#+begin_src sh
+gowl bar-slot-set mail 3 unread                 # create it (right region, top bar) or change its text
+gowl bar-slot-set '{"id":"ci","text":"2 failing","icon":"✗","role":"peach","urgency":"critical","region":"left","click":true,"owner":"ci-watch","ttl":120}'
+gowl bar-slot-list                              # one line of JSON, in bar order
+gowl bar-slot-remove mail
+gowl bar-slot-clear ci-watch                    # everything that owner made
+#+end_src
+
+No restart, no configuration reload, and no entry in a widget list: a slot appears when it is set and is gone when it is removed.
+
+*** What a slot holds
+:PROPERTIES:
+:CUSTOM_ID: slot-fields
+:END:
+
+| Key       | Meaning                                                                                              | Default  |
+|-----------+------------------------------------------------------------------------------------------------------+----------|
+| =id=      | The slot's name: 1 to 64 of =A-Z a-z 0-9 _ . -=, not starting with =.= or =-=. Required.            |          |
+| =text=    | What it says. Cut at 256 bytes, on a character boundary; control characters become spaces.           | empty    |
+| =icon=    | A glyph drawn before the text, in the bar's icon font --- the same thing =button.icon= takes.        | none     |
+| =role=    | A [[#theming][theme role]] for its colour: =text=, =accent=, =red=, =green=, =peach= ... Never a hex colour. | by urgency |
+| =tooltip= | Hover text, up to 1024 bytes.                                                                        | the id   |
+| =urgency= | =low= (drawn muted), =normal=, or =critical= (the red role, over a wash of it).                      | =normal= |
+| =click=   | =true= to have clicks reported; see [[#slot-clicks][Clicks]].                                         | =false=  |
+| =bar=     | =top= or =bottom=.                                                                                   | =top=    |
+| =region=  | =left=, =center= or =right=.                                                                         | =right=  |
+| =order=   | Where among the region's slots; see [[#slot-placement][Placement]]. -1000 to 1000.                    | =0=      |
+| =output=  | The one output it shows on, by name (=eDP-1=); empty for every output.                               | all      |
+| =owner=   | Who it belongs to, same alphabet as the id; see [[#slot-owners][Owners]].                              | nobody   |
+| =ttl=     | Seconds after the *last* push at which it removes itself; 0 for never. At most a day.                | =0=      |
+
+Only the keys a push names change, so the usual push is ={"id": ..., "text": ...}= and nothing else. A string given as =""= (or JSON =null=) is cleared. A push is all or nothing: one bad value and none of it is applied. A key that does not exist is an error rather than a setting quietly ignored.
+
+A slot with neither text nor an icon takes no room, the way =battery= takes none on a desktop. Push an empty text to hide one without giving up its place.
+
+The =role= is a role and only a role. A user may write =#fab387= in their own configuration and mean it; a pusher that did the same would leave an orange widget on a bar that had since been switched to Latte. With no role, the urgency picks one.
+
+*** Placement
+:PROPERTIES:
+:CUSTOM_ID: slot-placement
+:END:
+
+A slot is not in any widget list, which is what lets one be added to a bar somebody else configured --- and what keeps it there: =widgets-right: ...= replaces the right region's *widgets*, on every reload and every time cmacs pushes a setting, and leaves the slots in it alone.
+
+Within its region, slots with a *negative* =order= come before the region's own widgets and slots with zero or more come after them, each group sorted by =order=, equal orders in the order they were made. The region's own widgets are never moved relative to each other. In the right region "before" means nearer the screen edge, exactly as in =widgets-right=, which reads outward from the edge.
+
+That is enough to say "at the end" and "at the start". To put a slot *between* two particular widgets, give it a place in the list yourself:
+
+#+begin_src yaml
+modules:
+  bar:
+    widgets-left: "tags slot:task title"
+#+end_src
+
+A =slot:ID= in a widget list is an empty place waiting for a push to =ID=. It sits where the list says, the slot's own =bar=, =region= and =order= no longer apply, and removing the slot empties the place without taking it out of your list. If the list later stops naming it, the slot goes back to the place it asked for itself.
+
+*** Owners
+:PROPERTIES:
+:CUSTOM_ID: slot-owners
+:END:
+
+A slot left behind by something that has gone is a bar that lies. Three things prevent it:
+
+- *An owner tag.* A slot made with =owner= can only be changed by a push naming the same owner --- two programs that picked the same id get an error instead of silently overwriting each other for ever --- and =bar-slot-clear OWNER= removes everything that owner made in one call. A program clears its own tag when it starts and when it exits. cmacs does exactly that with the tag =cmacs=.
+- *A time-to-live.* A slot made with =ttl= removes itself that many seconds after the last push to it. Every push is a heartbeat, so a program that updates a count every minute and sets =ttl: 180= cannot leave a stale count behind however it dies. The check runs on the bar's tick, so it is good to a few seconds.
+- *The user outranks all of them.* =bar-slot-remove ID= with no owner removes any slot, and =bar-slot-clear --all= removes every one.
+
+At most 64 slots exist at once; the 65th is refused.
+
+*** Clicks
+:PROPERTIES:
+:CUSTOM_ID: slot-clicks
+:END:
+
+A slot made with =click: true= reports every button press on it:
+
+#+begin_example
+EVENT bar slot-click ID BUTTON MODIFIERS OUTPUT OWNER
+EVENT bar slot-click ci left - eDP-1 ci-watch
+EVENT bar slot-click mail right ctrl+shift DP-2 -
+#+end_example
+
+=BUTTON= is =left=, =right=, =middle= or =button-N=; =MODIFIERS= is =shift=, =ctrl=, =alt= and =super= joined with =+=, or =-=; =OWNER= is =-= for a slot with none. Text subscribers (=gowl-msg -s=) see the line as written; JSON subscribers get the event =bar= with it in =args= and =words=; an embedder gets the compositor's =module-event= signal, which cmacs turns into =cmacs-gowl-module-event-functions=.
+
+That is all a click does. A slot carries no command, and nothing a pusher sent is ever run or interpreted by the compositor: what a click *means* is decided by the slot's owner, in the owner's process. A slot without =click= is not a button, and a press on it falls through as it does on a label.
+
+#+begin_src sh
+# A slot that opens the mail client when clicked.
+gowl bar-slot-set '{"id":"mail","text":"3 unread","click":true,"owner":"mailcount"}'
+gowl-msg -s | while read -r _ module what id button _; do
+	[ "$module $what $id $button" = "bar slot-click mail left" ] && xdg-open mailto:
+done
+#+end_src
+
+*** The commands
+:PROPERTIES:
+:CUSTOM_ID: slot-commands
+:END:
+
+| Command                             | Does                                                                 | Replies                    |
+|-------------------------------------+----------------------------------------------------------------------+----------------------------|
+| =bar-slot-set ID TEXT...=           | Create =ID= with the rest of the line as its text, or change its text | =created ID= / =updated ID= |
+| =bar-slot-set {JSON}=               | The same, with any of the keys above                                 | =created ID= / =updated ID= |
+| =bar-slot-remove ID [OWNER]=        | Remove one; with =OWNER=, only if it is that owner's                 | =removed ID=               |
+| =bar-slot-clear OWNER=              | Remove everything =OWNER= made                                       | =removed N=                |
+| =bar-slot-clear --all=              | Remove every slot                                                    | =removed N=                |
+| =bar-slot-list [OWNER]=             | The slots, as a JSON array in the order the bar shows them           | the array                  |
+
+A refusal is =error: REASON=. The same four operations are the JSON-RPC methods =bar.slot.set=, =bar.slot.remove=, =bar.slot.clear= and =bar.slot.list= --- see [[file:ipc.org::#bar-slots][ipc.org]] --- and, from cmacs, =cmacs-gowl-bar-slot-set= and friends.
+
+=bar-slot-list= reports =placed: false= for a slot that is on no bar at the moment --- the =slot= plugin has been held back after a fault (=gowl bar-quarantined=). The slot itself is kept and goes back on show when the plugin does.
+
+*** What it costs
+:PROPERTIES:
+:CUSTOM_ID: slot-cost
+:END:
+
+A slot is drawn by an ordinary plugin, =slot=, instantiated as =slot:ID=: it is polled, measured, drawn and clicked through the same entry points as every other widget, under the same [[#containment][fault guard]], and shows up in =gowl bar-widgets= like any of them.
+
+Changing what an existing slot says is a hash lookup, eight settings and a repaint, whatever the number of slots; text is bounded before it is looked at, so a megabyte pushed as a status costs what 256 bytes do. Only a slot that is new, or that asked to move, costs a pass over its bar's widgets. Nothing in the path blocks, spawns or waits, which matters because under =cmacs --gowl= a push arrives holding the lock the whole editor needs.
+
+A slot with an =output= is the first widget whose /width/ differs from screen to screen, which found a bug older than slots: the bar is laid out per output but the result is kept in the widgets, so a click was hit-tested against whichever output had been drawn last. On two screens of different widths a click on one could land on the neighbouring widget. The bar now lays out for the output under the pointer before it hit-tests.
 
 ** The extended widget set
 :PROPERTIES:
@@ -1237,5 +1369,6 @@ Clear a quarantine with =gowl bar-plugin-clear <name>= once you have fixed the p
 10. Every setting a plugin writes is read somewhere, every tooltip is drawn, the toggle sets one, and the compositor's own recorder stays reachable.
 11. Reading a selection never blocks the compositor (the clipboard module reads from the main loop, with a deadline).
 12. A secret never goes into an argv: the network-shares widget builds every argv with =g_ptr_array_add(argv, ...)=, and no such line may name a password or secret --- an argv is readable by every user in =/proc/<pid>/cmdline=.
+13. A slot's click is reported and never run: the =slot= plugin spawns nothing, and the slot table still refuses a colour that is not a theme role and a 65th slot.
 
 =tests/test-bar-actions.sh= checks that every panel control a widget emits has a handler and every handler answers a control that is emitted. It reads each file flattened (so a call whose arguments wrap still counts), knows the ENTRY and CANVAS builders, follows local =#define NAME(id_, ...)= wrappers, and recognises =g_strcmp0=, =strcmp=, =g_str_has_prefix= and =*id_arg= helpers as handlers. A status row --- "Reading the selection..." --- should carry no id at all: an id makes it hover and click.

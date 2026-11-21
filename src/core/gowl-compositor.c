@@ -1385,6 +1385,11 @@ gowl_compositor_set_config(
 		                 G_CALLBACK(on_recording_config_notify), self);
 		gowl_compositor_apply_input_recording_config(self);
 	}
+
+	/* A replaced config may say something else about
+	 * `force-seat-keyboard'.  A no-op before the seat exists; start()
+	 * announces it then. */
+	gowl_compositor_update_seat_capabilities(self);
 }
 
 /**
@@ -5115,6 +5120,12 @@ gowl_compositor_start(
 	gowl_shortcuts_inhibit_init(self);
 	gowl_foreign_toplevel_init(self);
 	gowl_text_input_init(self);
+	/* Announce the seat now rather than when the first device is
+	 * plugged in: on a backend with no input devices (headless, a
+	 * tablet before its on-screen keyboard starts) that moment never
+	 * comes, and a forced keyboard capability has to be there for the
+	 * first client that connects. */
+	gowl_compositor_update_seat_capabilities(self);
 	self->tearing_control_mgr =
 		wlr_tearing_control_manager_v1_create(self->wl_display, 1);
 	self->content_type_mgr =
@@ -9840,7 +9851,6 @@ on_new_input(struct wl_listener *listener, void *data)
 {
 	GowlCompositor *self;
 	struct wlr_input_device *device;
-	guint32 caps;
 
 	self = wl_container_of(listener, self, new_input);
 	device = (struct wlr_input_device *)data;
@@ -9875,14 +9885,144 @@ on_new_input(struct wl_listener *listener, void *data)
 		break;
 	}
 
-	/* Update seat capabilities.  A claimed keyboard is outside the
-	 * group but still a keyboard: with only a pedal plugged in, its
-	 * remapped keys still need a wl_keyboard to arrive on. */
+	/* A device arrived: what the seat advertises may have changed. */
+	gowl_compositor_update_seat_capabilities(self);
+}
+
+/*
+ * GOWL_SEAT_KEYBOARD in the environment: "always" (or 1/on/true/yes)
+ * forces the keyboard capability, "auto" (or 0/off/false/no) makes it
+ * automatic, and both override the config.  The hook a test rig or a
+ * session launcher uses, where there is no config file to edit.
+ * Returns -1 when the variable is unset, empty or says nothing known.
+ */
+static gint
+seat_keyboard_from_environment(void)
+{
+	static gboolean warned = FALSE;
+	const gchar *value;
+
+	value = g_getenv("GOWL_SEAT_KEYBOARD");
+	if (value == NULL || *value == '\0')
+		return -1;
+	if (g_ascii_strcasecmp(value, "always") == 0
+	    || g_ascii_strcasecmp(value, "on") == 0
+	    || g_ascii_strcasecmp(value, "true") == 0
+	    || g_ascii_strcasecmp(value, "yes") == 0
+	    || g_strcmp0(value, "1") == 0)
+		return 1;
+	if (g_ascii_strcasecmp(value, "auto") == 0
+	    || g_ascii_strcasecmp(value, "off") == 0
+	    || g_ascii_strcasecmp(value, "false") == 0
+	    || g_ascii_strcasecmp(value, "no") == 0
+	    || g_strcmp0(value, "0") == 0)
+		return 0;
+	/* Once: this is asked every time the capabilities are decided. */
+	if (!warned) {
+		warned = TRUE;
+		g_warning("GOWL_SEAT_KEYBOARD='%s' is neither `always' nor "
+		          "`auto'; ignored", value);
+	}
+	return -1;
+}
+
+gboolean
+gowl_compositor_get_force_seat_keyboard(GowlCompositor *self)
+{
+	gint env;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	env = seat_keyboard_from_environment();
+	if (env >= 0)
+		return env > 0;
+	return self->config != NULL
+	       && gowl_config_get_force_seat_keyboard(self->config);
+}
+
+/*
+ * Whether the seat has a keyboard to advertise.
+ *
+ * It used to be "a physical keyboard is plugged in", which left a
+ * machine with none -- a tablet, a headset, a headless session --
+ * without wl_keyboard for ever: keys injected through a virtual
+ * keyboard (an on-screen keyboard, wtype) reached no client, because no
+ * client had a wl_keyboard to receive them on, and a toolkit, which
+ * learns that its window is focused from wl_keyboard.enter, never
+ * enabled its text input.
+ *
+ * A keyboard is any of:
+ *
+ *   - a device in the keyboard group (hardware, the ordinary case);
+ *   - a device an input remapper claimed, which is outside the group
+ *     but still a keyboard: with only a pedal plugged in, its remapped
+ *     keys still need a wl_keyboard to arrive on;
+ *   - a virtual keyboard a client created.  Virtual keyboards are still
+ *     kept out of the group (gowl-text-input.c says why); they count
+ *     here because their keys are delivered to the same seat;
+ *   - nothing at all, when the capability is forced on.
+ */
+gboolean
+gowl_compositor_seat_has_keyboard(GowlCompositor *self)
+{
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	if (self->wlr_kb_group != NULL
+	    && !wl_list_empty(&self->wlr_kb_group->devices))
+		return TRUE;
+	if (gowl_input_remap_core_has_claimed_keyboard(self))
+		return TRUE;
+	if (gowl_text_input_has_virtual_keyboard(self))
+		return TRUE;
+	return gowl_compositor_get_force_seat_keyboard(self);
+}
+
+/**
+ * gowl_compositor_update_seat_capabilities:
+ * @self: a #GowlCompositor
+ *
+ * Decides what the seat advertises and tells the clients when that
+ * changed.  The pointer is always there (the cursor exists without a
+ * mouse, and motion can be injected); the keyboard as
+ * gowl_compositor_seat_has_keyboard() says.
+ *
+ * Every place that used to compute this for itself calls here, so the
+ * rule cannot come to differ between them: one that forgot the virtual
+ * keyboards would take the capability away from under an on-screen
+ * keyboard the next time a mouse was plugged in.
+ */
+void
+gowl_compositor_update_seat_capabilities(GowlCompositor *self)
+{
+	guint32 caps;
+
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->wlr_seat == NULL)
+		return;
+
 	caps = WL_SEAT_CAPABILITY_POINTER;
-	if (!wl_list_empty(&self->wlr_kb_group->devices)
-	    || gowl_input_remap_core_has_claimed_keyboard(self))
+	if (gowl_compositor_seat_has_keyboard(self))
 		caps |= WL_SEAT_CAPABILITY_KEYBOARD;
+
+	/* Unchanged: say nothing.  wlroots sends wl_seat.capabilities to
+	 * every client on each call, and a client is entitled to rebind
+	 * its devices whenever it hears one. */
+	if (caps == self->wlr_seat->capabilities)
+		return;
 	wlr_seat_set_capabilities(self->wlr_seat, caps);
+}
+
+void
+gowl_compositor_set_force_seat_keyboard(
+	GowlCompositor *self,
+	gboolean        on
+){
+	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
+
+	if (self->config != NULL)
+		gowl_config_set_force_seat_keyboard(self->config, on);
+	gowl_compositor_update_seat_capabilities(self);
 }
 
 /**

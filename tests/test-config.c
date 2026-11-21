@@ -744,6 +744,35 @@ test_config_unknown_keys_are_counted(void)
 	g_object_unref(config);
 }
 
+/* force-seat-keyboard: off unless asked for, a known key, and settable
+ * from YAML and from code (the compositor's side of it is
+ * test-seat-keyboard.c). */
+static void
+test_config_force_seat_keyboard(void)
+{
+	GowlConfig *config;
+	GError *err = NULL;
+
+	config = gowl_config_new();
+	g_assert_false(gowl_config_get_force_seat_keyboard(config));
+
+	g_assert_true(load_yaml_from_string(config,
+		"force-seat-keyboard: true\n", &err));
+	g_assert_no_error(err);
+	/* a known key: nothing to report */
+	g_assert_cmpuint(gowl_config_get_problem_count(config), ==, 0);
+	g_assert_true(gowl_config_get_force_seat_keyboard(config));
+
+	g_assert_true(load_yaml_from_string(config,
+		"force-seat-keyboard: false\n", &err));
+	g_assert_no_error(err);
+	g_assert_false(gowl_config_get_force_seat_keyboard(config));
+
+	gowl_config_set_force_seat_keyboard(config, TRUE);
+	g_assert_true(gowl_config_get_force_seat_keyboard(config));
+	g_object_unref(config);
+}
+
 static void
 test_config_monitors_transform_string(void)
 {
@@ -1988,6 +2017,8 @@ main(int argc, char *argv[])
 	g_test_add_func("/config/output-profiles-from-code",
 	                test_config_output_profiles_from_code);
 	g_test_add_func("/config/rule-entry-init", test_config_rule_entry_init);
+	g_test_add_func("/config/force-seat-keyboard",
+	                test_config_force_seat_keyboard);
 	g_test_add_func("/config/no-fx-apps",
 	                test_no_fx_apps_takes_a_string_or_a_list);
 	g_test_add_func("/config/hdr-properties",

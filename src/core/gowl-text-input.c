@@ -51,6 +51,12 @@
  *     real key -- and any other (wtype, a KVM) goes through
  *     gowl_compositor_inject_key(), the synthetic path, which the
  *     recorder does not tap.
+ *     Kept apart from the GROUP, that is.  For the seat's wl_keyboard
+ *     capability a virtual keyboard is a keyboard like any other
+ *     (gowl_compositor_seat_has_keyboard()): on a machine with no
+ *     hardware one it is the only reason a client has a wl_keyboard
+ *     for these keys to arrive on, so creating and destroying one
+ *     re-decides the capability.
  *
  *   - POPUPS.  The candidate window is an input-method popup surface
  *     the compositor places itself, under the text cursor of the
@@ -813,6 +819,9 @@ on_vkb_destroy(struct wl_listener *listener, void *data)
 	wl_list_remove(&v->destroy.link);
 	relay->virtual_keyboards = g_list_remove(relay->virtual_keyboards, v);
 	g_free(v);
+	/* It was perhaps the only keyboard the seat had: after it is off
+	 * the list, so the count the decision reads is the new one. */
+	gowl_compositor_update_seat_capabilities(self);
 }
 
 static void
@@ -833,6 +842,52 @@ on_new_virtual_keyboard(struct wl_listener *listener, void *data)
 	v->destroy.notify = on_vkb_destroy;
 	wl_signal_add(&vkb->keyboard.base.events.destroy, &v->destroy);
 	relay->virtual_keyboards = g_list_prepend(relay->virtual_keyboards, v);
+	/* A virtual keyboard is a keyboard as far as the seat's
+	 * capabilities go: on a machine with no hardware one, this is what
+	 * lets clients bind the wl_keyboard its keys will arrive on.  It
+	 * still does not join the keyboard group. */
+	gowl_compositor_update_seat_capabilities(relay->compositor);
+}
+
+/**
+ * gowl_text_input_has_virtual_keyboard:
+ * @self: the compositor
+ *
+ * Returns: %TRUE while at least one client holds a
+ *   zwp_virtual_keyboard_v1 -- an on-screen keyboard, an input method's
+ *   own, wtype, a remote.  %FALSE before gowl_text_input_init() and
+ *   after gowl_text_input_finish().
+ */
+gboolean
+gowl_text_input_has_virtual_keyboard(GowlCompositor *self)
+{
+	GowlTextInputRelay *relay;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), FALSE);
+
+	relay = (GowlTextInputRelay *)self->text_input_relay;
+	return relay != NULL && relay->virtual_keyboards != NULL;
+}
+
+/**
+ * gowl_text_input_virtual_keyboard_manager:
+ * @self: the compositor
+ *
+ * For tests, which announce a virtual keyboard by emitting the
+ * manager's new_virtual_keyboard signal the way a client's request
+ * does.
+ *
+ * Returns: (transfer none) (nullable): the virtual-keyboard-v1 manager
+ */
+struct wlr_virtual_keyboard_manager_v1 *
+gowl_text_input_virtual_keyboard_manager(GowlCompositor *self)
+{
+	GowlTextInputRelay *relay;
+
+	g_return_val_if_fail(GOWL_IS_COMPOSITOR(self), NULL);
+
+	relay = (GowlTextInputRelay *)self->text_input_relay;
+	return relay != NULL ? relay->virtual_keyboard_mgr : NULL;
 }
 
 /* -----------------------------------------------------------
@@ -1317,9 +1372,12 @@ gowl_compositor_replace_text(
 		   the return value alone, so the callback is kept back until
 		   it is known to be needed */
 		ti->pending_func = NULL;
-		if (ti_pending_step(ti))
+		if (ti_pending_step(ti)) {
+			wl_display_flush_clients(self->wl_display);
 			return GOWL_TEXT_COMMIT_SENT;
+		}
 		ti->pending_func = func;
+		wl_display_flush_clients(self->wl_display);
 		return GOWL_TEXT_COMMIT_PENDING;
 	}
 
@@ -1328,6 +1386,13 @@ gowl_compositor_replace_text(
 	ti->borrowed = TRUE;
 	wlr_text_input_v3_send_enter(ti->input,
 	                             gowl_client_get_wlr_surface(client));
+	/* Flushed here, not left for the loop: under cmacs these functions
+	   are called from Emacs's thread while the dispatch thread sleeps in
+	   epoll, and nothing wakes it for an event queued from outside.  The
+	   client then first heard "enter" when the pending timeout fired --
+	   250 ms later, as "leave" -- and the operation failed about half
+	   the time on an idle desktop */
+	wl_display_flush_clients(self->wl_display);
 	return GOWL_TEXT_COMMIT_PENDING;
 }
 
@@ -1432,5 +1497,12 @@ gowl_compositor_read_text_field(
 	ti->borrowed = TRUE;
 	wlr_text_input_v3_send_enter(ti->input,
 	                             gowl_client_get_wlr_surface(client));
+	/* Flushed here, not left for the loop: under cmacs these functions
+	   are called from Emacs's thread while the dispatch thread sleeps in
+	   epoll, and nothing wakes it for an event queued from outside.  The
+	   client then first heard "enter" when the pending timeout fired --
+	   250 ms later, as "leave" -- and the operation failed about half
+	   the time on an idle desktop */
+	wl_display_flush_clients(self->wl_display);
 	return GOWL_TEXT_COMMIT_PENDING;
 }

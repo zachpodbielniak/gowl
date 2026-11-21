@@ -895,8 +895,6 @@ reevaluate_device(
 void
 gowl_compositor_input_remap_reevaluate(GowlCompositor *self)
 {
-	guint32 caps;
-
 	g_return_if_fail(GOWL_IS_COMPOSITOR(self));
 
 	if (self->wlr_kb_group == NULL)
@@ -907,14 +905,10 @@ gowl_compositor_input_remap_reevaluate(GowlCompositor *self)
 		return;
 	gowl_input_config_foreach_device(self, reevaluate_device, self);
 
-	/* A pedal may be the only keyboard left outside the group */
-	if (self->wlr_seat != NULL) {
-		caps = WL_SEAT_CAPABILITY_POINTER;
-		if (!wl_list_empty(&self->wlr_kb_group->devices)
-		    || gowl_input_remap_core_has_claimed_keyboard(self))
-			caps |= WL_SEAT_CAPABILITY_KEYBOARD;
-		wlr_seat_set_capabilities(self->wlr_seat, caps);
-	}
+	/* A pedal may be the only keyboard left outside the group.  The
+	 * rule is the compositor's, in one place: computing it here as
+	 * well once meant this copy knew nothing of virtual keyboards. */
+	gowl_compositor_update_seat_capabilities(self);
 }
 
 /**

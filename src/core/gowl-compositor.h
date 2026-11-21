@@ -788,6 +788,41 @@ gboolean gowl_compositor_get_tray (GowlCompositor *self);
 void gowl_compositor_set_tray (GowlCompositor *self, gboolean on);
 
 /**
+ * gowl_compositor_get_force_seat_keyboard:
+ * @self: a #GowlCompositor
+ *
+ * Returns: %TRUE when the seat advertises a keyboard whether or not one
+ *   exists: the config's `force-seat-keyboard', unless GOWL_SEAT_KEYBOARD
+ *   in the environment says otherwise
+ */
+gboolean gowl_compositor_get_force_seat_keyboard (GowlCompositor *self);
+
+/**
+ * gowl_compositor_set_force_seat_keyboard:
+ * @self: a #GowlCompositor
+ * @on: %TRUE to advertise wl_keyboard always; %FALSE to advertise it
+ *   while a keyboard -- physical, claimed or virtual -- exists
+ *
+ * Changes the config's `force-seat-keyboard' and re-announces the seat
+ * at once, so clients already connected bind (or release) wl_keyboard.
+ * GOWL_SEAT_KEYBOARD in the environment still overrides the value set
+ * here.  For a session with no keyboard that hosts toolkit clients; see
+ * docs/configuration.org.
+ */
+void gowl_compositor_set_force_seat_keyboard (GowlCompositor *self,
+                                              gboolean        on);
+
+/**
+ * gowl_compositor_seat_has_keyboard:
+ * @self: a #GowlCompositor
+ *
+ * Returns: %TRUE when the seat should advertise wl_keyboard now: a
+ *   keyboard is plugged in, an input remapper holds one, a client has
+ *   created a virtual keyboard, or the capability is forced on
+ */
+gboolean gowl_compositor_seat_has_keyboard (GowlCompositor *self);
+
+/**
  * gowl_compositor_get_crt:
  * @self: a #GowlCompositor
  *

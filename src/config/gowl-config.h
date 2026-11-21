@@ -1777,6 +1777,26 @@ gboolean gowl_config_get_cube_gesture (GowlConfig *self);
 gboolean gowl_config_get_tray (GowlConfig *self);
 void     gowl_config_set_tray (GowlConfig *self, gboolean on);
 
+/* --- The seat's keyboard capability ---
+ *
+ * By default (%FALSE) the seat advertises wl_keyboard while a keyboard
+ * exists: a physical one, a device claimed by an input remapper, or a
+ * virtual keyboard some client created (an on-screen keyboard, wtype, a
+ * remote).  %TRUE advertises it always.
+ *
+ * That is for a machine with no keyboard at all -- a tablet, a headset,
+ * a headless session hosting real applications.  A toolkit only binds
+ * wl_keyboard while the capability is there, and learns that its window
+ * has focus (and so enables its text input) from wl_keyboard.enter; and
+ * a key typed by a program that creates a virtual keyboard, types and
+ * exits (wtype) is gone before a client that waited for the capability
+ * could bind.  With the capability always on, the client is already
+ * listening.  The `force-seat-keyboard' key; GOWL_SEAT_KEYBOARD in the
+ * environment overrides it either way (docs/configuration.org).
+ */
+gboolean gowl_config_get_force_seat_keyboard (GowlConfig *self);
+void     gowl_config_set_force_seat_keyboard (GowlConfig *self, gboolean on);
+
 /* --- Cathode ray tube (modules/crt) ---
  *
  * The one effect that is not behind a window: it captures the finished

@@ -585,7 +585,7 @@ and checks the ones applications give up silently without.
 | wlr-screencopy, ext-image-capture-source (outputs and toplevels), ext-image-copy-capture, ext-foreign-toplevel-list | gowl-capture-wlroots.c | |
 | wlr-foreign-toplevel-management | gowl-foreign-toplevel.c | one handle per managed window; activate obeys =focus-on-activate= |
 | cursor-shape, pointer-constraints, relative-pointer, pointer-gestures, virtual-pointer, tablet-v2 | gowl-compositor.c, gowl-tablet.c | |
-| text-input-v3, input-method-v2, virtual-keyboard | gowl-text-input.c | the relay, the keyboard grab, popups; virtual keyboards from the input method go straight to the focused surface, any other goes through the synthetic key path |
+| text-input-v3, input-method-v2, virtual-keyboard | gowl-text-input.c | the relay, the keyboard grab, popups; virtual keyboards from the input method go straight to the focused surface, any other goes through the synthetic key path; any of them counts as a keyboard for the seat's =wl_keyboard= capability, which is decided in one place (=gowl_compositor_update_seat_capabilities()=) |
 | keyboard-shortcuts-inhibit | gowl-shortcuts-inhibit.c | active only for the focused surface; the escape hatches stay |
 | idle-inhibit, ext-idle-notify | gowl-idle-manager.c | an inhibitor counts on a visible surface only; both timers and the screenlock's auto-lock hold off |
 | wlr-output-power-management | gowl-output-power.c | powered-off outputs keep their layout place and windows |

@@ -74,6 +74,7 @@ General compositor settings.
 | =manage_lid=   | bool   | =true=         | Power off the internal panel (eDP/LVDS/DSI) when the laptop lid is shut and an external display is connected |
 | =input-recording= | bool | =false=       | Allow a recording of real key and pointer input to be started.  See [[file:input-recording.org][Input Recording]] |
 | =input-recording-deny-apps= | string | ="" | Comma-separated globs; recording pauses while the focused window matches one.  *Added* to the built-in list, never replacing it |
+| =force-seat-keyboard= | bool | =false= | Advertise =wl_keyboard= on the seat even when no keyboard exists.  See [[#seat-keyboard][Machines without a keyboard]] |
 
 When =manage_lid= is enabled (the default), gowl turns the laptop's
 built-in panel off while the lid is closed and at least one external
@@ -626,6 +627,36 @@ the texture and the per-frame capture --- so an unzoomed session costs
 nothing. It also sits above the bar, since a magnifier that magnified
 everything except the panel would be useless to somebody who needs it to
 read the panel.
+
+**** Machines without a keyboard
+:PROPERTIES:
+:CUSTOM_ID: seat-keyboard
+:END:
+
+A Wayland seat tells its clients which input devices it has, and a client only asks for the ones it is told about. gowl advertises =wl_keyboard= while *a keyboard exists*, and a keyboard is any of:
+
+- a physical keyboard;
+- a device an input remapper has claimed (a foot pedal is still a keyboard, see [[file:input-remap.org][input-remap.org]]);
+- a *virtual keyboard* some client created with =zwp_virtual_keyboard_v1=: an on-screen keyboard, an input method, =wtype=, a remote.
+
+Virtual keyboards did not count before 0.5.3. On a machine with no physical keyboard --- a tablet, a VR headset, a headless session --- the seat never offered =wl_keyboard= at all, so keys typed on an on-screen keyboard reached no application (none had a =wl_keyboard= to receive them on), and a GTK or Qt window never enabled its text field: a toolkit learns that its window has focus from =wl_keyboard.enter=. Virtual keyboards are still kept out of the hardware keyboard group, so the input recorder cannot mistake one for hardware ([[file:input-recording.org][input-recording.org]]); they count for the capability only.
+
+The capability follows the keyboards: it appears when the first one does and goes when the last one leaves. That is right for an on-screen keyboard, which stays. It is not enough for a program that creates a virtual keyboard, types and exits (=wtype=): its keys are sent before any application has had time to notice the new capability and bind =wl_keyboard=, and are lost. For that --- and for any session that has to host real toolkit clients with no keyboard attached, a test rig included --- turn the capability on for good:
+
+#+begin_src yaml
+force-seat-keyboard: true
+#+end_src
+
+| Setting | Meaning |
+|---------+---------|
+| =force-seat-keyboard: false= (default) | Automatic: =wl_keyboard= while a physical, claimed or virtual keyboard exists |
+| =force-seat-keyboard: true= | Always. Applications bind =wl_keyboard= at startup and get =enter= with focus; injected keys (=gowl_compositor_inject_key()=, the IPC and MCP key tools, a virtual keyboard) arrive on it |
+| =GOWL_SEAT_KEYBOARD=always= (environment) | As =true=, whatever the config says. Also =1=, =on=, =true=, =yes= |
+| =GOWL_SEAT_KEYBOARD=auto= (environment) | As =false=, whatever the config says. Also =0=, =off=, =false=, =no= |
+
+From C, =gowl_compositor_set_force_seat_keyboard()= changes it in a running compositor and re-announces the seat at once; =gowl_compositor_seat_has_keyboard()= answers what the seat advertises now. Forcing the capability invents no device: with nothing attached and nothing injected, no key ever arrives.
+
+The pointer capability is always advertised, from startup: the cursor exists without a mouse, and motion can be injected.
 
 **** The system tray
 :PROPERTIES:
@@ -4289,6 +4320,7 @@ gowl_config_init(void)
 | =GOWL_DISABLE_SYSTEMD=  | Skip the systemd user-session bootstrap (=import-environment=, =gowl-session.target=, portal restart). |
 | =GOWL_DEBUG_XWAYLAND=   | Log every XWayland surface's type (=OVERRIDE-REDIRECT (unmanaged)= vs =MANAGED=, with class/title) at =message= level, so it appears even at the default =warning= log-level.  Use to confirm which focus path an X11 window takes. |
 | =GOWL_OUTPUT_SIZE=      | =WxH= mode for nested/headless outputs that advertise no mode list (e.g. =1920x1080=).         |
+| =GOWL_SEAT_KEYBOARD=    | =always= advertises =wl_keyboard= on the seat with no keyboard attached; =auto= advertises it only while one exists. Overrides =force-seat-keyboard= either way. See [[#seat-keyboard][Machines without a keyboard]]. |
 
 The standard wlroots variable =WLR_BACKENDS= (e.g. =libinput,drm=) is also
 honoured: gowl only =setenv='s it with no-overwrite, so a value set in the

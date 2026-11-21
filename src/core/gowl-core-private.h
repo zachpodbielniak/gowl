@@ -1408,6 +1408,15 @@ gboolean gowl_text_input_grab_key          (GowlCompositor *self, struct wlr_key
                                             guint32 time_msec, guint32 keycode,
                                             guint32 state);
 gboolean gowl_text_input_grab_modifiers    (GowlCompositor *self, struct wlr_keyboard *kb);
+gboolean gowl_text_input_has_virtual_keyboard(GowlCompositor *self);
+struct wlr_virtual_keyboard_manager_v1 *
+         gowl_text_input_virtual_keyboard_manager(GowlCompositor *self);
+
+/* The one place the seat's capabilities are decided: gowl-compositor.c.
+ * Called whenever something they depend on changes -- a device arrives,
+ * a remapper claims or releases one, a virtual keyboard comes or goes,
+ * the config is replaced. */
+void     gowl_compositor_update_seat_capabilities(GowlCompositor *self);
 
 /* per-device input settings: gowl-input-config.c */
 struct libinput_device;

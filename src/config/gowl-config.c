@@ -292,6 +292,9 @@
 /* --- The system tray (src/tray) ------------------------------------ */
 #define GOWL_CONFIG_DEFAULT_TRAY               (FALSE)
 
+/* --- The seat's keyboard capability (src/core) ---------------------- */
+#define GOWL_CONFIG_DEFAULT_FORCE_SEAT_KEYBOARD (FALSE)
+
 /* --- The cathode ray tube (modules/crt) ---------------------------- */
 #define GOWL_CONFIG_DEFAULT_CRT                (FALSE)
 #define GOWL_CONFIG_DEFAULT_CRT_PRESET     "consumer"
@@ -878,6 +881,7 @@ struct _GowlConfig {
 	gdouble  bokeh_brightness;
 
 	gboolean tray;
+	gboolean force_seat_keyboard;
 	gboolean crt;
 	gchar   *crt_preset;
 	gchar   *crt_mask_kind;    /* NULL: the preset's tube */
@@ -2375,6 +2379,7 @@ gowl_config_init(GowlConfig *self)
 	self->bokeh_brightness   = GOWL_CONFIG_DEFAULT_BOKEH_BRIGHTNESS;
 
 	self->tray               = GOWL_CONFIG_DEFAULT_TRAY;
+	self->force_seat_keyboard = GOWL_CONFIG_DEFAULT_FORCE_SEAT_KEYBOARD;
 	self->crt                = GOWL_CONFIG_DEFAULT_CRT;
 	self->crt_preset         = g_strdup(GOWL_CONFIG_DEFAULT_CRT_PRESET);
 	self->crt_mask_kind      = NULL;
@@ -2958,6 +2963,7 @@ static const gchar *const top_level_keys[] = {
 	"bokeh-brightness",
 
 	"tray",
+	"force-seat-keyboard",
 	"crt", "crt-preset", "crt-mask-kind", "crt-lines", "crt-mask-size",
 	"crt-glow-scale", "crt-glow-passes", "crt-curvature",
 	"crt-curvature-y", "crt-scanline", "crt-beam", "crt-beam-bloom",
@@ -4465,6 +4471,9 @@ gowl_config_apply_mapping(
 
 	if (yaml_mapping_has_member(mapping, "tray"))
 		self->tray = yaml_mapping_get_boolean_member(mapping, "tray");
+	if (yaml_mapping_has_member(mapping, "force-seat-keyboard"))
+		self->force_seat_keyboard = yaml_mapping_get_boolean_member(
+			mapping, "force-seat-keyboard");
 	if (yaml_mapping_has_member(mapping, "crt"))
 		self->crt = yaml_mapping_get_boolean_member(mapping, "crt");
 	if (yaml_mapping_has_member(mapping, "crt-preset")) {
@@ -11710,6 +11719,38 @@ gowl_config_set_tray(GowlConfig *self, gboolean on)
 {
 	g_return_if_fail(GOWL_IS_CONFIG(self));
 	self->tray = on;
+}
+
+/**
+ * gowl_config_get_force_seat_keyboard:
+ * @self: a #GowlConfig
+ *
+ * Returns: %TRUE when the seat advertises a keyboard whether or not
+ *   any keyboard exists (the `force-seat-keyboard' key); %FALSE, the
+ *   default, when it follows the keyboards that are there
+ */
+gboolean
+gowl_config_get_force_seat_keyboard(GowlConfig *self)
+{
+	g_return_val_if_fail(GOWL_IS_CONFIG(self),
+	                     GOWL_CONFIG_DEFAULT_FORCE_SEAT_KEYBOARD);
+	return self->force_seat_keyboard;
+}
+
+/**
+ * gowl_config_set_force_seat_keyboard:
+ * @self: a #GowlConfig
+ * @on: %TRUE to advertise a keyboard always, %FALSE for automatic
+ *
+ * Sets the value only.  A running compositor is told with
+ * gowl_compositor_set_force_seat_keyboard(), which also re-announces
+ * the seat.
+ */
+void
+gowl_config_set_force_seat_keyboard(GowlConfig *self, gboolean on)
+{
+	g_return_if_fail(GOWL_IS_CONFIG(self));
+	self->force_seat_keyboard = on;
 }
 
 gboolean

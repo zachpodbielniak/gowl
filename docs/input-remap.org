@@ -237,9 +237,15 @@ analog:
   scroll-rate: 8        # wheel notches/s at full deflection
   mouse-gain: 0.02      # virtual-stick deflection per pixel of mouse motion
   mouse-idle-ms: 100    # a mouse-driven stick recentres this long after the mouse stops
+  slant: 0              # degrees toward +X a vertical push reads as; see below
+  gate: 0               # drop the lesser axis of a near-straight push; 0 keeps both
 #+end_src
 
-Every axis is calibrated from =EVIOCGABS= (min, max, flat, fuzz) and normalised: sticks and hats to [-1, 1], split at the middle of their range so =0..255= resting at 128 and =-32768..32767= read the same; triggers (=ABS_Z=, =ABS_RZ=, gas, brake, throttle with an unsigned range) to [0, 1].  Inside the deadzone an axis is 0; beyond it the remaining travel is rescaled, so the output still runs smoothly from 0.  The loader refuses a deadzone above 0.95, a release at or above the press threshold, and out-of-range speeds and curves.
+Every axis is calibrated from =EVIOCGABS= (min, max, flat, fuzz) and normalised: sticks and hats to [-1, 1], split at the middle of their range so =0..255= resting at 128 and =-32768..32767= read the same; triggers (=ABS_Z=, =ABS_RZ=, gas, brake, throttle with an unsigned range) to [0, 1].  Inside the deadzone an axis is 0; beyond it the remaining travel is rescaled, so the output still runs smoothly from 0.  The loader refuses a deadzone above 0.95, a release at or above the press threshold, a slant outside [-60, 60], a gate outside [0, 1], and out-of-range speeds and curves.
+
+=slant= is for a stick whose straight up *and* straight down both read toward +X (a thumb that pushes the stick off to the right of the pad).  The angle is removed from X in proportion to |Y| (=x - |y| * tan(slant)=), so both of those pushes come back onto Y.  It is not a rotation.  Rotating the pair until up lies on Y swings down onto +X, and down then holds the right-hand key.  A real diagonal, past that angle, still has X left and still presses both keys.  =slant= applies to the left stick (=ABS_X=/=ABS_Y=) and the right stick (=ABS_RX=/=ABS_RY=) only.  Hats and triggers are unchanged.  The corrected deflection is what a pointer or scroll target sees.
+
+=gate= is only the digital edges.  When the lesser axis is under =gate= times the greater, it is not pressed, so a push a few degrees off a cardinal stays one key.  0, the default, presses every axis that crosses =press=, and a diagonal is two keys.  An equal pair is never dropped.  Pointer and scroll keep the ungated value, so a stick used as the mouse does not snap to the cardinals.
 
 *** Stick directions as keys
 :PROPERTIES:

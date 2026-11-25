@@ -173,6 +173,100 @@ gowl_remap_analog_hysteresis(
 }
 
 /**
+ * gowl_remap_analog_slant: (skip)
+ * @x: the stick's X after the deadzone, [-1, 1].  Positive is right
+ * @y: the stick's Y after the deadzone, [-1, 1].  Sign is the device's
+ * @degrees: how far toward +X a straight vertical push reads.
+ *   Positive leans right.  0 leaves the stick alone
+ * @out_x: (out): X with that lean removed
+ * @out_y: (out): Y, unchanged
+ *
+ * Some sticks report a push aimed at the top of the pad as up and to
+ * the right, and a push aimed at the bottom as down and to the right.
+ * Both leans have the same sign, so this is not a rotation: rotating
+ * the pair until up lies on Y swings down onto +X.  The lean is taken
+ * off X in proportion to |Y| (`x - |y| * tan(degrees)`), and the result
+ * is clamped to [-1, 1].  A real diagonal, which is past that angle,
+ * still has X left.  |@degrees| above 60 is not meaningful (tan runs
+ * away); callers refuse it.
+ */
+void
+gowl_remap_analog_slant(
+	gdouble  x,
+	gdouble  y,
+	gdouble  degrees,
+	gdouble *out_x,
+	gdouble *out_y
+){
+	gdouble xs;
+
+	if (out_y != NULL)
+		*out_y = y;
+	if (degrees == 0.0 || isnan(degrees)) {
+		if (out_x != NULL)
+			*out_x = x;
+		return;
+	}
+	xs = x - fabs(y) * tan(degrees * G_PI / 180.0);
+	if (xs > 1.0)
+		xs = 1.0;
+	if (xs < -1.0)
+		xs = -1.0;
+	if (out_x != NULL)
+		*out_x = xs;
+}
+
+/**
+ * gowl_remap_analog_gate: (skip)
+ * @x: a stick axis, [-1, 1]
+ * @y: the other axis of the same stick, [-1, 1]
+ * @gate: lesser/greater ratio below which the lesser axis is cleared.
+ *   0 leaves both.  A near-straight push is one key; a real diagonal
+ *   (the two axes about equal) is still two
+ * @out_x: (out): X, or 0 when it lost the gate
+ * @out_y: (out): Y, or 0 when it lost the gate
+ *
+ * Applied to the digital edges only.  A continuous target (pointer,
+ * scroll) keeps the ungated deflection, so looking around does not
+ * snap to the cardinals.
+ */
+void
+gowl_remap_analog_gate(
+	gdouble  x,
+	gdouble  y,
+	gdouble  gate,
+	gdouble *out_x,
+	gdouble *out_y
+){
+	gdouble ax;
+	gdouble ay;
+	gdouble major;
+
+	if (!(gate > 0.0) || isnan(gate)) {
+		if (out_x != NULL)
+			*out_x = x;
+		if (out_y != NULL)
+			*out_y = y;
+		return;
+	}
+	if (gate > 1.0)
+		gate = 1.0;
+	ax = fabs(x);
+	ay = fabs(y);
+	major = ax > ay ? ax : ay;
+	if (major > 0.0) {
+		if (ay < ax && (ay / major) < gate)
+			y = 0.0;
+		else if (ax < ay && (ax / major) < gate)
+			x = 0.0;
+	}
+	if (out_x != NULL)
+		*out_x = x;
+	if (out_y != NULL)
+		*out_y = y;
+}
+
+/**
  * gowl_remap_analog_combine: (skip)
  * @pos_x: how far keys hold the stick right, [0, 1]
  * @neg_x: how far keys hold it left, [0, 1]

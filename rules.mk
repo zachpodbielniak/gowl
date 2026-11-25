@@ -22,8 +22,10 @@ PROTO_HDRS := \
 	wlr-output-power-management-unstable-v1-protocol.h \
 	gowl-input-capture-v1-protocol.h
 
-# All source objects depend on generated version header and protocol headers
-$(LIB_OBJS) $(MAIN_OBJ): src/gowl-version.h $(PROTO_HDRS)
+# All source objects depend on generated version header and protocol headers.
+# barkit includes crispy.h, which includes the generated version header.
+# Without this, a parallel build compiles that object before the header exists.
+$(LIB_OBJS) $(MAIN_OBJ): src/gowl-version.h $(PROTO_HDRS) $(CRISPY_DIR)/src/crispy-version.h
 
 # evdev key/button names for input-remap rules, generated from the
 # kernel headers the compiler actually sees, so a key code added to the

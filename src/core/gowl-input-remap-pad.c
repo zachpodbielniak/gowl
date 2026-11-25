@@ -98,7 +98,8 @@ typedef struct {
 	GowlRemapAbsInfo abs;
 	gint32           raw;
 	gboolean         centred;
-	gdouble          value;              /* deadzone applied, inverted */
+	gdouble          sample;             /* deadzone applied, before slant */
+	gdouble          value;              /* after slant; gate does not touch it */
 	gboolean         down[3];            /* by GOWL_INPUT_REMAP_ABS_POS/NEG */
 	gint64           deflected_since;    /* monotonic us, 0 at rest */
 	PadContinuous    cont;
@@ -645,20 +646,37 @@ pad_edge(
 		gowl_input_remap_core_identify_pad(pad->compositor, pad->info, &ev);
 }
 
-/*
- * One axis after a SYN_REPORT: normalised, inverted, deadzoned; its two
- * directions pressed or released through the hysteresis; and, when the
- * axis drives a continuous target, the tick armed while it is deflected.
- */
+/* The left stick is ABS_X/ABS_Y, the right stick ABS_RX/ABS_RY.
+ * Hats and triggers are not sticks: slant and gate do not touch them. */
+static gboolean
+pad_stick_pair(
+	guint  code,
+	guint *xcode,
+	guint *ycode
+){
+	if (code == ABS_X || code == ABS_Y) {
+		*xcode = ABS_X;
+		*ycode = ABS_Y;
+		return TRUE;
+	}
+	if (code == ABS_RX || code == ABS_RY) {
+		*xcode = ABS_RX;
+		*ycode = ABS_RY;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+/* Normalise, invert, deadzone.  sample is the reading slant corrects
+ * from; value starts equal to it and a stick pair may replace it. */
 static void
-pad_axis_update(
+pad_axis_sample(
 	GowlRemapPad *pad,
 	guint         code
 ){
 	PadAxis *a;
 	gdouble v;
 	gdouble dz;
-	guint dir;
 
 	a = &pad->axes[code];
 	if (!a->present)
@@ -674,8 +692,24 @@ pad_axis_update(
 	if (code >= ABS_HAT0X && code <= ABS_HAT3Y)
 		dz = 0.0;
 	v = gowl_remap_analog_deadzone(v, dz);
+	a->sample = v;
 	a->value = v;
+}
 
+/* Press or release this axis's two directions from @v, and arm the
+ * continuous tick from a->value (slanted, not gated). */
+static void
+pad_axis_edges(
+	GowlRemapPad *pad,
+	guint         code,
+	gdouble       v
+){
+	PadAxis *a;
+	guint dir;
+
+	a = &pad->axes[code];
+	if (!a->present)
+		return;
 	for (dir = GOWL_INPUT_REMAP_ABS_POS; dir <= GOWL_INPUT_REMAP_ABS_NEG; dir++) {
 		gdouble amount;
 		gboolean now;
@@ -690,13 +724,118 @@ pad_axis_update(
 		pad_edge(pad, GOWL_INPUT_REMAP_ABS_INPUT(code, dir), now, amount);
 	}
 
-	if (v != 0.0) {
+	if (a->value != 0.0) {
 		if (a->deflected_since == 0)
 			a->deflected_since = g_get_monotonic_time();
 		if (pad->claimed && a->cont.kind != GOWL_INPUT_REMAP_TARGET_PASS)
 			tick_arm((GowlRemapPads *)pad->compositor->remap_pads);
 	} else {
 		a->deflected_since = 0;
+	}
+}
+
+/* One stick: slant the sampled pair, then gate only the digital edges. */
+static void
+pad_axis_correct_pair(
+	GowlRemapPad *pad,
+	guint         xcode,
+	guint         ycode
+){
+	PadAxis *ax;
+	PadAxis *ay;
+	gdouble x;
+	gdouble y;
+	gdouble gx;
+	gdouble gy;
+
+	ax = &pad->axes[xcode];
+	ay = &pad->axes[ycode];
+	x = ax->present ? ax->sample : 0.0;
+	y = ay->present ? ay->sample : 0.0;
+	gowl_remap_analog_slant(x, y, pad->analog.slant, &x, &y);
+	if (ax->present)
+		ax->value = x;
+	if (ay->present)
+		ay->value = y;
+	gowl_remap_analog_gate(x, y, pad->analog.gate, &gx, &gy);
+	if (ax->present)
+		pad_axis_edges(pad, xcode, gx);
+	if (ay->present)
+		pad_axis_edges(pad, ycode, gy);
+}
+
+/*
+ * One axis after a SYN_REPORT, with no slant and no gate: its two
+ * directions pressed or released through the hysteresis, and, when the
+ * axis drives a continuous target, the tick armed while it is deflected.
+ */
+static void
+pad_axis_update(
+	GowlRemapPad *pad,
+	guint         code
+){
+	pad_axis_sample(pad, code);
+	if (pad->axes[code].present)
+		pad_axis_edges(pad, code, pad->axes[code].value);
+}
+
+/* Consume pad->dirty.  Slant and gate couple the two axes of a stick,
+ * so a pair is corrected together once either axis moved.  With both
+ * at their defaults this is pad_axis_update() per dirty axis, which is
+ * what a rule that never mentions them has always done. */
+static void
+pad_axes_commit(GowlRemapPad *pad)
+{
+	guint code;
+	guint64 dirty;
+	guint64 left;
+	gboolean correct;
+	gboolean did_left;
+	gboolean did_right;
+
+	dirty = pad->dirty;
+	pad->dirty = 0;
+	correct = pad->analog.slant != 0.0 || pad->analog.gate > 0.0;
+	if (!correct) {
+		for (code = 0; code < ABS_CNT && dirty != 0; code++) {
+			if (!((dirty >> code) & 1))
+				continue;
+			dirty &= ~((guint64)1 << code);
+			pad_axis_update(pad, code);
+		}
+		return;
+	}
+
+	left = dirty;
+	for (code = 0; code < ABS_CNT && left != 0; code++) {
+		if (!((left >> code) & 1))
+			continue;
+		left &= ~((guint64)1 << code);
+		pad_axis_sample(pad, code);
+	}
+	did_left = FALSE;
+	did_right = FALSE;
+	for (code = 0; code < ABS_CNT && dirty != 0; code++) {
+		guint xcode;
+		guint ycode;
+
+		if (!((dirty >> code) & 1))
+			continue;
+		dirty &= ~((guint64)1 << code);
+		if (!pad_stick_pair(code, &xcode, &ycode)) {
+			pad_axis_edges(pad, code, pad->axes[code].value);
+			continue;
+		}
+		if (xcode == ABS_X) {
+			if (did_left)
+				continue;
+			did_left = TRUE;
+		} else {
+			if (did_right)
+				continue;
+			did_right = TRUE;
+		}
+		pad_axis_correct_pair(pad, xcode, ycode);
 	}
 }
 
@@ -784,17 +923,7 @@ on_pad_readable(
 				pad->axes[e->code].raw = e->value;
 				pad->dirty |= (guint64)1 << e->code;
 			} else if (e->type == EV_SYN && e->code == SYN_REPORT) {
-				guint code;
-				guint64 dirty;
-
-				dirty = pad->dirty;
-				pad->dirty = 0;
-				for (code = 0; code < ABS_CNT && dirty != 0; code++) {
-					if (!((dirty >> code) & 1))
-						continue;
-					dirty &= ~((guint64)1 << code);
-					pad_axis_update(pad, code);
-				}
+				pad_axes_commit(pad);
 			}
 		}
 		if ((gsize)n < sizeof evs)
@@ -1028,10 +1157,7 @@ pad_apply(
 		for (code = 0; code < ABS_CNT; code++)
 			if (pad->axes[code].present)
 				pad->dirty |= (guint64)1 << code;
-		for (code = 0; code < ABS_CNT; code++)
-			if ((pad->dirty >> code) & 1)
-				pad_axis_update(pad, code);
-		pad->dirty = 0;
+		pad_axes_commit(pad);
 	}
 
 	if (want != was && r != NULL)

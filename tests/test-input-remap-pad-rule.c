@@ -114,7 +114,8 @@ test_stick_to_keys(void)
 
 	rule = load_ok(
 		"{name: wasd, match: {id: \"045e:028e\", type: gamepad}, grab: true,"
-		" analog: {press: 0.6, release: 0.4, deadzone: 0.2, invert: [ABS_Y]},"
+		" analog: {press: 0.6, release: 0.4, deadzone: 0.2, invert: [ABS_Y],"
+		"          slant: 40, gate: 0.55},"
 		" map: {left-stick-up: {key: KEY_W}, left-stick-left: {key: KEY_A},"
 		"       ABS_Y+: {key: KEY_S}, ABS_X+: {key: KEY_D},"
 		"       right-trigger: {button: left}, pad-a: {key: KEY_SPACE}}}");
@@ -123,6 +124,8 @@ test_stick_to_keys(void)
 	g_assert_cmpfloat(a.press, ==, 0.6);
 	g_assert_cmpfloat(a.release, ==, 0.4);
 	g_assert_cmpfloat(a.deadzone, ==, 0.2);
+	g_assert_cmpfloat(a.slant, ==, 40.0);
+	g_assert_cmpfloat(a.gate, ==, 0.55);
 	g_assert_cmpuint(a.invert, ==, (guint64)1 << ABS_Y);
 
 	t = gowl_input_remap_rule_lookup(rule,
@@ -297,6 +300,10 @@ test_analog_validation(void)
 	             GOWL_INPUT_REMAP_ERROR_UNKNOWN_CODE, NULL);
 	load_refused("{name: x, match: {name: p}, analog: {wobble: 1}}",
 	             GOWL_INPUT_REMAP_ERROR_INVALID, "unknown analog key");
+	load_refused("{name: x, match: {name: p}, analog: {slant: 90}}",
+	             GOWL_INPUT_REMAP_ERROR_INVALID, "slant");
+	load_refused("{name: x, match: {name: p}, analog: {gate: 1.5}}",
+	             GOWL_INPUT_REMAP_ERROR_INVALID, "gate");
 	/* a forbidden key is refused as one-to-one, wherever it hides */
 	load_refused("{name: x, match: {name: p}, analog: {deadzone: 0.1}, delay: 5}",
 	             GOWL_INPUT_REMAP_ERROR_NOT_ONE_TO_ONE, NULL);

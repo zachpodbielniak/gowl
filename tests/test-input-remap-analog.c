@@ -165,6 +165,54 @@ test_curve_and_speed(void)
 		gowl_remap_analog_speed(1.0, 1.0, 100.0, 1.0, 100.0), 400.0, EPS);
 }
 
+/* A vertical push that reads 40 degrees toward +X, and the same lean
+ * on the way down.  Rotating that pair puts down on +X; slant puts
+ * both back on Y and leaves a real diagonal alone. */
+static void
+test_slant_and_gate(void)
+{
+	gdouble x;
+	gdouble y;
+	gdouble s;
+
+	s = tan(40.0 * G_PI / 180.0);
+
+	gowl_remap_analog_slant(0.0, 0.0, 40.0, &x, &y);
+	g_assert_cmpfloat(x, ==, 0.0);
+	g_assert_cmpfloat(y, ==, 0.0);
+
+	/* straight up, reported as up-right */
+	gowl_remap_analog_slant(s * 0.8, -0.8, 40.0, &x, &y);
+	g_assert_cmpfloat_with_epsilon(x, 0.0, 1e-9);
+	g_assert_cmpfloat(y, ==, -0.8);
+	/* straight down, reported as down-right: rotation would make this +X */
+	gowl_remap_analog_slant(s * 0.8, 0.8, 40.0, &x, &y);
+	g_assert_cmpfloat_with_epsilon(x, 0.0, 1e-9);
+	g_assert_cmpfloat(y, ==, 0.8);
+	/* pure right is untouched */
+	gowl_remap_analog_slant(1.0, 0.0, 40.0, &x, &y);
+	g_assert_cmpfloat(x, ==, 1.0);
+	g_assert_cmpfloat(y, ==, 0.0);
+	/* zero degrees is a copy */
+	gowl_remap_analog_slant(0.4, -0.5, 0.0, &x, &y);
+	g_assert_cmpfloat(x, ==, 0.4);
+	g_assert_cmpfloat(y, ==, -0.5);
+	/* past the ends clamps */
+	gowl_remap_analog_slant(-1.0, 1.0, 40.0, &x, &y);
+	g_assert_cmpfloat(x, ==, -1.0);
+
+	/* a near-cardinal loses the lesser axis; an equal diagonal does not */
+	gowl_remap_analog_gate(0.2, -0.9, 0.55, &x, &y);
+	g_assert_cmpfloat(x, ==, 0.0);
+	g_assert_cmpfloat(y, ==, -0.9);
+	gowl_remap_analog_gate(0.7, 0.7, 0.55, &x, &y);
+	g_assert_cmpfloat(x, ==, 0.7);
+	g_assert_cmpfloat(y, ==, 0.7);
+	gowl_remap_analog_gate(0.2, -0.9, 0.0, &x, &y);
+	g_assert_cmpfloat(x, ==, 0.2);
+	g_assert_cmpfloat(y, ==, -0.9);
+}
+
 static void
 test_to_raw(void)
 {
@@ -192,6 +240,7 @@ main(
 	g_test_add_func("/input-remap/analog/hysteresis", test_hysteresis);
 	g_test_add_func("/input-remap/analog/combine", test_combine);
 	g_test_add_func("/input-remap/analog/curve-and-speed", test_curve_and_speed);
+	g_test_add_func("/input-remap/analog/slant-and-gate", test_slant_and_gate);
 	g_test_add_func("/input-remap/analog/to-raw", test_to_raw);
 	return g_test_run();
 }

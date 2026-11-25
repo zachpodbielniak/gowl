@@ -151,6 +151,12 @@ GQuark gowl_input_remap_error_quark (void);
  *   stick-follow target (default 0.02)
  * @mouse_idle_ms: a mouse-driven stick returns to centre this long after
  *   the last motion (default 100)
+ * @slant: degrees toward +X that a straight vertical push reads as.
+ *   Taken off X in proportion to |Y| (see gowl_remap_analog_slant()).
+ *   0, the default, leaves the stick alone.  Not a rotation
+ * @gate: lesser/greater ratio below which a stick direction is not
+ *   pressed (see gowl_remap_analog_gate()).  0, the default, keeps
+ *   every axis that crosses @press, so a diagonal is two keys
  *
  * The analog settings of one rule: how it reads a controller's axes
  * and how fast its continuous targets run.
@@ -167,6 +173,8 @@ typedef struct {
 	gdouble scroll_rate;
 	gdouble mouse_gain;
 	guint   mouse_idle_ms;
+	gdouble slant;
+	gdouble gate;
 } GowlInputRemapAnalog;
 
 /* --- GowlInputRemapEvent --- */

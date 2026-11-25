@@ -1172,7 +1172,7 @@ gowl_input_remap_rule_map_pass(
  * the device, press at 0.5, release at 0.35, nothing inverted, 1200
  * px/s pointer speed on a square curve without acceleration, 8 scroll
  * notches per second, 0.02 stick per pixel of mouse motion and a 100 ms
- * return to centre.
+ * return to centre.  Slant and gate are 0: the stick is not corrected.
  */
 void
 gowl_input_remap_analog_init(GowlInputRemapAnalog *analog)
@@ -1250,7 +1250,8 @@ gowl_input_remap_rule_get_analog(
  * (the gap is what stops a resting stick chattering), a curve outside
  * [0.5, 5], a pointer speed outside (0, 20000], a negative
  * acceleration, a scroll rate outside (0, 120], a mouse gain outside
- * (0, 1], and a return to centre outside [10, 5000] ms.
+ * (0, 1], a return to centre outside [10, 5000] ms, a slant outside
+ * [-60, 60] degrees, and a gate outside [0, 1].
  *
  * Returns: %TRUE when stored
  */
@@ -1285,6 +1286,12 @@ gowl_input_remap_rule_set_analog(
 		what = "mouse-gain must be in (0, 1]";
 	else if (analog->mouse_idle_ms < 10 || analog->mouse_idle_ms > 5000)
 		what = "mouse-idle-ms must be in [10, 5000]";
+	else if (!(analog->slant >= -60.0 && analog->slant <= 60.0)
+	         || isnan(analog->slant))
+		what = "slant must be in [-60, 60] degrees";
+	else if (!(analog->gate >= 0.0 && analog->gate <= 1.0)
+	         || isnan(analog->gate))
+		what = "gate must be in [0, 1]";
 	if (what != NULL) {
 		g_set_error(error, GOWL_INPUT_REMAP_ERROR,
 		            GOWL_INPUT_REMAP_ERROR_INVALID, "rule `%s': analog %s",
@@ -2368,6 +2375,8 @@ append_analog_yaml(
 	ANALOG_NUM(scroll_rate, "scroll-rate")
 	ANALOG_NUM(mouse_gain, "mouse-gain")
 	ANALOG_NUM(mouse_idle_ms, "mouse-idle-ms")
+	ANALOG_NUM(slant, "slant")
+	ANALOG_NUM(gate, "gate")
 #undef ANALOG_NUM
 	if (a->invert != 0)
 		append_abs_mask(body, "invert", a->invert);
@@ -3545,7 +3554,7 @@ parse_virtual_pad(
 
 /* `analog: {deadzone, press, release, invert, centred, pointer-speed,
  * pointer-curve, pointer-accel, scroll-rate, mouse-gain,
- * mouse-idle-ms}'; validated as a whole by set_analog. */
+ * mouse-idle-ms, slant, gate}'; validated as a whole by set_analog. */
 static gboolean
 parse_analog(
 	GowlInputRemapRule  *rule,
@@ -3566,6 +3575,8 @@ parse_analog(
 		{ "pointer-accel", G_STRUCT_OFFSET(GowlInputRemapAnalog, pointer_accel),  0.0, 1e9 },
 		{ "scroll-rate",   G_STRUCT_OFFSET(GowlInputRemapAnalog, scroll_rate),    0.0, 1e9 },
 		{ "mouse-gain",    G_STRUCT_OFFSET(GowlInputRemapAnalog, mouse_gain),     0.0, 1e9 },
+		{ "slant",         G_STRUCT_OFFSET(GowlInputRemapAnalog, slant),         -1e3, 1e3 },
+		{ "gate",          G_STRUCT_OFFSET(GowlInputRemapAnalog, gate),           0.0, 1e3 },
 	};
 	GowlInputRemapAnalog a;
 	YamlMapping *m;
@@ -3627,7 +3638,7 @@ parse_analog(
 			            "unknown analog key `%s' (deadzone, press, release, "
 			            "invert, centred, pointer-speed, pointer-curve, "
 			            "pointer-accel, scroll-rate, mouse-gain, "
-			            "mouse-idle-ms)", k);
+			            "mouse-idle-ms, slant, gate)", k);
 			return FALSE;
 		}
 	}

@@ -65,6 +65,16 @@ gboolean gowl_remap_analog_hysteresis       (gboolean                was_pressed
                                              gdouble                 amount,
                                              gdouble                 press,
                                              gdouble                 release);
+void     gowl_remap_analog_slant            (gdouble                 x,
+                                             gdouble                 y,
+                                             gdouble                 degrees,
+                                             gdouble                *out_x,
+                                             gdouble                *out_y);
+void     gowl_remap_analog_gate             (gdouble                 x,
+                                             gdouble                 y,
+                                             gdouble                 gate,
+                                             gdouble                *out_x,
+                                             gdouble                *out_y);
 void     gowl_remap_analog_combine          (gdouble                 pos_x,
                                              gdouble                 neg_x,
                                              gdouble                 pos_y,
